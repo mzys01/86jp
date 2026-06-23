@@ -1,0 +1,155 @@
+using System;
+using System.Collections.Generic;
+using DfoServer.Game.Inventory;
+
+namespace DfoServer.Game.Dungeon
+{
+    public sealed class DropGenerator
+    {
+        private readonly DnfLcg _lcg;
+
+        private const int DropDenominator = 10000;
+        private const int MobItemDropRate = 1000;
+
+        private static readonly float[] DifficultyGoldBonus = { 1.0f, 1.2f, 1.4f, 1.6f, 1.8f };
+
+        public DropGenerator(DnfLcg lcg)
+        {
+            _lcg = lcg;
+        }
+
+        public (int goldAmount, List<DropInfo> drops) GenerateMonsterDrops(
+            int monsterLevel, int monsterType, int monsterCode,
+            int difficulty, int dungeonLevel,
+            ref ushort slotCounter,
+            IReadOnlyList<MonsterDropTable.DropPoolEntry> dropPool = null)
+        {
+            var drops = new List<DropInfo>();
+
+            var diffBonus = difficulty >= 0 && difficulty < DifficultyGoldBonus.Length
+                ? DifficultyGoldBonus[difficulty] : 1.0f;
+
+            MonsterDropConfig.GetAllDropRates(monsterLevel, monsterType,
+                out var goldRate, out var type1Rate, out var type2Rate,
+                out var type3Rate, out var type4Rate);
+
+            goldRate = Math.Min((int)(goldRate * diffBonus), DropDenominator);
+            type1Rate = Math.Min((int)(type1Rate * diffBonus), DropDenominator);
+            type2Rate = Math.Min((int)(type2Rate * diffBonus), DropDenominator);
+            type3Rate = Math.Min((int)(type3Rate * diffBonus), DropDenominator);
+            type4Rate = Math.Min((int)(type4Rate * diffBonus), DropDenominator);
+
+            
+            
+            var goldBase = ExpTableProvider.GetMonsterGold(monsterLevel, out int variancePct);
+            var goldVariance = variancePct > 0
+                ? (_lcg.Next(2 * variancePct + 1) - variancePct) * goldBase / 100 : 0;
+            var goldAmount = Math.Max(1, (int)((goldBase + goldVariance) * diffBonus));
+
+            if (goldRate > _lcg.Next(DropDenominator))
+            {
+                slotCounter++;
+                drops.Add(new DropInfo
+                {
+                    SceneSlot = slotCounter,
+                    TemplateId = 0,
+                    StackCount = (uint)goldAmount
+                });
+            }
+            else
+            {
+                goldAmount = 0;
+            }
+
+            
+            if (type1Rate > _lcg.Next(DropDenominator))
+            {
+                int rarity = MonsterDropConfig.RollRarity(_lcg);
+                int itemId = MonsterDropConfig.ChooseStackable(_lcg, monsterLevel, rarity);
+                if (itemId > 0)
+                {
+                    slotCounter++;
+                    drops.Add(new DropInfo
+                    {
+                        SceneSlot = slotCounter,
+                        TemplateId = (uint)itemId,
+                        StackCount = 1
+                    });
+                }
+            }
+
+            
+            if (type2Rate > _lcg.Next(DropDenominator))
+            {
+                int rarity = MonsterDropConfig.RollRarity(_lcg);
+                int itemId = MonsterDropConfig.ChooseEquipment(_lcg, monsterLevel, rarity);
+                if (itemId > 0)
+                {
+                    var meta = ItemMetadataResolver.Resolve(itemId);
+                    slotCounter++;
+                    drops.Add(new DropInfo
+                    {
+                        SceneSlot = slotCounter,
+                        TemplateId = (uint)itemId,
+                        StackCount = 1,
+                        Endurance = meta.Durability
+                    });
+                }
+            }
+
+            
+            if (type3Rate > _lcg.Next(DropDenominator))
+            {
+                int rarity = MonsterDropConfig.RollRarity(_lcg);
+                int itemId = MonsterDropConfig.ChooseStackable(_lcg, monsterLevel, rarity);
+                if (itemId > 0)
+                {
+                    slotCounter++;
+                    drops.Add(new DropInfo
+                    {
+                        SceneSlot = slotCounter,
+                        TemplateId = (uint)itemId,
+                        StackCount = 1
+                    });
+                }
+            }
+
+            
+            if (dropPool != null && dropPool.Count > 0
+                && MobItemDropRate > _lcg.Next(DropDenominator))
+            {
+                int totalWeight = 0;
+                for (int i = 0; i < dropPool.Count; i++)
+                    totalWeight += dropPool[i].Weight;
+
+                if (totalWeight > 0)
+                {
+                    var roll = _lcg.Next(totalWeight);
+                    int cum = 0;
+                    for (int i = 0; i < dropPool.Count; i++)
+                    {
+                        cum += dropPool[i].Weight;
+                        if (roll < cum)
+                        {
+                            slotCounter++;
+                            drops.Add(new DropInfo
+                            {
+                                SceneSlot = slotCounter,
+                                TemplateId = (uint)dropPool[i].ItemId,
+                                StackCount = 1
+                            });
+                            break;
+                        }
+                    }
+                }
+            }
+
+            
+            var independentDrops = IndependentDropSystem.GenerateDrops(
+                monsterCode, difficulty, dungeonLevel, _lcg, ref slotCounter);
+            drops.AddRange(independentDrops);
+
+            return (goldAmount, drops);
+        }
+    }
+}

@@ -1,0 +1,61 @@
+using System;
+using System.Collections.Generic;
+
+namespace DfoServer.Game.Dungeon
+{
+    public static class ClearRewardGenerator
+    {
+        private static readonly float[] DifficultyGoldBonus = { 1.02f, 1.38f, 1.60f, 1.90f, 2.0f };
+
+        public struct CardReward
+        {
+            public bool IsGold;
+            public int GoldAmount;
+            public int ItemId;
+            public int StackCount;
+            public bool IsEquipment;
+        }
+
+        public static CardReward GenerateGoldCard(int dungeonLevel, int difficulty, DnfLcg lcg)
+        {
+            int baseGold = ExpTableProvider.GetMonsterGold(dungeonLevel, out int variancePct);
+            int goldBase = baseGold * 175 / 1000;
+
+            float diffBonus = difficulty >= 0 && difficulty < DifficultyGoldBonus.Length
+                ? DifficultyGoldBonus[difficulty] : 1.0f;
+            int goldAmount = (int)(goldBase * diffBonus);
+
+            if (variancePct > 0 && goldAmount > 0)
+            {
+                int variance = (lcg.Next(2 * variancePct + 1) - variancePct) * goldAmount / 100;
+                goldAmount += variance;
+            }
+
+            return new CardReward { IsGold = true, GoldAmount = Math.Max(1, goldAmount) };
+        }
+
+        public static CardReward GenerateItemCard(int dungeonLevel, int difficulty, DnfLcg lcg)
+        {
+            int rarity = RollClearRewardRarity(lcg);
+            int itemId = MonsterDropConfig.ChooseEquipment(lcg, dungeonLevel, rarity);
+            bool isEquip = itemId > 0;
+
+            if (itemId <= 0)
+                itemId = MonsterDropConfig.ChooseStackable(lcg, dungeonLevel, rarity);
+
+            if (itemId <= 0)
+                return new CardReward { IsGold = true, GoldAmount = 100 };
+
+            return new CardReward { IsGold = false, ItemId = itemId, StackCount = 1, IsEquipment = isEquip };
+        }
+
+        private static int RollClearRewardRarity(DnfLcg lcg)
+        {
+            int roll = lcg.Next(1000000) + 1;
+            if (roll <= 500000) return 0;
+            if (roll <= 799900) return 1;
+            if (roll <= 999900) return 2;
+            return 3;
+        }
+    }
+}
