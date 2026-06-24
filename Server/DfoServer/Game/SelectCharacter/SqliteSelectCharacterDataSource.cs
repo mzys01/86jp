@@ -158,10 +158,10 @@ namespace DfoServer.Game.SelectCharacter
                 return _inventoryStore.TryBuyItem(itemTemplateId, buyCount, out result);
         }
 
-        public bool TryBuyMallItem(int characterId, int accountId, int productId, int buyCount, out InventoryMutationResult result)
+        public bool TryBuyCeraShopItem(int characterId, int accountId, int productId, int buyCount, out InventoryMutationResult result)
         {
             using (_inventoryStore.BeginScope(characterId, accountId))
-                return _inventoryStore.TryBuyMallItem(productId, buyCount, out result);
+                return _inventoryStore.TryBuyCeraShopItem(productId, buyCount, out result);
         }
 
         public bool TrySellItem(int characterId, int accountId, InventoryListType listType, short slotIndex, short sellCount, out InventoryMutationResult result)

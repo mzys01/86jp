@@ -22,7 +22,7 @@ namespace DfoServer.Network
         private readonly DungeonHandler _dungeonHandler;
         private readonly SkillHandler _skillHandler;
         private readonly SettingsHandler _settingsHandler;
-        private readonly MallHandler _mallHandler;
+        private readonly CeraShopHandler _ceraShopHandler;
         private readonly ICharacterRepository _characterRepository;
         private readonly SqliteSelectCharacterDataSource _selectCharacterDataSource;
 
@@ -53,7 +53,7 @@ namespace DfoServer.Network
             _dungeonHandler = new DungeonHandler();
             _skillHandler = new SkillHandler(characterRepository);
             _settingsHandler = new SettingsHandler();
-            _mallHandler = new MallHandler(sqliteSelectCharacterDataSource);
+            _ceraShopHandler = new CeraShopHandler(sqliteSelectCharacterDataSource);
         }
 
         public override async Task OnClientConnected(EnhancedClientSession session)
@@ -217,7 +217,7 @@ namespace DfoServer.Network
                         await _dungeonHandler.Handle_SET_PLAY_RESULT(session, header, body);
                         break;
                     case 0x0040://64 商城购买
-                        await _mallHandler.HandleMallPurchase(session, header, body);
+                        await _ceraShopHandler.HandleCeraShopPurchase(session, header, body);
                         break;
                     case 0x002C:
                         await _inventoryHandler.Handle_ENUM_CMDPACKET_USE_STACKABLE(session, header, body);

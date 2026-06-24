@@ -1,11 +1,11 @@
 using DfoServer.Game.Inventory;
-using DfoServer.Network.Parsers.Mall;
+using DfoServer.Network.Parsers.CeraShop;
 
-namespace DfoServer.Network.Builders.Mall
+namespace DfoServer.Network.Builders.CeraShop
 {
-    public static class MallPurchaseAckBuilder
+    public static class CeraShopPurchaseAckBuilder
     {
-        public static byte[] BuildSuccess(MallPurchaseRequest request, InventoryMutationResult result)
+        public static byte[] BuildSuccess(CeraShopPurchaseRequest request, InventoryMutationResult result)
         {
             int commodityNo = (request != null && request.CommodityNos.Count > 0) ? request.CommodityNos[0] : 0;
             return BuildSuccess(commodityNo, result);
@@ -40,7 +40,7 @@ namespace DfoServer.Network.Builders.Mall
             return writer.ToArray();
         }
 
-        public static byte[] BuildError(MallPurchaseRequest request = null)
+        public static byte[] BuildError(CeraShopPurchaseRequest request = null)
         {
             // 失败回包: 客户端失败分支(sub_CD9490, a2=0)在 default 错误码下会继续从流里读
             //   var_805(U8) + 5个U32 (共21字节), 并在 CD9ADF 用 body[2..5]作category、body[6..9]作

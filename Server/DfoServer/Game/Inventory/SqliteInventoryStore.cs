@@ -1835,7 +1835,7 @@ WHERE item_uid = @itemUid;";
             OnlyCeraPoint,
         }
 
-        private struct MallPaymentPlan
+        private struct CeraShopPaymentPlan
         {
             public bool Ok;
             public int NewGold;
@@ -1846,9 +1846,9 @@ WHERE item_uid = @itemUid;";
 
         // 计算扣费后的各币余额。金币与点券分别结算; 点券按 mode 在 {欢乐券, 代币券, 点券} 内瀑布扣减。
         // 若任一币种(在允许的币池内)余额不足, 返回 Ok=false 且不改动余额。
-        private static MallPaymentPlan ComputeMallPayment(WalletState w, int goldCost, int ceraCost, CeraPayMode mode)
+        private static CeraShopPaymentPlan ComputeCeraShopPayment(WalletState w, int goldCost, int ceraCost, CeraPayMode mode)
         {
-            var plan = new MallPaymentPlan
+            var plan = new CeraShopPaymentPlan
             {
                 Ok = false,
                 NewGold = w.Gold,
@@ -1888,7 +1888,7 @@ WHERE item_uid = @itemUid;";
         }
 
         // 落库: 把四种货币的扣费后余额写入。
-        private void ApplyMallPayment(SqliteConnection connection, SqliteTransaction transaction, MallPaymentPlan plan)
+        private void ApplyCeraShopPayment(SqliteConnection connection, SqliteTransaction transaction, CeraShopPaymentPlan plan)
         {
             CurrencyService.UpdateGold(connection, transaction, DefaultCharacterId, plan.NewGold);
             CurrencyService.UpdateCera(connection, transaction, DefaultCharacterId, plan.NewCera);
@@ -1896,19 +1896,19 @@ WHERE item_uid = @itemUid;";
             CurrencyService.UpdateHappyTokenCera(connection, transaction, DefaultCharacterId, plan.NewHappyTokenCera);
         }
 
-        public bool TryBuyMallItem(int productId, int buyCount, out InventoryMutationResult result)
+        public bool TryBuyCeraShopItem(int productId, int buyCount, out InventoryMutationResult result)
         {
             result = null;
-            FileLogger.Log($"  [MallBuy] clientProductId=0x{productId:X8} ({productId}) buyCount={buyCount}");
+            FileLogger.Log($"  [CeraShopBuy] clientProductId=0x{productId:X8} ({productId}) buyCount={buyCount}");
 
             if (buyCount <= 0)
                 buyCount = 1;
             if (buyCount > 999)
                 buyCount = 999;
 
-            if (!MallProductCatalog.TryResolve(productId, out var product))
+            if (!CeraShopProductCatalog.TryResolve(productId, out var product))
             {
-                FileLogger.Log($"  [MallBuy] REJECT: product 0x{productId:X8} not found in cerashop.etc");
+                FileLogger.Log($"  [CeraShopBuy] REJECT: product 0x{productId:X8} not found in cerashop.etc");
                 return false;
             }
 
@@ -1916,7 +1916,7 @@ WHERE item_uid = @itemUid;";
             var metadata = ItemMetadataResolver.Resolve(itemTemplateId);
             if (metadata.ItemKind == "special")
             {
-                FileLogger.Log($"  [MallBuy] REJECT: product=0x{productId:X8} maps to unsupported item=0x{itemTemplateId:X8} section={product.Section}");
+                FileLogger.Log($"  [CeraShopBuy] REJECT: product=0x{productId:X8} maps to unsupported item=0x{itemTemplateId:X8} section={product.Section}");
                 return false;
             }
 
@@ -1942,11 +1942,11 @@ WHERE item_uid = @itemUid;";
                     avatarDurationDays = durDays;
                     if (avatarPrice > 0)
                         ceraPrice = avatarPrice;
-                    FileLogger.Log($"  [MallBuy] avatar item=0x{itemTemplateId:X8} durIndex={product.Count} -> durationDays={durDays} ceraPrice={avatarPrice}");
+                    FileLogger.Log($"  [CeraShopBuy] avatar item=0x{itemTemplateId:X8} durIndex={product.Count} -> durationDays={durDays} ceraPrice={avatarPrice}");
                 }
                 else
                 {
-                    FileLogger.Log($"  [MallBuy] WARN: avatar item=0x{itemTemplateId:X8} 无 [avatar type select] 档位 {product.Count}, 点券价沿用 {ceraPrice}");
+                    FileLogger.Log($"  [CeraShopBuy] WARN: avatar item=0x{itemTemplateId:X8} 无 [avatar type select] 档位 {product.Count}, 点券价沿用 {ceraPrice}");
                 }
             }
             var perUnit = Math.Max(1, buyCount);
@@ -1954,25 +1954,25 @@ WHERE item_uid = @itemUid;";
             var totalCeraLong = (long)ceraPrice * perUnit;
             if (totalGoldLong > int.MaxValue || totalCeraLong > int.MaxValue)
             {
-                FileLogger.Log($"  [MallBuy] REJECT: cost overflow product=0x{productId:X8} item=0x{itemTemplateId:X8} gold={goldPrice} cera={ceraPrice} buyCount={buyCount}");
+                FileLogger.Log($"  [CeraShopBuy] REJECT: cost overflow product=0x{productId:X8} item=0x{itemTemplateId:X8} gold={goldPrice} cera={ceraPrice} buyCount={buyCount}");
                 return false;
             }
             var totalGoldCost = (int)totalGoldLong;
             var totalCeraCost = (int)totalCeraLong;
             // 点券支付方式: buy only cera=仅点券; buy only cera point=仅欢乐券+代币券; 否则瀑布(欢乐→代币→点券)。
-            var ceraMode = MallProductCatalog.IsBuyOnlyCera(itemTemplateId) ? CeraPayMode.OnlyCera
-                : MallProductCatalog.IsBuyOnlyCeraPoint(itemTemplateId) ? CeraPayMode.OnlyCeraPoint
+            var ceraMode = CeraShopProductCatalog.IsBuyOnlyCera(itemTemplateId) ? CeraPayMode.OnlyCera
+                : CeraShopProductCatalog.IsBuyOnlyCeraPoint(itemTemplateId) ? CeraPayMode.OnlyCeraPoint
                 : CeraPayMode.Default;
 
             using (var connection = OpenConnection())
             using (var transaction = connection.BeginTransaction())
             {
                 var wallet = LoadWallet(connection, transaction);
-                var plan = ComputeMallPayment(wallet, totalGoldCost, totalCeraCost, ceraMode);
-                FileLogger.Log($"  [MallBuy] product=0x{productId:X8} -> item=0x{itemTemplateId:X8} section={product.Section} kind={itemKind} count={effectiveCount} gold={totalGoldCost} cera={totalCeraCost} mode={ceraMode} wallet(g={wallet.Gold},c={wallet.Coin},t={wallet.TokenCera},h={wallet.HappyTokenCera}) ok={plan.Ok}");
+                var plan = ComputeCeraShopPayment(wallet, totalGoldCost, totalCeraCost, ceraMode);
+                FileLogger.Log($"  [CeraShopBuy] product=0x{productId:X8} -> item=0x{itemTemplateId:X8} section={product.Section} kind={itemKind} count={effectiveCount} gold={totalGoldCost} cera={totalCeraCost} mode={ceraMode} wallet(g={wallet.Gold},c={wallet.Coin},t={wallet.TokenCera},h={wallet.HappyTokenCera}) ok={plan.Ok}");
                 if (!plan.Ok)
                 {
-                    FileLogger.Log($"  [MallBuy] REJECT: insufficient funds gold={totalGoldCost} cera={totalCeraCost} mode={ceraMode}");
+                    FileLogger.Log($"  [CeraShopBuy] REJECT: insufficient funds gold={totalGoldCost} cera={totalCeraCost} mode={ceraMode}");
                     return false;
                 }
                 var goldSpent = totalGoldCost > 0;
@@ -1985,7 +1985,7 @@ WHERE item_uid = @itemUid;";
                     {
                         var newStackCount = existingItem.StackCount + effectiveCount;
                         UpdateStackCount(connection, transaction, existingItem.ItemUid, newStackCount);
-                        ApplyMallPayment(connection, transaction, plan);
+                        ApplyCeraShopPayment(connection, transaction, plan);
                         WriteBuyAuditLog(connection, transaction, itemTemplateId, existingItem.SlotIndex, totalGoldCost, totalCeraCost);
                         transaction.Commit();
 
@@ -2043,7 +2043,7 @@ WHERE item_uid = @itemUid;";
                 var targetSlot = FindEmptySlot(connection, transaction, insertListType, slotStart, slotEnd);
                 if (targetSlot < 0)
                 {
-                    FileLogger.Log($"  [MallBuy] REJECT: no empty slot product=0x{productId:X8} item=0x{itemTemplateId:X8} list={insertListType} slotRange={slotStart}-{slotEnd}");
+                    FileLogger.Log($"  [CeraShopBuy] REJECT: no empty slot product=0x{productId:X8} item=0x{itemTemplateId:X8} list={insertListType} slotRange={slotStart}-{slotEnd}");
                     return false;
                 }
 
@@ -2067,7 +2067,7 @@ WHERE item_uid = @itemUid;";
                     petSerial,
                     "{}");
 
-                ApplyMallPayment(connection, transaction, plan);
+                ApplyCeraShopPayment(connection, transaction, plan);
                 WriteBuyAuditLog(connection, transaction, itemTemplateId, (short)targetSlot, totalGoldCost, totalCeraCost);
                 transaction.Commit();
 
@@ -2208,7 +2208,7 @@ ORDER BY slot_index;";
             }
             catch (Exception ex)
             {
-                FileLogger.Log($"  [MallBuy] IsCreatureItem(0x{itemTemplateId:X8}) 判定失败, 视为非宠物: {ex.Message}");
+                FileLogger.Log($"  [CeraShopBuy] IsCreatureItem(0x{itemTemplateId:X8}) 判定失败, 视为非宠物: {ex.Message}");
                 return false;
             }
         }
