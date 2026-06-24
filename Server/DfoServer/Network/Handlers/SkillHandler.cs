@@ -16,6 +16,59 @@ namespace DfoServer.Network.Handlers
             _characterRepository = characterRepository;
         }
 
+        public async Task Handle_CHANGE_SKILL_COMMAND(EnhancedClientSession session, GamePacketHeader header, byte[] body)
+        {
+            if (body == null || body.Length < 4) return;
+
+            var ack = new byte[body.Length + 1];
+            ack[0] = 0x01;
+            Buffer.BlockCopy(body, 0, ack, 1, body.Length);
+            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x014B, ack));
+
+            int cid = session.Player != null ? session.Player.CharacterId : 0;
+            if (cid <= 0) return;
+
+            var records = ParseSkillCommandRecords(body);
+            if (records.Count == 0) return;
+
+            try
+            {
+                var repo = new Game.CharacterData.SqliteCharacterProgressRepository(
+                    Infrastructure.ServerPaths.DatabasePath, Infrastructure.ServerPaths.SchemaFilePath);
+                foreach (var (page, skillId, commandBytes) in records)
+                {
+                    int rows = repo.UpdateSkillCommand(cid, skillId, commandBytes);
+                    FileLogger.Log(
+                        $"[SkillHandler] CHANGE_SKILL_COMMAND char={cid} page={page} skill={skillId} " +
+                        $"cmd={BitConverter.ToString(commandBytes)} rows={rows}");
+                }
+            }
+            catch (Exception ex)
+            {
+                FileLogger.Log($"[SkillHandler] CHANGE_SKILL_COMMAND persist failed: {ex.Message}");
+            }
+        }
+
+        public async Task Handle_RESET_ALL_SKILL_COMMANDS(EnhancedClientSession session, GamePacketHeader header, byte[] body)
+        {
+            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x014C, new byte[] { 0x01 }));
+
+            int cid = session.Player != null ? session.Player.CharacterId : 0;
+            if (cid <= 0) return;
+
+            try
+            {
+                var repo = new Game.CharacterData.SqliteCharacterProgressRepository(
+                    Infrastructure.ServerPaths.DatabasePath, Infrastructure.ServerPaths.SchemaFilePath);
+                int cleared = repo.ClearAllSkillCommands(cid);
+                FileLogger.Log($"[SkillHandler] RESET_ALL_SKILL_COMMANDS char={cid} cleared={cleared}");
+            }
+            catch (Exception ex)
+            {
+                FileLogger.Log($"[SkillHandler] RESET_ALL_SKILL_COMMANDS failed: {ex.Message}");
+            }
+        }
+
         public async Task Handle_CHANGE_SKILLSLOT(EnhancedClientSession session, GamePacketHeader header, byte[] body)
         {
             if (body == null || body.Length < 3) return;
@@ -100,6 +153,38 @@ namespace DfoServer.Network.Handlers
                     await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0013, skillBytes));
             }
             catch (Exception ex) { FileLogger.Log($"[SkillHandler] SKILL_INIT failed: {ex}"); }
+        }
+
+        private static List<(int page, ushort skillId, byte[] commandBytes)> ParseSkillCommandRecords(byte[] body)
+        {
+            var records = new List<(int, ushort, byte[])>();
+            if (body == null || body.Length < 4) return records;
+
+            int page = body[0] == 1 ? 1 : 0;
+            int offset = 0;
+            bool first = true;
+
+            while (offset < body.Length)
+            {
+                int headerSize = first ? 4 : 3;
+                if (offset + headerSize > body.Length) break;
+
+                ushort skillId = first ? body[offset + 1] : body[offset];
+                int lenPos = first ? offset + 2 : offset + 1;
+                int cmdLen = (body[lenPos] << 8) | body[lenPos + 1];
+                offset += headerSize;
+
+                if (!first && cmdLen <= 0) break;
+                if (offset + cmdLen > body.Length) break;
+
+                var commandBytes = new byte[cmdLen];
+                Buffer.BlockCopy(body, offset, commandBytes, 0, cmdLen);
+                records.Add((page, skillId, commandBytes));
+                offset += cmdLen;
+                first = false;
+            }
+
+            return records;
         }
     }
 }

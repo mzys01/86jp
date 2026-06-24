@@ -154,6 +154,12 @@ namespace DfoServer.Network
                     case 0x001D://29
                         await _skillHandler.Handle_BUY_SKILL(session, header, body);
                         break;
+                    case 0x014B://331
+                        await _skillHandler.Handle_CHANGE_SKILL_COMMAND(session, header, body);
+                        break;
+                    case 0x014C://332
+                        await _skillHandler.Handle_RESET_ALL_SKILL_COMMANDS(session, header, body);
+                        break;
                     case 0x0239://569
                         await _inventoryHandler.Handle_SET_CLONE_TITLE(session, header, body);
                         break;
