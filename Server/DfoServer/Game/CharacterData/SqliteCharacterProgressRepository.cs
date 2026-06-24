@@ -153,10 +153,38 @@ namespace DfoServer.Game.CharacterData
             }
         }
 
-        
-        
-        
-        
+        public int ClearAllSkillCommands(int characterId)
+        {
+            using (var conn = new SqliteConnection(_connectionString))
+            {
+                conn.Open();
+                using (var cmd = new SqliteCommand(
+                    "UPDATE character_skills SET extra_values = NULL WHERE character_id = @cid AND extra_values IS NOT NULL", conn))
+                {
+                    cmd.Parameters.AddWithValue("@cid", characterId);
+                    return cmd.ExecuteNonQuery();
+                }
+            }
+        }
+
+        public int UpdateSkillCommand(int characterId, ushort skillId, byte[] commandBytes)
+        {
+            using (var conn = new SqliteConnection(_connectionString))
+            {
+                conn.Open();
+                using (var cmd = new SqliteCommand(
+                    "UPDATE character_skills SET extra_values = @extra WHERE character_id = @cid AND skill_id = @sid", conn))
+                {
+                    cmd.Parameters.AddWithValue("@cid", characterId);
+                    cmd.Parameters.AddWithValue("@sid", (int)skillId);
+                    cmd.Parameters.AddWithValue("@extra", commandBytes != null && commandBytes.Length > 0
+                        ? (object)commandBytes
+                        : DBNull.Value);
+                    return cmd.ExecuteNonQuery();
+                }
+            }
+        }
+
         public void SwapSkillSlot(int characterId, int page, int slot1, int slot2)
         {
             if (slot1 == slot2) return;
