@@ -149,6 +149,9 @@ namespace DfoServer.Game.Dungeon
                 monsterCode, difficulty, dungeonLevel, _lcg, ref slotCounter);
             drops.AddRange(independentDrops);
 
+            var worldDrops = WorldDropSystem.GenerateDrops(monsterLevel, _lcg, ref slotCounter);
+            drops.AddRange(worldDrops);
+
             return (goldAmount, drops);
         }
     }
