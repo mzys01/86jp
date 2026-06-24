@@ -247,6 +247,70 @@ namespace DfoServer.Network.Handlers
             FileLogger.Log($"[{ProtocolName}] USE_STACKABLE: consumed 1x item 0x{itemCode:X8} from slot {slotIndex}, remaining={result.RemainingStackCount}");
         }
 
+        public async Task Handle_OPEN_AVATAR_PACKAGE(EnhancedClientSession session, GamePacketHeader header, byte[] body)
+        {
+            FileLogger.Log($"[{ProtocolName}] OPEN_AVATAR_PACKAGE raw({body?.Length ?? 0}B): {(body != null ? BitConverter.ToString(body) : "null")}");
+
+            if (!AvatarPackageOpenRequest.TryParse(body, out var request))
+            {
+                FileLogger.Log($"[{ProtocolName}] OPEN_AVATAR_PACKAGE: parse failed");
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0207, new byte[] { 0x00 }));
+                return;
+            }
+
+            var (cid, aid) = ResolveOwner(session);
+            if (!_sqliteSelectCharacterDataSource.TryOpenAvatarPackage(cid, aid, request, out var result))
+            {
+                FileLogger.Log($"[{ProtocolName}] OPEN_AVATAR_PACKAGE: FAILED slot={request.SlotIndex} choices={request.Choices.Count}");
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0207, new byte[] { 0x00 }));
+                return;
+            }
+
+            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0207, CommonPacketBodyBuilder.BuildSuccessAck()));
+            if (result.AddedPetCount > 0)
+                await SendItemListRefresh(session, InventoryListType.Main, InventoryListType.Avatar, InventoryListType.Pet);
+            else
+                await SendItemListRefresh(session, InventoryListType.Main, InventoryListType.Avatar);
+
+            FileLogger.Log($"[{ProtocolName}] OPEN_AVATAR_PACKAGE: OK slot={result.SlotIndex} item=0x{result.PackageItemTemplateId:X8} avatar={result.AddedAvatarCount} main={result.AddedMainItemCount} pet={result.AddedPetCount}");
+        }
+
+        public async Task Handle_OPEN_SELECTABLE_PACKAGE(EnhancedClientSession session, GamePacketHeader header, byte[] body)
+        {
+            FileLogger.Log($"[{ProtocolName}] OPEN_SELECTABLE_PACKAGE raw({body?.Length ?? 0}B): {(body != null ? BitConverter.ToString(body) : "null")}");
+
+            if (!SelectablePackageOpenRequest.TryParse(body, out var request))
+            {
+                FileLogger.Log($"[{ProtocolName}] OPEN_SELECTABLE_PACKAGE: parse failed");
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x00A0, SelectablePackageAckBuilder.BuildError()));
+                return;
+            }
+
+            var (cid, aid) = ResolveOwner(session);
+            if (!_sqliteSelectCharacterDataSource.TryOpenSelectablePackage(cid, aid, request, out var result))
+            {
+                FileLogger.Log($"[{ProtocolName}] OPEN_SELECTABLE_PACKAGE: FAILED slot={request.SlotIndex} selected=0x{request.SelectedItemTemplateId:X8}");
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x00A0, SelectablePackageAckBuilder.BuildError()));
+                return;
+            }
+
+            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x00A0, SelectablePackageAckBuilder.BuildSuccess(result.GrantedItems)));
+            var refreshTypes = new System.Collections.Generic.List<InventoryListType>
+            {
+                // The package itself lives in main inventory even when all rewards go to avatar/pet lists.
+                InventoryListType.Main,
+            };
+            if (result.AddedAvatarCount > 0)
+                refreshTypes.Add(InventoryListType.Avatar);
+            if (result.AddedPetCount > 0)
+                refreshTypes.Add(InventoryListType.Pet);
+            if (refreshTypes.Count == 0)
+                refreshTypes.Add(InventoryListType.Main);
+            await SendItemListRefresh(session, refreshTypes.ToArray());
+
+            FileLogger.Log($"[{ProtocolName}] OPEN_SELECTABLE_PACKAGE: OK slot={result.SlotIndex} item=0x{result.PackageItemTemplateId:X8} reward=0x{result.RewardItemTemplateId:X8} main={result.AddedMainItemCount} avatar={result.AddedAvatarCount} pet={result.AddedPetCount} ackItems={result.GrantedItems.Count}");
+        }
+
         private async Task SendNoti2AppearanceUpdate(EnhancedClientSession session)
         {
             var (cid, aid) = ResolveOwner(session);

@@ -152,6 +152,18 @@ namespace DfoServer.Game.SelectCharacter
                 return _inventoryStore.TryDeleteItem(listType, slotIndex, deleteCount, out result);
         }
 
+        public bool TryOpenAvatarPackage(int characterId, int accountId, AvatarPackageOpenRequest request, out AvatarPackageOpenResult result)
+        {
+            using (_inventoryStore.BeginScope(characterId, accountId))
+                return _inventoryStore.TryOpenAvatarPackage(request, out result);
+        }
+
+        public bool TryOpenSelectablePackage(int characterId, int accountId, SelectablePackageOpenRequest request, out SelectablePackageOpenResult result)
+        {
+            using (_inventoryStore.BeginScope(characterId, accountId))
+                return _inventoryStore.TryOpenSelectablePackage(request, out result);
+        }
+
         public bool TryBuyItem(int characterId, int accountId, int itemTemplateId, int buyCount, out InventoryMutationResult result)
         {
             using (_inventoryStore.BeginScope(characterId, accountId))

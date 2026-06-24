@@ -207,6 +207,9 @@ namespace DfoServer.Network
                     case 0x0048:
                         await _dungeonHandler.Handle_ENUM_CMDPACKET_SELECT_CARD(session, header, body);
                         break;
+                    case 0x00A0:
+                        await _inventoryHandler.Handle_OPEN_SELECTABLE_PACKAGE(session, header, body);
+                        break;
                     case 0x002E://46
                         await _dungeonHandler.Handle_SET_PLAY_RESULT(session, header, body);
                         break;
@@ -250,6 +253,9 @@ namespace DfoServer.Network
                         break;
                     case 0x01DE: // 478
                         await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x01DE, CommonPacketBodyBuilder.BuildSuccessAck()));
+                        break;
+                    case 0x0207:
+                        await _inventoryHandler.Handle_OPEN_AVATAR_PACKAGE(session, header, body);
                         break;
                     case 0x0252://594
                         break;
