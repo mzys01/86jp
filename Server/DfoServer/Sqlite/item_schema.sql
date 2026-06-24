@@ -6,7 +6,10 @@ CREATE TABLE IF NOT EXISTS accounts (
     password_hash  TEXT    NOT NULL DEFAULT '',
     last_login_ip  TEXT    NOT NULL DEFAULT '',
     last_login_at  TEXT,
-    created_at     TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP
+    created_at     TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    cera           INTEGER NOT NULL DEFAULT 0,
+    token_cera     INTEGER NOT NULL DEFAULT 0,
+    happy_token_cera INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS characters (
