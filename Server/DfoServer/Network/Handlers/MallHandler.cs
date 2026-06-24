@@ -1,0 +1,162 @@
+using DfoServer.Game.SelectCharacter;
+using DfoServer.Game.Inventory;
+using DfoServer.Network.Builders;
+using DfoServer.Network.Builders.Mall;
+using DfoServer.Network.Parsers.Mall;
+using System;
+using System.Threading.Tasks;
+
+namespace DfoServer.Network.Handlers
+{
+    public sealed class MallHandler
+    {
+        private readonly SqliteSelectCharacterDataSource _sqliteSelectCharacterDataSource;
+
+        public string ProtocolName => "GameProtocol";
+
+        public MallHandler(SqliteSelectCharacterDataSource sqliteSelectCharacterDataSource)
+        {
+            _sqliteSelectCharacterDataSource = sqliteSelectCharacterDataSource ?? throw new ArgumentNullException(nameof(sqliteSelectCharacterDataSource));
+        }
+
+        public async Task HandleMallPurchase(EnhancedClientSession session, GamePacketHeader header, byte[] body)
+        {
+            FileLogger.Log($"[{ProtocolName}] MALL_BUY raw body({body?.Length ?? 0}): {(body != null ? BitConverter.ToString(body) : "null")}");
+            if (!MallPurchaseRequest.TryParse(body, out var request))
+            {
+                FileLogger.Log($"[{ProtocolName}] MALL_BUY: parse failed");
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0040, MallPurchaseAckBuilder.BuildError()));
+                return;
+            }
+
+            FileLogger.Log($"[{ProtocolName}] MALL_BUY parsed: {request.CommodityNos.Count} item(s) [{string.Join(", ", request.CommodityNos)}] flag=0x{request.UnknownFlag:X2}");
+            var cid = session.Player?.CharacterId ?? 0;
+            var aid = session.Account?.AccountId ?? 0;
+            if (cid <= 0 || aid <= 0)
+            {
+                FileLogger.Log($"[{ProtocolName}] MALL_BUY: invalid owner cid={cid} aid={aid}");
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0040, MallPurchaseAckBuilder.BuildError(request)));
+                return;
+            }
+
+            // 购物车: 逐件结算, 每个 commodityNo 买 1 份(份内数量由商品定义)
+            var results = new System.Collections.Generic.List<InventoryMutationResult>();
+            var successItems = new System.Collections.Generic.List<System.Tuple<int, InventoryMutationResult>>();
+            foreach (var commodityNo in request.CommodityNos)
+            {
+                if (_sqliteSelectCharacterDataSource.TryBuyMallItem(cid, aid, commodityNo, 1, out var result))
+                {
+                    FileLogger.Log($"[{ProtocolName}] MALL_BUY: OK commodityNo={commodityNo} slot={result.SlotIndex} item=0x{result.ItemTemplateId:X8} count={result.AppliedCount} coin={result.UpdatedCoin}");
+                    results.Add(result);
+                    successItems.Add(System.Tuple.Create(commodityNo, result));
+                }
+                else
+                {
+                    FileLogger.Log($"[{ProtocolName}] MALL_BUY: FAILED commodityNo={commodityNo}");
+                }
+            }
+
+            if (results.Count == 0)
+            {
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0040, MallPurchaseAckBuilder.BuildError(request)));
+                return;
+            }
+
+            var last = results[results.Count - 1];
+
+            // CMD 64 购买应答(成功): 客户端按 ACK 中的 commodityNo 清购物车项,
+            // 因此多件购物车需要逐件回 ACK, 但库存/点券刷新仍合并发送。
+            foreach (var item in successItems)
+            {
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0040,
+                    MallPurchaseAckBuilder.BuildSuccess(item.Item1, item.Item2)));
+            }
+
+            // 普通商品走 NOTI 0x0E。多商品购物车时合并成一个 UPDATE_ITEM_LIST,
+            // 与地下城翻牌/任务掉落一致, 避免连续多个 0x0E 时客户端漏刷新 slot0 金币。
+            var hasAvatarResult = false;
+            var hasPetResult = false;
+            var itemUpdateResults = new System.Collections.Generic.List<InventoryMutationResult>();
+            InventoryMutationResult goldResult = null;
+            foreach (var result in results)
+            {
+                if (result.ListType == InventoryListType.Avatar)
+                {
+                    hasAvatarResult = true;
+                    continue;
+                }
+                if (result.ListType == InventoryListType.Pet)
+                {
+                    hasPetResult = true;
+                    continue;
+                }
+                itemUpdateResults.Add(result);
+                if (result.GoldSpent)
+                    goldResult = result;
+            }
+
+            if (goldResult != null)
+            {
+                itemUpdateResults.Add(new InventoryMutationResult
+                {
+                    SlotIndex = 0,
+                    ItemTemplateId = 0,
+                    RemainingStackCount = goldResult.UpdatedGold,
+                });
+                FileLogger.Log($"[{ProtocolName}] MALL_BUY: gold refresh queued gold={goldResult.UpdatedGold}");
+            }
+
+            if (itemUpdateResults.Count > 0)
+            {
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000E,
+                    BuildItemListUpdate(itemUpdateResults)));
+            }
+
+            if (hasAvatarResult || hasPetResult)
+            {
+                var snapshot = _sqliteSelectCharacterDataSource.LoadItemListSnapshot(cid, aid);
+                if (hasAvatarResult)
+                {
+                    var avatarListBody = ItemListPacketBuilder.BuildBody(snapshot, InventoryListType.Avatar);
+                    await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000D, avatarListBody));
+                    FileLogger.Log($"[{ProtocolName}] MALL_BUY: avatar ITEM_LIST refresh sent count={snapshot.AvatarItems.Count}");
+                }
+                if (hasPetResult)
+                {
+                    var petListBody = ItemListPacketBuilder.BuildBody(snapshot, InventoryListType.Pet);
+                    await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000D, petListBody));
+                    FileLogger.Log($"[{ProtocolName}] MALL_BUY: pet ITEM_LIST refresh sent count={snapshot.PetItems.Count}");
+                }
+            }
+
+            // NOTI 0x35 点券更新(最终余额)
+            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0035,
+                BuildCeraUpdate(last.UpdatedCoin, last.UpdatedTokenCera, last.UpdatedHappyTokenCera)));
+        }
+
+        private static byte[] BuildItemListUpdate(System.Collections.Generic.IReadOnlyList<InventoryMutationResult> updates)
+        {
+            var writer = new GamePacketWriter();
+            writer.WriteByte(0);
+            writer.WriteUInt16((ushort)updates.Count);
+            foreach (var update in updates)
+            {
+                writer.WriteInt16(update.SlotIndex);
+                writer.WriteInt32(update.ItemTemplateId);
+                writer.WriteInt32(update.RemainingStackCount);
+                writer.WriteZeroBytes(0x4A);
+            }
+            return writer.ToArray();
+        }
+
+        private static byte[] BuildCeraUpdate(int cera, int tokenCera, int happyTokenCera)
+        {
+            var writer = new GamePacketWriter();
+            writer.WriteByte(1);       // [0]    ok
+            writer.WriteInt32(cera);   // [1..4] cera point
+            writer.WriteInt32(tokenCera);      // [5..8] token/event cera point
+            writer.WriteInt32(happyTokenCera); // [9..12] happy token/event cera point
+            return writer.ToArray();
+        }
+    }
+}

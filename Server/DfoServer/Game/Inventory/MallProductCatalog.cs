@@ -1,0 +1,235 @@
+using DfoServer.GameWorld;
+using System;
+using System.Collections.Generic;
+using System.IO;
+
+namespace DfoServer.Game.Inventory
+{
+    public sealed class MallProductEntry
+    {
+        public int ProductId { get; set; }
+
+        public int ItemTemplateId { get; set; }
+
+        public int Count { get; set; }
+
+        // 金币价(标准段 +3 列); 0 表示该商品不用金币。
+        public int GoldPrice { get; set; }
+
+        // 点券价(标准段 +5 列 / visual +5 / package +4)。胜点(+4)暂不实现, 不解析。
+        public int CoinPrice { get; set; }
+
+        public string Section { get; set; }
+    }
+
+    public static class MallProductCatalog
+    {
+        private static readonly Lazy<CatalogData> Data = new Lazy<CatalogData>(Load);
+
+        public static bool TryResolve(int productId, out MallProductEntry entry)
+        {
+            return Data.Value.Products.TryGetValue(productId, out entry);
+        }
+
+        // [buy only cera]: 仅可用点券(cera)购买的物品。
+        public static bool IsBuyOnlyCera(int itemTemplateId)
+        {
+            return Data.Value.BuyOnlyCera.Contains(itemTemplateId);
+        }
+
+        // [buy only cera point]: 仅可用代币券(欢乐代币券+代币券)购买的物品。
+        public static bool IsBuyOnlyCeraPoint(int itemTemplateId)
+        {
+            return Data.Value.BuyOnlyCeraPoint.Contains(itemTemplateId);
+        }
+
+        private static CatalogData Load()
+        {
+            var content = ReadCatalogText();
+            var entries = new Dictionary<int, MallProductEntry>();
+            // cerashop.etc: 客户端购买实际使用的商品定义 (commodityNo->itemId)。
+            // 各段格式: 标准段 stride=9 (commodityNo itemId count 金币 胜点 点券 name 0 0),
+            //          visual stride=8(+3时长 +5点券), package stride=11(价格在 col4), avatar stride=6。
+            ParseStandardSection(content, "item", 9, entries);
+            ParseStandardSection(content, "premium", 9, entries);
+            ParseStandardSection(content, "creature", 9, entries);
+            ParseStandardSection(content, "coin", 9, entries);
+            ParseStandardSection(content, "material", 9, entries);
+            ParseStandardSection(content, "recoveryitem", 9, entries);
+            ParseStandardSection(content, "visual", 8, entries);
+            ParseStandardSection(content, "package", 11, entries);
+            ParseAvatarSection(content, entries);
+
+            var data = new CatalogData
+            {
+                Products = entries,
+                BuyOnlyCera = ParseIdSet(content, "buy only cera"),
+                BuyOnlyCeraPoint = ParseIdSet(content, "buy only cera point"),
+            };
+
+            FileLogger.Log($"[MallProductCatalog] Loaded {entries.Count} products, buyOnlyCera={data.BuyOnlyCera.Count}, buyOnlyCeraPoint={data.BuyOnlyCeraPoint.Count} from cerashop.etc");
+            return data;
+        }
+
+        // 解析仅一串整数 itemId 的段(如 [buy only cera] / [buy only cera point])。
+        private static HashSet<int> ParseIdSet(string content, string section)
+        {
+            var set = new HashSet<int>();
+            foreach (var tok in TokenizeSection(content, section))
+            {
+                if (TryParseInt(tok, out var id) && id > 0)
+                    set.Add(id);
+            }
+            return set;
+        }
+
+        private sealed class CatalogData
+        {
+            public Dictionary<int, MallProductEntry> Products { get; set; }
+
+            public HashSet<int> BuyOnlyCera { get; set; }
+
+            public HashSet<int> BuyOnlyCeraPoint { get; set; }
+        }
+
+        private static void ParseStandardSection(string content, string section, int stride, Dictionary<int, MallProductEntry> entries)
+        {
+            var tokens = TokenizeSection(content, section);
+            if (tokens.Count == 0)
+                return;
+
+            for (var i = 0; i + stride - 1 < tokens.Count; i += stride)
+            {
+                if (!TryParseInt(tokens[i], out var productId) || productId <= 0)
+                    continue;
+                if (!TryParseInt(tokens[i + 1], out var itemTemplateId) || itemTemplateId <= 0)
+                    continue;
+                if (!TryParseInt(tokens[i + 2], out var count) || count <= 0)
+                    count = 1;
+
+                var priceIndex = section == "package" ? i + 4 : i + 5;
+                if (!TryParseInt(tokens[priceIndex], out var coinPrice) || coinPrice < 0)
+                    coinPrice = 0;
+
+                // 标准段(stride 9): +3 金币, +4 胜点(忽略), +5 点券。
+                // visual(8)/package(11) 的 +3 不是金币(时长/其它), 不取金币。
+                var goldPrice = 0;
+                if (stride == 9 && (!TryParseInt(tokens[i + 3], out goldPrice) || goldPrice < 0))
+                    goldPrice = 0;
+
+                entries[productId] = new MallProductEntry
+                {
+                    ProductId = productId,
+                    ItemTemplateId = itemTemplateId,
+                    Count = count,
+                    GoldPrice = goldPrice,
+                    CoinPrice = coinPrice,
+                    Section = section,
+                };
+            }
+        }
+
+        private static void ParseAvatarSection(string content, Dictionary<int, MallProductEntry> entries)
+        {
+            var tokens = TokenizeSection(content, "avatar");
+            for (var i = 0; i + 5 < tokens.Count; i += 6)
+            {
+                if (!TryParseInt(tokens[i], out var productId) || productId <= 0)
+                    continue;
+                if (!TryParseInt(tokens[i + 1], out var itemTemplateId) || itemTemplateId <= 0)
+                    continue;
+                if (!TryParseInt(tokens[i + 2], out var count) || count <= 0)
+                    count = 1;
+
+                var coinPrice = 0;
+                TryParseInt(tokens[i + 5], out coinPrice);
+                entries[productId] = new MallProductEntry
+                {
+                    ProductId = productId,
+                    ItemTemplateId = itemTemplateId,
+                    Count = count,
+                    CoinPrice = Math.Max(0, coinPrice),
+                    Section = "avatar",
+                };
+            }
+        }
+
+        private static List<string> TokenizeSection(string content, string section)
+        {
+            var sectionText = ExtractSection(content, section);
+            var tokens = new List<string>();
+            if (string.IsNullOrWhiteSpace(sectionText))
+                return tokens;
+
+            for (var i = 0; i < sectionText.Length;)
+            {
+                while (i < sectionText.Length && char.IsWhiteSpace(sectionText[i]))
+                    i++;
+                if (i >= sectionText.Length)
+                    break;
+
+                if (sectionText[i] == '`')
+                {
+                    var end = sectionText.IndexOf('`', i + 1);
+                    if (end < 0)
+                        end = sectionText.Length - 1;
+                    tokens.Add(sectionText.Substring(i + 1, end - i - 1));
+                    i = end + 1;
+                    continue;
+                }
+
+                var start = i;
+                while (i < sectionText.Length && !char.IsWhiteSpace(sectionText[i]))
+                    i++;
+                tokens.Add(sectionText.Substring(start, i - start));
+            }
+
+            return tokens;
+        }
+
+        private static string ExtractSection(string content, string section)
+        {
+            if (string.IsNullOrEmpty(content))
+                return string.Empty;
+
+            var startTag = "[" + section + "]";
+            var endTag = "[/" + section + "]";
+            var start = content.IndexOf(startTag, StringComparison.OrdinalIgnoreCase);
+            if (start < 0)
+                return string.Empty;
+            start += startTag.Length;
+
+            var end = content.IndexOf(endTag, start, StringComparison.OrdinalIgnoreCase);
+            return end > start ? content.Substring(start, end - start) : content.Substring(start);
+        }
+
+        private static bool TryParseInt(string value, out int result)
+        {
+            return int.TryParse((value ?? string.Empty).Trim(), out result);
+        }
+
+        private static string ReadCatalogText()
+        {
+            try
+            {
+                return PvfArchiveAccessor.ReadText("etc/cerashop.etc");
+            }
+            catch (Exception ex)
+            {
+                FileLogger.Log($"[MallProductCatalog] PVF read failed, trying docs fallback: {ex.Message}");
+            }
+
+            var directory = AppDomain.CurrentDomain.BaseDirectory;
+            for (var i = 0; i < 8 && !string.IsNullOrEmpty(directory); i++)
+            {
+                var candidate = Path.Combine(directory, "docs", "cerashop.etc");
+                if (File.Exists(candidate))
+                    return File.ReadAllText(candidate);
+
+                directory = Directory.GetParent(directory)?.FullName;
+            }
+
+            throw new FileNotFoundException("Cannot find etc/cerashop.etc in PVF or docs/cerashop.etc fallback.");
+        }
+    }
+}

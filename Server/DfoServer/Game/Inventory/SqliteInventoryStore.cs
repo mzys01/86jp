@@ -72,9 +72,16 @@ namespace DfoServer.Game.Inventory
 
         public int UpdatedCoin { get; set; }
 
+        public int UpdatedTokenCera { get; set; }
+
+        public int UpdatedHappyTokenCera { get; set; }
+
         public short RequestedCount { get; set; }
 
         public short AppliedCount { get; set; }
+
+        // 本次购买是否扣了金币(用于商城回包决定是否刷新主背包 slot0 金币显示)。
+        public bool GoldSpent { get; set; }
 
         public int CostItemTemplateId { get; set; }
 
@@ -167,6 +174,13 @@ namespace DfoServer.Game.Inventory
             DfoServer.Sqlite.SqliteSchemaMigrator.EnsureColumns(connection, "account_cargo_state", new[]
             {
                 ("item_count", "INTEGER NOT NULL DEFAULT 0"),
+            });
+            // 点券/代币券/欢乐代币券账号化: 旧库补列(账号级钱包)
+            DfoServer.Sqlite.SqliteSchemaMigrator.EnsureColumns(connection, "accounts", new[]
+            {
+                ("cera", "INTEGER NOT NULL DEFAULT 0"),
+                ("token_cera", "INTEGER NOT NULL DEFAULT 0"),
+                ("happy_token_cera", "INTEGER NOT NULL DEFAULT 0"),
             });
             DfoServer.Sqlite.SqliteSchemaMigrator.MigrateCharacterItemsUniqueConstraint(connection);
             CurrencyService.MigrateCeraFromPacketTemplates(connection);
@@ -560,6 +574,11 @@ ORDER BY slot_index;";
         private const int QuickSlotStart = 3;
         private const int QuickSlotEnd = 8;
 
+        // 宠物栏(list 7)"宠物"本体分页槽段(category 5): slot 0..139 共 140 格(实测计数)。
+        // 其后 宠物装备=140..188(cat6)、宠物耗品=189..237(cat7)。新购宠物从本页首格开始填。
+        private const int PetInventorySlotStart = 0;
+        private const int PetInventorySlotEnd = 139;
+
         public bool TryPickupItem(int itemTemplateId, int stackCount, out short assignedSlot)
         {
             assignedSlot = -1;
@@ -891,8 +910,9 @@ ORDER BY slot_index;";
                 case InventoryListType.Pet:
                     return new Dictionary<byte, (short, short)>
                     {
-                        { 6, (140, 188) },
-                        { 7, (189, 237) },
+                        { 5, (0, 139) },    // 宠物(本体), 共 140 格
+                        { 6, (140, 188) },  // 宠物装备
+                        { 7, (189, 237) },  // 宠物耗品
                     };
                 case InventoryListType.Avatar:
                     return new Dictionary<byte, (short, short)>
@@ -1788,7 +1808,7 @@ WHERE item_uid = @itemUid;";
         private  WalletState LoadWallet(SqliteConnection connection, SqliteTransaction transaction)
         {
             var snap = CurrencyService.LoadWallet(connection, transaction, DefaultCharacterId);
-            var w = new WalletState { Gold = snap.Gold, Coin = snap.Cera };
+            var w = new WalletState { Gold = snap.Gold, Coin = snap.Cera, TokenCera = snap.TokenCera, HappyTokenCera = snap.HappyTokenCera };
             using (var cmd = connection.CreateCommand())
             {
                 cmd.Transaction = transaction;
@@ -1805,6 +1825,271 @@ WHERE item_uid = @itemUid;";
         {
             CurrencyService.UpdateGold(connection, transaction, DefaultCharacterId, gold);
             CurrencyService.UpdateCera(connection, transaction, DefaultCharacterId, coin);
+        }
+
+        // 点券支付模式: Default=欢乐券→代币券→点券瀑布; OnlyCera=仅点券; OnlyCeraPoint=仅欢乐券+代币券。
+        private enum CeraPayMode
+        {
+            Default,
+            OnlyCera,
+            OnlyCeraPoint,
+        }
+
+        private struct MallPaymentPlan
+        {
+            public bool Ok;
+            public int NewGold;
+            public int NewCera;
+            public int NewTokenCera;
+            public int NewHappyTokenCera;
+        }
+
+        // 计算扣费后的各币余额。金币与点券分别结算; 点券按 mode 在 {欢乐券, 代币券, 点券} 内瀑布扣减。
+        // 若任一币种(在允许的币池内)余额不足, 返回 Ok=false 且不改动余额。
+        private static MallPaymentPlan ComputeMallPayment(WalletState w, int goldCost, int ceraCost, CeraPayMode mode)
+        {
+            var plan = new MallPaymentPlan
+            {
+                Ok = false,
+                NewGold = w.Gold,
+                NewCera = w.Coin,
+                NewTokenCera = w.TokenCera,
+                NewHappyTokenCera = w.HappyTokenCera,
+            };
+
+            if (goldCost > 0)
+            {
+                if (w.Gold < goldCost)
+                    return plan;
+                plan.NewGold = w.Gold - goldCost;
+            }
+
+            if (ceraCost > 0)
+            {
+                var useHappy = mode != CeraPayMode.OnlyCera;          // OnlyCera 不能用欢乐/代币券
+                var useToken = mode != CeraPayMode.OnlyCera;
+                var useCera = mode != CeraPayMode.OnlyCeraPoint;       // OnlyCeraPoint 不能用点券
+
+                var remaining = ceraCost;
+                int happy = plan.NewHappyTokenCera, token = plan.NewTokenCera, cera = plan.NewCera;
+                if (useHappy && remaining > 0) { var t = Math.Min(remaining, happy); happy -= t; remaining -= t; }
+                if (useToken && remaining > 0) { var t = Math.Min(remaining, token); token -= t; remaining -= t; }
+                if (useCera && remaining > 0) { var t = Math.Min(remaining, cera); cera -= t; remaining -= t; }
+                if (remaining > 0)
+                    return plan; // 允许的币池内不够付
+
+                plan.NewHappyTokenCera = happy;
+                plan.NewTokenCera = token;
+                plan.NewCera = cera;
+            }
+
+            plan.Ok = true;
+            return plan;
+        }
+
+        // 落库: 把四种货币的扣费后余额写入。
+        private void ApplyMallPayment(SqliteConnection connection, SqliteTransaction transaction, MallPaymentPlan plan)
+        {
+            CurrencyService.UpdateGold(connection, transaction, DefaultCharacterId, plan.NewGold);
+            CurrencyService.UpdateCera(connection, transaction, DefaultCharacterId, plan.NewCera);
+            CurrencyService.UpdateTokenCera(connection, transaction, DefaultCharacterId, plan.NewTokenCera);
+            CurrencyService.UpdateHappyTokenCera(connection, transaction, DefaultCharacterId, plan.NewHappyTokenCera);
+        }
+
+        public bool TryBuyMallItem(int productId, int buyCount, out InventoryMutationResult result)
+        {
+            result = null;
+            FileLogger.Log($"  [MallBuy] clientProductId=0x{productId:X8} ({productId}) buyCount={buyCount}");
+
+            if (buyCount <= 0)
+                buyCount = 1;
+            if (buyCount > 999)
+                buyCount = 999;
+
+            if (!MallProductCatalog.TryResolve(productId, out var product))
+            {
+                FileLogger.Log($"  [MallBuy] REJECT: product 0x{productId:X8} not found in cerashop.etc");
+                return false;
+            }
+
+            var itemTemplateId = product.ItemTemplateId;
+            var metadata = ItemMetadataResolver.Resolve(itemTemplateId);
+            if (metadata.ItemKind == "special")
+            {
+                FileLogger.Log($"  [MallBuy] REJECT: product=0x{productId:X8} maps to unsupported item=0x{itemTemplateId:X8} section={product.Section}");
+                return false;
+            }
+
+            var itemKind = metadata.ItemKind;
+            var isStackable = metadata.IsStackable;
+            // 限时时装(avatar): cerashop 第3字段(product.Count)= 时长档位(1-based),
+            // 时长(天)与点券价取自时装 .equ 的 [avatar type select]。
+            var isAvatar = string.Equals(product.Section, "avatar", StringComparison.OrdinalIgnoreCase);
+            // 宠物(creature): 装备类且 .equ 的 [equipment type]=[creature], 应进专用宠物栏(Pet 列表 7),
+            // 而不是主背包装备格。判定基于物品本身的 equipment type, 不依赖 cerashop 段名(段内还混有可堆叠饲料)。
+            var isCreature = !isAvatar && string.Equals(itemKind, "equipment", StringComparison.Ordinal) && IsCreatureItem(itemTemplateId);
+            var avatarDurationDays = 0;
+            // 发货数量 = 份数 × 每份数量(cerashop count); 价格 = 每份价 × 份数 (avatar 恒为 1)
+            var effectiveCount = (isStackable && !isAvatar) ? Math.Min(999, buyCount * Math.Max(1, product.Count)) : 1;
+            // 价格来自 cerashop 三列: 金币 / 胜点(忽略) / 点券。金币与点券一般互斥(只一个非 0)。
+            var goldPrice = Math.Max(0, product.GoldPrice);
+            var ceraPrice = Math.Max(0, product.CoinPrice);
+            if (isAvatar)
+            {
+                goldPrice = 0; // 时装走点券
+                if (AvatarTypeSelectResolver.TryGetOption(itemTemplateId, Math.Max(1, product.Count), out var durDays, out var avatarPrice))
+                {
+                    avatarDurationDays = durDays;
+                    if (avatarPrice > 0)
+                        ceraPrice = avatarPrice;
+                    FileLogger.Log($"  [MallBuy] avatar item=0x{itemTemplateId:X8} durIndex={product.Count} -> durationDays={durDays} ceraPrice={avatarPrice}");
+                }
+                else
+                {
+                    FileLogger.Log($"  [MallBuy] WARN: avatar item=0x{itemTemplateId:X8} 无 [avatar type select] 档位 {product.Count}, 点券价沿用 {ceraPrice}");
+                }
+            }
+            var perUnit = Math.Max(1, buyCount);
+            var totalGoldLong = (long)goldPrice * perUnit;
+            var totalCeraLong = (long)ceraPrice * perUnit;
+            if (totalGoldLong > int.MaxValue || totalCeraLong > int.MaxValue)
+            {
+                FileLogger.Log($"  [MallBuy] REJECT: cost overflow product=0x{productId:X8} item=0x{itemTemplateId:X8} gold={goldPrice} cera={ceraPrice} buyCount={buyCount}");
+                return false;
+            }
+            var totalGoldCost = (int)totalGoldLong;
+            var totalCeraCost = (int)totalCeraLong;
+            // 点券支付方式: buy only cera=仅点券; buy only cera point=仅欢乐券+代币券; 否则瀑布(欢乐→代币→点券)。
+            var ceraMode = MallProductCatalog.IsBuyOnlyCera(itemTemplateId) ? CeraPayMode.OnlyCera
+                : MallProductCatalog.IsBuyOnlyCeraPoint(itemTemplateId) ? CeraPayMode.OnlyCeraPoint
+                : CeraPayMode.Default;
+
+            using (var connection = OpenConnection())
+            using (var transaction = connection.BeginTransaction())
+            {
+                var wallet = LoadWallet(connection, transaction);
+                var plan = ComputeMallPayment(wallet, totalGoldCost, totalCeraCost, ceraMode);
+                FileLogger.Log($"  [MallBuy] product=0x{productId:X8} -> item=0x{itemTemplateId:X8} section={product.Section} kind={itemKind} count={effectiveCount} gold={totalGoldCost} cera={totalCeraCost} mode={ceraMode} wallet(g={wallet.Gold},c={wallet.Coin},t={wallet.TokenCera},h={wallet.HappyTokenCera}) ok={plan.Ok}");
+                if (!plan.Ok)
+                {
+                    FileLogger.Log($"  [MallBuy] REJECT: insufficient funds gold={totalGoldCost} cera={totalCeraCost} mode={ceraMode}");
+                    return false;
+                }
+                var goldSpent = totalGoldCost > 0;
+
+                if (isStackable)
+                {
+                    var existingItem = FindItemByTemplateId(connection, transaction, InventoryListType.Main, itemTemplateId);
+                    var stackLimit = metadata.StackLimit;
+                    if (existingItem != null && (stackLimit <= 0 || existingItem.StackCount + effectiveCount <= stackLimit))
+                    {
+                        var newStackCount = existingItem.StackCount + effectiveCount;
+                        UpdateStackCount(connection, transaction, existingItem.ItemUid, newStackCount);
+                        ApplyMallPayment(connection, transaction, plan);
+                        WriteBuyAuditLog(connection, transaction, itemTemplateId, existingItem.SlotIndex, totalGoldCost, totalCeraCost);
+                        transaction.Commit();
+
+                        result = new InventoryMutationResult
+                        {
+                            ListType = InventoryListType.Main,
+                            SlotIndex = existingItem.SlotIndex,
+                            ItemTemplateId = itemTemplateId,
+                            RemainingStackCount = newStackCount,
+                            InstanceValue = newStackCount,
+                            Durability = 0,
+                            UpdatedGold = plan.NewGold,
+                            UpdatedSp = wallet.Sp,
+                            UpdatedCoin = plan.NewCera,
+                            UpdatedTokenCera = plan.NewTokenCera,
+                            UpdatedHappyTokenCera = plan.NewHappyTokenCera,
+                            GoldSpent = goldSpent,
+                            RequestedCount = (short)effectiveCount,
+                            AppliedCount = (short)effectiveCount,
+                        };
+                        return true;
+                    }
+                }
+
+                int slotStart;
+                int slotEnd;
+                var insertListType = InventoryListType.Main;
+                var insertKind = itemKind;
+                var expireTime = isStackable ? 0 : -1;   // -1 = 永久(装备/永久时装)
+                if (isAvatar)
+                {
+                    insertListType = InventoryListType.Avatar;  // 时装进时装库存, 不进主库存装备槽
+                    insertKind = "avatar";
+                    slotStart = 0;
+                    slotEnd = 500;
+                    if (avatarDurationDays > 0)
+                    {
+                        var unixNow = (long)(DateTime.UtcNow - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalSeconds;
+                        expireTime = (int)Math.Min(int.MaxValue, unixNow + (long)avatarDurationDays * 86400L);
+                    }
+                }
+                else if (isCreature)
+                {
+                    insertListType = InventoryListType.Pet;  // 宠物进专用宠物栏(list 7), 不进主背包装备格
+                    insertKind = "pet";
+                    slotStart = PetInventorySlotStart;
+                    slotEnd = PetInventorySlotEnd;
+                    expireTime = 0;
+                }
+                else
+                {
+                    metadata.GetSlotRange(out slotStart, out slotEnd);
+                }
+
+                var targetSlot = FindEmptySlot(connection, transaction, insertListType, slotStart, slotEnd);
+                if (targetSlot < 0)
+                {
+                    FileLogger.Log($"  [MallBuy] REJECT: no empty slot product=0x{productId:X8} item=0x{itemTemplateId:X8} list={insertListType} slotRange={slotStart}-{slotEnd}");
+                    return false;
+                }
+
+                var petSerial = isCreature ? NextPetSerialOrHandle(connection, transaction) : 0;
+                var instanceValue = isStackable ? effectiveCount : (isCreature ? 0 : GenerateInstanceValue(itemTemplateId, targetSlot));
+                var durability = (isAvatar || isCreature) ? (ushort)0 : metadata.Durability;
+                InsertCharacterItem(
+                    connection,
+                    transaction,
+                    insertListType,
+                    (short)targetSlot,
+                    itemTemplateId,
+                    insertKind,
+                    isCreature ? 0 : effectiveCount,
+                    instanceValue,
+                    durability,
+                    0,
+                    0,
+                    expireTime,
+                    0,
+                    petSerial,
+                    "{}");
+
+                ApplyMallPayment(connection, transaction, plan);
+                WriteBuyAuditLog(connection, transaction, itemTemplateId, (short)targetSlot, totalGoldCost, totalCeraCost);
+                transaction.Commit();
+
+                result = new InventoryMutationResult
+                {
+                    ListType = insertListType,
+                    SlotIndex = (short)targetSlot,
+                    ItemTemplateId = itemTemplateId,
+                    RemainingStackCount = effectiveCount,
+                    InstanceValue = instanceValue,
+                    Durability = durability,
+                    UpdatedGold = plan.NewGold,
+                    UpdatedSp = wallet.Sp,
+                    UpdatedCoin = plan.NewCera,
+                    UpdatedTokenCera = plan.NewTokenCera,
+                    UpdatedHappyTokenCera = plan.NewHappyTokenCera,
+                    GoldSpent = goldSpent,
+                    RequestedCount = (short)effectiveCount,
+                    AppliedCount = (short)effectiveCount,
+                };
+                return true;
+            }
         }
 
         private ItemRecord FindItemByTemplateId(SqliteConnection connection, SqliteTransaction transaction, InventoryListType listType, int templateId)
@@ -1911,6 +2196,38 @@ ORDER BY slot_index;";
         private static int GenerateInstanceValue(int itemTemplateId, int slotIndex)
         {
             return 999999998;
+        }
+
+        // 宠物判定: 物品在 equipment.lst 且 .equ 的 [equipment type] 为 [creature]。
+        // CreatureExtraResolver 对不在 equipment.lst 的物品会抛异常, 这里吞掉返回 false。
+        private static bool IsCreatureItem(int itemTemplateId)
+        {
+            try
+            {
+                return CreatureExtraResolver.HasCreatureExtra(itemTemplateId);
+            }
+            catch (Exception ex)
+            {
+                FileLogger.Log($"  [MallBuy] IsCreatureItem(0x{itemTemplateId:X8}) 判定失败, 视为非宠物: {ex.Message}");
+                return false;
+            }
+        }
+
+        // 为新购宠物生成栏内唯一 serial/handle (取当前角色宠物栏 max+1, 从 1 起)。
+        private int NextPetSerialOrHandle(SqliteConnection connection, SqliteTransaction transaction)
+        {
+            using (var command = connection.CreateCommand())
+            {
+                command.Transaction = transaction;
+                command.CommandText = @"
+SELECT COALESCE(MAX(pet_serial_or_handle), 0) + 1
+FROM character_items
+WHERE character_id = @characterId AND list_type = @listType;";
+                command.Parameters.AddWithValue("@characterId", DefaultCharacterId);
+                command.Parameters.AddWithValue("@listType", (int)InventoryListType.Pet);
+                var next = Convert.ToInt32(command.ExecuteScalar(), CultureInfo.InvariantCulture);
+                return next < 1 ? 1 : next;
+            }
         }
 
         private  void InsertSplitItem(SqliteConnection connection, SqliteTransaction transaction, ItemRecord source, InventoryListType listType, short slotIndex, int moveCount)
@@ -2373,6 +2690,10 @@ VALUES (
             public int Sp { get; set; }
 
             public int Coin { get; set; }
+
+            public int TokenCera { get; set; }
+
+            public int HappyTokenCera { get; set; }
         }
     }
 }
