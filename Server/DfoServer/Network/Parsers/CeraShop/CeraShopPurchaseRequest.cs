@@ -1,8 +1,8 @@
 using System;
 
-namespace DfoServer.Network.Parsers.Mall
+namespace DfoServer.Network.Parsers.CeraShop
 {
-    public sealed class MallPurchaseRequest
+    public sealed class CeraShopPurchaseRequest
     {
         // 一次购买可包含多件不同商品(购物车), 每件一个 commodityNo
         public System.Collections.Generic.List<int> CommodityNos { get; } = new System.Collections.Generic.List<int>();
@@ -21,7 +21,7 @@ namespace DfoServer.Network.Parsers.Mall
         private const int ItemStride = 15;
         private const int CommodityOffsetInItem = 3;
 
-        public static bool TryParse(byte[] body, out MallPurchaseRequest request)
+        public static bool TryParse(byte[] body, out CeraShopPurchaseRequest request)
         {
             request = null;
             if (body == null || body.Length < HeaderSize + ItemStride)
@@ -31,7 +31,7 @@ namespace DfoServer.Network.Parsers.Mall
             if (totalCount <= 0)
                 totalCount = 1;
 
-            var parsed = new MallPurchaseRequest { UnknownFlag = body[5] };
+            var parsed = new CeraShopPurchaseRequest { UnknownFlag = body[5] };
             for (int i = 0; i < totalCount; i++)
             {
                 int commodityOffset = HeaderSize + i * ItemStride + CommodityOffsetInItem;

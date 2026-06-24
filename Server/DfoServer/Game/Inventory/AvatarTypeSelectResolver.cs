@@ -11,7 +11,7 @@ namespace DfoServer.Game.Inventory
     //   每档 7 个 token: 时长(0=无限) ? ? 点券价 ? ? ?
     //   例: 7 0 0 350 0 0 0  30 0 0 770 0 0 0  0 0 0 2310 0 0 0
     //       -> 7天/350, 30天/770, 无限/2310
-    // cerashop avatar 段的第3字段(MallProductEntry.Count) = 此处的 1-based 档位。
+    // cerashop avatar 段的第3字段(CeraShopProductEntry.Count) = 此处的 1-based 档位。
     public sealed class AvatarDurationOption
     {
         public int DurationDays { get; set; } // 0 = 永久

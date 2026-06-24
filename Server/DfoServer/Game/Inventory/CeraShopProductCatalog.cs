@@ -5,7 +5,7 @@ using System.IO;
 
 namespace DfoServer.Game.Inventory
 {
-    public sealed class MallProductEntry
+    public sealed class CeraShopProductEntry
     {
         public int ProductId { get; set; }
 
@@ -22,11 +22,11 @@ namespace DfoServer.Game.Inventory
         public string Section { get; set; }
     }
 
-    public static class MallProductCatalog
+    public static class CeraShopProductCatalog
     {
         private static readonly Lazy<CatalogData> Data = new Lazy<CatalogData>(Load);
 
-        public static bool TryResolve(int productId, out MallProductEntry entry)
+        public static bool TryResolve(int productId, out CeraShopProductEntry entry)
         {
             return Data.Value.Products.TryGetValue(productId, out entry);
         }
@@ -46,7 +46,7 @@ namespace DfoServer.Game.Inventory
         private static CatalogData Load()
         {
             var content = ReadCatalogText();
-            var entries = new Dictionary<int, MallProductEntry>();
+            var entries = new Dictionary<int, CeraShopProductEntry>();
             // cerashop.etc: 客户端购买实际使用的商品定义 (commodityNo->itemId)。
             // 各段格式: 标准段 stride=9 (commodityNo itemId count 金币 胜点 点券 name 0 0),
             //          visual stride=8(+3时长 +5点券), package stride=11(价格在 col4), avatar stride=6。
@@ -67,7 +67,7 @@ namespace DfoServer.Game.Inventory
                 BuyOnlyCeraPoint = ParseIdSet(content, "buy only cera point"),
             };
 
-            FileLogger.Log($"[MallProductCatalog] Loaded {entries.Count} products, buyOnlyCera={data.BuyOnlyCera.Count}, buyOnlyCeraPoint={data.BuyOnlyCeraPoint.Count} from cerashop.etc");
+            FileLogger.Log($"[CeraShopProductCatalog] Loaded {entries.Count} products, buyOnlyCera={data.BuyOnlyCera.Count}, buyOnlyCeraPoint={data.BuyOnlyCeraPoint.Count} from cerashop.etc");
             return data;
         }
 
@@ -85,14 +85,14 @@ namespace DfoServer.Game.Inventory
 
         private sealed class CatalogData
         {
-            public Dictionary<int, MallProductEntry> Products { get; set; }
+            public Dictionary<int, CeraShopProductEntry> Products { get; set; }
 
             public HashSet<int> BuyOnlyCera { get; set; }
 
             public HashSet<int> BuyOnlyCeraPoint { get; set; }
         }
 
-        private static void ParseStandardSection(string content, string section, int stride, Dictionary<int, MallProductEntry> entries)
+        private static void ParseStandardSection(string content, string section, int stride, Dictionary<int, CeraShopProductEntry> entries)
         {
             var tokens = TokenizeSection(content, section);
             if (tokens.Count == 0)
@@ -117,7 +117,7 @@ namespace DfoServer.Game.Inventory
                 if (stride == 9 && (!TryParseInt(tokens[i + 3], out goldPrice) || goldPrice < 0))
                     goldPrice = 0;
 
-                entries[productId] = new MallProductEntry
+                entries[productId] = new CeraShopProductEntry
                 {
                     ProductId = productId,
                     ItemTemplateId = itemTemplateId,
@@ -129,7 +129,7 @@ namespace DfoServer.Game.Inventory
             }
         }
 
-        private static void ParseAvatarSection(string content, Dictionary<int, MallProductEntry> entries)
+        private static void ParseAvatarSection(string content, Dictionary<int, CeraShopProductEntry> entries)
         {
             var tokens = TokenizeSection(content, "avatar");
             for (var i = 0; i + 5 < tokens.Count; i += 6)
@@ -143,7 +143,7 @@ namespace DfoServer.Game.Inventory
 
                 var coinPrice = 0;
                 TryParseInt(tokens[i + 5], out coinPrice);
-                entries[productId] = new MallProductEntry
+                entries[productId] = new CeraShopProductEntry
                 {
                     ProductId = productId,
                     ItemTemplateId = itemTemplateId,
@@ -216,7 +216,7 @@ namespace DfoServer.Game.Inventory
             }
             catch (Exception ex)
             {
-                FileLogger.Log($"[MallProductCatalog] PVF read failed, trying docs fallback: {ex.Message}");
+                FileLogger.Log($"[CeraShopProductCatalog] PVF read failed, trying docs fallback: {ex.Message}");
             }
 
             var directory = AppDomain.CurrentDomain.BaseDirectory;

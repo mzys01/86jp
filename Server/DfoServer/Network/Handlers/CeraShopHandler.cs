@@ -1,41 +1,41 @@
 using DfoServer.Game.SelectCharacter;
 using DfoServer.Game.Inventory;
 using DfoServer.Network.Builders;
-using DfoServer.Network.Builders.Mall;
-using DfoServer.Network.Parsers.Mall;
+using DfoServer.Network.Builders.CeraShop;
+using DfoServer.Network.Parsers.CeraShop;
 using System;
 using System.Threading.Tasks;
 
 namespace DfoServer.Network.Handlers
 {
-    public sealed class MallHandler
+    public sealed class CeraShopHandler
     {
         private readonly SqliteSelectCharacterDataSource _sqliteSelectCharacterDataSource;
 
         public string ProtocolName => "GameProtocol";
 
-        public MallHandler(SqliteSelectCharacterDataSource sqliteSelectCharacterDataSource)
+        public CeraShopHandler(SqliteSelectCharacterDataSource sqliteSelectCharacterDataSource)
         {
             _sqliteSelectCharacterDataSource = sqliteSelectCharacterDataSource ?? throw new ArgumentNullException(nameof(sqliteSelectCharacterDataSource));
         }
 
-        public async Task HandleMallPurchase(EnhancedClientSession session, GamePacketHeader header, byte[] body)
+        public async Task HandleCeraShopPurchase(EnhancedClientSession session, GamePacketHeader header, byte[] body)
         {
-            FileLogger.Log($"[{ProtocolName}] MALL_BUY raw body({body?.Length ?? 0}): {(body != null ? BitConverter.ToString(body) : "null")}");
-            if (!MallPurchaseRequest.TryParse(body, out var request))
+            FileLogger.Log($"[{ProtocolName}] CERA_SHOP_BUY raw body({body?.Length ?? 0}): {(body != null ? BitConverter.ToString(body) : "null")}");
+            if (!CeraShopPurchaseRequest.TryParse(body, out var request))
             {
-                FileLogger.Log($"[{ProtocolName}] MALL_BUY: parse failed");
-                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0040, MallPurchaseAckBuilder.BuildError()));
+                FileLogger.Log($"[{ProtocolName}] CERA_SHOP_BUY: parse failed");
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0040, CeraShopPurchaseAckBuilder.BuildError()));
                 return;
             }
 
-            FileLogger.Log($"[{ProtocolName}] MALL_BUY parsed: {request.CommodityNos.Count} item(s) [{string.Join(", ", request.CommodityNos)}] flag=0x{request.UnknownFlag:X2}");
+            FileLogger.Log($"[{ProtocolName}] CERA_SHOP_BUY parsed: {request.CommodityNos.Count} item(s) [{string.Join(", ", request.CommodityNos)}] flag=0x{request.UnknownFlag:X2}");
             var cid = session.Player?.CharacterId ?? 0;
             var aid = session.Account?.AccountId ?? 0;
             if (cid <= 0 || aid <= 0)
             {
-                FileLogger.Log($"[{ProtocolName}] MALL_BUY: invalid owner cid={cid} aid={aid}");
-                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0040, MallPurchaseAckBuilder.BuildError(request)));
+                FileLogger.Log($"[{ProtocolName}] CERA_SHOP_BUY: invalid owner cid={cid} aid={aid}");
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0040, CeraShopPurchaseAckBuilder.BuildError(request)));
                 return;
             }
 
@@ -44,21 +44,21 @@ namespace DfoServer.Network.Handlers
             var successItems = new System.Collections.Generic.List<System.Tuple<int, InventoryMutationResult>>();
             foreach (var commodityNo in request.CommodityNos)
             {
-                if (_sqliteSelectCharacterDataSource.TryBuyMallItem(cid, aid, commodityNo, 1, out var result))
+                if (_sqliteSelectCharacterDataSource.TryBuyCeraShopItem(cid, aid, commodityNo, 1, out var result))
                 {
-                    FileLogger.Log($"[{ProtocolName}] MALL_BUY: OK commodityNo={commodityNo} slot={result.SlotIndex} item=0x{result.ItemTemplateId:X8} count={result.AppliedCount} coin={result.UpdatedCoin}");
+                    FileLogger.Log($"[{ProtocolName}] CERA_SHOP_BUY: OK commodityNo={commodityNo} slot={result.SlotIndex} item=0x{result.ItemTemplateId:X8} count={result.AppliedCount} coin={result.UpdatedCoin}");
                     results.Add(result);
                     successItems.Add(System.Tuple.Create(commodityNo, result));
                 }
                 else
                 {
-                    FileLogger.Log($"[{ProtocolName}] MALL_BUY: FAILED commodityNo={commodityNo}");
+                    FileLogger.Log($"[{ProtocolName}] CERA_SHOP_BUY: FAILED commodityNo={commodityNo}");
                 }
             }
 
             if (results.Count == 0)
             {
-                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0040, MallPurchaseAckBuilder.BuildError(request)));
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0040, CeraShopPurchaseAckBuilder.BuildError(request)));
                 return;
             }
 
@@ -69,7 +69,7 @@ namespace DfoServer.Network.Handlers
             foreach (var item in successItems)
             {
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0040,
-                    MallPurchaseAckBuilder.BuildSuccess(item.Item1, item.Item2)));
+                    CeraShopPurchaseAckBuilder.BuildSuccess(item.Item1, item.Item2)));
             }
 
             // 普通商品走 NOTI 0x0E。多商品购物车时合并成一个 UPDATE_ITEM_LIST,
@@ -103,7 +103,7 @@ namespace DfoServer.Network.Handlers
                     ItemTemplateId = 0,
                     RemainingStackCount = goldResult.UpdatedGold,
                 });
-                FileLogger.Log($"[{ProtocolName}] MALL_BUY: gold refresh queued gold={goldResult.UpdatedGold}");
+                FileLogger.Log($"[{ProtocolName}] CERA_SHOP_BUY: gold refresh queued gold={goldResult.UpdatedGold}");
             }
 
             if (itemUpdateResults.Count > 0)
@@ -119,13 +119,13 @@ namespace DfoServer.Network.Handlers
                 {
                     var avatarListBody = ItemListPacketBuilder.BuildBody(snapshot, InventoryListType.Avatar);
                     await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000D, avatarListBody));
-                    FileLogger.Log($"[{ProtocolName}] MALL_BUY: avatar ITEM_LIST refresh sent count={snapshot.AvatarItems.Count}");
+                    FileLogger.Log($"[{ProtocolName}] CERA_SHOP_BUY: avatar ITEM_LIST refresh sent count={snapshot.AvatarItems.Count}");
                 }
                 if (hasPetResult)
                 {
                     var petListBody = ItemListPacketBuilder.BuildBody(snapshot, InventoryListType.Pet);
                     await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000D, petListBody));
-                    FileLogger.Log($"[{ProtocolName}] MALL_BUY: pet ITEM_LIST refresh sent count={snapshot.PetItems.Count}");
+                    FileLogger.Log($"[{ProtocolName}] CERA_SHOP_BUY: pet ITEM_LIST refresh sent count={snapshot.PetItems.Count}");
                 }
             }
 
