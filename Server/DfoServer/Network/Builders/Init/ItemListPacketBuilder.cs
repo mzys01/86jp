@@ -51,20 +51,48 @@ namespace DfoServer.Network.Builders
 
             foreach (var item in items)
             {
-                writer.WriteInt16(item.SlotIndex);
-                writer.WriteInt32(item.ItemTemplateId);
-                writer.WriteInt32(item.CountOrInstanceValue);
-                writer.WriteByte(item.ExtData0);
-                writer.WriteUInt16(item.Durability);
-                writer.WriteByte(item.SealFlag);
-                writer.WriteBytes(item.PrefixData0E);
-                writer.WriteInt32(item.Marker16);
-                writer.WriteBytes(item.MiddleData1A);
-                writer.WriteInt32(item.ExpireTime);
-                writer.WriteBytes(item.TailData2F);
+                WriteCommonEntry(writer, item);
             }
 
             return writer.ToArray();
+        }
+
+        public static void WriteCommonEntry(GamePacketWriter writer, CommonInventoryItem item)
+        {
+            if (writer == null) throw new ArgumentNullException(nameof(writer));
+            if (item == null) throw new ArgumentNullException(nameof(item));
+
+            // 普通物品 entry 是初始化 ITEM_LIST 和 NOTI 14 增量刷新共用的 84 字节布局。
+            writer.WriteInt16(item.SlotIndex);
+            writer.WriteInt32(item.ItemTemplateId);
+            writer.WriteInt32(item.CountOrInstanceValue);
+            writer.WriteByte(item.ExtData0);
+            writer.WriteUInt16(item.Durability);
+            writer.WriteByte(item.SealFlag);
+            WriteFixedBytes(writer, item.PrefixData0E, 8);
+            writer.WriteInt32(item.Marker16);
+            WriteFixedBytes(writer, item.MiddleData1A, 17);
+            writer.WriteInt32(item.ExpireTime);
+            WriteFixedBytes(writer, item.TailData2F, 37);
+        }
+
+        private static void WriteFixedBytes(GamePacketWriter writer, byte[] value, int length)
+        {
+            if (value == null || value.Length == 0)
+            {
+                writer.WriteZeroBytes(length);
+                return;
+            }
+
+            if (value.Length == length)
+            {
+                writer.WriteBytes(value);
+                return;
+            }
+
+            var buffer = new byte[length];
+            Array.Copy(value, 0, buffer, 0, Math.Min(value.Length, length));
+            writer.WriteBytes(buffer);
         }
 
         private static byte[] BuildAvatarContainerBody(ushort listParam16, List<AvatarInventoryItem> items, List<AvatarInventoryItem> equipmentItems)
@@ -131,17 +159,7 @@ namespace DfoServer.Network.Builders
 
             foreach (var item in items)
             {
-                writer.WriteInt16(item.SlotIndex);
-                writer.WriteInt32(item.ItemTemplateId);
-                writer.WriteInt32(item.CountOrInstanceValue);
-                writer.WriteByte(item.ExtData0);
-                writer.WriteUInt16(item.Durability);
-                writer.WriteByte(item.SealFlag);
-                writer.WriteBytes(item.PrefixData0E);
-                writer.WriteInt32(item.Marker16);
-                writer.WriteBytes(item.MiddleData1A);
-                writer.WriteInt32(item.ExpireTime);
-                writer.WriteBytes(item.TailData2F);
+                WriteCommonEntry(writer, item);
             }
 
             return writer.ToArray();

@@ -1,5 +1,6 @@
 using DfoServer.Game.CharacterData;
 using DfoServer.Game.Characters;
+using DfoServer.Game.ExpertJob;
 using DfoServer.Game.Inventory;
 using DfoServer.Game.Settings;
 using System;
@@ -180,6 +181,12 @@ namespace DfoServer.Game.SelectCharacter
         {
             using (_inventoryStore.BeginScope(characterId, accountId))
                 return _inventoryStore.TrySellItem(listType, slotIndex, sellCount, out result);
+        }
+
+        public bool TryEnchantByBead(int characterId, int accountId, EnchantByBeadCommand command, out EnchantByBeadResult result)
+        {
+            using (_inventoryStore.BeginScope(characterId, accountId))
+                return _inventoryStore.TryEnchantByBead(command, out result);
         }
 
         public bool TrySortItems(int characterId, int accountId, InventoryListType listType, byte category)

@@ -1,4 +1,5 @@
 using DfoServer.Infrastructure;
+using DfoServer.Game.ExpertJob;
 using System;
 using System.Collections.Generic;
 using System.Globalization;
@@ -1185,6 +1186,91 @@ ORDER BY slot_index;";
             }
         }
 
+        public bool TryEnchantByBead(EnchantByBeadCommand command, out EnchantByBeadResult result)
+        {
+            if (command == null)
+            {
+                result = EnchantByBeadResult.Error(null, EnchantByBeadResult.ErrorInvalidBead);
+                return false;
+            }
+
+            result = EnchantByBeadResult.Error(command, EnchantByBeadResult.ErrorInvalidBead);
+
+            // 从主背包取宝珠和目标装备；先只放开已确认的空间。
+            if (command.BeadListType != InventoryListType.Main || command.TargetListType != InventoryListType.Main)
+            {
+                FileLogger.Log($"  [EnchantByBead] REJECT: unsupported space bead={command.BeadListType} target={command.TargetListType}");
+                result = EnchantByBeadResult.Error(command, EnchantByBeadResult.ErrorUnsupported);
+                return false;
+            }
+
+            using (var connection = OpenConnection())
+            using (var transaction = connection.BeginTransaction())
+            {
+                var bead = LoadItemRecord(connection, transaction, InventoryListType.Main, command.BeadSlotIndex);
+                if (bead == null || bead.StackCount <= 0)
+                {
+                    FileLogger.Log($"  [EnchantByBead] REJECT: invalid bead slot={command.BeadSlotIndex} itemKind={bead?.ItemKind ?? "null"}");
+                    result = EnchantByBeadResult.Error(command, EnchantByBeadResult.ErrorInvalidBead);
+                    return false;
+                }
+
+                var target = LoadItemRecord(connection, transaction, InventoryListType.Main, command.TargetSlotIndex);
+                if (target == null || target.ItemKind != "equipment")
+                {
+                    FileLogger.Log($"  [EnchantByBead] REJECT: invalid target slot={command.TargetSlotIndex} itemKind={target?.ItemKind ?? "null"}");
+                    result = EnchantByBeadResult.Error(command, EnchantByBeadResult.ErrorInvalidTarget);
+                    return false;
+                }
+
+                if (!ItemMetadataResolver.TryValidateEnchantByBeadTarget(bead.ItemTemplateId, target.ItemTemplateId, out var enchantCardItemId, out var rejectReason))
+                {
+                    var errorCode = rejectReason != null && rejectReason.StartsWith("target", StringComparison.Ordinal)
+                        ? EnchantByBeadResult.ErrorInvalidTarget
+                        : EnchantByBeadResult.ErrorUnsupported;
+                    FileLogger.Log($"  [EnchantByBead] REJECT: bead=0x{bead.ItemTemplateId:X8} target=0x{target.ItemTemplateId:X8} reason={rejectReason}");
+                    result = EnchantByBeadResult.Error(command, errorCode);
+                    return false;
+                }
+
+                var targetCommon = LoadCommonItem(connection, transaction, InventoryListType.Main, command.TargetSlotIndex);
+                if (targetCommon == null)
+                {
+                    result = EnchantByBeadResult.Error(command, EnchantByBeadResult.ErrorInvalidTarget);
+                    return false;
+                }
+
+                targetCommon.PrefixData0E = NormalizeBytes(targetCommon.PrefixData0E, 8);
+
+                // 装备 common entry 的 +0x0E 前 4 字节是当前项目里承载附魔卡片 index 的动态字段。
+                BitConverter.GetBytes(enchantCardItemId).CopyTo(targetCommon.PrefixData0E, 0);
+                UpdateCommonExtraJson(connection, transaction, target.ItemUid, targetCommon);
+
+                var remainingBeadCount = bead.StackCount - 1;
+                CommonInventoryItem beadCommon;
+                if (remainingBeadCount > 0)
+                {
+                    UpdateStackCount(connection, transaction, bead.ItemUid, remainingBeadCount);
+                    beadCommon = LoadCommonItem(connection, transaction, InventoryListType.Main, command.BeadSlotIndex);
+                    if (beadCommon == null)
+                        beadCommon = CreateEmptyCommonItem(command.BeadSlotIndex);
+                }
+                else
+                {
+                    DeleteItem(connection, transaction, bead.ItemUid);
+                    beadCommon = CreateEmptyCommonItem(command.BeadSlotIndex);
+                }
+
+                WriteDeleteAuditLog(connection, transaction, bead, 1);
+                WriteEnchantAuditLog(connection, transaction, bead, target, enchantCardItemId);
+                transaction.Commit();
+
+                FileLogger.Log($"  [EnchantByBead] OK: beadSlot={command.BeadSlotIndex} targetSlot={command.TargetSlotIndex} enchantCard=0x{enchantCardItemId:X8} beadLeft={Math.Max(0, remainingBeadCount)}");
+                result = EnchantByBeadResult.Ok(command, targetCommon, beadCommon, enchantCardItemId);
+                return true;
+            }
+        }
+
         public bool TryMoveItem(InventoryMoveRequest request, out InventoryMoveResult result)
         {
             result = null;
@@ -1782,6 +1868,12 @@ VALUES (
                 if (cachedRaw != null)
                 {
                     entryRaw = MakeEquipListCodec.SetSlotByte(cachedRaw, equipSlot);
+                    var fields = LoadDisplayFieldsFromCharacterItem(connection, transaction, dbSrcList, request.SourceSlotIndex);
+                    if (fields != null)
+                    {
+                        // unequipped_entries 可能是附魔前的旧 raw；穿戴前用当前背包记录覆盖动态附魔/增幅字段。
+                        ApplyEquipmentPrefixFields(entryRaw, fields.Value);
+                    }
                 }
                 else if (equipSlot == 12)
                 {
@@ -1824,6 +1916,17 @@ VALUES (
                 FileLogger.Log($"  [EquipMove] EQUIP: slot {equipSlot} itemId=0x{wantId:X8} ({(cachedRaw != null ? "cache" : "template")})");
                 return EquipOutcome.Equipped;
             }
+        }
+
+        private static void ApplyEquipmentPrefixFields(byte[] raw, MakeEquipListCodec.DisplayFields fields)
+        {
+            if (raw == null || raw.Length < 24)
+                return;
+
+            BitConverter.GetBytes(fields.Enchant).CopyTo(raw, 16);
+            raw[20] = fields.EnchantUpgrade;
+            raw[21] = fields.AmplifyType;
+            BitConverter.GetBytes(fields.AmplifyValue).CopyTo(raw, 22);
         }
 
         private void InsertEquipToContainer(SqliteConnection connection, SqliteTransaction transaction, InventoryListType listType, short slot, int itemId, byte[] entryRaw)
@@ -2274,6 +2377,22 @@ WHERE item_uid = @itemUid;";
             {
                 command.Transaction = transaction;
                 command.CommandText = "DELETE FROM character_items WHERE item_uid = @itemUid;";
+                command.Parameters.AddWithValue("@itemUid", itemUid);
+                command.ExecuteNonQuery();
+            }
+        }
+
+        private void UpdateCommonExtraJson(SqliteConnection connection, SqliteTransaction transaction, long itemUid, CommonInventoryItem item)
+        {
+            using (var command = connection.CreateCommand())
+            {
+                command.Transaction = transaction;
+                command.CommandText = @"
+UPDATE character_items
+SET extra_json = @extraJson,
+    updated_at = CURRENT_TIMESTAMP
+WHERE item_uid = @itemUid;";
+                command.Parameters.AddWithValue("@extraJson", SerializeCommon(item));
                 command.Parameters.AddWithValue("@itemUid", itemUid);
                 command.ExecuteNonQuery();
             }
@@ -2791,6 +2910,30 @@ WHERE character_id = @characterId AND list_type = @listType AND slot_index = @sl
             }
         }
 
+        private CommonInventoryItem LoadCommonItem(SqliteConnection connection, SqliteTransaction transaction, InventoryListType listType, short slotIndex)
+        {
+            using (var command = connection.CreateCommand())
+            {
+                command.Transaction = transaction;
+                command.CommandText = @"
+SELECT list_type, slot_index, item_template_id, item_kind, stack_count, instance_value,
+       durability, seal_flag, option_value, expire_time, marker_16, pet_serial_or_handle, extra_json
+FROM character_items
+WHERE character_id = @characterId AND list_type = @listType AND slot_index = @slotIndex;";
+                command.Parameters.AddWithValue("@characterId", DefaultCharacterId);
+                command.Parameters.AddWithValue("@listType", (int)listType);
+                command.Parameters.AddWithValue("@slotIndex", slotIndex);
+
+                using (var reader = command.ExecuteReader())
+                {
+                    if (!reader.Read())
+                        return null;
+
+                    return ReadCommonItem(reader, reader.IsDBNull(12) ? "{}" : reader.GetString(12));
+                }
+            }
+        }
+
         private  List<ItemRecord> LoadItemsByListType(SqliteConnection connection, SqliteTransaction transaction, InventoryListType listType)
         {
             var items = new List<ItemRecord>();
@@ -2900,6 +3043,34 @@ VALUES (
                 command.Parameters.AddWithValue("@itemTemplateId", source.ItemTemplateId);
                 command.Parameters.AddWithValue("@deltaStackCount", -deleteCount);
                 command.Parameters.AddWithValue("@payloadJson", "{\"deleteCount\":" + deleteCount + "}");
+                command.ExecuteNonQuery();
+            }
+        }
+
+        private void WriteEnchantAuditLog(SqliteConnection connection, SqliteTransaction transaction, ItemRecord bead, ItemRecord target, int enchantCardItemId)
+        {
+            using (var command = connection.CreateCommand())
+            {
+                command.Transaction = transaction;
+                command.CommandText = @"
+INSERT INTO item_audit_log (
+    owner_scope, owner_id, character_id, action_name, list_type, slot_index, item_uid,
+    item_template_id, delta_stack_count, payload_json)
+VALUES (
+    'character', @ownerId, @characterId, 'enchant_by_bead', @listType, @slotIndex, @itemUid,
+    @itemTemplateId, 0, @payloadJson);";
+                command.Parameters.AddWithValue("@ownerId", DefaultCharacterId);
+                command.Parameters.AddWithValue("@characterId", DefaultCharacterId);
+                command.Parameters.AddWithValue("@listType", (int)target.ListType);
+                command.Parameters.AddWithValue("@slotIndex", target.SlotIndex);
+                command.Parameters.AddWithValue("@itemUid", target.ItemUid);
+                command.Parameters.AddWithValue("@itemTemplateId", target.ItemTemplateId);
+                command.Parameters.AddWithValue("@payloadJson",
+                    "{\"beadItemUid\":" + bead.ItemUid
+                    + ",\"beadItemTemplateId\":" + bead.ItemTemplateId
+                    + ",\"beadSlotIndex\":" + bead.SlotIndex
+                    + ",\"enchantCardItemId\":" + enchantCardItemId
+                    + "}");
                 command.ExecuteNonQuery();
             }
         }
@@ -3164,6 +3335,22 @@ VALUES (
         private static string SerializePet(PetInventoryItem item)
         {
             return "{\"tailData0A\":\"" + ToHex(item.TailData0A) + "\"}";
+        }
+
+        private static CommonInventoryItem CreateEmptyCommonItem(short slotIndex)
+        {
+            return new CommonInventoryItem
+            {
+                SlotIndex = slotIndex,
+            };
+        }
+
+        private static byte[] NormalizeBytes(byte[] source, int expectedLength)
+        {
+            var buffer = new byte[expectedLength];
+            if (source != null && source.Length > 0)
+                Array.Copy(source, 0, buffer, 0, Math.Min(source.Length, expectedLength));
+            return buffer;
         }
 
         private static string ToHex(byte[] data)

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Text.RegularExpressions;
 
 namespace PvfLib
 {
@@ -81,6 +82,8 @@ namespace PvfLib
         public string Equipment { get; set; }
         
         public string StringData { get; set; }
+
+        public List<string> StringDataItems { get; set; } = new List<string>();
         
         public string IntData { get; set; }
         
@@ -90,6 +93,7 @@ namespace PvfLib
         public string NeedSkill { get; set; }
         public string NeedMaterial { get; set; }
         public int MonsterCardId { get; set; } = -1;
+        public List<int> TargetItemIds { get; set; } = new List<int>();
 
         #endregion
 
@@ -165,7 +169,10 @@ namespace PvfLib
 
                     
                     case "equipment": stk.Equipment = data; break;
-                    case "string data": stk.StringData = data; break;
+                    case "string data":
+                        stk.StringData = data;
+                        stk.StringDataItems = ParseStringList(node, content);
+                        break;
                     case "int data": stk.IntData = data; break;
                     case "package data": stk.PackageData = data; break;
                     case "output item": stk.OutputItem = data; break;
@@ -173,6 +180,7 @@ namespace PvfLib
                     case "need skill": stk.NeedSkill = data; break;
                     case "need material": stk.NeedMaterial = data; break;
                     case "monster card id": stk.MonsterCardId = ParseInt(data); break;
+                    case "target item id": stk.TargetItemIds = ParseIntList(node, content); break;
 
                     
                     case "physical attack": stk.PhysicalAttack = ParseInt(data); break;
@@ -183,6 +191,54 @@ namespace PvfLib
             }
 
             return stk;
+        }
+
+        private static List<string> ParseStringList(ScriptNode node, string content)
+        {
+            var result = new List<string>();
+            if (node == null || node.DataItems == null)
+                return result;
+
+            foreach (var item in node.DataItems)
+            {
+                var raw = item.GetContent(content).Trim();
+                var matches = Regex.Matches(raw, "`([^`]*)`");
+                if (matches.Count > 0)
+                {
+                    foreach (Match match in matches)
+                    {
+                        var value = match.Groups[1].Value.Trim();
+                        if (!string.IsNullOrWhiteSpace(value))
+                            result.Add(value);
+                    }
+                    continue;
+                }
+
+                var fallback = StripBacktick(raw);
+                if (!string.IsNullOrWhiteSpace(fallback))
+                    result.Add(fallback);
+            }
+
+            return result;
+        }
+
+        private static List<int> ParseIntList(ScriptNode node, string content)
+        {
+            var result = new List<int>();
+            if (node == null || node.DataItems == null)
+                return result;
+
+            foreach (var item in node.DataItems)
+            {
+                var raw = item.GetContent(content);
+                foreach (var token in raw.Split(new[] { ' ', '\t', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
+                {
+                    if (int.TryParse(StripBacktick(token), out var value))
+                        result.Add(value);
+                }
+            }
+
+            return result;
         }
 
         #endregion
