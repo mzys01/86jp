@@ -1,4 +1,6 @@
+using DfoServer.Game.CharacterData;
 using DfoServer.Game.Dungeon;
+using DfoServer.Game.SelectCharacter;
 using DfoServer.Game.Skills;
 using DfoServer.GameWorld;
 using DfoServer.Infrastructure;
@@ -972,10 +974,23 @@ namespace DfoServer.Network.Handlers
             }
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x008F, ack.ToArray()));
 
-            if (flagIndex == 31 && session.Player.CurDungeon > 0)
+            if (flagIndex == 31)
             {
-                FileLogger.Log($"[{ProtocolName}] CHANGE_TUTORIAL_FLAG: tutorial complete (flag=31), returning to town");
-                await ReturnToVillage(session);
+                var cid = session.Player.CharacterId;
+                FileLogger.Log($"[{ProtocolName}] CHANGE_TUTORIAL_FLAG: tutorial complete (flag=31), marking skip. cid={cid}");
+
+                var stateRepo = new SqliteCharacterStateRepository(
+                    ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
+                var snap = new SelectCharacterInitializationSnapshot();
+                stateRepo.LoadFlags(cid, snap);
+                snap.AckTutorialSkipable = 1;
+                stateRepo.SaveFlags(cid, snap);
+
+                if (session.Player.CurDungeon > 0)
+                {
+                    FileLogger.Log($"[{ProtocolName}] CHANGE_TUTORIAL_FLAG: returning to town from dungeon={session.Player.CurDungeon}");
+                    await ReturnToVillage(session);
+                }
             }
         }
 

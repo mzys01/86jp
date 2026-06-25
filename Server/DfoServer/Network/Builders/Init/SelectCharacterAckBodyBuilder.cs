@@ -90,7 +90,7 @@ namespace DfoServer.Network.Builders
 
             writer.WriteByte(initSnap.AckCharSlotIndex);
 
-            if (record.Level <= 1)
+            if (record.Level <= 1 && initSnap.AckTutorialSkipable == 0)
             {
                 writer.WriteByte(0x00);  // v15 flag
                 writer.WriteByte(0x00);  // v16 count = 0
