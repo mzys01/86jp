@@ -296,7 +296,12 @@ namespace DfoServer.Network.Handlers
                 return;
             }
 
-            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0207, CommonPacketBodyBuilder.BuildSuccessAck()));
+            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0207, AvatarPackageAckBuilder.BuildSuccess(result.SlotIndex)));
+            if (result.GrantedItems.Count > 0)
+            {
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x00A0,
+                    SelectablePackageAckBuilder.BuildSuccess(result.SlotIndex, result.GrantedItems)));
+            }
             if (result.AddedPetCount > 0)
                 await SendItemListRefresh(session, InventoryListType.Main, InventoryListType.Avatar, InventoryListType.Pet);
             else
@@ -324,7 +329,7 @@ namespace DfoServer.Network.Handlers
                 return;
             }
 
-            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x00A0, SelectablePackageAckBuilder.BuildSuccess(result.GrantedItems)));
+            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x00A0, SelectablePackageAckBuilder.BuildSuccess(result.SlotIndex, result.GrantedItems)));
             var refreshTypes = new System.Collections.Generic.List<InventoryListType>
             {
                 // The package itself lives in main inventory even when all rewards go to avatar/pet lists.

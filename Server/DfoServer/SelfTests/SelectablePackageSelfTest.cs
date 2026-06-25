@@ -174,11 +174,14 @@ namespace DfoServer.SelfTests
                 Check($"result reward item={result.RewardItemTemplateId}", result.RewardItemTemplateId == SelectedRewardItemTemplateId);
                 Check("result added main item", result.AddedMainItemCount == 1);
 
-                var singleAckBody = SelectablePackageAckBuilder.BuildSuccess(result.GrantedItems);
-                Check($"0x00A0 single reward ACK length={singleAckBody.Length}", singleAckBody.Length == 32);
-                Check("0x00A0 single reward ACK popup item count=1", singleAckBody.Length >= 24 && BitConverter.ToUInt16(singleAckBody, 22) == 1);
-                Check("0x00A0 single reward ACK item id", singleAckBody.Length >= 32 && BitConverter.ToInt32(singleAckBody, 24) == SelectedRewardItemTemplateId);
-                Check("0x00A0 single reward ACK item count", singleAckBody.Length >= 32 && BitConverter.ToInt32(singleAckBody, 28) == 1);
+                var singleAckBody = SelectablePackageAckBuilder.BuildSuccess(result.SlotIndex, result.GrantedItems);
+                Check($"0x00A0 single reward ACK length={singleAckBody.Length}", singleAckBody.Length == 21);
+                Check("0x00A0 single reward ACK result flag", singleAckBody.Length >= 1 && singleAckBody[0] == 1);
+                Check("0x00A0 single reward ACK source slot", singleAckBody.Length >= 3 && BitConverter.ToInt16(singleAckBody, 1) == PackageSlot);
+                Check("0x00A0 single reward ACK reserved context", singleAckBody.Length >= 11 && BitConverter.ToInt32(singleAckBody, 3) == 0 && BitConverter.ToInt32(singleAckBody, 7) == 0);
+                Check("0x00A0 single reward ACK popup item count=1", singleAckBody.Length >= 13 && BitConverter.ToUInt16(singleAckBody, 11) == 1);
+                Check("0x00A0 single reward ACK item id", singleAckBody.Length >= 21 && BitConverter.ToInt32(singleAckBody, 13) == SelectedRewardItemTemplateId);
+                Check("0x00A0 single reward ACK item count", singleAckBody.Length >= 21 && BitConverter.ToInt32(singleAckBody, 17) == 1);
             }
 
             using (store.BeginScope(CharacterId, AccountId))
@@ -213,15 +216,14 @@ namespace DfoServer.SelfTests
                     Check("avatar result no main items", avatarResult.AddedMainItemCount == 0);
                     Check($"avatar result granted count={avatarResult.GrantedItems.Count}", avatarResult.GrantedItems.Count == CapturedAvatarItemTemplateIds.Length);
 
-                    var ackBody = SelectablePackageAckBuilder.BuildSuccess(avatarResult.GrantedItems);
-                    Check("0x00A0 success ACK carries result flag", ackBody.Length >= 24 && ackBody[0] == 1);
-                    Check("0x00A0 success ACK popup category sentinel", ackBody.Length >= 24 && BitConverter.ToInt32(ackBody, 2) == -1);
-                    Check("0x00A0 success ACK popup commodity sentinel", ackBody.Length >= 24 && BitConverter.ToInt32(ackBody, 6) == -1);
-                    Check("0x00A0 success ACK keeps mall-compatible var_824", ackBody.Length >= 24 && BitConverter.ToInt32(ackBody, 18) == 0);
-                    Check($"0x00A0 success ACK popup item count={BitConverter.ToUInt16(ackBody, 22)}", ackBody.Length >= 24 && BitConverter.ToUInt16(ackBody, 22) == CapturedAvatarItemTemplateIds.Length);
-                    Check($"0x00A0 success ACK length={ackBody.Length}", ackBody.Length == 24 + CapturedAvatarItemTemplateIds.Length * 8);
-                    Check("0x00A0 success ACK first popup item id", ackBody.Length >= 32 && BitConverter.ToInt32(ackBody, 24) == CapturedAvatarItemTemplateIds[0]);
-                    Check("0x00A0 success ACK first popup item count", ackBody.Length >= 32 && BitConverter.ToInt32(ackBody, 28) == 1);
+                    var ackBody = SelectablePackageAckBuilder.BuildSuccess(avatarResult.SlotIndex, avatarResult.GrantedItems);
+                    Check("0x00A0 success ACK carries result flag", ackBody.Length >= 1 && ackBody[0] == 1);
+                    Check("0x00A0 success ACK source slot", ackBody.Length >= 3 && BitConverter.ToInt16(ackBody, 1) == AvatarPackageSlot);
+                    Check("0x00A0 success ACK reserved context", ackBody.Length >= 11 && BitConverter.ToInt32(ackBody, 3) == 0 && BitConverter.ToInt32(ackBody, 7) == 0);
+                    Check($"0x00A0 success ACK popup item count={BitConverter.ToUInt16(ackBody, 11)}", ackBody.Length >= 13 && BitConverter.ToUInt16(ackBody, 11) == CapturedAvatarItemTemplateIds.Length);
+                    Check($"0x00A0 success ACK length={ackBody.Length}", ackBody.Length == 13 + CapturedAvatarItemTemplateIds.Length * 8);
+                    Check("0x00A0 success ACK first popup item id", ackBody.Length >= 21 && BitConverter.ToInt32(ackBody, 13) == CapturedAvatarItemTemplateIds[0]);
+                    Check("0x00A0 success ACK first popup item count", ackBody.Length >= 21 && BitConverter.ToInt32(ackBody, 17) == 1);
                 }
 
                 using (store.BeginScope(CharacterId, AccountId))

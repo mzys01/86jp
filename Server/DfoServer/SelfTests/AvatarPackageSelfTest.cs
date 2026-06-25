@@ -83,6 +83,27 @@ namespace DfoServer.SelfTests
             {
                 Check($"result package item={result.PackageItemTemplateId}", result.PackageItemTemplateId == PackageItemTemplateId);
                 Check($"result avatar count={result.AddedAvatarCount}", result.AddedAvatarCount == ExpectedAvatarItemIds.Length);
+                Check("result granted popup item count covers known rewards", result.GrantedItems.Count >= ExpectedAvatarItemIds.Length + 6);
+                foreach (var expectedItemId in ExpectedAvatarItemIds)
+                    Check($"granted avatar reward {expectedItemId}", result.GrantedItems.Exists(x => x.ListType == InventoryListType.Avatar && x.ItemTemplateId == expectedItemId && x.DisplayCount == 1));
+                Check("granted expiring reward 10008359", result.GrantedItems.Exists(x => x.ListType == InventoryListType.Main && x.ItemTemplateId == 10008359 && x.DisplayCount == 1));
+                Check("granted expiring reward 10008357", result.GrantedItems.Exists(x => x.ListType == InventoryListType.Main && x.ItemTemplateId == 10008357 && x.DisplayCount == 1));
+                Check("granted expiring reward 10008358", result.GrantedItems.Exists(x => x.ListType == InventoryListType.Main && x.ItemTemplateId == 10008358 && x.DisplayCount == 1));
+                Check("granted expiring reward 10008360", result.GrantedItems.Exists(x => x.ListType == InventoryListType.Main && x.ItemTemplateId == 10008360 && x.DisplayCount == 1));
+                Check("granted expiring reward 10008361", result.GrantedItems.Exists(x => x.ListType == InventoryListType.Main && x.ItemTemplateId == 10008361 && x.DisplayCount == 1));
+                Check("granted expiring reward 10008362", result.GrantedItems.Exists(x => x.ListType == InventoryListType.Main && x.ItemTemplateId == 10008362 && x.DisplayCount == 5));
+
+                var ackBody = AvatarPackageAckBuilder.BuildSuccess(result.SlotIndex);
+                Check("0x0207 success ACK carries result flag", ackBody.Length >= 1 && ackBody[0] == 1);
+                Check("0x0207 success ACK carries source slot", ackBody.Length == 3 && BitConverter.ToInt16(ackBody, 1) == PackageSlot);
+
+                var popupAckBody = SelectablePackageAckBuilder.BuildSuccess(result.SlotIndex, result.GrantedItems);
+                Check("0x0207 popup notification uses 0x00A0 result flag", popupAckBody.Length >= 1 && popupAckBody[0] == 1);
+                Check("0x0207 popup notification source slot", popupAckBody.Length >= 3 && BitConverter.ToInt16(popupAckBody, 1) == PackageSlot);
+                Check("0x0207 popup notification reward count field", popupAckBody.Length >= 13 && BitConverter.ToUInt16(popupAckBody, 11) == result.GrantedItems.Count);
+                Check("0x0207 popup notification length matches granted rewards", popupAckBody.Length == 13 + result.GrantedItems.Count * 8);
+                Check("0x0207 popup notification first item id", popupAckBody.Length >= 21 && BitConverter.ToInt32(popupAckBody, 13) == ExpectedAvatarItemIds[0]);
+                Check("0x0207 popup notification first item count", popupAckBody.Length >= 21 && BitConverter.ToInt32(popupAckBody, 17) == 1);
             }
 
             using (store.BeginScope(CharacterId, AccountId))

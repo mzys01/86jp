@@ -427,6 +427,7 @@ ORDER BY slot_index;";
                 var addedAvatarCount = 0;
                 var addedMainItemCount = 0;
                 var addedPetCount = 0;
+                var grantedItems = new List<PackageGrantedItem>();
 
                 foreach (var reward in definition.Rewards)
                 {
@@ -446,13 +447,21 @@ ORDER BY slot_index;";
                                 connection,
                                 transaction,
                                 CreateDefaultAvatarItem((short)targetSlot, reward.ItemTemplateId, optionValue));
+                            grantedItems.Add(new PackageGrantedItem
+                            {
+                                ListType = InventoryListType.Avatar,
+                                SlotIndex = (short)targetSlot,
+                                ItemTemplateId = reward.ItemTemplateId,
+                                DisplayCount = 1,
+                                Durability = 0,
+                            });
                             addedAvatarCount++;
                         }
 
                         continue;
                     }
 
-                    if (!TryInsertPackageReward(connection, transaction, reward, ref addedMainItemCount, ref addedPetCount))
+                    if (!TryInsertPackageReward(connection, transaction, reward, ref addedMainItemCount, ref addedPetCount, grantedItems))
                     {
                         FileLogger.Log($"  [AvatarPackage] REJECT: cannot insert package reward item=0x{reward.ItemTemplateId:X8} count={reward.Count}");
                         return false;
@@ -475,6 +484,7 @@ ORDER BY slot_index;";
                     AddedMainItemCount = addedMainItemCount,
                     AddedPetCount = addedPetCount,
                 };
+                result.GrantedItems.AddRange(grantedItems);
                 return true;
             }
         }
