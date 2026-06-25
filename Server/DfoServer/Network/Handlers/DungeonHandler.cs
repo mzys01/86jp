@@ -41,12 +41,10 @@ namespace DfoServer.Network.Handlers
                     var subtype1Repo = new Game.CharacterData.SqliteSubtype1Repository(
                         Infrastructure.ServerPaths.DatabasePath, Infrastructure.ServerPaths.SchemaFilePath);
                     var addition = subtype1Repo.HasData(cid) ? subtype1Repo.Load(cid) : null;
-                    var skillRepo = new Game.CharacterData.SqliteCharacterProgressRepository(
-                        Infrastructure.ServerPaths.DatabasePath, Infrastructure.ServerPaths.SchemaFilePath);
-                    var skillSnap = skillRepo.LoadSkills(cid);
 
                     if (record != null && addition != null)
                     {
+                        var skillSnap = LoadSyncedSkillState(cid, record.Level).Skills;
                         var w = new GamePacketWriter();
                         w.WriteByte(1); // subtype 1 ADDITION
                         w.WriteUInt16(1);
@@ -392,22 +390,19 @@ namespace DfoServer.Network.Handlers
                     session.Player.Level++;
 
                 var leveledUp = session.Player.Level > prevLevel;
+                if (leveledUp)
+                {
+                    PersistLevelAndExp(session.Player.CharacterId, session.Player.Level, session.Player.Exp);
+                }
 
                 ushort spTree0 = 0, spTree1 = 0;
                 try
                 {
-                    var charRepo2 = new Game.Characters.SqliteCharacterRepository(
-                        Infrastructure.ServerPaths.DatabasePath, Infrastructure.ServerPaths.SchemaFilePath);
-                    var rec2 = charRepo2.GetById(session.Player.CharacterId);
-                    var skillRepo2 = new Game.CharacterData.SqliteCharacterProgressRepository(
-                        Infrastructure.ServerPaths.DatabasePath, Infrastructure.ServerPaths.SchemaFilePath);
-                    var skillSnap2 = skillRepo2.LoadSkills(session.Player.CharacterId);
-                    if (rec2 != null && skillSnap2 != null)
+                    var points = LoadSyncedSkillState(session.Player.CharacterId, session.Player.Level, persist: leveledUp).Points;
+                    if (points != null)
                     {
-                        var sp2 = Game.Skills.SkillPointCalculator.Calculate(
-                            rec2.Job, session.Player.Level, rec2.BonusSp, rec2.BonusTp, skillSnap2);
-                        spTree0 = (ushort)sp2.RemainingSp;
-                        spTree1 = (ushort)sp2.RemainingSp;
+                        spTree0 = (ushort)points.RemainingSp;
+                        spTree1 = (ushort)points.RemainingSp;
                     }
                 }
                 catch { }
@@ -418,7 +413,6 @@ namespace DfoServer.Network.Handlers
                 if (leveledUp)
                 {
                     FileLogger.Log($"[DungeonHandler] LEVEL UP: cid={session.Player.CharacterId} {prevLevel}→{session.Player.Level} exp={session.Player.Exp}");
-                    PersistLevelAndExp(session.Player.CharacterId, session.Player.Level, session.Player.Exp);
                     await SendQuestListRefresh(session);
                     await SendUserInfoBroadcast(session);
                 }
@@ -478,6 +472,30 @@ namespace DfoServer.Network.Handlers
             }
         }
 
+        private static (Game.SelectCharacter.SkillInfoSnapshot Skills, SkillPointState Points) LoadSyncedSkillState(
+            int characterId,
+            byte currentLevel,
+            bool persist = false)
+        {
+            var charRepo = new Game.Characters.SqliteCharacterRepository(
+                Infrastructure.ServerPaths.DatabasePath, Infrastructure.ServerPaths.SchemaFilePath);
+            var record = charRepo.GetById(characterId);
+            var skillRepo = new Game.CharacterData.SqliteCharacterProgressRepository(
+                Infrastructure.ServerPaths.DatabasePath, Infrastructure.ServerPaths.SchemaFilePath);
+
+            if (record == null)
+                return (skillRepo.LoadSkills(characterId), null);
+
+            return SkillStateService.LoadAndSync(
+                skillRepo,
+                characterId,
+                record.Job,
+                currentLevel > 0 ? currentLevel : record.Level,
+                record.BonusSp,
+                record.BonusTp,
+                persist: persist);
+        }
+
         private async Task SendUserInfoBroadcast(EnhancedClientSession session)
         {
             try
@@ -489,12 +507,10 @@ namespace DfoServer.Network.Handlers
                 var subtype1Repo = new Game.CharacterData.SqliteSubtype1Repository(
                     Infrastructure.ServerPaths.DatabasePath, Infrastructure.ServerPaths.SchemaFilePath);
                 var addition = subtype1Repo.HasData(cid) ? subtype1Repo.Load(cid) : null;
-                var skillRepo = new Game.CharacterData.SqliteCharacterProgressRepository(
-                    Infrastructure.ServerPaths.DatabasePath, Infrastructure.ServerPaths.SchemaFilePath);
-                var skillSnap = skillRepo.LoadSkills(cid);
 
                 if (record != null && addition != null)
                 {
+                    var skillSnap = LoadSyncedSkillState(cid, session.Player.Level).Skills;
                     var w = new GamePacketWriter();
                     w.WriteByte(1);
                     w.WriteUInt16(1);
@@ -786,18 +802,11 @@ namespace DfoServer.Network.Handlers
             ushort spTree0 = 0, spTree1 = 0;
             try
             {
-                var charRepo = new Game.Characters.SqliteCharacterRepository(
-                    Infrastructure.ServerPaths.DatabasePath, Infrastructure.ServerPaths.SchemaFilePath);
-                var rec = charRepo.GetById(session.Player.CharacterId);
-                var skillRepo = new Game.CharacterData.SqliteCharacterProgressRepository(
-                    Infrastructure.ServerPaths.DatabasePath, Infrastructure.ServerPaths.SchemaFilePath);
-                var skillSnap = skillRepo.LoadSkills(session.Player.CharacterId);
-                if (rec != null && skillSnap != null)
+                var points = LoadSyncedSkillState(session.Player.CharacterId, session.Player.Level, persist: false).Points;
+                if (points != null)
                 {
-                    var sp = Game.Skills.SkillPointCalculator.Calculate(
-                        rec.Job, rec.Level, rec.BonusSp, rec.BonusTp, skillSnap);
-                    spTree0 = (ushort)sp.RemainingSp;
-                    spTree1 = (ushort)sp.RemainingSp;
+                    spTree0 = (ushort)points.RemainingSp;
+                    spTree1 = (ushort)points.RemainingSp;
                 }
             }
             catch { }
@@ -1022,18 +1031,11 @@ namespace DfoServer.Network.Handlers
             ushort spTree0 = 0, spTree1 = 0;
             try
             {
-                var charRepo = new Game.Characters.SqliteCharacterRepository(
-                    Infrastructure.ServerPaths.DatabasePath, Infrastructure.ServerPaths.SchemaFilePath);
-                var rec = charRepo.GetById(session.Player.CharacterId);
-                var skillRepo = new Game.CharacterData.SqliteCharacterProgressRepository(
-                    Infrastructure.ServerPaths.DatabasePath, Infrastructure.ServerPaths.SchemaFilePath);
-                var skillSnap = skillRepo.LoadSkills(session.Player.CharacterId);
-                if (rec != null && skillSnap != null)
+                var points = LoadSyncedSkillState(session.Player.CharacterId, session.Player.Level, persist: true).Points;
+                if (points != null)
                 {
-                    var sp = Game.Skills.SkillPointCalculator.Calculate(
-                        rec.Job, session.Player.Level, rec.BonusSp, rec.BonusTp, skillSnap);
-                    spTree0 = (ushort)sp.RemainingSp;
-                    spTree1 = (ushort)sp.RemainingSp;
+                    spTree0 = (ushort)points.RemainingSp;
+                    spTree1 = (ushort)points.RemainingSp;
                 }
             }
             catch { }

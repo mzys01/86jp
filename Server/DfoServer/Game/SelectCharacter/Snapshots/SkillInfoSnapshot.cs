@@ -27,5 +27,7 @@ namespace DfoServer.Game.SelectCharacter
         public ushort Tail0 { get; set; }
 
         public ushort Tail1 { get; set; }
+
+        public bool HasTailValues { get; set; }
     }
 }

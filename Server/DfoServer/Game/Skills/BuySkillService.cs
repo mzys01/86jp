@@ -1,5 +1,6 @@
 using DfoServer.Game.CharacterData;
 using DfoServer.Game.SelectCharacter;
+using System;
 using System.Collections.Generic;
 
 namespace DfoServer.Game.Skills
@@ -41,7 +42,7 @@ namespace DfoServer.Game.Skills
     public static class BuySkillService
     {
         public static BuySkillResult Execute(SqliteCharacterProgressRepository repo, int cid, int job, int skillTree, IList<BuySkillEntry> entries,
-            int bonusSp = 0, byte level = 1)
+            int bonusSp = 0, byte level = 1, int bonusTp = 0)
         {
             var snapshot = repo.LoadSkills(cid);
             int pageIdx = skillTree == 1 ? 1 : 0;
@@ -49,9 +50,11 @@ namespace DfoServer.Game.Skills
                 snapshot.Pages.Add(new SkillInfoPageSnapshot());
             var page = snapshot.Pages[pageIdx];
 
-            var calc = SkillPointCalculator.Calculate((byte)job, level, bonusSp, 0, snapshot);
-            int remainSp = calc.RemainingSp;
-            int remainSfp = snapshot.Tail0;
+            var persistedPoints = repo.LoadSkillPointState(cid);
+            var points = SkillStateService.ResolvePointState(
+                snapshot, persistedPoints, (byte)job, level, bonusSp, bonusTp);
+            int remainSp = points.RemainingSp;
+            int remainSfp = points.RemainingSfp;
 
             var result = new BuySkillResult { Success = true, SkillTree = (byte)skillTree };
 
@@ -75,6 +78,25 @@ namespace DfoServer.Game.Skills
                     if (sd.MaxLevel > 0 && newLevel > sd.MaxLevel) newLevel = sd.MaxLevel;
                     if (newLevel <= curLevel) continue; 
 
+                    byte slotForEntry;
+                    int allocatedSlot = -1;
+                    if (existing != null)
+                    {
+                        slotForEntry = existing.Slot;
+                    }
+                    else
+                    {
+                        int group = SkillSlotAllocator.ReformGroup(sd.RawGroup, sd.IsActive, sd.NumGrowtypes);
+                        allocatedSlot = SkillSlotAllocator.AllocateNewSlot(sd.IsActive, group, job, occupied);
+                        if (allocatedSlot < 0)
+                        {
+                            result.Success = false;
+                            result.ErrorCode = 1;
+                            return result;
+                        }
+                        slotForEntry = (byte)allocatedSlot;
+                    }
+
                     int cost = sd.SpCostFor(curLevel, newLevel);
                     if (sd.IsSpecial)
                     {
@@ -87,25 +109,19 @@ namespace DfoServer.Game.Skills
                         remainSp -= cost;
                     }
 
-                    byte slotForEntry;
                     if (existing != null)
                     {
                         existing.Level = (byte)newLevel;
-                        slotForEntry = existing.Slot;
                     }
                     else
                     {
-                        int group = SkillSlotAllocator.ReformGroup(sd.RawGroup, sd.IsActive, sd.NumGrowtypes);
-                        int slot = SkillSlotAllocator.AllocateNewSlot(sd.IsActive, group, job, occupied);
-                        if (slot < 0) continue; 
-                        occupied.Add(slot);
+                        occupied.Add(allocatedSlot);
                         page.Entries.Add(new SkillInfoEntrySnapshot
                         {
-                            Slot = (byte)slot,
+                            Slot = slotForEntry,
                             SkillId = (ushort)req.SkillIndex,
                             Level = (byte)newLevel,
                         });
-                        slotForEntry = (byte)slot;
                     }
 
                     result.Entries.Add(new BuySkillResultEntry
@@ -121,8 +137,10 @@ namespace DfoServer.Game.Skills
                     
                     if (existing == null || curLevel == 0) continue;
                     byte refundSlot = existing.Slot;
+                    int baseLevel = GetInitialLevel((byte)job, req.SkillIndex);
                     int newLevel = curLevel - levels;
-                    if (newLevel < 0) newLevel = 0;
+                    if (newLevel < baseLevel) newLevel = baseLevel;
+                    if (newLevel >= curLevel) continue;
 
                     int refund = sd.SpCostFor(newLevel, curLevel);
                     if (sd.IsSpecial) remainSfp += refund; else remainSp += refund;
@@ -147,13 +165,24 @@ namespace DfoServer.Game.Skills
                 }
             }
 
-            page.HeaderValue = (ushort)remainSp;
-            snapshot.Tail0 = (ushort)remainSfp;
-            repo.SaveSkills(cid, snapshot);
+            points.RemainingSp = Math.Max(0, Math.Min(remainSp, points.TotalSp));
+            points.RemainingSfp = Math.Max(0, Math.Min(remainSfp, points.TotalSfp));
+            SkillStateService.Persist(repo, cid, snapshot, points);
 
-            result.RemainSp = (ushort)remainSp;
-            result.RemainSfp = (ushort)remainSfp;
+            result.RemainSp = (ushort)points.RemainingSp;
+            result.RemainSfp = (ushort)points.RemainingSfp;
             return result;
+        }
+
+        private static int GetInitialLevel(byte job, int skillId)
+        {
+            var initial = InitialCharacterSkills.Build(job);
+            if (initial == null || initial.Pages.Count == 0) return 0;
+
+            foreach (var entry in initial.Pages[0].Entries)
+                if (entry.SkillId == skillId)
+                    return entry.Level;
+            return 0;
         }
     }
 }

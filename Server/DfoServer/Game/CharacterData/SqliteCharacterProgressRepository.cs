@@ -3,6 +3,7 @@ using DfoServer.Infrastructure;
 using System;
 using System.Collections.Generic;
 using Microsoft.Data.Sqlite;
+using Skills = DfoServer.Game.Skills;
 
 namespace DfoServer.Game.CharacterData
 {
@@ -70,6 +71,7 @@ namespace DfoServer.Game.CharacterData
                         {
                             snapshot.Tail0 = (ushort)reader.GetInt32(0);
                             snapshot.Tail1 = (ushort)reader.GetInt32(1);
+                            snapshot.HasTailValues = true;
                         }
                     }
                 }
@@ -77,66 +79,146 @@ namespace DfoServer.Game.CharacterData
             return snapshot;
         }
 
-        public void SaveSkills(int characterId, SkillInfoSnapshot snapshot)
+        public void SaveSkillProgress(int characterId, SkillInfoSnapshot snapshot, Skills.SkillPointState state)
         {
+            if (snapshot == null || state == null) return;
             using (var conn = new SqliteConnection(_connectionString))
             {
                 conn.Open();
                 using (var tx = conn.BeginTransaction())
                 {
-                    using (var cmd = new SqliteCommand("DELETE FROM character_skills WHERE character_id = @cid", conn, tx))
-                    {
-                        cmd.Parameters.AddWithValue("@cid", characterId);
-                        cmd.ExecuteNonQuery();
-                    }
-                    using (var cmd = new SqliteCommand("DELETE FROM character_skill_tail WHERE character_id = @cid", conn, tx))
-                    {
-                        cmd.Parameters.AddWithValue("@cid", characterId);
-                        cmd.ExecuteNonQuery();
-                    }
-
-                    for (int pageIdx = 0; pageIdx < snapshot.Pages.Count; pageIdx++)
-                    {
-                        var page = snapshot.Pages[pageIdx];
-                        if (page.Entries.Count == 0)
-                        {
-                            using (var cmd = new SqliteCommand(
-                                "INSERT INTO character_skills (character_id, page_index, page_header, slot, skill_id, level) VALUES (@cid, @page, @header, -1, 0, 0)", conn, tx))
-                            {
-                                cmd.Parameters.AddWithValue("@cid", characterId);
-                                cmd.Parameters.AddWithValue("@page", pageIdx);
-                                cmd.Parameters.AddWithValue("@header", (int)page.HeaderValue);
-                                cmd.ExecuteNonQuery();
-                            }
-                        }
-                        foreach (var entry in page.Entries)
-                        {
-                            using (var cmd = new SqliteCommand(
-                                "INSERT INTO character_skills (character_id, page_index, page_header, slot, skill_id, level, extra_values) VALUES (@cid, @page, @header, @slot, @sid, @lvl, @extra)", conn, tx))
-                            {
-                                cmd.Parameters.AddWithValue("@cid", characterId);
-                                cmd.Parameters.AddWithValue("@page", pageIdx);
-                                cmd.Parameters.AddWithValue("@header", (int)page.HeaderValue);
-                                cmd.Parameters.AddWithValue("@slot", (int)entry.Slot);
-                                cmd.Parameters.AddWithValue("@sid", (int)entry.SkillId);
-                                cmd.Parameters.AddWithValue("@lvl", (int)entry.Level);
-                                cmd.Parameters.AddWithValue("@extra", entry.ExtraValues.Count > 0 ? (object)entry.ExtraValues.ToArray() : DBNull.Value);
-                                cmd.ExecuteNonQuery();
-                            }
-                        }
-                    }
-
-                    using (var cmd = new SqliteCommand(
-                        "INSERT INTO character_skill_tail (character_id, tail0, tail1) VALUES (@cid, @t0, @t1)", conn, tx))
-                    {
-                        cmd.Parameters.AddWithValue("@cid", characterId);
-                        cmd.Parameters.AddWithValue("@t0", (int)snapshot.Tail0);
-                        cmd.Parameters.AddWithValue("@t1", (int)snapshot.Tail1);
-                        cmd.ExecuteNonQuery();
-                    }
-
+                    SaveSkillsCore(conn, tx, characterId, snapshot);
+                    SaveSkillPointStateCore(conn, tx, characterId, state);
                     tx.Commit();
                 }
+            }
+        }
+
+        private static void SaveSkillsCore(
+            SqliteConnection conn,
+            SqliteTransaction tx,
+            int characterId,
+            SkillInfoSnapshot snapshot)
+        {
+            using (var cmd = new SqliteCommand("DELETE FROM character_skills WHERE character_id = @cid", conn, tx))
+            {
+                cmd.Parameters.AddWithValue("@cid", characterId);
+                cmd.ExecuteNonQuery();
+            }
+            using (var cmd = new SqliteCommand("DELETE FROM character_skill_tail WHERE character_id = @cid", conn, tx))
+            {
+                cmd.Parameters.AddWithValue("@cid", characterId);
+                cmd.ExecuteNonQuery();
+            }
+
+            for (int pageIdx = 0; pageIdx < snapshot.Pages.Count; pageIdx++)
+            {
+                var page = snapshot.Pages[pageIdx];
+                if (page.Entries.Count == 0)
+                {
+                    using (var cmd = new SqliteCommand(
+                        "INSERT INTO character_skills (character_id, page_index, page_header, slot, skill_id, level) VALUES (@cid, @page, @header, -1, 0, 0)", conn, tx))
+                    {
+                        cmd.Parameters.AddWithValue("@cid", characterId);
+                        cmd.Parameters.AddWithValue("@page", pageIdx);
+                        cmd.Parameters.AddWithValue("@header", (int)page.HeaderValue);
+                        cmd.ExecuteNonQuery();
+                    }
+                }
+                foreach (var entry in page.Entries)
+                {
+                    using (var cmd = new SqliteCommand(
+                        "INSERT INTO character_skills (character_id, page_index, page_header, slot, skill_id, level, extra_values) VALUES (@cid, @page, @header, @slot, @sid, @lvl, @extra)", conn, tx))
+                    {
+                        cmd.Parameters.AddWithValue("@cid", characterId);
+                        cmd.Parameters.AddWithValue("@page", pageIdx);
+                        cmd.Parameters.AddWithValue("@header", (int)page.HeaderValue);
+                        cmd.Parameters.AddWithValue("@slot", (int)entry.Slot);
+                        cmd.Parameters.AddWithValue("@sid", (int)entry.SkillId);
+                        cmd.Parameters.AddWithValue("@lvl", (int)entry.Level);
+                        cmd.Parameters.AddWithValue("@extra", entry.ExtraValues.Count > 0 ? (object)entry.ExtraValues.ToArray() : DBNull.Value);
+                        cmd.ExecuteNonQuery();
+                    }
+                }
+            }
+
+            using (var cmd = new SqliteCommand(
+                "INSERT INTO character_skill_tail (character_id, tail0, tail1) VALUES (@cid, @t0, @t1)", conn, tx))
+            {
+                cmd.Parameters.AddWithValue("@cid", characterId);
+                cmd.Parameters.AddWithValue("@t0", (int)snapshot.Tail0);
+                cmd.Parameters.AddWithValue("@t1", (int)snapshot.Tail1);
+                cmd.ExecuteNonQuery();
+                snapshot.HasTailValues = true;
+            }
+        }
+
+        public Skills.SkillPointState LoadSkillPointState(int characterId)
+        {
+            using (var conn = new SqliteConnection(_connectionString))
+            {
+                conn.Open();
+                using (var cmd = new SqliteCommand(@"
+SELECT total_sp, remaining_sp, total_sfp, remaining_sfp, total_tp, remaining_tp, synced_level
+FROM character_skill_points
+WHERE character_id = @cid", conn))
+                {
+                    cmd.Parameters.AddWithValue("@cid", characterId);
+                    using (var reader = cmd.ExecuteReader())
+                    {
+                        if (!reader.Read())
+                            return null;
+
+                        return new Skills.SkillPointState
+                        {
+                            TotalSp = reader.GetInt32(0),
+                            RemainingSp = reader.GetInt32(1),
+                            TotalSfp = reader.GetInt32(2),
+                            RemainingSfp = reader.GetInt32(3),
+                            TotalTp = reader.GetInt32(4),
+                            RemainingTp = reader.GetInt32(5),
+                            SyncedLevel = (byte)reader.GetInt32(6),
+                            HasPersistedState = true,
+                        };
+                    }
+                }
+            }
+        }
+
+        private static void SaveSkillPointStateCore(
+            SqliteConnection conn,
+            SqliteTransaction tx,
+            int characterId,
+            Skills.SkillPointState state)
+        {
+            using (var cmd = new SqliteCommand(@"
+INSERT INTO character_skill_points (
+    character_id, total_sp, remaining_sp, total_sfp, remaining_sfp,
+    total_tp, remaining_tp, synced_level, updated_at
+) VALUES (
+    @cid, @totalSp, @remainingSp, @totalSfp, @remainingSfp,
+    @totalTp, @remainingTp, @level, CURRENT_TIMESTAMP
+)
+ON CONFLICT(character_id) DO UPDATE SET
+    total_sp = excluded.total_sp,
+    remaining_sp = excluded.remaining_sp,
+    total_sfp = excluded.total_sfp,
+    remaining_sfp = excluded.remaining_sfp,
+    total_tp = excluded.total_tp,
+    remaining_tp = excluded.remaining_tp,
+    synced_level = excluded.synced_level,
+    updated_at = CURRENT_TIMESTAMP", conn, tx))
+            {
+                cmd.Parameters.AddWithValue("@cid", characterId);
+                cmd.Parameters.AddWithValue("@totalSp", state.TotalSp);
+                cmd.Parameters.AddWithValue("@remainingSp", state.RemainingSp);
+                cmd.Parameters.AddWithValue("@totalSfp", state.TotalSfp);
+                cmd.Parameters.AddWithValue("@remainingSfp", state.RemainingSfp);
+                cmd.Parameters.AddWithValue("@totalTp", state.TotalTp);
+                cmd.Parameters.AddWithValue("@remainingTp", state.RemainingTp);
+                cmd.Parameters.AddWithValue("@level", (int)state.SyncedLevel);
+                cmd.ExecuteNonQuery();
+                state.HasPersistedState = true;
             }
         }
 
@@ -213,18 +295,6 @@ namespace DfoServer.Game.CharacterData
                 cmd.ExecuteNonQuery();
             }
         }
-
-        public void ResetSkills(int characterId, ushort totalSp)
-        {
-            var snapshot = LoadSkills(characterId);
-            foreach (var page in snapshot.Pages)
-                page.Entries.Clear();
-            if (snapshot.Pages.Count > 0)
-                snapshot.Pages[0].HeaderValue = totalSp;
-            SaveSkills(characterId, snapshot);
-        }
-
-        
 
         public CreatureItemListSnapshot LoadCreatures(int characterId)
         {
@@ -316,10 +386,67 @@ namespace DfoServer.Game.CharacterData
         public void SeedFromSnapshot(int characterId, SelectCharacterInitializationSnapshot snapshot)
         {
             if (!HasSkills(characterId) && snapshot.SkillInfo != null && snapshot.SkillInfo.Pages.Count > 0)
-                SaveSkills(characterId, snapshot.SkillInfo);
+            {
+                var owner = LoadSkillOwnerState(characterId);
+                var points = Skills.SkillStateService.ResolvePointState(
+                    snapshot.SkillInfo,
+                    null,
+                    owner.Job,
+                    owner.Level,
+                    owner.BonusSp,
+                    owner.BonusTp);
+                Skills.SkillStateService.Persist(this, characterId, snapshot.SkillInfo, points);
+            }
 
             if (!HasCreatures(characterId) && snapshot.CreatureItemList != null && snapshot.CreatureItemList.Entries.Count > 0)
                 SaveCreatures(characterId, snapshot.CreatureItemList);
+        }
+
+        private (byte Job, byte Level, int BonusSp, int BonusTp) LoadSkillOwnerState(int characterId)
+        {
+            try
+            {
+                using (var conn = new SqliteConnection(_connectionString))
+                {
+                    conn.Open();
+                    using (var cmd = new SqliteCommand(
+                        "SELECT job, level, bonus_sp, bonus_tp FROM characters WHERE character_id = @cid", conn))
+                    {
+                        cmd.Parameters.AddWithValue("@cid", characterId);
+                        using (var reader = cmd.ExecuteReader())
+                        {
+                            if (reader.Read())
+                            {
+                                return (
+                                    (byte)reader.GetInt32(0),
+                                    (byte)Math.Max(1, reader.GetInt32(1)),
+                                    reader.GetInt32(2),
+                                    reader.GetInt32(3));
+                            }
+                        }
+                    }
+                }
+            }
+            catch (SqliteException)
+            {
+            }
+
+            using (var conn = new SqliteConnection(_connectionString))
+            {
+                conn.Open();
+                using (var cmd = new SqliteCommand(
+                    "SELECT job, level FROM characters WHERE character_id = @cid", conn))
+                {
+                    cmd.Parameters.AddWithValue("@cid", characterId);
+                    using (var reader = cmd.ExecuteReader())
+                    {
+                        if (reader.Read())
+                            return ((byte)reader.GetInt32(0), (byte)Math.Max(1, reader.GetInt32(1)), 0, 0);
+                    }
+                }
+            }
+
+            return (0, 1, 0, 0);
         }
     }
 }
