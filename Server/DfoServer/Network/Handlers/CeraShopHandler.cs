@@ -1,5 +1,6 @@
 using DfoServer.Game.SelectCharacter;
 using DfoServer.Game.Inventory;
+using DfoServer.Game.Premium;
 using DfoServer.Network.Builders;
 using DfoServer.Network.Builders.CeraShop;
 using DfoServer.Network.Parsers.CeraShop;
@@ -42,6 +43,7 @@ namespace DfoServer.Network.Handlers
             // 购物车: 逐件结算, 每个 commodityNo 买 1 份(份内数量由商品定义)
             var results = new System.Collections.Generic.List<InventoryMutationResult>();
             var successItems = new System.Collections.Generic.List<System.Tuple<int, InventoryMutationResult>>();
+            var boughtExpertContract = false;
             foreach (var commodityNo in request.CommodityNos)
             {
                 if (_sqliteSelectCharacterDataSource.TryBuyCeraShopItem(cid, aid, commodityNo, 1, out var result))
@@ -49,6 +51,8 @@ namespace DfoServer.Network.Handlers
                     FileLogger.Log($"[{ProtocolName}] CERA_SHOP_BUY: OK commodityNo={commodityNo} slot={result.SlotIndex} item=0x{result.ItemTemplateId:X8} count={result.AppliedCount} coin={result.UpdatedCoin}");
                     results.Add(result);
                     successItems.Add(System.Tuple.Create(commodityNo, result));
+                    if (PremiumContractService.IsExpertContractItem(result.ItemTemplateId))
+                        boughtExpertContract = true;
                 }
                 else
                 {
@@ -130,8 +134,33 @@ namespace DfoServer.Network.Handlers
             }
 
             // NOTI 0x35 点券更新(最终余额)
+            if (boughtExpertContract)
+                await SendPremiumServiceRefresh(session, cid, aid);
+
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0035,
                 BuildCeraUpdate(last.UpdatedCoin, last.UpdatedTokenCera, last.UpdatedHappyTokenCera)));
+        }
+
+        private async Task SendPremiumServiceRefresh(EnhancedClientSession session, int characterId, int accountId)
+        {
+            try
+            {
+                var snapshot = _sqliteSelectCharacterDataSource.Load(characterId, accountId);
+                var initSnap = snapshot?.InitializationSnapshot;
+                if (initSnap?.PremiumServiceData == null)
+                    return;
+
+                var writer = new GamePacketWriter();
+                writer.WriteByte(1);
+                writer.WriteUInt16(initSnap.PremiumServiceType);
+                writer.WriteBytes(initSnap.PremiumServiceData);
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0312, writer.ToArray()));
+                FileLogger.Log($"[{ProtocolName}] CERA_SHOP_BUY: premium service refresh sent char={characterId} account={accountId}");
+            }
+            catch (Exception ex)
+            {
+                FileLogger.Log($"[{ProtocolName}] CERA_SHOP_BUY: premium service refresh failed: {ex.Message}");
+            }
         }
 
         private static byte[] BuildItemListUpdate(System.Collections.Generic.IReadOnlyList<InventoryMutationResult> updates)

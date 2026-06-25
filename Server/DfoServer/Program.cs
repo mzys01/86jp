@@ -28,6 +28,12 @@ namespace DfoServer
                 return;
             }
 
+            if (Array.IndexOf(args, "--selftest-premium-contract-account-scope") >= 0)
+            {
+                Environment.Exit(SelfTests.PremiumContractAccountScopeSelfTest.Run());
+                return;
+            }
+
             GameNetworkConfig.Configure(args);
 
             try
