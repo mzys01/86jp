@@ -217,9 +217,9 @@ namespace DfoServer.GameWorld
                     {
                         Code = item.MonsterId.Value,
                         Type = (byte)item.Type,
-                        Level = item.AutoLv.GetValueOrDefault() == 0
-                            ? GetDungeonBasicLv(dungeonId)
-                            : (byte)item.AutoLv.Value,
+                        Level = item.Lv.GetValueOrDefault() != 0
+                            ? (byte)(GetDungeonBasicLv(dungeonId) + item.AutoLv.GetValueOrDefault())
+                            : (byte)item.AutoLv.GetValueOrDefault(),
                     });
                 }
                 return new MazeSumInfo { Monsters = listO, X = x, Y = y, Index = overrideMapId };
@@ -505,9 +505,9 @@ namespace DfoServer.GameWorld
                 {
                     Code = item.MonsterId.Value,
                     Type = (byte)item.Type,
-                    Level = item.AutoLv.GetValueOrDefault() == 0
-                        ? GetDungeonBasicLv(dungeonId)
-                        : (byte)item.AutoLv.Value,
+                    Level = item.Lv.GetValueOrDefault() != 0
+                        ? (byte)(GetDungeonBasicLv(dungeonId) + item.AutoLv.GetValueOrDefault())
+                        : (byte)item.AutoLv.GetValueOrDefault(),
                 };
                 list.Add(monster);
             }
