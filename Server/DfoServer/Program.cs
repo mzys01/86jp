@@ -16,6 +16,18 @@ namespace DfoServer
                 return;
             }
 
+            if (Array.IndexOf(args, "--selftest-avatar-package") >= 0)
+            {
+                Environment.Exit(SelfTests.AvatarPackageSelfTest.Run());
+                return;
+            }
+
+            if (Array.IndexOf(args, "--selftest-selectable-package") >= 0)
+            {
+                Environment.Exit(SelfTests.SelectablePackageSelfTest.Run());
+                return;
+            }
+
             GameNetworkConfig.Configure(args);
 
             try
