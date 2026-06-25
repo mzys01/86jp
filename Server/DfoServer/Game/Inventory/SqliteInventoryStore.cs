@@ -1868,6 +1868,12 @@ VALUES (
                 if (cachedRaw != null)
                 {
                     entryRaw = MakeEquipListCodec.SetSlotByte(cachedRaw, equipSlot);
+                    var fields = LoadDisplayFieldsFromCharacterItem(connection, transaction, dbSrcList, request.SourceSlotIndex);
+                    if (fields != null)
+                    {
+                        // unequipped_entries 可能是附魔前的旧 raw；穿戴前用当前背包记录覆盖动态附魔/增幅字段。
+                        ApplyEquipmentPrefixFields(entryRaw, fields.Value);
+                    }
                 }
                 else if (equipSlot == 12)
                 {
@@ -1910,6 +1916,17 @@ VALUES (
                 FileLogger.Log($"  [EquipMove] EQUIP: slot {equipSlot} itemId=0x{wantId:X8} ({(cachedRaw != null ? "cache" : "template")})");
                 return EquipOutcome.Equipped;
             }
+        }
+
+        private static void ApplyEquipmentPrefixFields(byte[] raw, MakeEquipListCodec.DisplayFields fields)
+        {
+            if (raw == null || raw.Length < 24)
+                return;
+
+            BitConverter.GetBytes(fields.Enchant).CopyTo(raw, 16);
+            raw[20] = fields.EnchantUpgrade;
+            raw[21] = fields.AmplifyType;
+            BitConverter.GetBytes(fields.AmplifyValue).CopyTo(raw, 22);
         }
 
         private void InsertEquipToContainer(SqliteConnection connection, SqliteTransaction transaction, InventoryListType listType, short slot, int itemId, byte[] entryRaw)
