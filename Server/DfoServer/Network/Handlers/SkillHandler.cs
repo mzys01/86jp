@@ -119,7 +119,7 @@ namespace DfoServer.Network.Handlers
                         Infrastructure.ServerPaths.DatabasePath, Infrastructure.ServerPaths.SchemaFilePath);
                     var rec = charRepo.GetById(cid);
                     var result = Game.Skills.BuySkillService.Execute(repo, cid, job, skillTree, entries,
-                        rec?.BonusSp ?? 0, rec?.Level ?? (byte)1);
+                        rec?.BonusSp ?? 0, rec?.Level ?? (byte)1, rec?.BonusTp ?? 0);
                     var ack = BuySkillAckBuilder.Build(result);
                     await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x001D, ack));
                 }
@@ -140,8 +140,13 @@ namespace DfoServer.Network.Handlers
                 var charRepo = new Game.Characters.SqliteCharacterRepository(
                     Infrastructure.ServerPaths.DatabasePath, Infrastructure.ServerPaths.SchemaFilePath);
                 var rec = charRepo.GetById(cid);
-                int totalSp = Game.Skills.SpTableProvider.GetTotalSp(level) + (rec?.BonusSp ?? 0);
-                repo.ResetSkills(cid, (ushort)totalSp);
+                var reset = Game.Skills.SkillStateService.ResetToInitial(
+                    repo,
+                    cid,
+                    rec?.Job ?? (byte)(session.Player != null ? session.Player.Job : 0),
+                    rec?.Level ?? level,
+                    rec?.BonusSp ?? 0,
+                    rec?.BonusTp ?? 0);
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, header.type, new byte[] { 0x01, 0x00 }));
 
                 var dataSource = new SqliteSelectCharacterDataSource(
@@ -151,6 +156,7 @@ namespace DfoServer.Network.Handlers
                 var skillBody = new SkillInfoBodyBuilder();
                 if (skillBody.TryBuild(snapshot, 0, out var skillBytes))
                     await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0013, skillBytes));
+                FileLogger.Log($"[SkillHandler] SKILL_INIT reset char={cid} remainSP={reset.Points.RemainingSp}");
             }
             catch (Exception ex) { FileLogger.Log($"[SkillHandler] SKILL_INIT failed: {ex}"); }
         }

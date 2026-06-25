@@ -55,12 +55,15 @@ namespace DfoServer.Game.SelectCharacter
                 var rec = _characterRepository?.GetById(characterId);
                 if (rec != null && initSnapshot.SkillInfo != null && initSnapshot.SkillInfo.Pages.Count > 0)
                 {
-                    var sp = Skills.SkillPointCalculator.Calculate(
-                        rec.Job, rec.Level, rec.BonusSp, rec.BonusTp, initSnapshot.SkillInfo);
-                    initSnapshot.SkillInfo.Pages[0].HeaderValue = (ushort)sp.RemainingSp;
-                    if (initSnapshot.SkillInfo.Pages.Count > 1)
-                        initSnapshot.SkillInfo.Pages[1].HeaderValue = (ushort)sp.RemainingSp;
-                    initSnapshot.SkillInfo.Tail1 = (ushort)sp.TotalSp;
+                    var synced = Skills.SkillStateService.LoadAndSync(
+                        _initDataRepository,
+                        characterId,
+                        rec.Job,
+                        rec.Level,
+                        rec.BonusSp,
+                        rec.BonusTp,
+                        persist: false);
+                    initSnapshot.SkillInfo = synced.Skills;
                 }
             }
 
@@ -222,7 +225,14 @@ namespace DfoServer.Game.SelectCharacter
 
             var initialSkills = InitialCharacterSkills.Build(job);
             if (initialSkills != null)
-                _initDataRepository.SaveSkills(characterId, initialSkills);
+            {
+                var points = Skills.SkillStateService.ResolvePointState(
+                    initialSkills, null, job, 1, 0, 0);
+                points.RemainingSp = points.TotalSp;
+                points.RemainingTp = points.TotalTp;
+                points.RemainingSfp = points.TotalSfp;
+                Skills.SkillStateService.Persist(_initDataRepository, characterId, initialSkills, points);
+            }
 
             var initialEquip = InitialCharacterEquipment.Get(job);
             if (initialEquip != null)

@@ -99,12 +99,12 @@ namespace DfoServer.Game.Quests
                     var charRepo = new SqliteCharacterRepository(ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
                     var rec = charRepo.GetById(cid);
                     var skillRepo = new SqliteCharacterProgressRepository(ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
-                    var skillSnap = skillRepo.LoadSkills(cid);
-                    if (rec != null && skillSnap != null)
+                    if (rec != null)
                     {
-                        var sp = SkillPointCalculator.Calculate(rec.Job, player.Level, rec.BonusSp, rec.BonusTp, skillSnap);
-                        spTree0 = (ushort)sp.RemainingSp;
-                        spTree1 = (ushort)sp.RemainingSp;
+                        var synced = SkillStateService.LoadAndSync(
+                            skillRepo, cid, rec.Job, player.Level, rec.BonusSp, rec.BonusTp, persist: player.Level > prevLevel);
+                        spTree0 = (ushort)synced.Points.RemainingSp;
+                        spTree1 = (ushort)synced.Points.RemainingSp;
                     }
                 }
                 catch (Exception ex) { FileLogger.Log($"[QuestManager] SP calc ERROR: {ex.Message}"); }
@@ -176,15 +176,16 @@ namespace DfoServer.Game.Quests
                 var subtype1Repo = new SqliteSubtype1Repository(ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
                 var addition = subtype1Repo.HasData(characterId) ? subtype1Repo.Load(characterId) : null;
                 var skillRepo = new SqliteCharacterProgressRepository(ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
-                var skillSnap = skillRepo.LoadSkills(characterId);
 
                 if (record != null && addition != null)
                 {
+                    var synced = SkillStateService.LoadAndSync(
+                        skillRepo, characterId, record.Job, record.Level, record.BonusSp, record.BonusTp, persist: false);
                     var w = new Network.GamePacketWriter();
                     w.WriteByte(1);
                     w.WriteUInt16(1);
                     w.WriteUInt16((ushort)record.CharacterId);
-                    w.WriteBytes(UserInfoSubtype1Builder.BuildFromSnapshot(addition, skillSnap));
+                    w.WriteBytes(UserInfoSubtype1Builder.BuildFromSnapshot(addition, synced.Skills));
                     await _sender.SendNotiAsync(0x0002, w.ToArray());
                 }
             }

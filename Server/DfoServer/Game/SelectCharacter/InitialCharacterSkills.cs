@@ -24,10 +24,10 @@ namespace DfoServer.Game.SelectCharacter
         {
             lock (_lock)
             {
-                if (_cache.TryGetValue(job, out var cached)) return cached;
+                if (_cache.TryGetValue(job, out var cached)) return Clone(cached);
                 var result = ParseFromPvf(job);
                 _cache[job] = result;
-                return result;
+                return Clone(result);
             }
         }
 
@@ -100,5 +100,35 @@ namespace DfoServer.Game.SelectCharacter
 
         private static void Add(SkillInfoPageSnapshot page, byte slot, ushort skillId, byte level)
             => page.Entries.Add(new SkillInfoEntrySnapshot { Slot = slot, SkillId = skillId, Level = level });
+
+        private static SkillInfoSnapshot Clone(SkillInfoSnapshot source)
+        {
+            var copy = new SkillInfoSnapshot
+            {
+                Tail0 = source != null ? source.Tail0 : (ushort)0,
+                Tail1 = source != null ? source.Tail1 : (ushort)0,
+                HasTailValues = source != null && source.HasTailValues,
+            };
+            if (source == null) return copy;
+
+            foreach (var page in source.Pages)
+            {
+                var pageCopy = new SkillInfoPageSnapshot { HeaderValue = page.HeaderValue };
+                foreach (var entry in page.Entries)
+                {
+                    var entryCopy = new SkillInfoEntrySnapshot
+                    {
+                        Slot = entry.Slot,
+                        SkillId = entry.SkillId,
+                        Level = entry.Level,
+                    };
+                    foreach (var value in entry.ExtraValues)
+                        entryCopy.ExtraValues.Add(value);
+                    pageCopy.Entries.Add(entryCopy);
+                }
+                copy.Pages.Add(pageCopy);
+            }
+            return copy;
+        }
     }
 }

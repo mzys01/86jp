@@ -2,139 +2,372 @@ using DfoServer.Game.CharacterData;
 using DfoServer.Game.SelectCharacter;
 using DfoServer.Infrastructure;
 using DfoServer.Network.Builders;
+using Microsoft.Data.Sqlite;
 using System;
 using System.Collections.Generic;
 using System.IO;
-using Microsoft.Data.Sqlite;
 
 namespace DfoServer.Game.Skills
 {
-    
-    
-    
-    
     public static class BuySkillSelfTest
     {
         private static int _pass, _fail;
 
         public static int Run()
         {
-            Console.WriteLine("=== BUY_SKILL 自验证 ===");
-            _pass = 0; _fail = 0;
+            Console.WriteLine("=== BUY_SKILL self-test ===");
+            _pass = 0;
+            _fail = 0;
 
-            
             SkillStaticData sd = null;
             try { sd = SkillDataProvider.GetSkill(0, 64); }
-            catch (Exception ex) { Console.WriteLine("  PVF 读取异常: " + ex.Message); }
-            Check("SkillDataProvider 找到 idx64", sd != null);
+            catch (Exception ex) { Console.WriteLine("  PVF read failed: " + ex.Message); }
+
+            Check("SkillDataProvider finds skill 64", sd != null);
             if (sd != null)
             {
-                Check($"十字斩 Name='{sd.Name}'", sd.Name != null && sd.Name.Contains("十字"));
-                Check($"十字斩 IsActive={sd.IsActive} (期望 true)", sd.IsActive);
-                int sp0 = sd.SpCostPerLevel.Length > 0 ? sd.SpCostPerLevel[0] : -1;
-                Check($"十字斩 SP/级={sp0} (期望 15)", sp0 == 15);
-                Check($"十字斩 MaxLevel={sd.MaxLevel} (期望 60)", sd.MaxLevel == 60);
-                Check($"十字斩 RequiredLevel={sd.RequiredLevel} (期望 15)", sd.RequiredLevel == 15);
+                Check($"skill64 name='{sd.Name}'", sd.Name != null && sd.Name.Contains("十字"));
+                Check($"skill64 active={sd.IsActive}", sd.IsActive);
+                Check($"skill64 first SP cost={FirstCost(sd)}", FirstCost(sd) == 15);
+                Check($"skill64 maxLevel={sd.MaxLevel}", sd.MaxLevel == 60);
+                Check($"skill64 requiredLevel={sd.RequiredLevel}", sd.RequiredLevel == 15);
             }
 
-            
-            byte[] reqBody = { 0x00, 0x01, 0x40, 0x00, 0x00, 0x01, 0x00, 0xB7, 0x8D, 0x0A, 0x8C };
-            Check("请求解析 skillTree=0", reqBody[0] == 0);
-            Check("请求解析 count=1", reqBody[1] == 1);
-            Check("请求解析 skillIndex=64", reqBody[2] == 64);
-            Check("请求解析 level=0(→1)", reqBody[3] == 0);
-            Check("请求解析 isRefund=0", reqBody[4] == 0);
-
-            
+            var firstCost = sd != null ? sd.SpCostFor(0, 1) : 15;
+            var secondCost = sd != null ? sd.SpCostFor(1, 2) : firstCost;
+            const byte testLevel = 86;
             const int cid = 999001;
+            var startingSp = firstCost + secondCost + 7;
+            var afterFirst = startingSp - firstCost;
+            var afterSecond = afterFirst - secondCost;
+
+            byte[] reqBody = { 0x00, 0x01, 0x40, 0x00, 0x00, 0x01, 0x00, 0xB7, 0x8D, 0x0A, 0x8C };
+            Check("request skillTree=0", reqBody[0] == 0);
+            Check("request count=1", reqBody[1] == 1);
+            Check("request skillIndex=64", reqBody[2] == 64);
+            Check("request isRefund=0", reqBody[4] == 0);
+            Check("request level byte=1", reqBody[5] == 1);
+
+            CheckCalculatedPointStateBootstrap(testLevel);
+            CheckSeedFromSnapshotCreatesPointState(testLevel);
+            CheckSfpRefundDoesNotInflateTotal(testLevel);
+
             string tempDb = Path.Combine(Path.GetTempPath(), "buyskill_selftest.db");
-            foreach (var ext in new[] { "", "-wal", "-shm" })
-                try { if (File.Exists(tempDb + ext)) File.Delete(tempDb + ext); } catch { }
+            DeleteSqliteFiles(tempDb);
 
             var repo = new SqliteCharacterProgressRepository(tempDb, ServerPaths.SchemaFilePath);
-            EnsureTestCharacter(tempDb, cid);
-            var seed = new SkillInfoSnapshot { Tail0 = 0, Tail1 = 37 };
+            var charRepo = new Game.Characters.SqliteCharacterRepository(tempDb, ServerPaths.SchemaFilePath);
+            EnsureTestCharacter(tempDb, cid, testLevel);
+            var seed = new SkillInfoSnapshot();
             var p0 = new SkillInfoPageSnapshot { HeaderValue = 0x0005 };
-            p0.Entries.Add(new SkillInfoEntrySnapshot { Slot = 0, SkillId = 5,   Level = 1 }); 
-            p0.Entries.Add(new SkillInfoEntrySnapshot { Slot = 1, SkillId = 46,  Level = 1 }); 
-            p0.Entries.Add(new SkillInfoEntrySnapshot { Slot = 2, SkillId = 169, Level = 1 }); 
+            p0.Entries.Add(new SkillInfoEntrySnapshot { Slot = 0, SkillId = 5, Level = 1 });
+            p0.Entries.Add(new SkillInfoEntrySnapshot { Slot = 1, SkillId = 46, Level = 1 });
+            p0.Entries.Add(new SkillInfoEntrySnapshot { Slot = 2, SkillId = 169, Level = 1 });
             seed.Pages.Add(p0);
             seed.Pages.Add(new SkillInfoPageSnapshot { HeaderValue = 0x2BF2 });
-            repo.SaveSkills(cid, seed);
+            SeedSkillProgress(repo, cid, seed, testLevel, startingSp);
 
-            var entries = new List<BuySkillEntry> { new BuySkillEntry { SkillIndex = 64, Level = 0, IsRefund = 0 } };
-            BuySkillResult result = null;
-            try { result = BuySkillService.Execute(repo, cid, 0, 0, entries); }
-            catch (Exception ex) { Console.WriteLine("  BuySkillService 异常: " + ex); }
-            Check("学习 result 非空", result != null);
+            var entries = new List<BuySkillEntry>
+            {
+                new BuySkillEntry { SkillIndex = 64, Level = 0, IsRefund = 0 }
+            };
+            var result = RunBuy(repo, cid, entries, testLevel);
+            Check("learn result exists", result != null);
             if (result != null)
             {
-                Check($"学习 success={result.Success} (期望 true)", result.Success);
-                Check($"remainSP={result.RemainSp} (期望 22 = 37-15)", result.RemainSp == 22);
-                Check($"ACK 条目数={result.Entries.Count} (期望 1)", result.Entries.Count == 1);
+                Check("learn success", result.Success);
+                Check($"learn remaining SP={result.RemainSp}, expected {afterFirst}", result.RemainSp == afterFirst);
+                Check("learn ack entry count=1", result.Entries.Count == 1);
                 if (result.Entries.Count == 1)
                 {
                     var e = result.Entries[0];
-                    Check($"ACK skillId={e.SkillId} (期望 64)", e.SkillId == 64);
-                    Check($"ACK level={e.Level} (期望 1)", e.Level == 1);
-                    Check($"ACK slot={e.Slot} (期望 3, 客户端据此落槽)", e.Slot == 3);
-                    Check($"ACK hasCmd={e.HasCmd} (期望 false)", !e.HasCmd);
+                    Check("learn ack skillId=64", e.SkillId == 64);
+                    Check("learn ack level=1", e.Level == 1);
+                    Check("learn ack slot=3", e.Slot == 3);
+                    Check("learn ack hasCmd=false", !e.HasCmd);
                 }
 
-                
                 var ack = BuySkillAckBuilder.Build(result);
-                byte[] expectAck = { 0x01, 0x00, 0x16, 0x00, 0x00, 0x00, 0x01, 0x03, 0x40, 0x00, 0x01, 0x00 };
-                Check($"ACK字节={ToHex(ack)}\n         期望={ToHex(expectAck)}", BytesEqual(ack, expectAck));
+                byte[] expectedAck =
+                {
+                    0x01, 0x00,
+                    (byte)(afterFirst & 0xFF), (byte)((afterFirst >> 8) & 0xFF),
+                    0x00, 0x00,
+                    0x01, 0x03, 0x40, 0x00, 0x01, 0x00
+                };
+                Check($"learn ACK bytes={ToHex(ack)} expected={ToHex(expectedAck)}", BytesEqual(ack, expectedAck));
             }
 
-            
             var reload = repo.LoadSkills(cid);
             var page0 = reload.Pages.Count > 0 ? reload.Pages[0] : null;
-            SkillInfoEntrySnapshot learned = null;
-            if (page0 != null) learned = page0.Entries.Find(x => x.SkillId == 64);
-            Check("持久化: skill64 存在", learned != null);
+            var page1 = reload.Pages.Count > 1 ? reload.Pages[1] : null;
+            var learned = page0?.Entries.Find(x => x.SkillId == 64);
+            Check("persisted skill64 exists", learned != null);
             if (learned != null)
             {
-                Check($"持久化: skill64 slot={learned.Slot} (期望 3, 主动技填0-5首个空槽)", learned.Slot == 3);
-                Check($"持久化: skill64 level={learned.Level} (期望 1)", learned.Level == 1);
+                Check("persisted skill64 slot=3", learned.Slot == 3);
+                Check("persisted skill64 level=1", learned.Level == 1);
             }
-            Check($"持久化: Tail1(SP)={reload.Tail1} (期望 22)", reload.Tail1 == 22);
+            Check($"protocol Tail1 mirror={reload.Tail1}, expected {afterFirst}", reload.Tail1 == afterFirst);
+            Check($"page0 header mirror={page0?.HeaderValue ?? 0}, expected {afterFirst}", page0 != null && page0.HeaderValue == afterFirst);
+            Check($"page1 header preserved={page1?.HeaderValue ?? 0}, expected 0x2BF2", page1 != null && page1.HeaderValue == 0x2BF2);
 
-            
-            var up = BuySkillService.Execute(repo, cid, 0, 0,
-                new List<BuySkillEntry> { new BuySkillEntry { SkillIndex = 64, Level = 0, IsRefund = 0 } });
-            Check($"升级 success={(up != null && up.Success)} (期望 true)", up != null && up.Success);
-            Check($"升级 remainSP={(up != null ? up.RemainSp : 0)} (期望 7 = 22-15)", up != null && up.RemainSp == 7);
-            if (up != null && up.Entries.Count == 1)
-                Check($"升级 level={up.Entries[0].Level} (期望 2)", up.Entries[0].Level == 2);
+            var pointsAfterFirst = repo.LoadSkillPointState(cid);
+            Check("skill point state exists", pointsAfterFirst != null);
+            Check($"state remaining SP={pointsAfterFirst?.RemainingSp ?? -1}, expected {afterFirst}",
+                pointsAfterFirst != null && pointsAfterFirst.RemainingSp == afterFirst);
+
+            var selectData = new SqliteSelectCharacterDataSource(tempDb, ServerPaths.SchemaFilePath, charRepo);
+            var selectSnapshot = selectData.Load(cid, 1);
+            Check($"select init Tail1={selectSnapshot.InitializationSnapshot.SkillInfo.Tail1}, expected {afterFirst}",
+                selectSnapshot.InitializationSnapshot.SkillInfo.Tail1 == afterFirst);
+            Check($"select init page1 header={selectSnapshot.InitializationSnapshot.SkillInfo.Pages[1].HeaderValue}, expected 0x2BF2",
+                selectSnapshot.InitializationSnapshot.SkillInfo.Pages[1].HeaderValue == 0x2BF2);
+
+            var refundInitial = RunBuy(repo, cid, new List<BuySkillEntry>
+            {
+                new BuySkillEntry { SkillIndex = 5, Level = 0, IsRefund = 1 }
+            }, testLevel);
+            Check("initial skill refund is ignored", refundInitial != null && refundInitial.Success && refundInitial.Entries.Count == 0);
+            Check($"initial skill refund keeps remaining SP={refundInitial?.RemainSp ?? 0}, expected {afterFirst}",
+                refundInitial != null && refundInitial.RemainSp == afterFirst);
+
+            var upgraded = RunBuy(repo, cid, entries, testLevel);
+            Check("upgrade success", upgraded != null && upgraded.Success);
+            Check($"upgrade remaining SP={upgraded?.RemainSp ?? 0}, expected {afterSecond}",
+                upgraded != null && upgraded.RemainSp == afterSecond);
             var reload2 = repo.LoadSkills(cid);
             var up64 = reload2.Pages.Count > 0 ? reload2.Pages[0].Entries.Find(x => x.SkillId == 64) : null;
-            Check($"升级持久化 slot={(up64 != null ? up64.Slot : 255)} level={(up64 != null ? up64.Level : 0)} (期望 slot3 level2, slot不变)",
+            Check($"upgrade persisted slot={up64?.Slot ?? 255} level={up64?.Level ?? 0}",
                 up64 != null && up64.Slot == 3 && up64.Level == 2);
 
-            
+            var refunded = RunBuy(repo, cid, new List<BuySkillEntry>
+            {
+                new BuySkillEntry { SkillIndex = 64, Level = 0, IsRefund = 1 }
+            }, testLevel);
+            Check("learned skill refund success", refunded != null && refunded.Success);
+            Check($"learned skill refund remaining SP={refunded?.RemainSp ?? 0}, expected {afterFirst}",
+                refunded != null && refunded.RemainSp == afterFirst);
+            var reloadAfterRefund = repo.LoadSkills(cid);
+            var refunded64 = reloadAfterRefund.Pages.Count > 0 ? reloadAfterRefund.Pages[0].Entries.Find(x => x.SkillId == 64) : null;
+            Check($"learned skill refund keeps slot={refunded64?.Slot ?? 255} level={refunded64?.Level ?? 0}",
+                refunded64 != null && refunded64.Slot == 3 && refunded64.Level == 1);
+
+            var syncedAtNextLevel = SkillStateService.LoadAndSync(
+                repo, cid, 0, (byte)(testLevel + 1), 0, 0, persist: true);
+            var gainedSp = SpTableProvider.GetSpAtLevel(testLevel + 1);
+            Check($"level-up sync adds SP: {syncedAtNextLevel.Points.RemainingSp}, expected {afterFirst + gainedSp}",
+                syncedAtNextLevel.Points.RemainingSp == afterFirst + gainedSp);
+
             string tempDb2 = Path.Combine(Path.GetTempPath(), "buyskill_selftest2.db");
-            foreach (var ext in new[] { "", "-wal", "-shm" })
-                try { if (File.Exists(tempDb2 + ext)) File.Delete(tempDb2 + ext); } catch { }
+            DeleteSqliteFiles(tempDb2);
             var repo2 = new SqliteCharacterProgressRepository(tempDb2, ServerPaths.SchemaFilePath);
-            EnsureTestCharacter(tempDb2, cid);
-            var seed2 = new SkillInfoSnapshot { Tail0 = 0, Tail1 = 5 };
-            seed2.Pages.Add(new SkillInfoPageSnapshot { HeaderValue = 0x0005 });
-            seed2.Pages.Add(new SkillInfoPageSnapshot { HeaderValue = 0x2BF2 });
-            repo2.SaveSkills(cid, seed2);
-            var poor = BuySkillService.Execute(repo2, cid, 0, 0,
-                new List<BuySkillEntry> { new BuySkillEntry { SkillIndex = 64, Level = 0, IsRefund = 0 } });
-            Check($"SP不足 success={(poor != null && poor.Success)} (期望 false)", poor != null && !poor.Success);
+            _ = new Game.Characters.SqliteCharacterRepository(tempDb2, ServerPaths.SchemaFilePath);
+            EnsureTestCharacter(tempDb2, cid, testLevel);
+            var poorSp = Math.Max(0, firstCost - 1);
+            var poorSeed = new SkillInfoSnapshot();
+            poorSeed.Pages.Add(new SkillInfoPageSnapshot { HeaderValue = 0x0005 });
+            poorSeed.Pages.Add(new SkillInfoPageSnapshot { HeaderValue = 0x2BF2 });
+            SeedSkillProgress(repo2, cid, poorSeed, testLevel, poorSp);
+            var poor = RunBuy(repo2, cid, entries, testLevel);
+            Check("SP-insufficient purchase fails", poor != null && !poor.Success);
             var reload3 = repo2.LoadSkills(cid);
             var notLearned = reload3.Pages.Count > 0 ? reload3.Pages[0].Entries.Find(x => x.SkillId == 64) : null;
-            Check("SP不足: skill64 未学入", notLearned == null);
-            Check($"SP不足: SP 未扣={reload3.Tail1} (期望 5)", reload3.Tail1 == 5);
+            Check("SP-insufficient does not add skill64", notLearned == null);
+            Check($"SP-insufficient keeps Tail1={reload3.Tail1}, expected {poorSp}", reload3.Tail1 == poorSp);
 
-            Console.WriteLine($"=== 结果: {_pass} PASS, {_fail} FAIL ===");
+            var reset = SkillStateService.ResetToInitial(repo, cid, 0, testLevel, 0, 0);
+            Check("reset removes learned skill64", reset.Skills.Pages[0].Entries.Find(x => x.SkillId == 64) == null);
+            Check($"reset remaining SP={reset.Points.RemainingSp}, expected total {reset.Points.TotalSp}",
+                reset.Points.RemainingSp == reset.Points.TotalSp);
+
+            Console.WriteLine($"=== result: {_pass} PASS, {_fail} FAIL ===");
             return _fail == 0 ? 0 : 1;
         }
 
-        private static void EnsureTestCharacter(string databasePath, int characterId)
+        private static BuySkillResult RunBuy(
+            SqliteCharacterProgressRepository repo,
+            int cid,
+            List<BuySkillEntry> entries,
+            byte level)
+        {
+            try { return BuySkillService.Execute(repo, cid, 0, 0, entries, level: level); }
+            catch (Exception ex)
+            {
+                Console.WriteLine("  BuySkillService exception: " + ex);
+                return null;
+            }
+        }
+
+        private static void CheckCalculatedPointStateBootstrap(byte level)
+        {
+            var skills = new SkillInfoSnapshot { Tail1 = ushort.MaxValue, HasTailValues = true };
+            skills.Pages.Add(new SkillInfoPageSnapshot { HeaderValue = ushort.MaxValue });
+            var calculated = SkillPointCalculator.Calculate(0, level, 0, 0, skills);
+            var resolved = SkillStateService.ResolvePointState(skills, null, 0, level, 0, 0);
+            Check($"missing point row bootstraps calculated SP={resolved.RemainingSp}",
+                resolved.RemainingSp == calculated.RemainingSp);
+        }
+
+        private static void CheckSeedFromSnapshotCreatesPointState(byte level)
+        {
+            const int seedCid = 999002;
+            string tempDb = Path.Combine(Path.GetTempPath(), "buyskill_seed_selftest.db");
+            DeleteSqliteFiles(tempDb);
+
+            var repo = new SqliteCharacterProgressRepository(tempDb, ServerPaths.SchemaFilePath);
+            _ = new Game.Characters.SqliteCharacterRepository(tempDb, ServerPaths.SchemaFilePath);
+            EnsureTestCharacter(tempDb, seedCid, level);
+            var skills = InitialCharacterSkills.Build(0);
+            var snapshot = new SelectCharacterInitializationSnapshot { SkillInfo = skills };
+
+            repo.SeedFromSnapshot(seedCid, snapshot);
+
+            var points = repo.LoadSkillPointState(seedCid);
+            var reloaded = repo.LoadSkills(seedCid);
+            var calculated = SkillPointCalculator.Calculate(0, level, 0, 0, reloaded);
+            Check("seed snapshot creates skill point state", points != null && points.HasPersistedState);
+            Check($"seed snapshot remaining SP={points?.RemainingSp ?? -1}, expected {calculated.RemainingSp}",
+                points != null && points.RemainingSp == calculated.RemainingSp);
+            Check($"seed snapshot Tail1 mirror={reloaded.Tail1}, expected {calculated.RemainingSp}",
+                reloaded.Tail1 == calculated.RemainingSp);
+        }
+
+        private static void CheckSfpRefundDoesNotInflateTotal(byte level)
+        {
+            var special = FindSpecialSkill(0, out int specialSkillId);
+            var refundCost = special != null ? special.SpCostFor(0, 1) : 0;
+            if (special == null || refundCost <= 0)
+            {
+                specialSkillId = 208;
+                refundCost = 5;
+                InstallSpecialSkillFixture(0, specialSkillId, refundCost);
+            }
+
+            const int specialCid = 999003;
+            string tempDb = Path.Combine(Path.GetTempPath(), "buyskill_sfp_selftest.db");
+            DeleteSqliteFiles(tempDb);
+
+            var repo = new SqliteCharacterProgressRepository(tempDb, ServerPaths.SchemaFilePath);
+            _ = new Game.Characters.SqliteCharacterRepository(tempDb, ServerPaths.SchemaFilePath);
+            EnsureTestCharacter(tempDb, specialCid, level);
+
+            var skills = InitialCharacterSkills.Build(0);
+            while (skills.Pages.Count < 2)
+                skills.Pages.Add(new SkillInfoPageSnapshot());
+            byte specialSlot = FindFreeSlot(skills.Pages[1]);
+            skills.Pages[1].Entries.Add(new SkillInfoEntrySnapshot
+            {
+                Slot = specialSlot,
+                SkillId = (ushort)specialSkillId,
+                Level = 1,
+            });
+
+            var points = SkillStateService.ResolvePointState(skills, null, 0, level, 0, 0);
+            points.TotalSfp = 0;
+            points.RemainingSfp = 0;
+            SkillStateService.Persist(repo, specialCid, skills, points);
+
+            var refunded = BuySkillService.Execute(repo, specialCid, 0, 1, new List<BuySkillEntry>
+            {
+                new BuySkillEntry { SkillIndex = (byte)specialSkillId, Level = 0, IsRefund = 1 }
+            }, level: level);
+            var persisted = repo.LoadSkillPointState(specialCid);
+
+            Check($"SFP refund keeps ACK remaining SFP={refunded?.RemainSfp ?? ushort.MaxValue}, expected 0",
+                refunded != null && refunded.RemainSfp == 0);
+            Check($"SFP refund keeps persisted total/remaining SFP={persisted?.TotalSfp ?? -1}/{persisted?.RemainingSfp ?? -1}, expected 0/0",
+                persisted != null && persisted.TotalSfp == 0 && persisted.RemainingSfp == 0);
+        }
+
+        private static SkillStaticData FindSpecialSkill(int job, out int skillId)
+        {
+            for (int id = 200; id <= 208; id++)
+            {
+                var data = SkillDataProvider.GetSkill(job, id);
+                if (data != null && data.IsSpecial)
+                {
+                    skillId = id;
+                    return data;
+                }
+            }
+
+            skillId = 0;
+            return null;
+        }
+
+        private static byte FindFreeSlot(SkillInfoPageSnapshot page)
+        {
+            for (int slot = 0; slot <= byte.MaxValue; slot++)
+            {
+                bool used = false;
+                foreach (var entry in page.Entries)
+                {
+                    if (entry.Slot == slot)
+                    {
+                        used = true;
+                        break;
+                    }
+                }
+
+                if (!used) return (byte)slot;
+            }
+
+            return byte.MaxValue;
+        }
+
+        private static void InstallSpecialSkillFixture(int job, int skillId, int cost)
+        {
+            var field = typeof(SkillDataProvider).GetField(
+                "_cache",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+            var cache = field?.GetValue(null) as Dictionary<int, SkillStaticData>;
+            if (cache == null) return;
+
+            int key = (job << 16) | (skillId & 0xFFFF);
+            cache[key] = new SkillStaticData
+            {
+                Job = job,
+                SkillIndex = skillId,
+                Name = "selftest special skill",
+                IsActive = false,
+                MaxLevel = 10,
+                RequiredLevel = 1,
+                NumGrowtypes = 0,
+                RawGroup = 0,
+                IsSpecial = true,
+                SpCostPerLevel = new[] { cost },
+            };
+        }
+
+        private static void SeedSkillProgress(
+            SqliteCharacterProgressRepository repo,
+            int cid,
+            SkillInfoSnapshot skills,
+            byte level,
+            int remainingSp)
+        {
+            var calculated = SkillPointCalculator.Calculate(0, level, 0, 0, skills);
+            var points = new SkillPointState
+            {
+                TotalSp = calculated.TotalSp,
+                RemainingSp = remainingSp,
+                TotalTp = calculated.TotalTp,
+                RemainingTp = calculated.TotalTp,
+                TotalSfp = 0,
+                RemainingSfp = 0,
+                SyncedLevel = level,
+                HasPersistedState = true,
+            };
+            SkillStateService.Persist(repo, cid, skills, points);
+        }
+
+        private static int FirstCost(SkillStaticData data)
+        {
+            return data.SpCostPerLevel.Length > 0 ? data.SpCostPerLevel[0] : -1;
+        }
+
+        private static void EnsureTestCharacter(string databasePath, int characterId, byte level)
         {
             using (var conn = new SqliteConnection(SqliteDatabaseBootstrap.BuildConnectionString(databasePath)))
             {
@@ -149,7 +382,23 @@ VALUES (@cid, 1, 'selftest');";
                     cmd.Parameters.AddWithValue("@cid", characterId);
                     cmd.ExecuteNonQuery();
                 }
+                using (var cmd = conn.CreateCommand())
+                {
+                    cmd.CommandText = @"
+UPDATE characters
+SET job = 0, level = @level, bonus_sp = 0, bonus_tp = 0
+WHERE character_id = @cid;";
+                    cmd.Parameters.AddWithValue("@cid", characterId);
+                    cmd.Parameters.AddWithValue("@level", (int)level);
+                    cmd.ExecuteNonQuery();
+                }
             }
+        }
+
+        private static void DeleteSqliteFiles(string databasePath)
+        {
+            foreach (var ext in new[] { "", "-wal", "-shm" })
+                try { if (File.Exists(databasePath + ext)) File.Delete(databasePath + ext); } catch { }
         }
 
         private static void Check(string label, bool ok)

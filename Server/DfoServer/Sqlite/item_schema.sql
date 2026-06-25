@@ -124,6 +124,19 @@ CREATE TABLE IF NOT EXISTS character_skill_tail (
     FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS character_skill_points (
+    character_id INTEGER PRIMARY KEY,
+    total_sp INTEGER NOT NULL DEFAULT 0,
+    remaining_sp INTEGER NOT NULL DEFAULT 0,
+    total_sfp INTEGER NOT NULL DEFAULT 0,
+    remaining_sfp INTEGER NOT NULL DEFAULT 0,
+    total_tp INTEGER NOT NULL DEFAULT 0,
+    remaining_tp INTEGER NOT NULL DEFAULT 0,
+    synced_level INTEGER NOT NULL DEFAULT 1,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS character_creatures (
     character_id INTEGER NOT NULL,
     sort_order INTEGER NOT NULL,
