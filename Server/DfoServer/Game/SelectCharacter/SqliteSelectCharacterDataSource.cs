@@ -1,6 +1,7 @@
 using DfoServer.Game.CharacterData;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory;
+using DfoServer.Game.Premium;
 using DfoServer.Game.Settings;
 using System;
 using System.Collections.Generic;
@@ -17,9 +18,13 @@ namespace DfoServer.Game.SelectCharacter
         private readonly PacketSequenceRepository _packetSequenceRepository;
         private readonly ICharacterRepository _characterRepository;
         private readonly AccountSettingsRepository _accountSettingsRepository;
+        private readonly string _databasePath;
+        private readonly string _schemaFilePath;
 
         public SqliteSelectCharacterDataSource(string databasePath, string schemaFilePath, ICharacterRepository characterRepository)
         {
+            _databasePath = databasePath;
+            _schemaFilePath = schemaFilePath;
             _inventoryStore = new SqliteInventoryStore(databasePath, schemaFilePath);
             _initDataRepository = new SqliteCharacterProgressRepository(databasePath, schemaFilePath);
             _userInfoBlobRepository = new SqliteUserInfoBlobRepository(databasePath, schemaFilePath);
@@ -95,6 +100,12 @@ namespace DfoServer.Game.SelectCharacter
                 }
             }
 
+            PremiumContractService.ApplyAccountPremiums(
+                _databasePath,
+                _schemaFilePath,
+                accountId,
+                initSnapshot);
+
             
             
             
@@ -124,6 +135,7 @@ namespace DfoServer.Game.SelectCharacter
             }
 
             var packetTemplates = _packetSequenceRepository.Load(characterId);
+            EnsurePremiumServicePacket(packetTemplates, initSnapshot);
 
             return new SelectCharacterDataSnapshot
             {
@@ -132,6 +144,43 @@ namespace DfoServer.Game.SelectCharacter
                 InitializationSnapshot = initSnapshot,
                 CharacterRecord = characterRecord,
             };
+        }
+
+        private static void EnsurePremiumServicePacket(
+            List<SelectCharacterPacketTemplate> packetTemplates,
+            SelectCharacterInitializationSnapshot initSnapshot)
+        {
+            if (packetTemplates == null || packetTemplates.Count == 0 || initSnapshot?.PremiumServiceData == null)
+                return;
+
+            for (var i = 0; i < packetTemplates.Count; i++)
+            {
+                var template = packetTemplates[i];
+                if (template.Command == 0x01 && template.Type == 0x0312)
+                    return;
+            }
+
+            var insertIndex = packetTemplates.Count;
+            for (var i = 0; i < packetTemplates.Count; i++)
+            {
+                var template = packetTemplates[i];
+                if (template.Command == 0x00 && template.Type == 0x03D8)
+                {
+                    insertIndex = i;
+                    break;
+                }
+
+                if (template.Command == 0x00 && template.Type == 0x0300)
+                    insertIndex = i + 1;
+            }
+
+            packetTemplates.Insert(insertIndex, new SelectCharacterPacketTemplate
+            {
+                Kind = SelectCharacterPacketTemplateKind.Raw,
+                Command = 0x01,
+                Type = 0x0312,
+                OccurrenceIndex = 0,
+            });
         }
 
         public CharacterItemListSnapshot LoadItemListSnapshot(int characterId, int accountId)
