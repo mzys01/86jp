@@ -243,6 +243,9 @@ namespace DfoServer.Network
                         break;
                     case 0x0078://120
                         break;
+                    case 0x0110://272 附魔宝珠
+                        await _inventoryHandler.Handle_ENUM_CMDPACKET_ENCHANT_BY_BEAD(session, header, body);
+                        break;
                     case 0x0118://280
                         break;
                     case 0x01A1://417

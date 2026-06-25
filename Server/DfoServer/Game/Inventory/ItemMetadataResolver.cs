@@ -1,6 +1,7 @@
 ﻿using DfoServer.GameWorld;
 using PvfLib;
 using System;
+using System.Collections.Generic;
 using System.IO;
 
 namespace DfoServer.Game.Inventory
@@ -159,6 +160,112 @@ namespace DfoServer.Game.Inventory
                 Durability = 0,
                 StackLimit = 1,
             };
+        }
+
+        public static bool TryValidateEnchantByBeadTarget(int beadItemTemplateId, int targetItemTemplateId, out int enchantCardItemId, out string rejectReason)
+        {
+            enchantCardItemId = 0;
+            rejectReason = null;
+
+            if (!TryLoadStackable(beadItemTemplateId, out var bead))
+            {
+                rejectReason = "bead is not found in stackable.lst";
+                return false;
+            }
+
+            if (bead.MonsterCardId > 0)
+                enchantCardItemId = bead.MonsterCardId;
+            else if (bead.EnchantIndex > 0)
+                enchantCardItemId = bead.EnchantIndex;
+            else
+            {
+                rejectReason = "bead has no monster card id/enchant index";
+                return false;
+            }
+
+            // 宝珠直接声明 target item id 时，只有白名单装备能被附魔。
+            if (bead.TargetItemIds != null && bead.TargetItemIds.Count > 0 && !bead.TargetItemIds.Contains(targetItemTemplateId))
+            {
+                rejectReason = "target item id is not allowed by bead target item id";
+                return false;
+            }
+
+            if (!TryGetEquipmentType(targetItemTemplateId, out var targetEquipmentType))
+            {
+                rejectReason = "target is not found in equipment.lst";
+                return false;
+            }
+
+            // monster card 的 string data: 第一个是图片资源，后续是允许附魔的 equipment type。
+            if (bead.MonsterCardId > 0)
+            {
+                if (!TryLoadStackable(bead.MonsterCardId, out var card))
+                {
+                    rejectReason = "monster card is not found in stackable.lst";
+                    return false;
+                }
+
+                var allowedTypes = ExtractAllowedEquipmentTypes(card.StringDataItems);
+                if (allowedTypes.Count > 0 && !allowedTypes.Contains(targetEquipmentType))
+                {
+                    rejectReason = "target equipment type is not allowed by monster card string data";
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        private static bool TryLoadStackable(int itemTemplateId, out StackableItemFile stackable)
+        {
+            stackable = null;
+            var stackableEntry = StackableList.Value.GetById(itemTemplateId);
+            if (stackableEntry == null)
+                return false;
+
+            stackable = StackableItemFile.Parse(PvfArchiveAccessor.ReadText(Path.Combine("stackable", stackableEntry.FilePath)));
+            return true;
+        }
+
+        private static bool TryGetEquipmentType(int itemTemplateId, out string equipmentType)
+        {
+            equipmentType = null;
+            var equipmentEntry = EquipmentList.Value.GetById(itemTemplateId);
+            if (equipmentEntry == null)
+                return false;
+
+            var equipment = EquipmentFile.Parse(PvfArchiveAccessor.ReadText(Path.Combine("equipment", equipmentEntry.FilePath)));
+            equipmentType = NormalizeEquipmentType(equipment.EquipmentType);
+            return !string.IsNullOrWhiteSpace(equipmentType);
+        }
+
+        private static HashSet<string> ExtractAllowedEquipmentTypes(List<string> stringDataItems)
+        {
+            var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (stringDataItems == null || stringDataItems.Count <= 1)
+                return result;
+
+            for (var i = 1; i < stringDataItems.Count; i++)
+            {
+                var normalized = NormalizeEquipmentType(stringDataItems[i]);
+                if (!string.IsNullOrWhiteSpace(normalized))
+                    result.Add(normalized);
+            }
+
+            return result;
+        }
+
+        private static string NormalizeEquipmentType(string raw)
+        {
+            if (string.IsNullOrWhiteSpace(raw))
+                return null;
+
+            var start = raw.IndexOf('[', StringComparison.Ordinal);
+            var end = start >= 0 ? raw.IndexOf(']', start + 1) : -1;
+            if (start < 0 || end <= start)
+                return raw.Trim('`', ' ', '\t', '\r', '\n').ToLowerInvariant();
+
+            return raw.Substring(start, end - start + 1).ToLowerInvariant();
         }
     }
 }
