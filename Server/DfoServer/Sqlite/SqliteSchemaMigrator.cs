@@ -78,6 +78,16 @@ CREATE INDEX IF NOT EXISTS idx_character_items_character
             }
         }
 
+        public static void MigrateCharactersNameUniqueIndex(SqliteConnection connection)
+        {
+            if (connection == null) return;
+            using (var cmd = connection.CreateCommand())
+            {
+                cmd.CommandText = "CREATE UNIQUE INDEX IF NOT EXISTS idx_characters_name_unique ON characters(name);";
+                cmd.ExecuteNonQuery();
+            }
+        }
+
         private static string ReadTableCreateSql(SqliteConnection connection, string tableName)
         {
             using (var cmd = connection.CreateCommand())

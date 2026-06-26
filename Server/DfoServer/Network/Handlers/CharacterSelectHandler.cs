@@ -204,7 +204,7 @@ namespace DfoServer.Network.Handlers
             var existing = _characterRepository.GetByName(name);
             if (existing != null)
             {
-                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x02B5, new byte[] { 0x02 }));
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x02B5, new byte[] { 0x00 }));
                 return;
             }
 
@@ -249,7 +249,7 @@ namespace DfoServer.Network.Handlers
 
             if (_characterRepository.GetByName(nameStr) != null)
             {
-                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0005, new byte[] { 0x02 }));
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0005, new byte[] { 0x00 }));
                 return;
             }
 
