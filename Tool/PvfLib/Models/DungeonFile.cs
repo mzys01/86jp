@@ -5,6 +5,7 @@ using System.Globalization;
 namespace PvfLib
 {
     /// <summary>
+    /// 迷宫变体信息（对应 [maze info] 分隔的块）
     /// </summary>
     public class RidableObject
     {
@@ -13,6 +14,7 @@ namespace PvfLib
         public int ObjectIndex { get; set; }
         public int PosX { get; set; }
         public int PosY { get; set; }
+        /// <summary>阵营: 100=[monster]敌方, 200=[neutral]中立, 0=[character]友方</summary>
         public int Faction { get; set; }
     }
 
@@ -23,24 +25,35 @@ namespace PvfLib
         public List<RidableObject> Objects { get; set; } = new List<RidableObject>();
     }
 
+    public class ClearConditionEntry
+    {
+        public int Type { get; set; }
+        public int TargetId { get; set; }
+        public int Count { get; set; }
+    }
+
     public class MazeInfo
     {
         public int Width { get; set; }
         public int Height { get; set; }
-        public string Greed { get; set; }
-        public string MapSpecification { get; set; }
+        public string Greed { get; set; }                   // 网格模式字符串
+        public string MapSpecification { get; set; }        // 原始格式
         public List<MapSpecificationItem> MapSpecifications { get; set; } = new List<MapSpecificationItem>();
         public int[] StartMap { get; set; }                 // [x, y, ?, ?]
-        public int[] BossMap { get; set; }
+        public int[] BossMap { get; set; }                  // 多个参数
         public int[] HitCount { get; set; }
         public int SealDoorAppearRate { get; set; } = -1;
         public int[] QuestConnection { get; set; }          // [flag, questId, value]
         public RidableObjectScript RidableScript { get; set; }
+        public List<ClearConditionEntry> ClearConditions { get; set; } = new List<ClearConditionEntry>();
 
+        /// <summary>该 maze 块的所有 ScriptNode 子节点（可用于访问未类型化的字段）</summary>
         public List<ScriptNode> Nodes { get; set; } = new List<ScriptNode>();
     }
 
     /// <summary>
+    /// PVF 中的 .dgn 地下城文件。
+    /// 核心字段类型化，不常用字段通过 Root/Content 属性或 GetValue 方法动态访问。
     /// </summary>
     public class DungeonFile : PvfModelBase
     {
@@ -71,14 +84,16 @@ namespace PvfLib
 
         public List<SpecialPassiveObjectItem> SpecialPassiveObjectItems { get; set; } = new List<SpecialPassiveObjectItem>();
 
+        /// <summary>迷宫变体列表（以 [maze info] 为分隔）</summary>
         public List<MazeInfo> Mazes { get; set; } = new List<MazeInfo>();
         #region 解析
 
+        // 已知仅属于迷宫变体的标签（出现在 [maze info] 之后）
         private static readonly HashSet<string> MazeTags = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
             "size", "greed", "map specification", "start map", "boss map",
             "hit count", "seal door appear rate", "quest connection",
-            "randomized object creation"
+            "randomized object creation", "clear condition"
         };
 
         public static DungeonFile Parse(string content)
@@ -88,6 +103,7 @@ namespace PvfLib
             var root = new ScriptParser().Parse(content);
             var dgn = new DungeonFile { Root = root, Content = content };
 
+            // 遍历所有根节点，按已知迷宫标签区分元数据和迷宫数据
             var metaNodes = new List<ScriptNode>();
             List<ScriptNode> currentMaze = null;
 
@@ -95,6 +111,7 @@ namespace PvfLib
             {
                 if (child.Tag.Equals("maze info", StringComparison.OrdinalIgnoreCase))
                 {
+                    // 保存前一个迷宫块
                     if (currentMaze != null && currentMaze.Count > 0)
                         dgn.Mazes.Add(BuildMazeInfo(currentMaze, content));
                     currentMaze = new List<ScriptNode>();
@@ -109,6 +126,7 @@ namespace PvfLib
                 }
             }
 
+            // 保存最后一个迷宫块
             if (currentMaze != null && currentMaze.Count > 0)
                 dgn.Mazes.Add(BuildMazeInfo(currentMaze, content));
 
@@ -255,6 +273,9 @@ namespace PvfLib
                     case "randomized object creation":
                         maze.RidableScript = ParseRidableObjectScript(node, text);
                         break;
+                    case "clear condition":
+                        maze.ClearConditions = ParseClearConditions(node, text);
+                        break;
                 }
             }
             return maze;
@@ -305,6 +326,7 @@ namespace PvfLib
                                     break;
                             }
                         }
+                        // [pos] 的数据可能被 ScriptParser 归入 [object] 的 DataItems
                         if (obj.PosX == 0 && obj.PosY == 0 && child.DataItems.Count > 0)
                         {
                             var objData = (child.GetFirstDataContent(text) ?? "").Trim();
@@ -321,6 +343,38 @@ namespace PvfLib
                 }
             }
             return script;
+        }
+
+        private static readonly Dictionary<string, int> ClearConditionTypeMap = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
+        {
+            { "destroy object", 0 },
+            { "seeking", 1 },
+            { "hunt monster", 2 },
+            { "hunt apc", 3 },
+            { "hunt boss", 4 },
+        };
+
+        private static List<ClearConditionEntry> ParseClearConditions(ScriptNode node, string text)
+        {
+            var result = new List<ClearConditionEntry>();
+            foreach (var child in node.Children)
+            {
+                int type;
+                if (!ClearConditionTypeMap.TryGetValue(child.Tag, out type))
+                    continue;
+                // ScriptParser 已知局限: 无结束标签的子节点在父节点末尾时数据被归入父节点 DataItems
+                // (ParseNodeContent inclusive endLine vs ParseNode exclusive endLine 不匹配)
+                var data = child.DataItems.Count > 0
+                    ? (child.GetFirstDataContent(text) ?? "").Trim()
+                    : (node.DataItems.Count > 0 ? (node.GetFirstDataContent(text) ?? "").Trim() : "");
+                var vals = ParseIntArray(data);
+                if (vals == null || vals.Length == 0) continue;
+                for (int i = 0; i + 1 < vals.Length; i += 2)
+                {
+                    result.Add(new ClearConditionEntry { Type = type, TargetId = vals[i], Count = vals[i + 1] });
+                }
+            }
+            return result;
         }
 
         private static List<MapSpecificationItem> ParseMapSpecifications(string data)
@@ -346,6 +400,7 @@ namespace PvfLib
                             Index = mapIndex,
                         };
 
+                        // map/boss 均可有多候选 mapId: `boss 9 0 17145 17148` 或 `map 1 0 20322 20323`
                         var candidates = new System.Collections.Generic.List<int> { mapIndex };
                         index += 4;
                         while (index < values.Length && int.TryParse(values[index], out var extra))
@@ -408,6 +463,7 @@ namespace PvfLib
         private static void ParseCutsceneImage(string data, DungeonFile dgn)
         {
             if (string.IsNullOrEmpty(data)) return;
+            // 格式: `path` number
             var parts = data.Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
             if (parts.Length >= 1)
                 dgn.CutsceneImage = StripBacktick(parts[0]);
@@ -434,6 +490,7 @@ namespace PvfLib
 
         public int[] LayeredMapIds { get; set; }
 
+        /// <summary>多候选 mapId (加权随机池), 如 `boss 9 0 17145 17148` 或 `map 1 0 20322 20323`</summary>
         public int[] MapCandidates { get; set; }
     }
 

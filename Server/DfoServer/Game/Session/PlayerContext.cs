@@ -41,6 +41,8 @@ namespace DfoServer.Game.Session
             = Array.Empty<GameWorld.Dungeon.MonsterSumInfo>();
         public HashSet<ushort> CurRoomKilledSeqIds { get; set; } = new HashSet<ushort>();
         public bool CurBossKilled { get; set; }
+        public bool CurDungeonCleared { get; set; }
+        public Game.Dungeon.ClearConditionState CurClearCondition { get; set; }
         public int CurBossCode { get; set; }
         public int[] CurBossMapPos { get; set; }
         public uint CurDungeonTotalExp { get; set; }

@@ -28,6 +28,7 @@ namespace DfoServer.Network.Handlers
                 snapshot.AreaId = 0xFF;
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0017, TownAreaNotificationBuilder.BuildUserArea(snapshot)));
 
+                // NOTI 0x0002 subtype1 (ADDITION): 从结构化表动态构建(和 init 流同一路径)
                 int cid = session.Player.CharacterId;
                 if (cid <= 0)
                 {
@@ -41,7 +42,6 @@ namespace DfoServer.Network.Handlers
                     var subtype1Repo = new Game.CharacterData.SqliteSubtype1Repository(
                         Infrastructure.ServerPaths.DatabasePath, Infrastructure.ServerPaths.SchemaFilePath);
                     var addition = subtype1Repo.HasData(cid) ? subtype1Repo.Load(cid) : null;
-
                     if (record != null && addition != null)
                     {
                         var skillSnap = LoadSyncedSkillState(cid, record.Level).Skills;
@@ -106,6 +106,11 @@ namespace DfoServer.Network.Handlers
             var bossPos = Dungeon.RandomizeBossPosition(selection.Maze.BossMap);
             session.Player.CurBossMapPos = bossPos;
             session.Player.CurDungeonRidableObjects = InitRidableObjects(selection.Maze);
+            session.Player.CurClearCondition = new Game.Dungeon.ClearConditionState(selection.Maze.ClearConditions);
+            if (session.Player.CurClearCondition.HasConditions)
+                FileLogger.Log($"[DungeonHandler] ClearCondition init: {selection.Maze.ClearConditions.Count} conditions, totalRequired={session.Player.CurClearCondition.TotalRequired}");
+            else
+                FileLogger.Log($"[DungeonHandler] WARNING: dungeon={req.DungeonId} maze={selection.Index} has no [clear condition]");
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x001C, DungeonNotificationBuilder.BuildDungeonInfo(
                 dungeonId: req.DungeonId,
                 difficulty: req.Difficulty,
@@ -157,6 +162,7 @@ namespace DfoServer.Network.Handlers
 
             if (session.Player.DungeonRoomStates.TryGetValue(roomKey, out var cached))
             {
+                // 重访: 恢复缓存状态，发 stateValue1=0 让客户端用本地缓存
                 session.Player.CurRoomMonsters = cached.Maze.Monsters;
                 session.Player.CurRoomStartSequence = cached.FirstSeqId;
                 session.Player.CurRoomKilledSeqIds = cached.KilledSeqIds;
@@ -168,10 +174,13 @@ namespace DfoServer.Network.Handlers
             }
             else
             {
+                // 首访: PVF 解析 → 分配 seqId → 缓存 RoomState
                 session.Player.CurRoomMonsters = maze.Monsters;
 
                 var startSequence = session.Player.CurMonsterCnt;
                 session.Player.CurRoomStartSequence = (ushort)(startSequence + 1);
+                // TODO: 真实服务端 seqId 存在不明间隙（Room1=1-6, Room2=8-14, 7被跳过），
+                // 疑似每次换门额外 +1。当前用 firstMonsterSequence+index+1 近似，boss 检测不受影响
                 var seed = (uint)(_seedGen.Next() & ~0x40000);
                 session.Player.CurDungeonSeed = seed;
                 var lcg = new DnfLcg(seed);
@@ -191,6 +200,7 @@ namespace DfoServer.Network.Handlers
 
                 byte layeredFlag = (byte)(overrideMapId > 0 ? 1 : 0);
 
+                // df_game_r: item seq 用独立随机计数器 v7=get_rand_int(60000)，与怪物 seq 完全隔离
                 var itemSeqCounter = (ushort)_seedGen.Next(60000);
                 var extraEntries = GeneratePassiveObjectDrops(
                     session.Player.CurDungeon, session.Player.CurMazeIndex,
@@ -326,7 +336,9 @@ namespace DfoServer.Network.Handlers
 
             if (req.IsPassiveObject)
             {
-                FileLogger.Log($"[DungeonHandler] DIE_MONSTER: passive object code={req.LocalIndex}, ignored (client-side drops)");
+                FileLogger.Log($"[DungeonHandler] DIE_MONSTER: passive object code={req.LocalIndex}");
+                if (session.Player.CurClearCondition != null && session.Player.CurClearCondition.Check(0, req.LocalIndex))
+                    await TryClearDungeon(session, $"destroy object {req.LocalIndex}");
                 return;
             }
 
@@ -356,6 +368,7 @@ namespace DfoServer.Network.Handlers
 
                 var dropPool = MonsterDropTable.GetDropPool(monster.Code);
 
+                // 区域材料挂入 mob [item] 掉落池 (PVF 无配置, 服务端补偿)
                 int areaMaterialId = GameWorld.AreaMaterialDropProvider.GetAreaMaterialItem(session.Player.CurDungeon);
                 if (areaMaterialId > 0)
                 {
@@ -422,40 +435,57 @@ namespace DfoServer.Network.Handlers
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0026,
                 DungeonNotificationBuilder.BuildMonsterDie(req.LocalIndex, drops, session.Player.UserId)));
 
+            // 任务物品掉落 (IDA: CUser::CheckQuestMonster, 在 DIE_MONSTER NOTI 之后)
             await CheckQuestMonsterDrop(session, killedMonsterCode);
 
-            bool roomCleared = session.Player.CurRoomKilledSeqIds.Count >= monsters.Count && monsters.Count > 0;
+            // check_grid_clear (IDA 0x830A0E8): spawnType==100 && spawnFlag==0 才阻挡
+            int blockingCount = 0;
+            foreach (var m in monsters)
+                if (m.IsBlocking) blockingCount++;
+            bool roomCleared = session.Player.CurRoomKilledSeqIds.Count >= blockingCount && blockingCount > 0;
 
-            bool isBossMonster = killedMonsterType == 3;
-            bool isBossRoom = false;
-            if (session.Player.CurBossMapPos != null && session.Player.CurBossMapPos.Length >= 2)
-            {
-                var roomState = session.Player.DungeonRoomStates.Values
-                    .FirstOrDefault(rs => rs.KilledSeqIds == session.Player.CurRoomKilledSeqIds);
-                if (roomState != null)
-                    isBossRoom = roomState.Maze.X == session.Player.CurBossMapPos[0]
-                              && roomState.Maze.Y == session.Player.CurBossMapPos[1];
-            }
+            // 老服 kill_monster 执行顺序 (IDA 0x85A3AED):
+            //   1. prepare_dungeon_clear (路径 B)
+            //   2. ClearCondition(type, monsterCode) (路径 A)
+            // 两条路径都调 ClearDungeon, cleared_flag 阻止重复
 
-            if (isBossMonster)
-            {
-                session.Player.CurBossKilled = true;
-                session.Player.CurBossCode = killedMonsterCode;
-            }
-            else if (isBossRoom && roomCleared && !session.Player.CurBossKilled)
-            {
-                session.Player.CurBossKilled = true;
-                session.Player.CurBossCode = killedMonsterCode;
-            }
-
-            if (session.Player.CurBossKilled && roomCleared)
-            {
-                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x001F, DungeonNotificationBuilder.BuildEnableClearDungeon()));
-                FileLogger.Log($"[DungeonHandler] ENABLE_CLEAR_DUNGEON sent: isBossMonster={isBossMonster} isBossRoom={isBossRoom}");
-            }
-
+            // 路径 B: prepare_dungeon_clear (df_game_r 0x85AA598)
+            // check_grid_clear → ClearCondition(1, mapIndex) OR check_end_point → ClearDungeon
             if (roomCleared)
-                FileLogger.Log($"[DungeonHandler] ROOM CLEARED: dungeon={session.Player.CurDungeon} killed={session.Player.CurRoomKilledSeqIds.Count}/{monsters.Count}");
+            {
+                bool endPoint = false;
+                if (session.Player.CurBossMapPos != null && session.Player.CurBossMapPos.Length >= 2)
+                {
+                    var roomState = session.Player.DungeonRoomStates.Values
+                        .FirstOrDefault(rs => rs.KilledSeqIds == session.Player.CurRoomKilledSeqIds);
+                    if (roomState != null)
+                        endPoint = roomState.Maze.X == session.Player.CurBossMapPos[0]
+                                && roomState.Maze.Y == session.Player.CurBossMapPos[1];
+                }
+
+                int currentMapId = 0;
+                {
+                    var rs = session.Player.DungeonRoomStates.Values
+                        .FirstOrDefault(r => r.KilledSeqIds == session.Player.CurRoomKilledSeqIds);
+                    if (rs != null) currentMapId = rs.Maze.Index;
+                }
+                bool ccType1 = session.Player.CurClearCondition != null
+                    && session.Player.CurClearCondition.Check(1, currentMapId);
+
+                if (ccType1 || endPoint)
+                    await TryClearDungeon(session, $"prepare_dungeon_clear ccType1={ccType1} endPoint={endPoint}", killedMonsterCode);
+
+                FileLogger.Log($"[DungeonHandler] ROOM CLEARED: dungeon={session.Player.CurDungeon} killed={session.Player.CurRoomKilledSeqIds.Count}/{blockingCount}");
+            }
+
+            // 路径 A: ClearCondition(type, monsterCode) (df_game_r kill_monster 末尾)
+            // monsterType → conditionType: boss(3)→4, apc(5-8)→3, normal→2
+            if (session.Player.CurClearCondition != null)
+            {
+                int ccType = killedMonsterType == 3 ? 4 : (killedMonsterType >= 5 ? 3 : 2);
+                if (session.Player.CurClearCondition.Check(ccType, killedMonsterCode))
+                    await TryClearDungeon(session, $"ClearCondition type={ccType} target={killedMonsterCode}", killedMonsterCode);
+            }
         }
 
         private void PersistLevelAndExp(int characterId, byte level, uint exp)
@@ -496,6 +526,25 @@ namespace DfoServer.Network.Handlers
                 persist: persist);
         }
 
+        // df_game_r CParty::ClearDungeon (0x85A9330)
+        // 开头: if (!cleared_flag) return; 末尾: cleared_flag = 1;
+        // 普通副本发 NOTI 31 (ENABLE_CLEAR_DUNGEON), 设 CurBossKilled
+        // + NOTI 279 (0x0117) SECRET_SHOP_NPC — 结算神秘商人 NPC ID
+        // PVF [visible on dungeon clear]=1: 德利拉(1000) 加百利(1002/1003/1004) 云幂(1203,86JP无效)
+        private static readonly int[] SecretShopNpcIds = { 1000, 1002, 1003, 1004 };
+
+        private async Task TryClearDungeon(EnhancedClientSession session, string reason, int bossCode = 0)
+        {
+            if (session.Player.CurDungeonCleared) return;
+            session.Player.CurDungeonCleared = true;
+            session.Player.CurBossKilled = true;
+            if (bossCode != 0) session.Player.CurBossCode = bossCode;
+            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x001F, DungeonNotificationBuilder.BuildEnableClearDungeon()));
+            var npcId = SecretShopNpcIds[_seedGen.Next(SecretShopNpcIds.Length)];
+            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0117, BitConverter.GetBytes(npcId)));
+            FileLogger.Log($"[DungeonHandler] ClearDungeon: {reason} secretShopNpc={npcId}");
+        }
+
         private async Task SendUserInfoBroadcast(EnhancedClientSession session)
         {
             try
@@ -507,7 +556,6 @@ namespace DfoServer.Network.Handlers
                 var subtype1Repo = new Game.CharacterData.SqliteSubtype1Repository(
                     Infrastructure.ServerPaths.DatabasePath, Infrastructure.ServerPaths.SchemaFilePath);
                 var addition = subtype1Repo.HasData(cid) ? subtype1Repo.Load(cid) : null;
-
                 if (record != null && addition != null)
                 {
                     var skillSnap = LoadSyncedSkillState(cid, session.Player.Level).Skills;
@@ -564,37 +612,47 @@ namespace DfoServer.Network.Handlers
         public async Task Handle_ENUM_CMDPACKET_DIE_CHARACTER(EnhancedClientSession session, GamePacketHeader header, byte[] body)
         {
             FileLogger.Log($"[{ProtocolName}] DIE_CHARACTER: uid={session.Player.UserId} body={BitConverter.ToString(body)}");
+            // NOTI 32 (wire 0x0020) DIE_STATE: u16 actorId + u8 dieType(0=死亡) + u8 flag
             var w = new GamePacketWriter();
             w.WriteUInt16(session.Player.UserId);
-            w.WriteByte(0x00);
+            w.WriteByte(0x00);  // dieType=0 死亡确认
             w.WriteByte(0x00);
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0020, w.ToArray()));
         }
 
         public async Task Handle_ENUM_CMDPACKET_USE_COIN(EnhancedClientSession session, GamePacketHeader header, byte[] body)
         {
+            // df_game_r: read = u16 targetActorId
             ushort targetId = body.Length >= 2 ? BitConverter.ToUInt16(body, 0) : session.Player.UserId;
             FileLogger.Log($"[{ProtocolName}] USE_COIN: uid={session.Player.UserId} target={targetId}");
 
+            // 1. NOTI 0x0020 DIE_STATE: set_charac_live(user, 1=复活)
+            //    df_game_r body = u16 actorId + u8 state; 86JP 多一个 u8 flag
             var noti = new GamePacketWriter();
             noti.WriteUInt16(targetId);
-            noti.WriteByte(0x01);
-            noti.WriteByte(0x00);
+            noti.WriteByte(0x01);  // state=1 复活
+            noti.WriteByte(0x00);  // 86JP flag
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0020, noti.ToArray()));
 
             // 2. CMD ACK 0x0029: resultCode=1 + u16 targetActorId
             var ack = new GamePacketWriter();
-            ack.WriteByte(0x01);
+            ack.WriteByte(0x01);           // resultCode = 成功
             ack.WriteUInt16(targetId);     // targetActorId
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0029, ack.ToArray()));
         }
 
+        // CMD 71 (0x47) SELECT_CARD — 翻牌选择 + EPLP 结算选项
+        // 86JP 合并了 SELECT_CARD 和 EPLP_COMMAND 到同一 wire type
+        // body[0]: 0=免费牌, 1=付费牌/EPLP确认, 2=EPLP状态更新
+        // body[1]: 翻牌时=cardIndex(0-3), EPLP时=选项(0=再次挑战 1=选其他副本 2=返回城镇)
         public async Task Handle_ENUM_CMDPACKET_SELECT_CARD(EnhancedClientSession session, GamePacketHeader header, byte[] body)
         {
             if (body.Length < 2) return;
             byte cardType = body[0];
             byte cardIndex = body[1];
 
+            // EPLP: df_game_r _BroadCastPacket 对每个 EPLP 都回 ACK [01, state, option]
+            // confirm 后启动 1s 定时器 → ReturnToVillage (NOTI 2)
             if (cardType >= 2 || (cardType == 1 && session.Player.CurCardRewards == null))
             {
                 FileLogger.Log($"[{ProtocolName}] EPLP: state={cardType} option={cardIndex}");
@@ -603,6 +661,8 @@ namespace DfoServer.Network.Handlers
 
                 if (cardType == 1)
                 {
+                    // 86JP 三个选项都走回城: 再次挑战(0)/选其他副本(1)/返回城镇(2)
+                    // 客户端回城后自动处理重新进入
                     int delayMs = cardIndex == 2 ? 1000 : 3000;
                     _ = Task.Run(async () =>
                     {
@@ -612,9 +672,11 @@ namespace DfoServer.Network.Handlers
                             ResetDungeonState(session);
                             session.Player.UserState = 0x01;
 
+                            // NOTI 3 USER_STATE — 退出副本状态 (out_from_dungeon 实证)
                             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0003,
                                 EnterSelectDungeonStateBuilder.BuildUserState(session.Player)));
 
+                            // USER_AREA + AREA_USERS — 加载城镇场景
                             var snapshot = TownAreaNotificationBuilder.CreateCurrentSnapshot(session.Player);
                             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0017,
                                 TownAreaNotificationBuilder.BuildUserArea(snapshot)));
@@ -629,6 +691,7 @@ namespace DfoServer.Network.Handlers
                 return;
             }
 
+            // 翻牌
             if (cardIndex > 3) return;
             session.Player.CurCardFlipCount++;
             FileLogger.Log($"[{ProtocolName}] SELECT_CARD: flip#{session.Player.CurCardFlipCount} type={cardType} index={cardIndex}");
@@ -651,6 +714,7 @@ namespace DfoServer.Network.Handlers
                 {
                     var entries = new System.Collections.Generic.List<byte[]>();
 
+                    // 免费牌金币
                     if (cards.Count > 0 && cards[0].IsGold && cards[0].GoldAmount > 0)
                     {
                         PersistGold(session.Player.CharacterId, cards[0].GoldAmount);
@@ -658,6 +722,7 @@ namespace DfoServer.Network.Handlers
                         entries.Add(BuildItemEntry(0, 0, (uint)totalGold));
                     }
 
+                    // 免费牌物品
                     if (cards.Count > 1 && !cards[1].IsGold && cards[1].ItemId > 0)
                     {
                         short slot;
@@ -667,6 +732,7 @@ namespace DfoServer.Network.Handlers
                                 : BuildItemEntry(slot, (uint)cards[1].ItemId, (uint)cards[1].StackCount));
                     }
 
+                    // 付费牌金币
                     if (cards.Count > 4 && cards[4].IsGold && cards[4].GoldAmount > 0)
                     {
                         PersistGold(session.Player.CharacterId, cards[4].GoldAmount);
@@ -674,6 +740,7 @@ namespace DfoServer.Network.Handlers
                         entries.Add(BuildItemEntry(0, 0, (uint)totalGold));
                     }
 
+                    // 付费牌物品
                     if (cards.Count > 5 && !cards[5].IsGold && cards[5].ItemId > 0)
                     {
                         short slot;
@@ -700,6 +767,9 @@ namespace DfoServer.Network.Handlers
             }
         }
 
+        // CMD ACK 71 body — 86JP 8-seat 格式
+        // seat[0-3]: 活动位 (单人只用 seat0)
+        // seat[4-7]: 0xFF×4 (隐藏/禁用)
         private byte[] BuildCardInfoAck(EnhancedClientSession session)
         {
             var w = new GamePacketWriter();
@@ -709,6 +779,7 @@ namespace DfoServer.Network.Handlers
             {
                 if (i >= 4)
                 {
+                    // 隐藏位: type=FF flag=FF count=FF(-1,skip) flipped=FF
                     w.WriteByte(0xFF);
                     w.WriteByte(0xFF);
                     w.WriteByte(0xFF);
@@ -721,6 +792,7 @@ namespace DfoServer.Network.Handlers
 
                 if (i != 0)
                 {
+                    // 单人模式 seat1-3 空: type=FF flag=FF count=0 flipped=0
                     w.WriteByte(0xFF);
                     w.WriteByte(0xFF);
                     w.WriteByte(0x00);
@@ -728,25 +800,28 @@ namespace DfoServer.Network.Handlers
                     continue;
                 }
 
+                // seat0: 活动牌位
                 w.WriteByte(freeSelected ? (byte)0x00 : (byte)0xFF);  // cardType
                 w.WriteByte(paidSelected ? (byte)0x00 : (byte)0xFF);  // seatFlag
 
                 if (paidSelected)
                 {
+                    // 付费牌: count=2, item[0]=金币{0,gold}, item[1]=物品{id,count}
+                    // S4Log 实证: {0,0} + {100180190,1}
                     var cards = session.Player.CurCardRewards;
                     int paidGoldAmt = (cards != null && cards.Count > 4 && cards[4].IsGold) ? cards[4].GoldAmount : 0;
                     int paidItemId = (cards != null && cards.Count > 5 && !cards[5].IsGold) ? cards[5].ItemId : 0;
                     int paidItemCnt = (cards != null && cards.Count > 5 && !cards[5].IsGold) ? cards[5].StackCount : 0;
 
                     w.WriteByte(2);                         // itemCount = 2
-                    w.WriteUInt32(0);
-                    w.WriteInt32(paidGoldAmt);
-                    w.WriteUInt32((uint)paidItemId);
-                    w.WriteInt32(paidItemCnt);
+                    w.WriteUInt32(0);                       // item[0] itemId=0 (金币)
+                    w.WriteInt32(paidGoldAmt);              // item[0] 金额
+                    w.WriteUInt32((uint)paidItemId);        // item[1] 物品 itemId
+                    w.WriteInt32(paidItemCnt);              // item[1] 数量
                 }
                 else
                 {
-                    w.WriteByte(0x00);
+                    w.WriteByte(0x00);  // itemCount = 0 (免费牌不发内容)
                 }
 
                 w.WriteByte(0x00);  // flippedFlag
@@ -755,6 +830,8 @@ namespace DfoServer.Network.Handlers
             return w.ToArray();
         }
 
+        // CMD ACK 70 — 卡牌布局: u8 resultCode + u16[8] slotStatus
+        // 单人: slot[0]=0x0001(可翻) slot[1-7]=0xFFFF(禁用)
         private static byte[] HexToBytes(string hex) {
             var bytes = new byte[hex.Length / 2];
             for (int i = 0; i < bytes.Length; i++)
@@ -778,6 +855,7 @@ namespace DfoServer.Network.Handlers
             session.Player.CurBossKilled = false;
             PersistLevelAndExp(session.Player.CharacterId, session.Player.Level, session.Player.Exp);
 
+            // 预生成翻牌奖励 (df_game_r: clear_reward 在 NOTI 35 之前生成)
             int dungeonLevel = 85;
             try { dungeonLevel = GameWorld.Dungeon.GetDungeonBasicLv(session.Player.CurDungeon); } catch { }
             var lcg = session.Player.CurRoomLcg ?? new Game.Dungeon.DnfLcg(session.Player.CurDungeonSeed);
@@ -791,10 +869,11 @@ namespace DfoServer.Network.Handlers
                 dungeonLevel, session.Player.CurDungeonDifficulty, lcg);
             session.Player.CurCardRewards = new System.Collections.Generic.List<Game.Dungeon.ClearRewardGenerator.CardReward>
             {
-                freeGold, freeItem, default, default,
-                paidGold, paidItem, default, default
+                freeGold, freeItem, default, default,  // 免费: [0]金 [1]物 [2-3]空(单人)
+                paidGold, paidItem, default, default    // 付费: [4]金 [5]物 [6-7]空(单人)
             };
 
+            // 结算三包 + 翻牌布局
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0022,
                 DungeonNotificationBuilder.BuildPlayResult(
                     session.Player.UserId, session.Player.CurBossCode,
@@ -885,7 +964,8 @@ namespace DfoServer.Network.Handlers
             catch { return 0; }
         }
 
-        // NOTI 14 UPDATE_ITEM_LIST — 84B item entry
+        // NOTI 14 UPDATE_ITEM_LIST — 84B item entry (Reverse/SUBSYSTEMS/inventory_system.md)
+        // PacketPopBuffer(84) 一次 memcpy，不逐字段读取
         private static byte[] BuildItemEntry(short slotIndex, uint itemId, uint instanceValue)
         {
             var buf = new byte[84];
@@ -923,7 +1003,8 @@ namespace DfoServer.Network.Handlers
             w.WriteByte(requestType);
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x00AA, w.ToArray()));
 
-            if (pauseFlag == 1 && session.Player.CurDungeon > 0 && !session.Player.CurBossKilled)
+            // APC 对话结束后：当房间有 APC 且所有非 APC 怪物已被击杀 → ClearDungeon
+            if (pauseFlag == 1 && session.Player.CurDungeon > 0)
             {
                 int apcCount = 0, normalCount = 0;
                 if (session.Player.CurRoomMonsters != null)
@@ -931,15 +1012,15 @@ namespace DfoServer.Network.Handlers
                     { if (m.Type >= 5) apcCount++; else normalCount++; }
 
                 if (apcCount > 0 && session.Player.CurRoomKilledSeqIds.Count >= normalCount)
-                {
-                    session.Player.CurBossKilled = true;
-                    await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x001F, new byte[] { 0x00 }));
-                    FileLogger.Log($"[{ProtocolName}] STORY_PAUSE: APC dialog + all normals dead → ENABLE_CLEAR_DUNGEON");
-                }
+                    await TryClearDungeon(session, "APC dialog + all normals dead");
             }
         }
 
         // CMD 0x008F (wire 143) CHANGE_TUTORIAL_FLAG
+        // body: u32 flagIndex + u8 rewardFlag (5B, df_game_r get_int+get_byte 实证, 86JP 抓包 1F-00-00-00-01 吻合)
+        // df_game_r: setCurCharacTutorialFlag(flagIndex), if rewardFlag → RewardTutorial(flagIndex)
+        //            flagIndex==31 + in dungeon → giveup_game (教程完成回城)
+        //            flagIndex==77 → set ALL flags 0-77
         public async Task Handle_ENUM_CMDPACKET_CHANGE_TUTORIAL_FLAG(EnhancedClientSession session, GamePacketHeader header, byte[] body)
         {
             if (body.Length < 5) return;
@@ -983,6 +1064,7 @@ namespace DfoServer.Network.Handlers
             }
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x008F, ack.ToArray()));
 
+            // flagIndex==31: 教程完成 → 回城 (仅在副本内才执行, df_game_r: state>1 + giveup_game)
             if (flagIndex == 31)
             {
                 var cid = session.Player.CharacterId;
@@ -1004,7 +1086,9 @@ namespace DfoServer.Network.Handlers
         }
 
         // CMD 0x01E4 (wire 484) TUTORIAL_LEVEL_UP
-        private const byte TutorialTargetLevel = 2;
+        // 86JP body: empty (0B). df_game_r: check level==1 + map∈{61001,61009,61016},
+        // CalLevelUpItemState(1, targetLevel) 一次性灌经验到目标等级, SendCmdOkPacket(484)
+        private const byte TutorialTargetLevel = 2; // df_game_r=59; FBS new0610 实测 TUTORIAL_LEVEL_UP 只升到 Lv2
         public async Task Handle_ENUM_CMDPACKET_TUTORIAL_LEVEL_UP(EnhancedClientSession session, GamePacketHeader header, byte[] body)
         {
             FileLogger.Log($"[{ProtocolName}] TUTORIAL_LEVEL_UP: cid={session.Player.CharacterId} level={session.Player.Level} dungeon={session.Player.CurDungeon}");
@@ -1111,6 +1195,7 @@ namespace DfoServer.Network.Handlers
 
             foreach (var candidate in candidates)
             {
+                // 查当前持有量
                 int currentHeld = 0;
                 try
                 {
@@ -1128,6 +1213,7 @@ namespace DfoServer.Network.Handlers
                 if (!TryPickupItemToInventory(session.Player.CharacterId, candidate.ItemId, dropCount, out slot))
                     continue;
 
+                // NOTI 14 UPDATE_ITEM_LIST (独立发, 86JP 84B 固定格式)
                 var w = new GamePacketWriter();
                 w.WriteByte(0);                     // updateType = 0
                 w.WriteUInt16(1);                   // count = 1
@@ -1155,8 +1241,10 @@ namespace DfoServer.Network.Handlers
             session.Player.CurRoomMonsters = System.Array.Empty<GameWorld.Dungeon.MonsterSumInfo>();
             session.Player.CurRoomKilledSeqIds.Clear();
             session.Player.CurBossKilled = false;
+            session.Player.CurDungeonCleared = false;
             session.Player.CurBossCode = 0;
             session.Player.CurBossMapPos = null;
+            session.Player.CurClearCondition = null;
             session.Player.CurSceneSlotCounter = 0;
             session.Player.CurDungeonSeed = 0;
             session.Player.CurRoomLcg = null;

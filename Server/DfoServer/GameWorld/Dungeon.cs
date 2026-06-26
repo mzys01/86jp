@@ -34,6 +34,8 @@ namespace DfoServer.GameWorld
             public byte Level { get; set; }
 
             public byte Type { get; set; }
+
+            public bool IsBlocking { get; set; }
         }
 
         public struct MazeSumInfo
@@ -220,6 +222,7 @@ namespace DfoServer.GameWorld
                         Level = item.Lv.GetValueOrDefault() != 0
                             ? (byte)(GetDungeonBasicLv(dungeonId) + item.AutoLv.GetValueOrDefault())
                             : (byte)item.AutoLv.GetValueOrDefault(),
+                        IsBlocking = true,
                     });
                 }
                 return new MazeSumInfo { Monsters = listO, X = x, Y = y, Index = overrideMapId };
@@ -508,6 +511,7 @@ namespace DfoServer.GameWorld
                     Level = item.Lv.GetValueOrDefault() != 0
                         ? (byte)(GetDungeonBasicLv(dungeonId) + item.AutoLv.GetValueOrDefault())
                         : (byte)item.AutoLv.GetValueOrDefault(),
+                    IsBlocking = true,
                 };
                 list.Add(monster);
             }
@@ -521,6 +525,7 @@ namespace DfoServer.GameWorld
                     Code = apc.Code,
                     Type = (byte)apc.AIType,
                     Level = apcLevel,
+                    IsBlocking = false,
                 });
             }
 
