@@ -19,6 +19,7 @@ namespace DfoServer.Game.SelectCharacter
         private readonly PacketSequenceRepository _packetSequenceRepository;
         private readonly ICharacterRepository _characterRepository;
         private readonly AccountSettingsRepository _accountSettingsRepository;
+        private readonly string _connectionString;
         private readonly string _databasePath;
         private readonly string _schemaFilePath;
 
@@ -26,6 +27,7 @@ namespace DfoServer.Game.SelectCharacter
         {
             _databasePath = databasePath;
             _schemaFilePath = schemaFilePath;
+            _connectionString = Infrastructure.SqliteDatabaseBootstrap.Initialize(databasePath, schemaFilePath);
             _inventoryStore = new SqliteInventoryStore(databasePath, schemaFilePath);
             _initDataRepository = new SqliteCharacterProgressRepository(databasePath, schemaFilePath);
             _userInfoBlobRepository = new SqliteUserInfoBlobRepository(databasePath, schemaFilePath);
@@ -74,6 +76,11 @@ namespace DfoServer.Game.SelectCharacter
             }
 
             
+            LoadInitFieldsFromPacketTemplates(characterId, initSnapshot);
+
+            var luckyStar = CurrencyService.LoadLuckyStar(_connectionString, accountId);
+            initSnapshot.LuckyStar = luckyStar;
+
             var acctSettings = _accountSettingsRepository.Load(accountId);
             initSnapshot.MainGameOptionBlob = acctSettings?.MainGameOption ?? Settings.AccountSettings.DefaultMainGameOption;
             initSnapshot.QuickchatBank0 = acctSettings?.QuickchatBank0;
@@ -87,8 +94,6 @@ namespace DfoServer.Game.SelectCharacter
                     initSnapshot.HotkeyConfigSlots.Add(BitConverter.ToUInt16(hkSlots, i));
             }
 
-
-            LoadInitFieldsFromPacketTemplates(characterId, initSnapshot);
 
             initSnapshot.ServerEventPhaseBitmap = _initFlagsRepository.LoadServerEventPhaseBitmap();
 
@@ -247,6 +252,12 @@ namespace DfoServer.Game.SelectCharacter
                 return _inventoryStore.TrySortItems(characterId, listType, category);
         }
 
+        public byte[] LoadCharacterInitBody(int characterId, ushort notiType, int occurrenceIndex = 0)
+            => LoadInitBody(characterId, notiType, occurrenceIndex);
+
+        public byte[] LoadAccountMainOption(int accountId)
+            => _accountSettingsRepository.Load(accountId)?.MainGameOption;
+
         private void LoadFieldFromInitBody(int characterId, int notiType, Action<byte[]> parse)
         {
             var body = LoadInitBody(characterId, notiType, 0);
@@ -361,6 +372,7 @@ namespace DfoServer.Game.SelectCharacter
                     (0x0077, new byte[] { 0x00 }),              
                     (0x0111, new byte[8]),                      
                     (0x019F, new byte[] { 0x00, 0x00 }),        
+                    (0x0357, new byte[] { 0x7B, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }),
                     (0x03D8, new byte[204]),                    
                 };
                 foreach (var d in defaults)
@@ -420,16 +432,7 @@ namespace DfoServer.Game.SelectCharacter
 
             LoadFieldFromInitBody(characterId, 0x0357, body => {
                 if (body == null || body.Length < 8) return;
-                snap.RentalInfo.RentalId = BitConverter.ToUInt32(body, 0);
-                var count = BitConverter.ToUInt32(body, 4);
-                int off = 8;
-                snap.RentalInfo.Items.Clear();
-                for (uint i = 0; i < count && off + 8 <= body.Length; i++)
-                {
-                    snap.RentalInfo.Items.Add(new RentalItemSnapshot
-                    { ItemId = BitConverter.ToUInt32(body, off), ExpireTime = BitConverter.ToUInt32(body, off + 4) });
-                    off += 8;
-                }
+                RentalInfoSnapshot.ParseStorageBody(body, snap.RentalInfo);
             });
 
             
@@ -437,12 +440,6 @@ namespace DfoServer.Game.SelectCharacter
                 var lbBody = LoadInitBody(characterId, 0x03D8, 0);
                 if (lbBody != null) snap.LotteryBufferBlob = lbBody;
             }
-
-            LoadFieldFromInitBody(characterId, 0x019D, body => {
-                if (body != null && body.Length >= 2) { snap.GageType = body[0]; snap.GageValue = body[1]; }
-            });
-
-            
         }
     }
 }

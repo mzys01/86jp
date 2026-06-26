@@ -21,7 +21,7 @@ namespace DfoServer.Game.Inventory
             {
                 cmd.Transaction = transaction;
                 cmd.CommandText = @"
-SELECT a.cera, a.token_cera, a.happy_token_cera
+SELECT a.cera, a.token_cera, a.happy_token_cera, a.lucky_star
 FROM accounts a
 JOIN characters c ON c.account_id = a.account_id
 WHERE c.character_id = @cid;";
@@ -33,10 +33,68 @@ WHERE c.character_id = @cid;";
                         w.Cera = reader.IsDBNull(0) ? 0 : Convert.ToInt32(reader.GetValue(0));
                         w.TokenCera = reader.IsDBNull(1) ? 0 : Convert.ToInt32(reader.GetValue(1));
                         w.HappyTokenCera = reader.IsDBNull(2) ? 0 : Convert.ToInt32(reader.GetValue(2));
+                        w.LuckyStar = reader.IsDBNull(3) ? (ushort)0 : NormalizeLuckyStar(Convert.ToInt32(reader.GetValue(3)));
                     }
                 }
             }
             return w;
+        }
+
+        public static ushort LoadLuckyStar(string connectionString, int accountId)
+        {
+            if (accountId <= 0)
+                return 0;
+
+            using (var conn = new SqliteConnection(connectionString))
+            {
+                conn.Open();
+                return LoadLuckyStar(conn, null, accountId);
+            }
+        }
+
+        public static ushort LoadLuckyStar(SqliteConnection connection, SqliteTransaction transaction, int accountId)
+        {
+            if (connection == null || accountId <= 0)
+                return 0;
+
+            using (var cmd = connection.CreateCommand())
+            {
+                cmd.Transaction = transaction;
+                cmd.CommandText = "SELECT lucky_star FROM accounts WHERE account_id = @aid;";
+                cmd.Parameters.AddWithValue("@aid", accountId);
+                var result = cmd.ExecuteScalar();
+                if (result == null || result == DBNull.Value)
+                    return 0;
+
+                return NormalizeLuckyStar(Convert.ToInt32(result));
+            }
+        }
+
+        public static void UpdateLuckyStar(SqliteConnection connection, SqliteTransaction transaction, int accountId, ushort luckyStar)
+        {
+            if (connection == null || transaction == null || accountId <= 0)
+                return;
+
+            using (var cmd = connection.CreateCommand())
+            {
+                cmd.Transaction = transaction;
+                cmd.CommandText = @"
+UPDATE accounts
+SET lucky_star = @luckyStar
+WHERE account_id = @aid;";
+                cmd.Parameters.AddWithValue("@luckyStar", (int)luckyStar);
+                cmd.Parameters.AddWithValue("@aid", accountId);
+                cmd.ExecuteNonQuery();
+            }
+        }
+
+        private static ushort NormalizeLuckyStar(int value)
+        {
+            if (value <= 0)
+                return 0;
+            if (value > 999)
+                return 999;
+            return (ushort)value;
         }
 
         public static void UpdateGold(SqliteConnection connection, SqliteTransaction transaction, int characterId, int newGold)
@@ -236,5 +294,7 @@ WHERE EXISTS (
         public int TokenCera { get; set; }
 
         public int HappyTokenCera { get; set; }
+
+        public ushort LuckyStar { get; set; }
     }
 }

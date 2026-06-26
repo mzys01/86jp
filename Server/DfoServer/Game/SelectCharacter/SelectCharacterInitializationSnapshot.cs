@@ -110,8 +110,7 @@ namespace DfoServer.Game.SelectCharacter
         public byte CubeGrade { get; set; }
 
         
-        public byte GageType { get; set; }
-        public byte GageValue { get; set; }
+        public ushort LuckyStar { get; set; }
 
         
         public ushort FatigueAccelValue { get; set; }

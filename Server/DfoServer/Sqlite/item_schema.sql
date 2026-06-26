@@ -9,7 +9,8 @@ CREATE TABLE IF NOT EXISTS accounts (
     created_at     TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP,
     cera           INTEGER NOT NULL DEFAULT 0,
     token_cera     INTEGER NOT NULL DEFAULT 0,
-    happy_token_cera INTEGER NOT NULL DEFAULT 0
+    happy_token_cera INTEGER NOT NULL DEFAULT 0,
+    lucky_star     INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS characters (
