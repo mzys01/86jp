@@ -16,11 +16,16 @@ namespace DfoServer.SelfTests
         private const short StackedPackageSlot = 67;
         private const short AvatarPackageSlot = 68;
         private const short CrossJobAuraPackageSlot = 69;
-        private const int PackageItemTemplateId = 10007993;
-        private const int AvatarPackageItemTemplateId = 10008359;
-        private const int AuraPackageItemTemplateId = 10008357;
-        private const int SelectedRewardItemTemplateId = 400330051;
-        private const int CapturedCrossJobAuraRewardItemTemplateId = 112590011;
+        private const short SpecialBoosterPackageSlot = 70;
+        // These are PVF sample IDs used only to exercise generic package paths.
+        // Production logic resolves package/reward data from PVF, not from these constants.
+        private const int SampleTitleSelectablePackageId = 10007993;
+        private const int SampleAvatarSelectablePackageId = 10008359;
+        private const int SampleAuraSelectablePackageId = 10008357;
+        private const int SampleSpecialKindBoosterPackageId = 10007997;
+        private const int SampleSpecialKindBoosterRewardId = 400360011;
+        private const int SampleSelectedTitleRewardId = 400330051;
+        private const int SampleCrossJobAuraRewardId = 112590011;
         private const int InvalidRewardItemTemplateId = 1;
 
         private static readonly byte[] CapturedOpenRequestBody =
@@ -123,7 +128,7 @@ namespace DfoServer.SelfTests
 
             Check($"request slot={request.SlotIndex}", request.SlotIndex == PackageSlot);
             Check($"request context={request.SelectionContext}", request.SelectionContext == 0);
-            Check($"request selected item={request.SelectedItemTemplateId}", request.SelectedItemTemplateId == SelectedRewardItemTemplateId);
+            Check($"request selected item={request.SelectedItemTemplateId}", request.SelectedItemTemplateId == SampleSelectedTitleRewardId);
             Check($"request selection flag={request.SelectionFlag}", request.SelectionFlag == 0);
             Check("single request has no avatar choices", !request.HasAvatarChoices);
 
@@ -170,8 +175,8 @@ namespace DfoServer.SelfTests
 
             if (result != null)
             {
-                Check($"result package item={result.PackageItemTemplateId}", result.PackageItemTemplateId == PackageItemTemplateId);
-                Check($"result reward item={result.RewardItemTemplateId}", result.RewardItemTemplateId == SelectedRewardItemTemplateId);
+                Check($"result package item={result.PackageItemTemplateId}", result.PackageItemTemplateId == SampleTitleSelectablePackageId);
+                Check($"result reward item={result.RewardItemTemplateId}", result.RewardItemTemplateId == SampleSelectedTitleRewardId);
                 Check("result added main item", result.AddedMainItemCount == 1);
 
                 var singleAckBody = SelectablePackageAckBuilder.BuildSuccess(result.SlotIndex, result.GrantedItems);
@@ -180,7 +185,7 @@ namespace DfoServer.SelfTests
                 Check("0x00A0 single reward ACK source slot", singleAckBody.Length >= 3 && BitConverter.ToInt16(singleAckBody, 1) == PackageSlot);
                 Check("0x00A0 single reward ACK reserved context", singleAckBody.Length >= 11 && BitConverter.ToInt32(singleAckBody, 3) == 0 && BitConverter.ToInt32(singleAckBody, 7) == 0);
                 Check("0x00A0 single reward ACK popup item count=1", singleAckBody.Length >= 13 && BitConverter.ToUInt16(singleAckBody, 11) == 1);
-                Check("0x00A0 single reward ACK item id", singleAckBody.Length >= 21 && BitConverter.ToInt32(singleAckBody, 13) == SelectedRewardItemTemplateId);
+                Check("0x00A0 single reward ACK item id", singleAckBody.Length >= 21 && BitConverter.ToInt32(singleAckBody, 13) == SampleSelectedTitleRewardId);
                 Check("0x00A0 single reward ACK item count", singleAckBody.Length >= 21 && BitConverter.ToInt32(singleAckBody, 17) == 1);
             }
 
@@ -189,7 +194,7 @@ namespace DfoServer.SelfTests
                 var snapshot = store.LoadCharacterItemListSnapshot();
                 Check("snapshot no package in source slot", snapshot.MainItems.Find(x => x.SlotIndex == PackageSlot) == null);
 
-                var reward = snapshot.MainItems.Find(x => x.ItemTemplateId == SelectedRewardItemTemplateId);
+                var reward = snapshot.MainItems.Find(x => x.ItemTemplateId == SampleSelectedTitleRewardId);
                 Check("selected title reward exists", reward != null);
                 if (reward != null)
                 {
@@ -211,7 +216,7 @@ namespace DfoServer.SelfTests
 
                 if (avatarResult != null)
                 {
-                    Check($"avatar result package item={avatarResult.PackageItemTemplateId}", avatarResult.PackageItemTemplateId == AvatarPackageItemTemplateId);
+                    Check($"avatar result package item={avatarResult.PackageItemTemplateId}", avatarResult.PackageItemTemplateId == SampleAvatarSelectablePackageId);
                     Check($"avatar result added avatar count={avatarResult.AddedAvatarCount}", avatarResult.AddedAvatarCount == CapturedAvatarItemTemplateIds.Length);
                     Check("avatar result no main items", avatarResult.AddedMainItemCount == 0);
                     Check($"avatar result granted count={avatarResult.GrantedItems.Count}", avatarResult.GrantedItems.Count == CapturedAvatarItemTemplateIds.Length);
@@ -242,7 +247,7 @@ namespace DfoServer.SelfTests
             {
                 SlotIndex = CrossJobAuraPackageSlot,
                 SelectionContext = 1,
-                SelectedItemTemplateId = CapturedCrossJobAuraRewardItemTemplateId,
+                SelectedItemTemplateId = SampleCrossJobAuraRewardId,
                 SelectionFlag = 0,
             };
             SelectablePackageOpenResult crossJobAuraResult = null;
@@ -253,8 +258,8 @@ namespace DfoServer.SelfTests
 
             if (crossJobAuraResult != null)
             {
-                Check($"cross-job aura result package item={crossJobAuraResult.PackageItemTemplateId}", crossJobAuraResult.PackageItemTemplateId == AuraPackageItemTemplateId);
-                Check($"cross-job aura result reward item={crossJobAuraResult.RewardItemTemplateId}", crossJobAuraResult.RewardItemTemplateId == CapturedCrossJobAuraRewardItemTemplateId);
+                Check($"cross-job aura result package item={crossJobAuraResult.PackageItemTemplateId}", crossJobAuraResult.PackageItemTemplateId == SampleAuraSelectablePackageId);
+                Check($"cross-job aura result reward item={crossJobAuraResult.RewardItemTemplateId}", crossJobAuraResult.RewardItemTemplateId == SampleCrossJobAuraRewardId);
                 Check("cross-job aura result added avatar count", crossJobAuraResult.AddedAvatarCount == 1);
                 Check("cross-job aura result granted count", crossJobAuraResult.GrantedItems.Count == 1);
             }
@@ -263,13 +268,33 @@ namespace DfoServer.SelfTests
             {
                 var snapshot = store.LoadCharacterItemListSnapshot();
                 Check("snapshot no cross-job aura package in source slot", snapshot.MainItems.Find(x => x.SlotIndex == CrossJobAuraPackageSlot) == null);
-                Check("cross-job aura reward exists in avatar inventory", snapshot.AvatarItems.Find(x => x.AvatarItemId == CapturedCrossJobAuraRewardItemTemplateId) != null);
+                Check("cross-job aura reward exists in avatar inventory", snapshot.AvatarItems.Find(x => x.AvatarItemId == SampleCrossJobAuraRewardId) != null);
+            }
+
+            BoosterUseResult boosterResult = null;
+            using (store.BeginScope(CharacterId, AccountId))
+            {
+                Check("open special-kind booster package succeeds", store.TryUseBoosterItem(SpecialBoosterPackageSlot, Array.Empty<int>(), out boosterResult));
+            }
+
+            if (boosterResult != null)
+            {
+                Check($"special booster source item={boosterResult.SourceItemTemplateId}", boosterResult.SourceItemTemplateId == SampleSpecialKindBoosterPackageId);
+                Check("special booster consumed source", boosterResult.SourceRemainingStackCount == 0);
+                Check("special booster granted reward", boosterResult.Rewards.Find(x => x.ItemTemplateId == SampleSpecialKindBoosterRewardId) != null);
+            }
+
+            using (store.BeginScope(CharacterId, AccountId))
+            {
+                var snapshot = store.LoadCharacterItemListSnapshot();
+                Check("snapshot no special booster package in source slot", snapshot.MainItems.Find(x => x.SlotIndex == SpecialBoosterPackageSlot) == null);
+                Check("special booster reward exists", snapshot.MainItems.Find(x => x.ItemTemplateId == SampleSpecialKindBoosterRewardId) != null);
             }
 
             using (var connection = new SqliteConnection(SqliteDatabaseBootstrap.BuildConnectionString(tempDb)))
             {
                 connection.Open();
-                var row = LoadItemRow(connection, SelectedRewardItemTemplateId);
+                var row = LoadItemRow(connection, SampleSelectedTitleRewardId);
                 Check("selected title DB row exists", row.Exists);
                 if (row.Exists)
                 {
@@ -348,6 +373,8 @@ VALUES
                     ('character', @characterId, @characterId, 0, @avatarPackageSlot, @avatarTemplateId, 'special',
                      1, 1, 0, 0, 0, @expireTime, 0, 0, '{}'),
                     ('character', @characterId, @characterId, 0, @crossJobAuraPackageSlot, @auraTemplateId, 'special',
+                     1, 1, 0, 0, 0, @expireTime, 0, 0, '{}'),
+                    ('character', @characterId, @characterId, 0, @specialBoosterPackageSlot, @specialBoosterTemplateId, 'special',
                      1, 1, 0, 0, 0, @expireTime, 0, 0, '{}');";
                     command.Parameters.AddWithValue("@accountId", AccountId);
                     command.Parameters.AddWithValue("@characterId", CharacterId);
@@ -355,9 +382,11 @@ VALUES
                     command.Parameters.AddWithValue("@stackedPackageSlot", StackedPackageSlot);
                     command.Parameters.AddWithValue("@avatarPackageSlot", AvatarPackageSlot);
                     command.Parameters.AddWithValue("@crossJobAuraPackageSlot", CrossJobAuraPackageSlot);
-                    command.Parameters.AddWithValue("@templateId", PackageItemTemplateId);
-                    command.Parameters.AddWithValue("@avatarTemplateId", AvatarPackageItemTemplateId);
-                    command.Parameters.AddWithValue("@auraTemplateId", AuraPackageItemTemplateId);
+                    command.Parameters.AddWithValue("@specialBoosterPackageSlot", SpecialBoosterPackageSlot);
+                    command.Parameters.AddWithValue("@templateId", SampleTitleSelectablePackageId);
+                    command.Parameters.AddWithValue("@avatarTemplateId", SampleAvatarSelectablePackageId);
+                    command.Parameters.AddWithValue("@auraTemplateId", SampleAuraSelectablePackageId);
+                    command.Parameters.AddWithValue("@specialBoosterTemplateId", SampleSpecialKindBoosterPackageId);
                     command.Parameters.AddWithValue("@expireTime", ToUnixLocal("2027-08-13 06:00:00"));
                     command.ExecuteNonQuery();
                 }

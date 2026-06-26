@@ -48,7 +48,7 @@ namespace DfoServer.Network.Handlers
             {
                 if (_sqliteSelectCharacterDataSource.TryBuyCeraShopItem(cid, aid, commodityNo, 1, out var result))
                 {
-                    FileLogger.Log($"[{ProtocolName}] CERA_SHOP_BUY: OK commodityNo={commodityNo} slot={result.SlotIndex} item=0x{result.ItemTemplateId:X8} count={result.AppliedCount} coin={result.UpdatedCoin}");
+                    FileLogger.Log($"[{ProtocolName}] CERA_SHOP_BUY: OK commodityNo={commodityNo} slot={result.SlotIndex} item=0x{result.ItemTemplateId:X8} count={result.AppliedCount} coin={result.UpdatedCoin} extra={result.ExtraResults.Count}");
                     results.Add(result);
                     successItems.Add(System.Tuple.Create(commodityNo, result));
                     if (PremiumContractService.IsExpertContractItem(result.ItemTemplateId))
@@ -84,17 +84,24 @@ namespace DfoServer.Network.Handlers
             InventoryMutationResult goldResult = null;
             foreach (var result in results)
             {
-                if (result.ListType == InventoryListType.Avatar)
+                var resultGroup = new System.Collections.Generic.List<InventoryMutationResult> { result };
+                resultGroup.AddRange(result.ExtraResults);
+
+                foreach (var updateResult in resultGroup)
                 {
-                    hasAvatarResult = true;
-                    continue;
+                    if (updateResult.ListType == InventoryListType.Avatar)
+                    {
+                        hasAvatarResult = true;
+                        continue;
+                    }
+                    if (updateResult.ListType == InventoryListType.Pet)
+                    {
+                        hasPetResult = true;
+                        continue;
+                    }
+                    itemUpdateResults.Add(updateResult);
                 }
-                if (result.ListType == InventoryListType.Pet)
-                {
-                    hasPetResult = true;
-                    continue;
-                }
-                itemUpdateResults.Add(result);
+
                 if (result.GoldSpent)
                     goldResult = result;
             }
@@ -112,8 +119,9 @@ namespace DfoServer.Network.Handlers
 
             if (itemUpdateResults.Count > 0)
             {
+                var snapshot = _sqliteSelectCharacterDataSource.LoadItemListSnapshot(cid, aid);
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000E,
-                    BuildItemListUpdate(itemUpdateResults)));
+                    BuildItemListUpdate(itemUpdateResults, snapshot)));
             }
 
             if (hasAvatarResult || hasPetResult)
@@ -163,19 +171,42 @@ namespace DfoServer.Network.Handlers
             }
         }
 
-        private static byte[] BuildItemListUpdate(System.Collections.Generic.IReadOnlyList<InventoryMutationResult> updates)
+        private static byte[] BuildItemListUpdate(System.Collections.Generic.IReadOnlyList<InventoryMutationResult> updates, CharacterItemListSnapshot snapshot)
         {
             var writer = new GamePacketWriter();
             writer.WriteByte(0);
             writer.WriteUInt16((ushort)updates.Count);
             foreach (var update in updates)
             {
-                writer.WriteInt16(update.SlotIndex);
-                writer.WriteInt32(update.ItemTemplateId);
-                writer.WriteInt32(update.RemainingStackCount);
-                writer.WriteZeroBytes(0x4A);
+                var common = FindUpdatedCommonItem(snapshot, update);
+                if (common != null)
+                {
+                    ItemListPacketBuilder.WriteCommonEntry(writer, common);
+                    continue;
+                }
+
+                WriteCompactItemListUpdate(writer, update);
             }
             return writer.ToArray();
+        }
+
+        private static CommonInventoryItem FindUpdatedCommonItem(CharacterItemListSnapshot snapshot, InventoryMutationResult update)
+        {
+            if (snapshot == null || update == null)
+                return null;
+
+            if (update.ListType != InventoryListType.Main || update.ItemTemplateId <= 0)
+                return null;
+
+            return snapshot.MainItems.Find(item => item.SlotIndex == update.SlotIndex);
+        }
+
+        private static void WriteCompactItemListUpdate(GamePacketWriter writer, InventoryMutationResult update)
+        {
+            writer.WriteInt16(update.SlotIndex);
+            writer.WriteInt32(update.ItemTemplateId);
+            writer.WriteInt32(update.RemainingStackCount);
+            writer.WriteZeroBytes(0x4A);
         }
 
         private static byte[] BuildCeraUpdate(int cera, int tokenCera, int happyTokenCera)

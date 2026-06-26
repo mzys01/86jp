@@ -89,6 +89,34 @@ namespace DfoServer.Game.Inventory
         public int CostItemNewStackCount { get; set; }
 
         public short CostItemSlotIndex { get; set; }
+
+        public List<InventoryMutationResult> ExtraResults { get; } = new List<InventoryMutationResult>();
+    }
+
+    public sealed class BoosterRewardResult
+    {
+        public InventoryListType ListType { get; set; } = InventoryListType.Main;
+
+        public short SlotIndex { get; set; }
+
+        public int ItemTemplateId { get; set; }
+
+        public int StackCount { get; set; }
+
+        public int GrantedCount { get; set; }
+    }
+
+    public sealed class BoosterUseResult
+    {
+        public short SourceSlotIndex { get; set; }
+
+        public int SourceItemTemplateId { get; set; }
+
+        public int SourceRemainingStackCount { get; set; }
+
+        public int SourceInstanceValue { get; set; }
+
+        public List<BoosterRewardResult> Rewards { get; } = new List<BoosterRewardResult>();
     }
 
     public sealed class SqliteInventoryStore
@@ -96,6 +124,8 @@ namespace DfoServer.Game.Inventory
         private const int DefaultAvatarUnknownFixed30 = 0x00001E00;
         private const ushort DefaultAvatarUnknownFixed4 = 0x0400;
         private const short ReviveCoinSlotIndex = 1;
+        private static readonly object StackableItemCacheLock = new object();
+        private static readonly Dictionary<int, PvfLib.StackableItemFile> StackableItemCache = new Dictionary<int, PvfLib.StackableItemFile>();
 
         private int _activeCharacterId = 1000;
         private int _activeAccountId = 1;
@@ -453,6 +483,9 @@ ORDER BY slot_index;";
                 var addedPetCount = 0;
                 var grantedItems = new List<PackageGrantedItem>();
 
+                if (!ConsumePackageItem(connection, transaction, packageItem))
+                    return false;
+
                 foreach (var reward in definition.Rewards)
                 {
                     if (reward.IsAvatar)
@@ -485,17 +518,12 @@ ORDER BY slot_index;";
                         continue;
                     }
 
-                    if (!TryInsertPackageReward(connection, transaction, reward, ref addedMainItemCount, ref addedPetCount, grantedItems))
+                    if (!TryInsertPackageReward(connection, transaction, reward, ref addedMainItemCount, ref addedPetCount, grantedItems, packageItem.SlotIndex))
                     {
                         FileLogger.Log($"  [AvatarPackage] REJECT: cannot insert package reward item=0x{reward.ItemTemplateId:X8} count={reward.Count}");
                         return false;
                     }
                 }
-
-                if (packageItem.StackCount > 1)
-                    UpdateStackCount(connection, transaction, packageItem.ItemUid, packageItem.StackCount - 1);
-                else
-                    DeleteItem(connection, transaction, packageItem.ItemUid);
 
                 WriteOpenPackageAuditLog(connection, transaction, packageItem, addedAvatarCount, addedMainItemCount, addedPetCount);
                 transaction.Commit();
@@ -544,7 +572,8 @@ ORDER BY slot_index;";
             PackageRewardEntry reward,
             ref int addedMainItemCount,
             ref int addedPetCount,
-            List<PackageGrantedItem> grantedItems = null)
+            List<PackageGrantedItem> grantedItems = null,
+            short? sourceSlotToUseLast = null)
         {
             if (reward.ExpireTime > 0 && reward.ExpireTime <= DateTimeOffset.Now.ToUnixTimeSeconds())
             {
@@ -562,10 +591,14 @@ ORDER BY slot_index;";
             if (metadata.IsStackable)
             {
                 var remaining = reward.Count;
-                var existingItem = reward.ExpireTime > 0
-                    ? null
-                    : FindItemByTemplateId(connection, transaction, InventoryListType.Main, reward.ItemTemplateId);
-                if (existingItem != null)
+                var existingItem = FindStackableItemByTemplateIdAndExpireTime(
+                    connection,
+                    transaction,
+                    InventoryListType.Main,
+                    reward.ItemTemplateId,
+                    reward.ExpireTime,
+                    metadata.StackLimit);
+                while (existingItem != null && remaining > 0)
                 {
                     var capacity = metadata.StackLimit > 0 ? Math.Max(0, metadata.StackLimit - existingItem.StackCount) : remaining;
                     var addCount = Math.Min(remaining, capacity);
@@ -582,6 +615,14 @@ ORDER BY slot_index;";
                         });
                         remaining -= addCount;
                     }
+
+                    existingItem = FindStackableItemByTemplateIdAndExpireTime(
+                        connection,
+                        transaction,
+                        InventoryListType.Main,
+                        reward.ItemTemplateId,
+                        reward.ExpireTime,
+                        metadata.StackLimit);
                 }
 
                 while (remaining > 0)
@@ -589,7 +630,7 @@ ORDER BY slot_index;";
                     var insertCount = metadata.StackLimit > 0 ? Math.Min(metadata.StackLimit, remaining) : remaining;
                     int slotStart, slotEnd;
                     metadata.GetSlotRange(out slotStart, out slotEnd);
-                    var targetSlot = FindEmptySlot(connection, transaction, InventoryListType.Main, slotStart, slotEnd);
+                    var targetSlot = FindEmptySlotPreferOther(connection, transaction, InventoryListType.Main, slotStart, slotEnd, sourceSlotToUseLast);
                     if (targetSlot < 0)
                         return false;
 
@@ -664,7 +705,7 @@ ORDER BY slot_index;";
 
                 int slotStart, slotEnd;
                 metadata.GetSlotRange(out slotStart, out slotEnd);
-                var targetSlot = FindEmptySlot(connection, transaction, InventoryListType.Main, slotStart, slotEnd);
+                var targetSlot = FindEmptySlotPreferOther(connection, transaction, InventoryListType.Main, slotStart, slotEnd, sourceSlotToUseLast);
                 if (targetSlot < 0)
                     return false;
 
@@ -732,6 +773,9 @@ ORDER BY slot_index;";
                 var addedPetCount = 0;
                 var grantedItems = new List<PackageGrantedItem>();
                 PackageRewardEntry rewardForResult = null;
+
+                if (!ConsumePackageItem(connection, transaction, packageItem))
+                    return false;
 
                 if (request.HasAvatarChoices)
                 {
@@ -854,7 +898,7 @@ ORDER BY slot_index;";
                         });
                         addedAvatarCount++;
                     }
-                    else if (!TryInsertPackageReward(connection, transaction, reward, ref addedMainItemCount, ref addedPetCount, grantedItems))
+                    else if (!TryInsertPackageReward(connection, transaction, reward, ref addedMainItemCount, ref addedPetCount, grantedItems, packageItem.SlotIndex))
                     {
                         FileLogger.Log($"  [SelectablePackage] REJECT: cannot insert selected reward item=0x{reward.ItemTemplateId:X8} count={reward.Count}");
                         return false;
@@ -865,11 +909,6 @@ ORDER BY slot_index;";
 
                 if (rewardForResult == null)
                     rewardForResult = new PackageRewardEntry { ItemTemplateId = request.SelectedItemTemplateId, Count = Math.Max(1, request.AvatarChoices.Count) };
-
-                if (packageItem.StackCount > 1)
-                    UpdateStackCount(connection, transaction, packageItem.ItemUid, packageItem.StackCount - 1);
-                else
-                    DeleteItem(connection, transaction, packageItem.ItemUid);
 
                 WriteOpenSelectablePackageAuditLog(connection, transaction, packageItem, rewardForResult, addedMainItemCount, addedPetCount);
                 transaction.Commit();
@@ -900,6 +939,467 @@ ORDER BY slot_index;";
             }
 
             return false;
+        }
+
+        public bool TryUseBoosterItem(short? slotIndex, IReadOnlyList<int> selectedItemTemplateIds, out BoosterUseResult result)
+        {
+            result = null;
+
+            using (var connection = OpenConnection())
+            using (var transaction = connection.BeginTransaction())
+            {
+                var source = slotIndex.HasValue
+                    ? LoadItemRecord(connection, transaction, InventoryListType.Main, slotIndex.Value)
+                    : FindFirstPackageItem(connection, transaction);
+                if (source == null)
+                    return false;
+
+                var stackable = LoadStackableItem(source.ItemTemplateId);
+                if (stackable == null)
+                    return false;
+
+                var stackableType = NormalizeStackableType(stackable.StackableType);
+                if (!TryResolvePackageRewards(stackable, stackableType, selectedItemTemplateIds, out var rewards))
+                {
+                    var selectedText = selectedItemTemplateIds == null || selectedItemTemplateIds.Count == 0
+                        ? "none"
+                        : string.Join(",", selectedItemTemplateIds.Select(id => $"0x{id:X8}"));
+                    FileLogger.Log($"  [Booster] unsupported/empty item=0x{source.ItemTemplateId:X8} type={stackableType} selected={selectedText} rewards(random={stackable.BoosterRewards.Count},select={stackable.BoosterSelectionRewards.Count},package={stackable.PackageRewards.Count})");
+                    return false;
+                }
+
+                if (!ConsumeOneStackable(connection, transaction, source))
+                    return false;
+
+                var useResult = new BoosterUseResult
+                {
+                    SourceSlotIndex = source.SlotIndex,
+                    SourceItemTemplateId = source.ItemTemplateId,
+                    SourceRemainingStackCount = Math.Max(0, source.StackCount - 1),
+                    SourceInstanceValue = source.InstanceValue,
+                };
+
+                foreach (var reward in rewards)
+                {
+                    if (!TryAddBoosterRewardItem(connection, transaction, reward.ItemId, reward.Count, out var rewardResult))
+                        return false;
+
+                    useResult.Rewards.Add(rewardResult);
+                }
+
+                WriteDeleteAuditLog(connection, transaction, source, 1);
+                foreach (var reward in useResult.Rewards)
+                    WriteBuyAuditLog(connection, transaction, reward.ItemTemplateId, reward.SlotIndex, 0, 0);
+                transaction.Commit();
+                result = useResult;
+                return true;
+            }
+        }
+
+        public bool TryOpenPackage0207(short slotIndex, IReadOnlyList<int> selectedItemTemplateIds, out BoosterUseResult result)
+        {
+            result = null;
+            if (selectedItemTemplateIds == null || selectedItemTemplateIds.Count == 0)
+                return false;
+
+            using (var connection = OpenConnection())
+            using (var transaction = connection.BeginTransaction())
+            {
+                var source = LoadItemRecord(connection, transaction, InventoryListType.Main, slotIndex);
+                if (source == null)
+                    return false;
+
+                var stackable = LoadStackableItem(source.ItemTemplateId);
+                if (stackable == null)
+                    return false;
+
+                var stackableType = NormalizeStackableType(stackable.StackableType);
+                if (!stackableType.Equals("[usable cera package]", StringComparison.OrdinalIgnoreCase)
+                    && !stackableType.Equals("[booster selection]", StringComparison.OrdinalIgnoreCase))
+                    return false;
+
+                if (!TryResolveClientSelectedRewards(stackable, selectedItemTemplateIds, out var rewards))
+                {
+                    FileLogger.Log($"  [OpenPkg0207] PVF validation failed source=0x{source.ItemTemplateId:X8} selected={string.Join(",", selectedItemTemplateIds.Select(id => $"0x{id:X8}"))}");
+                    return false;
+                }
+
+                if (!ConsumeOneStackable(connection, transaction, source))
+                    return false;
+
+                var useResult = new BoosterUseResult
+                {
+                    SourceSlotIndex = source.SlotIndex,
+                    SourceItemTemplateId = source.ItemTemplateId,
+                    SourceRemainingStackCount = Math.Max(0, source.StackCount - 1),
+                    SourceInstanceValue = source.InstanceValue,
+                };
+
+                foreach (var reward in rewards)
+                {
+                    if (!TryAddBoosterRewardItem(connection, transaction, reward.ItemId, reward.Count, out var rewardResult))
+                        return false;
+
+                    useResult.Rewards.Add(rewardResult);
+                }
+
+                WriteDeleteAuditLog(connection, transaction, source, 1);
+                foreach (var reward in useResult.Rewards)
+                    WriteBuyAuditLog(connection, transaction, reward.ItemTemplateId, reward.SlotIndex, 0, 0);
+                transaction.Commit();
+                result = useResult;
+                return true;
+            }
+        }
+
+        private bool ConsumeOneStackable(SqliteConnection connection, SqliteTransaction transaction, ItemRecord source)
+        {
+            if (source == null || LoadStackableItem(source.ItemTemplateId) == null)
+                return false;
+
+            return ConsumePackageItem(connection, transaction, source);
+        }
+
+        private bool ConsumePackageItem(SqliteConnection connection, SqliteTransaction transaction, ItemRecord source)
+        {
+            if (source == null || source.StackCount <= 0)
+                return false;
+
+            if (source.StackCount > 1)
+                UpdateStackCount(connection, transaction, source.ItemUid, source.StackCount - 1);
+            else
+                DeleteItem(connection, transaction, source.ItemUid);
+
+            return true;
+        }
+
+        private ItemRecord FindFirstPackageItem(SqliteConnection connection, SqliteTransaction transaction)
+        {
+            foreach (var item in LoadItemsByListType(connection, transaction, InventoryListType.Main))
+            {
+                var stackable = LoadStackableItem(item.ItemTemplateId);
+                if (stackable == null)
+                    continue;
+
+                if (IsSupportedPackageType(NormalizeStackableType(stackable.StackableType)))
+                    return item;
+            }
+
+            return null;
+        }
+
+        private static bool TryResolvePackageRewards(PvfLib.StackableItemFile stackable, string stackableType, IReadOnlyList<int> selectedItemTemplateIds, out List<PvfLib.BoosterRewardEntry> rewards)
+        {
+            rewards = new List<PvfLib.BoosterRewardEntry>();
+            if (stackableType.Equals("[booster]", StringComparison.OrdinalIgnoreCase)
+                || stackableType.Equals("[cera booster]", StringComparison.OrdinalIgnoreCase))
+            {
+                rewards = RollBoosterRewards(stackable.BoosterRewards);
+                return rewards.Count > 0;
+            }
+
+            if (stackableType.Equals("[cera package]", StringComparison.OrdinalIgnoreCase))
+            {
+                rewards = stackable.PackageRewards.ToList();
+                return rewards.Count > 0;
+            }
+
+            if (stackableType.Equals("[usable cera package]", StringComparison.OrdinalIgnoreCase))
+                return TryResolveClientSelectedRewards(stackable, selectedItemTemplateIds, out rewards);
+
+            if (stackableType.Equals("[booster selection]", StringComparison.OrdinalIgnoreCase))
+            {
+                if (selectedItemTemplateIds != null && selectedItemTemplateIds.Count > 0
+                    && TryResolveClientSelectedRewards(stackable, selectedItemTemplateIds, out rewards))
+                {
+                    return true;
+                }
+
+                if (stackable.BoosterSelectionNum <= 0)
+                {
+                    rewards = stackable.BoosterSelectionRewards.ToList();
+                    return rewards.Count > 0;
+                }
+
+                return TryResolveClientSelectedRewards(stackable, selectedItemTemplateIds, out rewards);
+            }
+
+            return false;
+        }
+
+        private static bool TryResolveClientSelectedRewards(PvfLib.StackableItemFile stackable, IReadOnlyList<int> selectedItemTemplateIds, out List<PvfLib.BoosterRewardEntry> rewards)
+        {
+            rewards = new List<PvfLib.BoosterRewardEntry>();
+            if (selectedItemTemplateIds == null || selectedItemTemplateIds.Count == 0)
+                return false;
+
+            var candidates = stackable.BoosterSelectionRewards.Count > 0
+                ? stackable.BoosterSelectionRewards
+                : stackable.PackageRewards;
+            if (candidates.Count == 0)
+                return false;
+
+            var rewardByItemId = candidates
+                .GroupBy(r => r.ItemId)
+                .ToDictionary(g => g.Key, g => g.First());
+            var maxSelectionCount = stackable.BoosterSelectionNum > 0
+                ? stackable.BoosterSelectionNum
+                : selectedItemTemplateIds.Count;
+            var seen = new HashSet<int>();
+
+            foreach (var itemId in selectedItemTemplateIds.Where(id => id > 0))
+            {
+                if (!seen.Add(itemId))
+                    continue;
+
+                if (!rewardByItemId.TryGetValue(itemId, out var reward))
+                    continue;
+
+                rewards.Add(reward);
+                if (rewards.Count >= maxSelectionCount)
+                    break;
+            }
+
+            return rewards.Count > 0;
+        }
+
+        private static List<PvfLib.BoosterRewardEntry> RollBoosterRewards(IEnumerable<PvfLib.BoosterRewardEntry> rewards)
+        {
+            var selected = new List<PvfLib.BoosterRewardEntry>();
+            foreach (var group in rewards.GroupBy(r => r.Group))
+            {
+                var totalWeight = group.Sum(r => Math.Max(0, r.Weight));
+                if (totalWeight <= 0)
+                    continue;
+
+                var drawCount = Math.Max(1, group.Max(r => r.DrawCount));
+                for (var drawIndex = 0; drawIndex < drawCount; drawIndex++)
+                {
+                    var roll = Random.Shared.Next(totalWeight);
+                    var cumulative = 0;
+                    foreach (var reward in group)
+                    {
+                        cumulative += Math.Max(0, reward.Weight);
+                        if (roll >= cumulative)
+                            continue;
+
+                        selected.Add(reward);
+                        break;
+                    }
+                }
+            }
+
+            return selected;
+        }
+
+        private bool TryAddBoosterRewardItem(SqliteConnection connection, SqliteTransaction transaction, int itemTemplateId, int stackCount, out BoosterRewardResult result)
+        {
+            result = null;
+            var metadata = ItemMetadataResolver.Resolve(itemTemplateId);
+            if (metadata.ItemKind == "special")
+                return false;
+
+            var effectiveCount = Math.Max(1, stackCount);
+            var isAvatarReward = IsAvatarReward(metadata);
+            if (metadata.IsStackable && !isAvatarReward)
+            {
+                var existing = FindItemByTemplateId(connection, transaction, InventoryListType.Main, itemTemplateId);
+                if (existing != null && (metadata.StackLimit <= 0 || existing.StackCount + effectiveCount <= metadata.StackLimit))
+                {
+                    var newStackCount = existing.StackCount + effectiveCount;
+                    UpdateStackCount(connection, transaction, existing.ItemUid, newStackCount);
+                    result = new BoosterRewardResult
+                    {
+                        ListType = InventoryListType.Main,
+                        SlotIndex = existing.SlotIndex,
+                        ItemTemplateId = itemTemplateId,
+                        StackCount = newStackCount,
+                        GrantedCount = effectiveCount,
+                    };
+                    return true;
+                }
+            }
+
+            int slotStart;
+            int slotEnd;
+            var insertListType = InventoryListType.Main;
+            var insertKind = metadata.ItemKind;
+            var expireTime = metadata.IsStackable ? 0 : -1;
+            var marker16 = metadata.IsStackable ? 0 : -1;
+            var petSerial = 0;
+            if (isAvatarReward)
+            {
+                insertListType = InventoryListType.Avatar;
+                insertKind = "avatar";
+                slotStart = 0;
+                slotEnd = 500;
+                expireTime = 0;
+                marker16 = DefaultAvatarUnknownFixed30;
+            }
+            else if (string.Equals(metadata.ItemKind, "equipment", StringComparison.Ordinal) && IsCreatureItem(itemTemplateId))
+            {
+                insertListType = InventoryListType.Pet;
+                insertKind = "pet";
+                slotStart = PetInventorySlotStart;
+                slotEnd = PetInventorySlotEnd;
+                expireTime = 0;
+                marker16 = 0;
+                petSerial = NextPetSerialOrHandle(connection, transaction);
+            }
+            else
+            {
+                metadata.GetSlotRange(out slotStart, out slotEnd);
+            }
+
+            var targetSlot = FindEmptySlot(connection, transaction, insertListType, slotStart, slotEnd);
+            if (targetSlot < 0)
+            {
+                FileLogger.Log($"  [Booster] no empty slot item=0x{itemTemplateId:X8} list={insertListType} range={slotStart}-{slotEnd}");
+                return false;
+            }
+
+            var instanceValue = metadata.IsStackable ? effectiveCount : insertListType == InventoryListType.Pet || insertListType == InventoryListType.Avatar ? 0 : GenerateInstanceValue(itemTemplateId, targetSlot);
+            var storedStackCount = insertListType == InventoryListType.Pet || insertListType == InventoryListType.Avatar
+                ? 0
+                : metadata.IsStackable ? effectiveCount : instanceValue;
+            var durability = insertListType == InventoryListType.Pet || insertListType == InventoryListType.Avatar
+                ? (ushort)0
+                : metadata.Durability;
+            var optionValue = (byte)0;
+            var extraJson = "{}";
+            if (insertListType == InventoryListType.Avatar)
+            {
+                var avatarItem = CreateDefaultAvatarItem((short)targetSlot, itemTemplateId, 0);
+                optionValue = avatarItem.OptionValue;
+                extraJson = SerializeAvatar(avatarItem);
+            }
+
+            InsertCharacterItem(
+                connection,
+                transaction,
+                insertListType,
+                (short)targetSlot,
+                itemTemplateId,
+                insertKind,
+                storedStackCount,
+                instanceValue,
+                durability,
+                0,
+                optionValue,
+                expireTime,
+                marker16,
+                petSerial,
+                extraJson);
+
+            result = new BoosterRewardResult
+            {
+                ListType = insertListType,
+                SlotIndex = (short)targetSlot,
+                ItemTemplateId = itemTemplateId,
+                StackCount = storedStackCount,
+                GrantedCount = effectiveCount,
+            };
+            return true;
+        }
+
+        private static bool TryResolveMallAutoOpenRewards(int itemTemplateId, out List<PvfLib.BoosterRewardEntry> rewards)
+        {
+            rewards = null;
+            var stackable = LoadStackableItem(itemTemplateId);
+            if (stackable == null)
+                return false;
+
+            var stackableType = NormalizeStackableType(stackable.StackableType);
+            if (!stackableType.Equals("[cera package]", StringComparison.OrdinalIgnoreCase)
+                && !stackableType.Equals("[cera booster]", StringComparison.OrdinalIgnoreCase))
+                return false;
+
+            return TryResolvePackageRewards(stackable, stackableType, null, out rewards) && rewards.Count > 0;
+        }
+
+        private static InventoryMutationResult ToInventoryMutationResult(BoosterRewardResult reward)
+        {
+            return new InventoryMutationResult
+            {
+                ListType = reward.ListType,
+                SlotIndex = reward.SlotIndex,
+                ItemTemplateId = reward.ItemTemplateId,
+                RemainingStackCount = reward.StackCount,
+                InstanceValue = reward.StackCount,
+                AppliedCount = (short)Math.Min(short.MaxValue, Math.Max(1, reward.GrantedCount)),
+                RequestedCount = (short)Math.Min(short.MaxValue, Math.Max(1, reward.GrantedCount)),
+            };
+        }
+
+        private static PvfLib.StackableItemFile LoadStackableItem(int itemTemplateId)
+        {
+            lock (StackableItemCacheLock)
+            {
+                if (StackableItemCache.TryGetValue(itemTemplateId, out var cached))
+                    return cached;
+            }
+
+            try
+            {
+                var entry = ItemMetadataResolver.GetStackableEntry(itemTemplateId);
+                if (entry == null)
+                    return null;
+
+                var parsed = PvfLib.StackableItemFile.Parse(GameWorld.PvfArchiveAccessor.ReadText(Path.Combine("stackable", entry.FilePath)));
+                lock (StackableItemCacheLock)
+                    StackableItemCache[itemTemplateId] = parsed;
+                return parsed;
+            }
+            catch (Exception ex)
+            {
+                FileLogger.Log($"  [Booster] failed to load item=0x{itemTemplateId:X8}: {ex.Message}");
+                return null;
+            }
+        }
+
+        private static string NormalizeStackableType(string stackableType)
+        {
+            if (string.IsNullOrWhiteSpace(stackableType))
+                return string.Empty;
+
+            var text = stackableType.Trim();
+            var first = text.IndexOf('`');
+            if (first >= 0)
+            {
+                var second = text.IndexOf('`', first + 1);
+                if (second > first)
+                    return text.Substring(first + 1, second - first - 1).Trim();
+            }
+
+            var bracketStart = text.IndexOf('[');
+            if (bracketStart >= 0)
+            {
+                var bracketEnd = text.IndexOf(']', bracketStart + 1);
+                if (bracketEnd > bracketStart)
+                    return text.Substring(bracketStart, bracketEnd - bracketStart + 1).Trim();
+            }
+
+            return text.Replace("`", "").Trim();
+        }
+
+        private static bool IsSupportedPackageType(string stackableType)
+        {
+            return stackableType.Equals("[booster]", StringComparison.OrdinalIgnoreCase)
+                || stackableType.Equals("[cera booster]", StringComparison.OrdinalIgnoreCase)
+                || stackableType.Equals("[cera package]", StringComparison.OrdinalIgnoreCase)
+                || stackableType.Equals("[usable cera package]", StringComparison.OrdinalIgnoreCase)
+                || stackableType.Equals("[booster selection]", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool IsAvatarReward(ItemMetadata metadata)
+        {
+            var path = metadata?.PvfFilePath;
+            if (string.IsNullOrWhiteSpace(path))
+                return false;
+
+            var normalizedPath = "/" + path.Replace('\\', '/').Trim('/');
+            return normalizedPath.IndexOf("/avatar/", StringComparison.OrdinalIgnoreCase) >= 0
+                || normalizedPath.IndexOf("/at_avatar/", StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
         public bool TryBuyItem(int itemTemplateId, int buyCount, out InventoryMutationResult result)
@@ -2621,6 +3121,48 @@ WHERE item_uid = @itemUid;";
                 }
                 var goldSpent = totalGoldCost > 0;
 
+                if (TryResolveMallAutoOpenRewards(itemTemplateId, out var autoOpenRewards))
+                {
+                    var openedResults = new List<InventoryMutationResult>();
+                    for (var openIndex = 0; openIndex < effectiveCount; openIndex++)
+                    {
+                        foreach (var reward in autoOpenRewards)
+                        {
+                            if (!TryAddBoosterRewardItem(connection, transaction, reward.ItemId, reward.Count, out var rewardResult))
+                            {
+                                FileLogger.Log($"  [CeraShopBuy] auto-open failed source=0x{itemTemplateId:X8} reward=0x{reward.ItemId:X8} count={reward.Count}");
+                                return false;
+                            }
+
+                            openedResults.Add(ToInventoryMutationResult(rewardResult));
+                        }
+                    }
+
+                    if (openedResults.Count == 0)
+                        return false;
+
+                    ApplyCeraShopPayment(connection, transaction, plan);
+                    WriteBuyAuditLog(connection, transaction, itemTemplateId, 0, totalGoldCost, totalCeraCost);
+                    foreach (var rewardResult in openedResults)
+                        WriteBuyAuditLog(connection, transaction, rewardResult.ItemTemplateId, rewardResult.SlotIndex, 0, 0);
+                    transaction.Commit();
+
+                    result = openedResults[0];
+                    result.UpdatedGold = plan.NewGold;
+                    result.UpdatedSp = wallet.Sp;
+                    result.UpdatedCoin = plan.NewCera;
+                    result.UpdatedTokenCera = plan.NewTokenCera;
+                    result.UpdatedHappyTokenCera = plan.NewHappyTokenCera;
+                    result.GoldSpent = goldSpent;
+                    result.RequestedCount = (short)Math.Min(short.MaxValue, effectiveCount);
+                    result.AppliedCount = (short)Math.Min(short.MaxValue, effectiveCount);
+                    for (var i = 1; i < openedResults.Count; i++)
+                        result.ExtraResults.Add(openedResults[i]);
+
+                    FileLogger.Log($"  [CeraShopBuy] auto-open source=0x{itemTemplateId:X8} rewards={string.Join(",", openedResults.Select(r => $"{r.ListType}:0x{r.ItemTemplateId:X8}x{r.RemainingStackCount}@{r.SlotIndex}"))}");
+                    return true;
+                }
+
                 if (isStackable)
                 {
                     var existingItem = FindItemByTemplateId(connection, transaction, InventoryListType.Main, itemTemplateId);
@@ -2793,6 +3335,44 @@ LIMIT 1;";
             return null;
         }
 
+        private ItemRecord FindStackableItemByTemplateIdAndExpireTime(SqliteConnection connection, SqliteTransaction transaction, InventoryListType listType, int templateId, int expireTime, int stackLimit)
+        {
+            using (var command = connection.CreateCommand())
+            {
+                command.Transaction = transaction;
+                command.CommandText = @"
+SELECT item_uid, list_type, slot_index, item_template_id, item_kind, stack_count, instance_value, durability
+FROM character_items
+WHERE character_id = @characterId AND list_type = @listType AND item_template_id = @templateId AND expire_time = @expireTime
+  AND (@stackLimit <= 0 OR stack_count < @stackLimit)
+ORDER BY stack_count DESC, slot_index ASC
+LIMIT 1;";
+                command.Parameters.AddWithValue("@characterId", DefaultCharacterId);
+                command.Parameters.AddWithValue("@listType", (int)listType);
+                command.Parameters.AddWithValue("@templateId", templateId);
+                command.Parameters.AddWithValue("@expireTime", expireTime);
+                command.Parameters.AddWithValue("@stackLimit", stackLimit);
+                using (var reader = command.ExecuteReader())
+                {
+                    if (reader.Read())
+                    {
+                        return new ItemRecord
+                        {
+                            ItemUid = reader.GetInt64(0),
+                            ListType = (InventoryListType)reader.GetInt32(1),
+                            SlotIndex = (short)reader.GetInt32(2),
+                            ItemTemplateId = reader.GetInt32(3),
+                            ItemKind = reader.GetString(4),
+                            StackCount = reader.GetInt32(5),
+                            InstanceValue = reader.GetInt32(6),
+                            Durability = (ushort)reader.GetInt32(7),
+                        };
+                    }
+                }
+            }
+            return null;
+        }
+
         private ItemRecord FindItemByTemplateIdInRange(SqliteConnection connection, SqliteTransaction transaction, InventoryListType listType, int templateId, int slotStart, int slotEnd)
         {
             using (var command = connection.CreateCommand())
@@ -2853,6 +3433,51 @@ ORDER BY slot_index;";
             var maxSlot = slotEnd >= 0 ? slotEnd : (listType == InventoryListType.Main ? 359 : 199);
             for (var slot = slotStart; slot <= maxSlot; slot++)
             {
+                if (!occupiedSlots.Contains(slot))
+                    return slot;
+            }
+
+            return -1;
+        }
+
+        private int FindEmptySlotPreferOther(SqliteConnection connection, SqliteTransaction transaction, InventoryListType listType, int slotStart, int slotEnd, short? useLastSlot)
+        {
+            if (!useLastSlot.HasValue)
+                return FindEmptySlot(connection, transaction, listType, slotStart, slotEnd);
+
+            var preferred = FindEmptySlotExcept(connection, transaction, listType, slotStart, slotEnd, useLastSlot.Value);
+            if (preferred >= 0)
+                return preferred;
+
+            return FindEmptySlot(connection, transaction, listType, slotStart, slotEnd);
+        }
+
+        private int FindEmptySlotExcept(SqliteConnection connection, SqliteTransaction transaction, InventoryListType listType, int slotStart, int slotEnd, short excludedSlot)
+        {
+            var occupiedSlots = new HashSet<int>();
+            using (var command = connection.CreateCommand())
+            {
+                command.Transaction = transaction;
+                command.CommandText = @"
+SELECT slot_index
+FROM character_items
+WHERE character_id = @characterId AND list_type = @listType
+ORDER BY slot_index;";
+                command.Parameters.AddWithValue("@characterId", DefaultCharacterId);
+                command.Parameters.AddWithValue("@listType", (int)listType);
+                using (var reader = command.ExecuteReader())
+                {
+                    while (reader.Read())
+                        occupiedSlots.Add(reader.GetInt32(0));
+                }
+            }
+
+            var maxSlot = slotEnd >= 0 ? slotEnd : (listType == InventoryListType.Main ? 359 : 199);
+            for (var slot = slotStart; slot <= maxSlot; slot++)
+            {
+                if (slot == excludedSlot)
+                    continue;
+
                 if (!occupiedSlots.Contains(slot))
                     return slot;
             }

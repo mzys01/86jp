@@ -216,6 +216,9 @@ namespace DfoServer.Network
                     case 0x00A0:
                         await _inventoryHandler.Handle_OPEN_SELECTABLE_PACKAGE(session, header, body);
                         break;
+                    case 0x0218:
+                        await _inventoryHandler.Handle_USE_BOOSTER_ITEM(session, header, body);
+                        break;
                     case 0x002E://46
                         await _dungeonHandler.Handle_SET_PLAY_RESULT(session, header, body);
                         break;

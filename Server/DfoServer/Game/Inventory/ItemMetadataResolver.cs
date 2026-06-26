@@ -12,6 +12,8 @@ namespace DfoServer.Game.Inventory
 
         public string StackableType { get; set; }
 
+        public string PvfFilePath { get; set; }
+
         public int BuyGold { get; set; }
 
         public int BuyCoin { get; set; }
@@ -105,6 +107,7 @@ namespace DfoServer.Game.Inventory
                 return new ItemMetadata
                 {
                     ItemKind = "equipment",
+                    PvfFilePath = equipmentEntry.FilePath,
                     BuyGold = buyGold,
                     SellGold = sellGold,
                     Durability = (ushort)durability,
@@ -143,6 +146,7 @@ namespace DfoServer.Game.Inventory
                 {
                     ItemKind = "stackable",
                     StackableType = stackable.StackableType,
+                    PvfFilePath = stackableEntry.FilePath,
                     BuyGold = hasMaterialCost ? 0 : buyGold,
                     SellGold = sellGold,
                     Durability = 0,
@@ -160,6 +164,11 @@ namespace DfoServer.Game.Inventory
                 Durability = 0,
                 StackLimit = 1,
             };
+        }
+
+        public static LstEntry GetStackableEntry(int itemTemplateId)
+        {
+            return StackableList.Value.GetById(itemTemplateId);
         }
 
         public static bool TryValidateEnchantByBeadTarget(int beadItemTemplateId, int targetItemTemplateId, byte enchantUpgradeCount, out int enchantCardItemId, out string rejectReason)
