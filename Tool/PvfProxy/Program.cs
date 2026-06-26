@@ -8,12 +8,12 @@ int gamePort = 10011;
 int chTargetPort = 7002;
 int gameTargetPort = 10012;
 string logDir = ".";
-string serverPath = null;
+string? serverPath = null;
 string serverArgs = "";
-string serverWd = null;
-string gamePath = null;
+string? serverWd = null;
+string? gamePath = null;
 string gameArgs = "";
-string gameWd = null;
+string? gameWd = null;
 
 for (int i = 0; i < args.Length; i++)
 {
@@ -62,8 +62,8 @@ Log($"Log: {logPath}");
 var cts = new CancellationTokenSource();
 Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
 
-Process serverProc = null;
-Process gameProc = null;
+Process? serverProc = null;
+Process? gameProc = null;
 
 void KillAll()
 {
