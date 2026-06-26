@@ -6,16 +6,26 @@ using Microsoft.Data.Sqlite;
 
 namespace DfoServer.Game.CharacterData
 {
-    public sealed class SqliteCharacterStateRepository
+    public sealed class SqliteCharacterStateRepository : ICharacterStateRepository
     {
         private readonly string _connectionString;
+        private readonly CharacterAchievementRepository _achievement;
+        private readonly CharacterItemValueRepository _itemValue;
+        private readonly CharacterItemLockRepository _itemLock;
+        private readonly CharacterMiscStateRepository _miscState;
+        private readonly GlobalStateRepository _globalState;
 
         public SqliteCharacterStateRepository(string databasePath, string schemaFilePath)
         {
             _connectionString = SqliteDatabaseBootstrap.Initialize(databasePath, schemaFilePath);
+            _achievement = new CharacterAchievementRepository(_connectionString);
+            _itemValue = new CharacterItemValueRepository(_connectionString);
+            _itemLock = new CharacterItemLockRepository(_connectionString);
+            _miscState = new CharacterMiscStateRepository(_connectionString);
+            _globalState = new GlobalStateRepository(_connectionString);
         }
 
-        
+
 
         public void LoadFlags(int characterId, SelectCharacterInitializationSnapshot snapshot)
         {
@@ -74,7 +84,7 @@ namespace DfoServer.Game.CharacterData
                             Buffer.BlockCopy(flagsBlob, 0, snapshot.RacingDungeonGroupFlags, 0, Math.Min(flagsBlob.Length, snapshot.RacingDungeonGroupFlags.Length));
                         }
 
-                        
+
                         snapshot.AckAccountRegTime = reader.IsDBNull(18) ? 0 : (int)reader.GetInt64(18);
                         var premBlob = reader.IsDBNull(19) ? null : (byte[])reader[19];
                         if (premBlob != null)
@@ -310,7 +320,7 @@ namespace DfoServer.Game.CharacterData
                         cmd.Parameters.AddWithValue("@ciplen", (long)snapshot.CharacInvisibleFalgsPayloadLen);
                         cmd.Parameters.AddWithValue("@rdcc", (long)snapshot.RacingDungeonCurrentEnterCount);
                         cmd.Parameters.AddWithValue("@rdgf", (object)snapshot.RacingDungeonGroupFlags ?? DBNull.Value);
-                        
+
                         cmd.Parameters.AddWithValue("@ackRegTime", (long)snapshot.AckAccountRegTime);
                         cmd.Parameters.AddWithValue("@ackPremBlob", (object)SerializeAckPremiums(snapshot.AckPremiums) ?? DBNull.Value);
                         cmd.Parameters.AddWithValue("@ackQuestDisp", (object)snapshot.AckQuestDisplayIds ?? DBNull.Value);
@@ -535,433 +545,72 @@ namespace DfoServer.Game.CharacterData
             }
         }
 
-        
 
-        public List<ItemValueEntrySnapshot> LoadItemValueList(int characterId, string listKind)
-        {
-            var items = new List<ItemValueEntrySnapshot>();
-            using (var conn = new SqliteConnection(_connectionString))
-            {
-                conn.Open();
-                using (var cmd = new SqliteCommand(
-                    "SELECT item_id, value FROM character_item_values WHERE character_id = @cid AND list_kind = @kind ORDER BY sort_order", conn))
-                {
-                    cmd.Parameters.AddWithValue("@cid", characterId);
-                    cmd.Parameters.AddWithValue("@kind", listKind);
-                    using (var reader = cmd.ExecuteReader())
-                    {
-                        while (reader.Read())
-                            items.Add(new ItemValueEntrySnapshot { ItemId = reader.GetInt32(0), Value = reader.GetInt32(1) });
-                    }
-                }
-            }
-            return items;
-        }
-
-        public void SaveItemValueList(int characterId, string listKind, List<ItemValueEntrySnapshot> items)
-        {
-            using (var conn = new SqliteConnection(_connectionString))
-            {
-                conn.Open();
-                using (var tx = conn.BeginTransaction())
-                {
-                    using (var cmd = new SqliteCommand("DELETE FROM character_item_values WHERE character_id = @cid AND list_kind = @kind", conn, tx))
-                    {
-                        cmd.Parameters.AddWithValue("@cid", characterId);
-                        cmd.Parameters.AddWithValue("@kind", listKind);
-                        cmd.ExecuteNonQuery();
-                    }
-                    for (int i = 0; i < items.Count; i++)
-                    {
-                        using (var cmd = new SqliteCommand(
-                            "INSERT INTO character_item_values (character_id, list_kind, sort_order, item_id, value) VALUES (@cid, @kind, @ord, @iid, @val)", conn, tx))
-                        {
-                            cmd.Parameters.AddWithValue("@cid", characterId);
-                            cmd.Parameters.AddWithValue("@kind", listKind);
-                            cmd.Parameters.AddWithValue("@ord", i);
-                            cmd.Parameters.AddWithValue("@iid", items[i].ItemId);
-                            cmd.Parameters.AddWithValue("@val", items[i].Value);
-                            cmd.ExecuteNonQuery();
-                        }
-                    }
-                    tx.Commit();
-                }
-            }
-        }
-
-        
-
-        public ItemLockListSnapshot LoadItemLocks(int characterId)
-        {
-            var snapshot = new ItemLockListSnapshot();
-            using (var conn = new SqliteConnection(_connectionString))
-            {
-                conn.Open();
-                using (var cmd = new SqliteCommand(
-                    "SELECT type_or_list, item_key_or_slot, state, extra_value FROM character_item_locks WHERE character_id = @cid ORDER BY sort_order", conn))
-                {
-                    cmd.Parameters.AddWithValue("@cid", characterId);
-                    using (var reader = cmd.ExecuteReader())
-                    {
-                        while (reader.Read())
-                        {
-                            var entry = new ItemLockEntrySnapshot
-                            {
-                                TypeOrList = (byte)reader.GetInt32(0),
-                                ItemKeyOrSlot = (ushort)reader.GetInt32(1),
-                                State = (byte)reader.GetInt32(2),
-                            };
-                            if (!reader.IsDBNull(3))
-                            {
-                                entry.ExtraValue = reader.GetInt32(3);
-                                entry.HasExtraValue = true;
-                            }
-                            snapshot.Entries.Add(entry);
-                        }
-                    }
-                }
-            }
-            return snapshot;
-        }
-
-        public void SaveItemLocks(int characterId, ItemLockListSnapshot snapshot)
-        {
-            using (var conn = new SqliteConnection(_connectionString))
-            {
-                conn.Open();
-                using (var tx = conn.BeginTransaction())
-                {
-                    using (var cmd = new SqliteCommand("DELETE FROM character_item_locks WHERE character_id = @cid", conn, tx))
-                    {
-                        cmd.Parameters.AddWithValue("@cid", characterId);
-                        cmd.ExecuteNonQuery();
-                    }
-                    for (int i = 0; i < snapshot.Entries.Count; i++)
-                    {
-                        var e = snapshot.Entries[i];
-                        using (var cmd = new SqliteCommand(
-                            "INSERT INTO character_item_locks (character_id, sort_order, type_or_list, item_key_or_slot, state, extra_value) VALUES (@cid, @ord, @t, @k, @s, @ev)", conn, tx))
-                        {
-                            cmd.Parameters.AddWithValue("@cid", characterId);
-                            cmd.Parameters.AddWithValue("@ord", i);
-                            cmd.Parameters.AddWithValue("@t", (int)e.TypeOrList);
-                            cmd.Parameters.AddWithValue("@k", (int)e.ItemKeyOrSlot);
-                            cmd.Parameters.AddWithValue("@s", (int)e.State);
-                            cmd.Parameters.AddWithValue("@ev", e.HasExtraValue ? (object)e.ExtraValue : DBNull.Value);
-                            cmd.ExecuteNonQuery();
-                        }
-                    }
-                    tx.Commit();
-                }
-            }
-        }
-
-        
-
-        public AchievementCompleteSnapshot LoadAchievementComplete(int characterId)
-        {
-            var snapshot = new AchievementCompleteSnapshot();
-            using (var conn = new SqliteConnection(_connectionString))
-            {
-                conn.Open();
-                using (var cmd = new SqliteCommand(
-                    "SELECT achievement_id, p1, p2, p3, p4 FROM character_achievement_complete WHERE character_id = @cid ORDER BY sort_order", conn))
-                {
-                    cmd.Parameters.AddWithValue("@cid", characterId);
-                    using (var reader = cmd.ExecuteReader())
-                    {
-                        while (reader.Read())
-                        {
-                            snapshot.Entries.Add(new AchievementCompleteEntrySnapshot
-                            {
-                                AchievementId = reader.GetInt32(0),
-                                P1 = (ushort)reader.GetInt32(1),
-                                P2 = (ushort)reader.GetInt32(2),
-                                P3 = (ushort)reader.GetInt32(3),
-                                P4 = (ushort)reader.GetInt32(4),
-                            });
-                        }
-                    }
-                }
-            }
-            return snapshot;
-        }
-
-        public void SaveAchievementComplete(int characterId, AchievementCompleteSnapshot snapshot)
-        {
-            using (var conn = new SqliteConnection(_connectionString))
-            {
-                conn.Open();
-                using (var tx = conn.BeginTransaction())
-                {
-                    using (var cmd = new SqliteCommand("DELETE FROM character_achievement_complete WHERE character_id = @cid", conn, tx))
-                    {
-                        cmd.Parameters.AddWithValue("@cid", characterId);
-                        cmd.ExecuteNonQuery();
-                    }
-                    for (int i = 0; i < snapshot.Entries.Count; i++)
-                    {
-                        var e = snapshot.Entries[i];
-                        using (var cmd = new SqliteCommand(
-                            "INSERT INTO character_achievement_complete (character_id, sort_order, achievement_id, p1, p2, p3, p4) VALUES (@cid, @ord, @aid, @p1, @p2, @p3, @p4)", conn, tx))
-                        {
-                            cmd.Parameters.AddWithValue("@cid", characterId);
-                            cmd.Parameters.AddWithValue("@ord", i);
-                            cmd.Parameters.AddWithValue("@aid", e.AchievementId);
-                            cmd.Parameters.AddWithValue("@p1", (int)e.P1);
-                            cmd.Parameters.AddWithValue("@p2", (int)e.P2);
-                            cmd.Parameters.AddWithValue("@p3", (int)e.P3);
-                            cmd.Parameters.AddWithValue("@p4", (int)e.P4);
-                            cmd.ExecuteNonQuery();
-                        }
-                    }
-                    tx.Commit();
-                }
-            }
-        }
-
-        
-
-        public List<AchievementListChunkSnapshot> LoadAchievementChunks(int characterId)
-        {
-            var chunks = new List<AchievementListChunkSnapshot>();
-            using (var conn = new SqliteConnection(_connectionString))
-            {
-                conn.Open();
-                using (var cmd = new SqliteCommand(
-                    "SELECT chunk_index, mode_byte, owner_id16, entries_blob FROM character_achievement_chunks WHERE character_id = @cid ORDER BY chunk_index", conn))
-                {
-                    cmd.Parameters.AddWithValue("@cid", characterId);
-                    using (var reader = cmd.ExecuteReader())
-                    {
-                        while (reader.Read())
-                        {
-                            var chunk = new AchievementListChunkSnapshot
-                            {
-                                ChunkIndex = reader.GetInt32(0),
-                                ModeByte = (byte)reader.GetInt32(1),
-                                OwnerId16 = (ushort)reader.GetInt32(2),
-                            };
-                            var blob = reader.IsDBNull(3) ? null : (byte[])reader[3];
-                            if (blob != null)
-                                DeserializeAchievementEntries(blob, chunk.Entries);
-                            chunks.Add(chunk);
-                        }
-                    }
-                }
-            }
-            return chunks;
-        }
-
-        public void SaveAchievementChunks(int characterId, List<AchievementListChunkSnapshot> chunks)
-        {
-            using (var conn = new SqliteConnection(_connectionString))
-            {
-                conn.Open();
-                using (var tx = conn.BeginTransaction())
-                {
-                    using (var cmd = new SqliteCommand("DELETE FROM character_achievement_chunks WHERE character_id = @cid", conn, tx))
-                    {
-                        cmd.Parameters.AddWithValue("@cid", characterId);
-                        cmd.ExecuteNonQuery();
-                    }
-                    foreach (var chunk in chunks)
-                    {
-                        using (var cmd = new SqliteCommand(
-                            "INSERT INTO character_achievement_chunks (character_id, chunk_index, mode_byte, owner_id16, entries_blob) VALUES (@cid, @ci, @mb, @oid, @eb)", conn, tx))
-                        {
-                            cmd.Parameters.AddWithValue("@cid", characterId);
-                            cmd.Parameters.AddWithValue("@ci", chunk.ChunkIndex);
-                            cmd.Parameters.AddWithValue("@mb", (int)chunk.ModeByte);
-                            cmd.Parameters.AddWithValue("@oid", (int)chunk.OwnerId16);
-                            cmd.Parameters.AddWithValue("@eb", SerializeAchievementEntries(chunk.Entries));
-                            cmd.ExecuteNonQuery();
-                        }
-                    }
-                    tx.Commit();
-                }
-            }
-        }
-
-        
-
-        public List<Unknown725Snapshot> LoadUnknown725(int characterId)
-        {
-            var list = new List<Unknown725Snapshot>();
-            using (var conn = new SqliteConnection(_connectionString))
-            {
-                conn.Open();
-                using (var cmd = new SqliteCommand(
-                    "SELECT param_a, mode_or_state, content_id, param_b FROM character_unknown725 WHERE character_id = @cid ORDER BY sort_order", conn))
-                {
-                    cmd.Parameters.AddWithValue("@cid", characterId);
-                    using (var reader = cmd.ExecuteReader())
-                    {
-                        while (reader.Read())
-                            list.Add(new Unknown725Snapshot
-                            {
-                                ParamA = reader.GetInt32(0),
-                                ModeOrState = reader.GetInt32(1),
-                                ContentId = reader.GetInt32(2),
-                                ParamB = reader.GetInt32(3),
-                            });
-                    }
-                }
-            }
-            return list;
-        }
-
-        public void SaveUnknown725(int characterId, List<Unknown725Snapshot> packets)
-        {
-            using (var conn = new SqliteConnection(_connectionString))
-            {
-                conn.Open();
-                using (var tx = conn.BeginTransaction())
-                {
-                    using (var cmd = new SqliteCommand("DELETE FROM character_unknown725 WHERE character_id = @cid", conn, tx))
-                    {
-                        cmd.Parameters.AddWithValue("@cid", characterId);
-                        cmd.ExecuteNonQuery();
-                    }
-                    for (int i = 0; i < packets.Count; i++)
-                    {
-                        var p = packets[i];
-                        using (var cmd = new SqliteCommand(
-                            "INSERT INTO character_unknown725 (character_id, sort_order, param_a, mode_or_state, content_id, param_b) VALUES (@cid, @ord, @pa, @ms, @ci, @pb)", conn, tx))
-                        {
-                            cmd.Parameters.AddWithValue("@cid", characterId);
-                            cmd.Parameters.AddWithValue("@ord", i);
-                            cmd.Parameters.AddWithValue("@pa", p.ParamA);
-                            cmd.Parameters.AddWithValue("@ms", p.ModeOrState);
-                            cmd.Parameters.AddWithValue("@ci", p.ContentId);
-                            cmd.Parameters.AddWithValue("@pb", p.ParamB);
-                            cmd.ExecuteNonQuery();
-                        }
-                    }
-                    tx.Commit();
-                }
-            }
-        }
-
-        
-
-        public Unknown730Snapshot LoadUnknown730(int characterId)
-        {
-            var snapshot = new Unknown730Snapshot();
-            using (var conn = new SqliteConnection(_connectionString))
-            {
-                conn.Open();
-                using (var cmd = new SqliteCommand(
-                    "SELECT entry_id, sentinel_or_value, flag FROM character_unknown730 WHERE character_id = @cid ORDER BY sort_order", conn))
-                {
-                    cmd.Parameters.AddWithValue("@cid", characterId);
-                    using (var reader = cmd.ExecuteReader())
-                    {
-                        while (reader.Read())
-                            snapshot.Entries.Add(new Unknown730EntrySnapshot
-                            {
-                                EntryId = reader.GetInt32(0),
-                                SentinelOrValue = reader.GetInt32(1),
-                                Flag = reader.GetInt32(2),
-                            });
-                    }
-                }
-            }
-            return snapshot;
-        }
-
-        public void SaveUnknown730(int characterId, Unknown730Snapshot snapshot)
-        {
-            using (var conn = new SqliteConnection(_connectionString))
-            {
-                conn.Open();
-                using (var tx = conn.BeginTransaction())
-                {
-                    using (var cmd = new SqliteCommand("DELETE FROM character_unknown730 WHERE character_id = @cid", conn, tx))
-                    {
-                        cmd.Parameters.AddWithValue("@cid", characterId);
-                        cmd.ExecuteNonQuery();
-                    }
-                    for (int i = 0; i < snapshot.Entries.Count; i++)
-                    {
-                        var e = snapshot.Entries[i];
-                        using (var cmd = new SqliteCommand(
-                            "INSERT INTO character_unknown730 (character_id, sort_order, entry_id, sentinel_or_value, flag) VALUES (@cid, @ord, @eid, @sv, @f)", conn, tx))
-                        {
-                            cmd.Parameters.AddWithValue("@cid", characterId);
-                            cmd.Parameters.AddWithValue("@ord", i);
-                            cmd.Parameters.AddWithValue("@eid", e.EntryId);
-                            cmd.Parameters.AddWithValue("@sv", e.SentinelOrValue);
-                            cmd.Parameters.AddWithValue("@f", e.Flag);
-                            cmd.ExecuteNonQuery();
-                        }
-                    }
-                    tx.Commit();
-                }
-            }
-        }
-
-        
 
         public void SeedFromSnapshot(int characterId, SelectCharacterInitializationSnapshot snapshot)
         {
             if (!HasFlags(characterId))
                 SaveFlags(characterId, snapshot);
 
-            SaveItemValueListIfEmpty(characterId, "cooltime", snapshot.CooltimeItems);
-            SaveItemValueListIfEmpty(characterId, "effect", snapshot.EffectItems);
+            _itemValue.SaveItemValueListIfEmpty(characterId, "cooltime", snapshot.CooltimeItems);
+            _itemValue.SaveItemValueListIfEmpty(characterId, "effect", snapshot.EffectItems);
 
-            if (LoadItemLocks(characterId).Entries.Count == 0 && snapshot.ItemLockList.Entries.Count > 0)
-                SaveItemLocks(characterId, snapshot.ItemLockList);
+            if (_itemLock.LoadItemLocks(characterId).Entries.Count == 0 && snapshot.ItemLockList.Entries.Count > 0)
+                _itemLock.SaveItemLocks(characterId, snapshot.ItemLockList);
 
-            if (LoadAchievementComplete(characterId).Entries.Count == 0 && snapshot.AchievementComplete.Entries.Count > 0)
-                SaveAchievementComplete(characterId, snapshot.AchievementComplete);
+            if (_achievement.LoadAchievementComplete(characterId).Entries.Count == 0 && snapshot.AchievementComplete.Entries.Count > 0)
+                _achievement.SaveAchievementComplete(characterId, snapshot.AchievementComplete);
 
-            if (LoadAchievementChunks(characterId).Count == 0 && snapshot.AchievementChunks.Count > 0)
-                SaveAchievementChunks(characterId, snapshot.AchievementChunks);
+            if (_achievement.LoadAchievementChunks(characterId).Count == 0 && snapshot.AchievementChunks.Count > 0)
+                _achievement.SaveAchievementChunks(characterId, snapshot.AchievementChunks);
 
-            if (LoadUnknown725(characterId).Count == 0 && snapshot.Unknown725Packets.Count > 0)
-                SaveUnknown725(characterId, snapshot.Unknown725Packets);
+            if (_miscState.LoadUnknown725(characterId).Count == 0 && snapshot.Unknown725Packets.Count > 0)
+                _miscState.SaveUnknown725(characterId, snapshot.Unknown725Packets);
 
-            if (LoadUnknown730(characterId).Entries.Count == 0 && snapshot.Unknown730.Entries.Count > 0)
-                SaveUnknown730(characterId, snapshot.Unknown730);
+            if (_miscState.LoadUnknown730(characterId).Entries.Count == 0 && snapshot.Unknown730.Entries.Count > 0)
+                _miscState.SaveUnknown730(characterId, snapshot.Unknown730);
         }
 
         public void LoadAll(int characterId, SelectCharacterInitializationSnapshot snapshot)
         {
             LoadFlags(characterId, snapshot);
 
-            var cooltime = LoadItemValueList(characterId, "cooltime");
+            var cooltime = _itemValue.LoadItemValueList(characterId, "cooltime");
             snapshot.CooltimeItems.Clear();
             snapshot.CooltimeItems.AddRange(cooltime);
 
-            var effect = LoadItemValueList(characterId, "effect");
+            var effect = _itemValue.LoadItemValueList(characterId, "effect");
             snapshot.EffectItems.Clear();
             snapshot.EffectItems.AddRange(effect);
 
-            var locks = LoadItemLocks(characterId);
+            var locks = _itemLock.LoadItemLocks(characterId);
             snapshot.ItemLockList = locks;
 
-            snapshot.AchievementComplete = LoadAchievementComplete(characterId);
+            snapshot.AchievementComplete = _achievement.LoadAchievementComplete(characterId);
 
-            var chunks = LoadAchievementChunks(characterId);
+            var chunks = _achievement.LoadAchievementChunks(characterId);
             snapshot.AchievementChunks.Clear();
             snapshot.AchievementChunks.AddRange(chunks);
 
-            var u725 = LoadUnknown725(characterId);
+            var u725 = _miscState.LoadUnknown725(characterId);
             snapshot.Unknown725Packets.Clear();
             snapshot.Unknown725Packets.AddRange(u725);
 
-            snapshot.Unknown730 = LoadUnknown730(characterId);
+            snapshot.Unknown730 = _miscState.LoadUnknown730(characterId);
         }
 
-        
 
-        private void SaveItemValueListIfEmpty(int characterId, string kind, List<ItemValueEntrySnapshot> items)
-        {
-            if (LoadItemValueList(characterId, kind).Count == 0 && items.Count > 0)
-                SaveItemValueList(characterId, kind, items);
-        }
+
+        public byte[] LoadGlobalRawPacket(int notiType)
+            => _globalState.LoadGlobalRawPacket(notiType);
+
+        public byte[] LoadServerEventPhaseBitmap()
+            => _globalState.LoadServerEventPhaseBitmap();
+
+        public void SeedRawPacketsFromTemplates(int characterId, List<SelectCharacterPacketTemplate> templates)
+            => _globalState.SeedRawPacketsFromTemplates(characterId, templates);
+
+
 
         private static byte[] SerializeExpertJobInfo(ExpertJobInfoSnapshot info)
         {
@@ -1046,151 +695,6 @@ namespace DfoServer.Game.CharacterData
                 };
                 Buffer.BlockCopy(blob, off + 1, entry.EndTime, 0, 8);
                 premiums.Add(entry);
-            }
-        }
-
-        private static byte[] SerializeAchievementEntries(List<AchievementListEntrySnapshot> entries)
-        {
-            var buf = new byte[entries.Count * 22];
-            for (int i = 0; i < entries.Count; i++)
-            {
-                var e = entries[i];
-                int off = i * 22;
-                Array.Copy(BitConverter.GetBytes(e.AchievementId), 0, buf, off, 2); off += 2;
-                Array.Copy(BitConverter.GetBytes(e.ValueA), 0, buf, off, 4); off += 4;
-                Array.Copy(BitConverter.GetBytes(e.ValueB), 0, buf, off, 4); off += 4;
-                buf[off++] = e.CategoryByte;
-                Array.Copy(BitConverter.GetBytes(e.LinkId), 0, buf, off, 2); off += 2;
-                buf[off++] = e.Flag0;
-                Array.Copy(BitConverter.GetBytes(e.ValueC), 0, buf, off, 4); off += 4;
-                buf[off++] = e.Flag1;
-                buf[off++] = e.Flag2;
-                Array.Copy(BitConverter.GetBytes(e.TailValue), 0, buf, off, 2);
-            }
-            return buf;
-        }
-
-        private static void DeserializeAchievementEntries(byte[] blob, List<AchievementListEntrySnapshot> entries)
-        {
-            for (int off = 0; off + 22 <= blob.Length; off += 22)
-            {
-                entries.Add(new AchievementListEntrySnapshot
-                {
-                    AchievementId = BitConverter.ToUInt16(blob, off),
-                    ValueA = BitConverter.ToInt32(blob, off + 2),
-                    ValueB = BitConverter.ToInt32(blob, off + 6),
-                    CategoryByte = blob[off + 10],
-                    LinkId = BitConverter.ToUInt16(blob, off + 11),
-                    Flag0 = blob[off + 13],
-                    ValueC = BitConverter.ToInt32(blob, off + 14),
-                    Flag1 = blob[off + 18],
-                    Flag2 = blob[off + 19],
-                    TailValue = BitConverter.ToUInt16(blob, off + 20),
-                });
-            }
-        }
-
-        
-
-        public byte[] LoadGlobalRawPacket(int notiType)
-        {
-            using (var conn = new SqliteConnection(_connectionString))
-            {
-                conn.Open();
-                using (var cmd = new SqliteCommand("SELECT packet_body FROM global_raw_packets WHERE noti_type = @nt", conn))
-                {
-                    cmd.Parameters.AddWithValue("@nt", notiType);
-                    var result = cmd.ExecuteScalar();
-                    return result == null || result == DBNull.Value ? null : (byte[])result;
-                }
-            }
-        }
-
-        public byte[] LoadServerEventPhaseBitmap()
-        {
-            using (var conn = new SqliteConnection(_connectionString))
-            {
-                conn.Open();
-                using (var cmd = new SqliteCommand("SELECT event_phase_bitmap FROM global_server_event_phase WHERE id = 1", conn))
-                {
-                    var result = cmd.ExecuteScalar();
-                    return result == null || result == DBNull.Value ? null : (byte[])result;
-                }
-            }
-        }
-
-        public void SeedRawPacketsFromTemplates(int characterId, List<SelectCharacterPacketTemplate> templates)
-        {
-            using (var conn = new SqliteConnection(_connectionString))
-            {
-                conn.Open();
-
-                using (var chk = new SqliteCommand("SELECT COUNT(*) FROM character_init_bodies WHERE character_id = @cid", conn))
-                {
-                    chk.Parameters.AddWithValue("@cid", characterId);
-                    if (Convert.ToInt32(chk.ExecuteScalar()) > 0)
-                        return;
-                }
-
-                using (var tx = conn.BeginTransaction())
-                {
-                    foreach (var t in templates)
-                    {
-                        if (t.PacketBytes == null || t.PacketBytes.Length == 0)
-                            continue;
-
-                        var headerLen = 15;
-                        if (t.PacketBytes.Length <= headerLen)
-                            continue;
-
-                        var body = new byte[t.PacketBytes.Length - headerLen];
-                        Buffer.BlockCopy(t.PacketBytes, headerLen, body, 0, body.Length);
-
-                        if (t.Command == 0x00 && t.Type == 0x0187)
-                        {
-                            if (body.Length < 4)
-                                continue;
-                            var bitmap = new byte[body.Length - 4];
-                            Buffer.BlockCopy(body, 4, bitmap, 0, bitmap.Length);
-                            using (var cmd = new SqliteCommand("INSERT OR IGNORE INTO global_server_event_phase (id, event_phase_bitmap) VALUES (1, @b)", conn, tx))
-                            {
-                                cmd.Parameters.AddWithValue("@b", bitmap);
-                                cmd.ExecuteNonQuery();
-                            }
-                        }
-                        else if (t.Command == 0x01 && t.Type == 0x0312)
-                        {
-                            using (var cmd = new SqliteCommand("INSERT OR IGNORE INTO global_raw_packets (noti_type, packet_body) VALUES (@nt, @body)", conn, tx))
-                            {
-                                cmd.Parameters.AddWithValue("@nt", 0x10312);
-                                cmd.Parameters.AddWithValue("@body", body);
-                                cmd.ExecuteNonQuery();
-                            }
-                        }
-                    }
-
-                    const int hdrLen = 15;
-                    var initBodyTypes = new System.Collections.Generic.HashSet<int> { 0x0035, 0x0077, 0x0111, 0x019F, 0x015F, 0x0381, 0x0357, 0x03D8 };
-                    foreach (var t in templates)
-                    {
-                        if (t.Command != 0x00 || !initBodyTypes.Contains(t.Type))
-                            continue;
-                        if (t.PacketBytes == null || t.PacketBytes.Length <= hdrLen)
-                            continue;
-                        var b = new byte[t.PacketBytes.Length - hdrLen];
-                        Buffer.BlockCopy(t.PacketBytes, hdrLen, b, 0, b.Length);
-                        using (var cmd = new SqliteCommand(
-                            "INSERT OR IGNORE INTO character_init_bodies(character_id, noti_type, occurrence_index, body) VALUES(@cid, @nt, @oi, @b)", conn, tx))
-                        {
-                            cmd.Parameters.AddWithValue("@cid", characterId);
-                            cmd.Parameters.AddWithValue("@nt", t.Type);
-                            cmd.Parameters.AddWithValue("@oi", t.OccurrenceIndex);
-                            cmd.Parameters.AddWithValue("@b", b);
-                            cmd.ExecuteNonQuery();
-                        }
-                    }
-                    tx.Commit();
-                }
             }
         }
     }

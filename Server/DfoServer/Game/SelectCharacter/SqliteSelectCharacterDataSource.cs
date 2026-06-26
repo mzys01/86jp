@@ -12,10 +12,10 @@ namespace DfoServer.Game.SelectCharacter
 {
     public sealed class SqliteSelectCharacterDataSource : ISelectCharacterDataSource
     {
-        private readonly SqliteInventoryStore _inventoryStore;
+        private readonly IInventoryStore _inventoryStore;
         private readonly SqliteCharacterProgressRepository _initDataRepository;
         private readonly SqliteUserInfoBlobRepository _userInfoBlobRepository;
-        private readonly SqliteCharacterStateRepository _initFlagsRepository;
+        private readonly ICharacterStateRepository _initFlagsRepository;
         private readonly PacketSequenceRepository _packetSequenceRepository;
         private readonly ICharacterRepository _characterRepository;
         private readonly AccountSettingsRepository _accountSettingsRepository;

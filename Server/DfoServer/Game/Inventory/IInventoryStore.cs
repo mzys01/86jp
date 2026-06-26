@@ -1,0 +1,60 @@
+using DfoServer.Game.ExpertJob;
+using Microsoft.Data.Sqlite;
+using System;
+using System.Collections.Generic;
+
+namespace DfoServer.Game.Inventory
+{
+    public interface IInventoryStore
+    {
+        IDisposable BeginScope(int characterId, int accountId);
+
+        int CountItem(int itemTemplateId);
+
+        void RunMigrations();
+
+        void EnsureDatabase(CharacterItemListSnapshot seedSnapshot);
+
+        void EnsureContainerState(int characterId);
+
+        CharacterItemListSnapshot LoadCharacterItemListSnapshot();
+
+        int DeleteExpiredRentalEquipment();
+
+        bool TryDeleteItem(InventoryListType listType, short slotIndex, short deleteCount, out InventoryMutationResult result);
+
+        bool TryOpenAvatarPackage(AvatarPackageOpenRequest request, out AvatarPackageOpenResult result);
+
+        bool TryOpenSelectablePackage(SelectablePackageOpenRequest request, out SelectablePackageOpenResult result);
+
+        bool TryUseBoosterItem(short? slotIndex, IReadOnlyList<int> selectedItemTemplateIds, out BoosterUseResult result);
+
+        bool TryOpenPackage0207(short slotIndex, IReadOnlyList<int> selectedItemTemplateIds, out BoosterUseResult result);
+
+        bool TryBuyItem(int itemTemplateId, int buyCount, out InventoryMutationResult result);
+
+        bool TryPickupRentalWeapon(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            int itemTemplateId,
+            int expireTime,
+            out short assignedSlot,
+            out int instanceValue);
+
+        bool TryPickupItem(int itemTemplateId, int stackCount, out short assignedSlot);
+
+        bool TrySellItem(InventoryListType listType, short slotIndex, short sellCount, out InventoryMutationResult result);
+
+        bool TryEnchantByBead(EnchantByBeadCommand command, out EnchantByBeadResult result);
+
+        bool TryMoveItem(InventoryMoveRequest request, out InventoryMoveResult result);
+
+        bool TrySortItems(int characterId, InventoryListType listType, byte category);
+
+        void SaveEquipListBlob(byte[] blob);
+
+        void SeedNewCharacterEquipment((short slot, int itemId)[] equipment);
+
+        bool TryBuyCeraShopItem(int productId, int buyCount, out InventoryMutationResult result);
+    }
+}

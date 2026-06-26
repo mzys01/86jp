@@ -9,6 +9,7 @@ using DfoServer.Network.Builders;
 using DfoServer.Network.Handlers;
 using DfoServer.Network.Legacy;
 using System;
+using System.Collections.Generic;
 using System.Threading.Tasks;
 
 namespace DfoServer.Network
@@ -27,6 +28,7 @@ namespace DfoServer.Network
         private readonly RentalHandler _rentalHandler;
         private readonly ICharacterRepository _characterRepository;
         private readonly SqliteSelectCharacterDataSource _selectCharacterDataSource;
+        private readonly Dictionary<ushort, Func<EnhancedClientSession, GamePacketHeader, byte[], Task>> _cmdDispatch;
 
         public override string ProtocolName => "GameProtocol";
 
@@ -58,6 +60,17 @@ namespace DfoServer.Network
             _ceraShopHandler = new CeraShopHandler(sqliteSelectCharacterDataSource);
             _luckyStarHandler = new LuckyStarHandler(databasePath, schemaFilePath, sqliteSelectCharacterDataSource);
             _rentalHandler = new RentalHandler(databasePath, schemaFilePath, sqliteSelectCharacterDataSource);
+
+            _cmdDispatch = new Dictionary<ushort, Func<EnhancedClientSession, GamePacketHeader, byte[], Task>>();
+            RegisterLoginHandlers(_cmdDispatch);
+            RegisterCharacterHandlers(_cmdDispatch);
+            RegisterInventoryHandlers(_cmdDispatch);
+            RegisterDungeonHandlers(_cmdDispatch);
+            RegisterSkillHandlers(_cmdDispatch);
+            RegisterTownHandlers(_cmdDispatch);
+            RegisterSettingsHandlers(_cmdDispatch);
+            RegisterQuestHandlers(_cmdDispatch);
+            RegisterMiscHandlers(_cmdDispatch);
         }
 
         public override async Task OnClientConnected(EnhancedClientSession session)
@@ -100,209 +113,138 @@ namespace DfoServer.Network
 
             if (header.cmd == 1)
             {
-                switch (header.type)
-                {
-                    case 0x0001:
-                        await _loginHandler.Handle_ENUM_CMDPACKET_LOGIN(session, header, body);
-                        break;
-                    case 0x0002:
-                        break;
-                    case 0x0003:
-                        await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0003, CommonPacketBodyBuilder.BuildSuccessAck()));
-                        break;
-                    case 0x0004:
-                        await _characterSelectHandler.Handle_ENUM_CMDPACKET_SELECT_CHARACTER(session, header, body);
-                        if (session.Player != null && session.Player.CharacterId > 0)
-                        {
-                            var gsConnStr = SqliteDatabaseBootstrap.Initialize(
-                                ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
-                            session.GameSession = new Game.Session.GameSession(session, gsConnStr);
-                        }
-                        break;
-                    case 0x0005:
-                        await _characterSelectHandler.Handle_ENUM_CMDPACKET_CREATE_CHARACTER(session, header, body);
-                        break;
-                    case 0x0006:
-                        await _characterSelectHandler.Handle_ENUM_CMDPACKET_DELETE_CHARACTER(session, header, body);
-                        break;
-                    case 0x0007:
-                        await _characterSelectHandler.Handle_ENUM_CMDPACKET_RETURN_SELECT_CHARACTER(session, header, body);
-                        break;
-                    case 0x0008:
-                        await _characterSelectHandler.Handle_ENUM_CMDPACKET_GET_USERINFO(session, header, body);
-                        break;
-                    case 0x000F:
-                        await _dungeonHandler.Handle_ENUM_CMDPACKET_ENTER_SELECT_DUNGEON(session, header, body);
-                        break;
-                    case 0x0010:
-                        await _dungeonHandler.Handle_ENUM_CMDPACKET_SELECT_DUNGEON(session, header, body);
-                        break;
-                    case 0x0012://18
-                        await _inventoryHandler.Handle_ENUM_CMDPACKET_DELETE_ITEM(session, header, body);
-                        break;
-                    case 0x0013://19
-                        await _inventoryHandler.Handle_ENUM_CMDPACKET_MOVE_ITEMSPACE(session, header, body);
-                        break;
-                    case 0x0014://20
-                        await _inventoryHandler.Handle_ENUM_CMDPACKET_SORT_ITEM(session, header, body);
-                        break;
-                    case 0x0015://21
-                        await _inventoryHandler.Handle_ENUM_CMDPACKET_BUY_ITEM(session, header, body);
-                        break;
-                    case 0x0016://22
-                        await _inventoryHandler.Handle_ENUM_CMDPACKET_SELL_ITEM(session, header, body);
-                        break;
-                    case 0x001C://28
-                        await _skillHandler.Handle_CHANGE_SKILLSLOT(session, header, body);
-                        break;
-                    case 0x001D://29
-                        await _skillHandler.Handle_BUY_SKILL(session, header, body);
-                        break;
-                    case 0x014B://331
-                        await _skillHandler.Handle_CHANGE_SKILL_COMMAND(session, header, body);
-                        break;
-                    case 0x014C://332
-                        await _skillHandler.Handle_RESET_ALL_SKILL_COMMANDS(session, header, body);
-                        break;
-                    case 0x0239://569
-                        await _inventoryHandler.Handle_SET_CLONE_TITLE(session, header, body);
-                        break;
-                    case 0x01EC://492
-                        await _skillHandler.Handle_SKILL_INIT(session, header, body);
-                        break;
-                    case 0x001F://31
-                        if (session.GameSession != null)
-                            await session.GameSession.QuestManager.HandleAcceptQuestAsync(header.type, body);
-                        break;
-                    case 0x0020://32
-                        if (session.GameSession != null)
-                            await session.GameSession.QuestManager.HandleGiveupQuestAsync(header.type, body);
-                        break;
-                    case 0x0021://33
-                        if (session.GameSession != null)
-                            await session.GameSession.QuestManager.HandleSetTriggerAsync(header.type, body);
-                        break;
-                    case 0x0022://34
-                        if (session.GameSession != null)
-                            await session.GameSession.QuestManager.HandleFinishQuestAsync(header.type, body);
-                        break;
-                    case 0x0023:
-                        await _townHandler.Handle_ENUM_CMDPACKET_SET_USER_POSITION(session, header, body);
-                        break;
-                    case 0x0024:
-                        await _townHandler.Handle_ENUM_CMDPACKET_SET_USER_AREA(session, header, body);
-                        break;
-                    case 0x0025:
-                        await _townHandler.Handle_ENUM_CMDPACKET_FINISH_LOADING(session, header, body);
-                        break;
-                    case 0x0026:
-                        break;
-                    case 0x0027:
-                        await _dungeonHandler.Handle_ENUM_CMDPACKET_DIE_MONSTER(session, header, body);
-                        break;
-                    case 0x002B:
-                        await _dungeonHandler.Handle_ENUM_CMDPACKET_GET_ITEM(session, header, body);
-                        break;
-                    case 0x002A:
-                    case 0x0084:
-                        await _townHandler.Handle_ENUM_CMDPACKET_GIVEUP_GAME(session, header, body);
-                        break;
-                    case 0x0028://40
-                        await _dungeonHandler.Handle_ENUM_CMDPACKET_DIE_CHARACTER(session, header, body);
-                        break;
-                    case 0x0029:
-                        await _dungeonHandler.Handle_ENUM_CMDPACKET_USE_COIN(session, header, body);
-                        break;
-                    case 0x0047:
-                    case 0x0048:
-                        await _dungeonHandler.Handle_ENUM_CMDPACKET_SELECT_CARD(session, header, body);
-                        break;
-                    case 0x00A0:
-                        await _inventoryHandler.Handle_OPEN_SELECTABLE_PACKAGE(session, header, body);
-                        break;
-                    case 0x0218:
-                        await _inventoryHandler.Handle_USE_BOOSTER_ITEM(session, header, body);
-                        break;
-                    case 0x002E://46
-                        await _dungeonHandler.Handle_SET_PLAY_RESULT(session, header, body);
-                        break;
-                    case 0x0040://64 商城购买
-                        await _ceraShopHandler.HandleCeraShopPurchase(session, header, body);
-                        break;
-                    case 0x002C:
-                        await _inventoryHandler.Handle_ENUM_CMDPACKET_USE_STACKABLE(session, header, body);
-                        break;
-                    case 0x002D:
-                        await _dungeonHandler.Handle_ENUM_CMDPACKET_MOVE_MAP(session, header, body);
-                        break;
-                    case 0x008F://143
-                        await _dungeonHandler.Handle_ENUM_CMDPACKET_CHANGE_TUTORIAL_FLAG(session, header, body);
-                        break;
-                    case 0x00BF://191
-                        await _dungeonHandler.Handle_ENUM_CMDPACKET_DUNGEON_EVENT_STORY_PAUSE(session, header, body);
-                        break;
-                    case 0x007A://122
-                        break;
-                    case 0x00AB://171
-                        break;
-                    case 0x00ED:
-                        await _townHandler.Handle_ENUM_CMDPACKET_TELEPORT(session, header, body);
-                        break;
-                    case 0x0078://120
-                        break;
-                    case 0x0110://272 附魔宝珠
-                        await _inventoryHandler.Handle_ENUM_CMDPACKET_ENCHANT_BY_BEAD(session, header, body);
-                        break;
-                    case 0x0118://280
-                        break;
-                    case 0x01A1://417
-                        await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x01A1, LegacyPacketBodyBuilder.BuildVerifyPvpLagResponse(body)));
-                        break;
-                    case 0x019C://412
-                    case 0x019D://413
-                        await _inventoryHandler.Handle_TITLE_BOOK(session, header, body);
-                        break;
-                    case 0x01E4://484
-                        await _dungeonHandler.Handle_ENUM_CMDPACKET_TUTORIAL_LEVEL_UP(session, header, body);
-                        break;
-                    case 0x01F8://504
-                        break;
-                    case 0x01DE: // 478
-                        await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x01DE, CommonPacketBodyBuilder.BuildSuccessAck()));
-                        break;
-                    case 0x0207:
-                        await _inventoryHandler.Handle_OPEN_AVATAR_PACKAGE(session, header, body);
-                        break;
-                    case 0x0252://594
-                        break;
-                    case 0x02C1://705
-                    case 0x01BA://442
-                        break;
-                    case 0x02B5:
-                        await _characterSelectHandler.Handle_ENUM_CMDPACKET_CHECK_DOUBLE_CHARACTER_NAME(session, header, body);
-                        break;
-                    case 0x02A8:
-                        await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x02A8, new byte[] { 0x00, 0x00 }));
-                        break;
-                    case 0x00C5:
-                        _settingsHandler.Handle_SAVE_GAME_OPTION_1(session, header, body);
-                        break;
-                    case 0x0373:
-                        await _luckyStarHandler.HandleShopPurchasePacket(session, header, body);
-                        break;
-                    case 0x0372:
-                        await _rentalHandler.HandleRentWeapon(session, header, body);
-                        break;
-                    case 0x00C6:
-                        _settingsHandler.Handle_SAVE_GAME_OPTION_2(session, header, body);
-                        break;
-                    case 0x0170:
-                        _settingsHandler.Handle_SAVE_QUICKCHAT(session, header, body);
-                        break;
-                    default:
-                        break;
-                }
+                if (_cmdDispatch.TryGetValue(header.type, out var handler))
+                    await handler(session, header, body);
+                else
+                    FileLogger.Log($"[GameProtocol] Unhandled CMD type=0x{header.type:X4}");
             }
         }
+
+        #region CMD Dispatch Registration
+
+        private void RegisterLoginHandlers(Dictionary<ushort, Func<EnhancedClientSession, GamePacketHeader, byte[], Task>> d)
+        {
+            d[0x0001] = _loginHandler.Handle_ENUM_CMDPACKET_LOGIN;
+        }
+
+        private void RegisterCharacterHandlers(Dictionary<ushort, Func<EnhancedClientSession, GamePacketHeader, byte[], Task>> d)
+        {
+            d[0x0004] = async (s, h, b) =>
+            {
+                await _characterSelectHandler.Handle_ENUM_CMDPACKET_SELECT_CHARACTER(s, h, b);
+                if (s.Player != null && s.Player.CharacterId > 0)
+                {
+                    var gsConnStr = SqliteDatabaseBootstrap.Initialize(
+                        ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
+                    s.GameSession = new Game.Session.GameSession(s, gsConnStr);
+                }
+            };
+            d[0x0005] = _characterSelectHandler.Handle_ENUM_CMDPACKET_CREATE_CHARACTER;
+            d[0x0006] = _characterSelectHandler.Handle_ENUM_CMDPACKET_DELETE_CHARACTER;
+            d[0x0007] = _characterSelectHandler.Handle_ENUM_CMDPACKET_RETURN_SELECT_CHARACTER;
+            d[0x0008] = _characterSelectHandler.Handle_ENUM_CMDPACKET_GET_USERINFO;
+            d[0x02B5] = _characterSelectHandler.Handle_ENUM_CMDPACKET_CHECK_DOUBLE_CHARACTER_NAME;
+        }
+
+        private void RegisterInventoryHandlers(Dictionary<ushort, Func<EnhancedClientSession, GamePacketHeader, byte[], Task>> d)
+        {
+            d[0x0012] = _inventoryHandler.Handle_ENUM_CMDPACKET_DELETE_ITEM;       //18
+            d[0x0013] = _inventoryHandler.Handle_ENUM_CMDPACKET_MOVE_ITEMSPACE;    //19
+            d[0x0014] = _inventoryHandler.Handle_ENUM_CMDPACKET_SORT_ITEM;         //20
+            d[0x0015] = _inventoryHandler.Handle_ENUM_CMDPACKET_BUY_ITEM;          //21
+            d[0x0016] = _inventoryHandler.Handle_ENUM_CMDPACKET_SELL_ITEM;         //22
+            d[0x002C] = _inventoryHandler.Handle_ENUM_CMDPACKET_USE_STACKABLE;
+            d[0x00A0] = _inventoryHandler.Handle_OPEN_SELECTABLE_PACKAGE;
+            d[0x0110] = _inventoryHandler.Handle_ENUM_CMDPACKET_ENCHANT_BY_BEAD;   //272
+            d[0x019C] = _inventoryHandler.Handle_TITLE_BOOK;                       //412
+            d[0x019D] = _inventoryHandler.Handle_TITLE_BOOK;                       //413
+            d[0x0207] = _inventoryHandler.Handle_OPEN_AVATAR_PACKAGE;
+            d[0x0218] = _inventoryHandler.Handle_USE_BOOSTER_ITEM;
+            d[0x0239] = _inventoryHandler.Handle_SET_CLONE_TITLE;                  //569
+        }
+
+        private void RegisterDungeonHandlers(Dictionary<ushort, Func<EnhancedClientSession, GamePacketHeader, byte[], Task>> d)
+        {
+            d[0x000F] = _dungeonHandler.Handle_ENUM_CMDPACKET_ENTER_SELECT_DUNGEON;
+            d[0x0010] = _dungeonHandler.Handle_ENUM_CMDPACKET_SELECT_DUNGEON;
+            d[0x0027] = _dungeonHandler.Handle_ENUM_CMDPACKET_DIE_MONSTER;
+            d[0x0028] = _dungeonHandler.Handle_ENUM_CMDPACKET_DIE_CHARACTER;       //40
+            d[0x0029] = _dungeonHandler.Handle_ENUM_CMDPACKET_USE_COIN;
+            d[0x002B] = _dungeonHandler.Handle_ENUM_CMDPACKET_GET_ITEM;
+            d[0x002D] = _dungeonHandler.Handle_ENUM_CMDPACKET_MOVE_MAP;
+            d[0x002E] = _dungeonHandler.Handle_SET_PLAY_RESULT;                    //46
+            d[0x0047] = _dungeonHandler.Handle_ENUM_CMDPACKET_SELECT_CARD;
+            d[0x0048] = _dungeonHandler.Handle_ENUM_CMDPACKET_SELECT_CARD;
+            d[0x008F] = _dungeonHandler.Handle_ENUM_CMDPACKET_CHANGE_TUTORIAL_FLAG; //143
+            d[0x00BF] = _dungeonHandler.Handle_ENUM_CMDPACKET_DUNGEON_EVENT_STORY_PAUSE; //191
+            d[0x01E4] = _dungeonHandler.Handle_ENUM_CMDPACKET_TUTORIAL_LEVEL_UP;   //484
+        }
+
+        private void RegisterSkillHandlers(Dictionary<ushort, Func<EnhancedClientSession, GamePacketHeader, byte[], Task>> d)
+        {
+            d[0x001C] = _skillHandler.Handle_CHANGE_SKILLSLOT;                     //28
+            d[0x001D] = _skillHandler.Handle_BUY_SKILL;                            //29
+            d[0x014B] = _skillHandler.Handle_CHANGE_SKILL_COMMAND;                 //331
+            d[0x014C] = _skillHandler.Handle_RESET_ALL_SKILL_COMMANDS;             //332
+            d[0x01EC] = _skillHandler.Handle_SKILL_INIT;                           //492
+        }
+
+        private void RegisterTownHandlers(Dictionary<ushort, Func<EnhancedClientSession, GamePacketHeader, byte[], Task>> d)
+        {
+            d[0x0023] = _townHandler.Handle_ENUM_CMDPACKET_SET_USER_POSITION;
+            d[0x0024] = _townHandler.Handle_ENUM_CMDPACKET_SET_USER_AREA;
+            d[0x0025] = _townHandler.Handle_ENUM_CMDPACKET_FINISH_LOADING;
+            d[0x002A] = _townHandler.Handle_ENUM_CMDPACKET_GIVEUP_GAME;
+            d[0x0084] = _townHandler.Handle_ENUM_CMDPACKET_GIVEUP_GAME;
+            d[0x00ED] = _townHandler.Handle_ENUM_CMDPACKET_TELEPORT;
+        }
+
+        private void RegisterSettingsHandlers(Dictionary<ushort, Func<EnhancedClientSession, GamePacketHeader, byte[], Task>> d)
+        {
+            d[0x00C5] = (s, h, b) => { _settingsHandler.Handle_SAVE_GAME_OPTION_1(s, h, b); return Task.CompletedTask; };
+            d[0x00C6] = (s, h, b) => { _settingsHandler.Handle_SAVE_GAME_OPTION_2(s, h, b); return Task.CompletedTask; };
+            d[0x0170] = (s, h, b) => { _settingsHandler.Handle_SAVE_QUICKCHAT(s, h, b); return Task.CompletedTask; };
+        }
+
+        private void RegisterQuestHandlers(Dictionary<ushort, Func<EnhancedClientSession, GamePacketHeader, byte[], Task>> d)
+        {
+            d[0x001F] = async (s, h, b) => //31
+            {
+                if (s.GameSession != null)
+                    await s.GameSession.QuestManager.HandleAcceptQuestAsync(h.type, b);
+            };
+            d[0x0020] = async (s, h, b) => //32
+            {
+                if (s.GameSession != null)
+                    await s.GameSession.QuestManager.HandleGiveupQuestAsync(h.type, b);
+            };
+            d[0x0021] = async (s, h, b) => //33
+            {
+                if (s.GameSession != null)
+                    await s.GameSession.QuestManager.HandleSetTriggerAsync(h.type, b);
+            };
+            d[0x0022] = async (s, h, b) => //34
+            {
+                if (s.GameSession != null)
+                    await s.GameSession.QuestManager.HandleFinishQuestAsync(h.type, b);
+            };
+        }
+
+        private void RegisterMiscHandlers(Dictionary<ushort, Func<EnhancedClientSession, GamePacketHeader, byte[], Task>> d)
+        {
+            d[0x0003] = (s, h, b) =>
+                s.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0003, CommonPacketBodyBuilder.BuildSuccessAck()));
+            d[0x0040] = _ceraShopHandler.HandleCeraShopPurchase;                   //64
+            d[0x01A1] = (s, h, b) =>                                               //417
+                s.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x01A1, LegacyPacketBodyBuilder.BuildVerifyPvpLagResponse(b)));
+            d[0x01DE] = (s, h, b) =>                                               //478
+                s.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x01DE, CommonPacketBodyBuilder.BuildSuccessAck()));
+            d[0x02A8] = (s, h, b) =>
+                s.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x02A8, new byte[] { 0x00, 0x00 }));
+            d[0x0372] = _rentalHandler.HandleRentWeapon;
+            d[0x0373] = _luckyStarHandler.HandleShopPurchasePacket;
+        }
+
+        #endregion
     }
 }
