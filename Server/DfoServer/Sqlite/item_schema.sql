@@ -561,6 +561,7 @@ CREATE TABLE IF NOT EXISTS character_equipped_entries (
     character_id INTEGER NOT NULL,
     slot INTEGER NOT NULL,
     item_id INTEGER NOT NULL,
+    expire_time INTEGER NOT NULL DEFAULT 0,
     raw_entry BLOB NOT NULL,
     PRIMARY KEY (character_id, slot),
     FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE

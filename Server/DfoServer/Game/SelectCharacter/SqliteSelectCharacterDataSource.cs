@@ -47,7 +47,10 @@ namespace DfoServer.Game.SelectCharacter
         {
             CharacterItemListSnapshot itemList;
             using (_inventoryStore.BeginScope(characterId, accountId))
+            {
+                _inventoryStore.DeleteExpiredRentalEquipment();
                 itemList = _inventoryStore.LoadCharacterItemListSnapshot();
+            }
 
             var initSnapshot = new SelectCharacterInitializationSnapshot();
 
@@ -257,6 +260,40 @@ namespace DfoServer.Game.SelectCharacter
 
         public byte[] LoadAccountMainOption(int accountId)
             => _accountSettingsRepository.Load(accountId)?.MainGameOption;
+
+        public bool TryPickupRentalWeapon(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            int characterId,
+            int accountId,
+            int itemTemplateId,
+            int expireTime,
+            out short assignedSlot,
+            out int instanceValue)
+        {
+            using (_inventoryStore.BeginScope(characterId, accountId))
+                return _inventoryStore.TryPickupRentalWeapon(
+                    connection, transaction, itemTemplateId, expireTime, out assignedSlot, out instanceValue);
+        }
+
+        public void SaveRentalInfo(SqliteConnection connection, SqliteTransaction transaction, int characterId, RentalInfoSnapshot rental)
+        {
+            if (characterId <= 0 || connection == null || transaction == null || rental == null)
+                return;
+
+            var storage = RentalInfoSnapshot.BuildStorageBody(rental);
+            using (var cmd = new SqliteCommand(
+                @"INSERT INTO character_init_bodies (character_id, noti_type, occurrence_index, body)
+                  VALUES (@cid, @nt, 0, @body)
+                  ON CONFLICT(character_id, noti_type, occurrence_index)
+                  DO UPDATE SET body=@body", connection, transaction))
+            {
+                cmd.Parameters.AddWithValue("@cid", characterId);
+                cmd.Parameters.AddWithValue("@nt", 0x0357);
+                cmd.Parameters.AddWithValue("@body", storage);
+                cmd.ExecuteNonQuery();
+            }
+        }
 
         private void LoadFieldFromInitBody(int characterId, int notiType, Action<byte[]> parse)
         {

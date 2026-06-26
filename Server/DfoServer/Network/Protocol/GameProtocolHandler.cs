@@ -24,6 +24,7 @@ namespace DfoServer.Network
         private readonly SettingsHandler _settingsHandler;
         private readonly CeraShopHandler _ceraShopHandler;
         private readonly LuckyStarHandler _luckyStarHandler;
+        private readonly RentalHandler _rentalHandler;
         private readonly ICharacterRepository _characterRepository;
         private readonly SqliteSelectCharacterDataSource _selectCharacterDataSource;
 
@@ -56,6 +57,7 @@ namespace DfoServer.Network
             _settingsHandler = new SettingsHandler();
             _ceraShopHandler = new CeraShopHandler(sqliteSelectCharacterDataSource);
             _luckyStarHandler = new LuckyStarHandler(databasePath, schemaFilePath, sqliteSelectCharacterDataSource);
+            _rentalHandler = new RentalHandler(databasePath, schemaFilePath, sqliteSelectCharacterDataSource);
         }
 
         public override async Task OnClientConnected(EnhancedClientSession session)
@@ -284,6 +286,9 @@ namespace DfoServer.Network
                         break;
                     case 0x0373:
                         await _luckyStarHandler.HandleShopPurchasePacket(session, header, body);
+                        break;
+                    case 0x0372:
+                        await _rentalHandler.HandleRentWeapon(session, header, body);
                         break;
                     case 0x00C6:
                         _settingsHandler.Handle_SAVE_GAME_OPTION_2(session, header, body);

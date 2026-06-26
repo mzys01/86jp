@@ -32,7 +32,9 @@ namespace DfoServer.Game.SelectCharacter
 
     public sealed class RentalInfoSnapshot
     {
-        public uint RentalId { get; set; }
+        public const uint DefaultRentalId = 891;
+
+        public uint RentalId { get; set; } = DefaultRentalId;
         public List<RentalItemSnapshot> Items { get; } = new List<RentalItemSnapshot>();
 
         public static void ParseStorageBody(byte[] body, RentalInfoSnapshot rental)
@@ -44,9 +46,21 @@ namespace DfoServer.Game.SelectCharacter
             if (body == null || body.Length < 8)
                 return;
 
-            rental.RentalId = BitConverter.ToUInt32(body, 0);
-            var count = BitConverter.ToUInt32(body, 4);
-            var off = 8;
+            uint count;
+            int off;
+            if (body.Length >= 12 && BitConverter.ToUInt32(body, 4) == DefaultRentalId)
+            {
+                rental.RentalId = DefaultRentalId;
+                count = BitConverter.ToUInt32(body, 8);
+                off = 12;
+            }
+            else
+            {
+                rental.RentalId = BitConverter.ToUInt32(body, 0);
+                count = BitConverter.ToUInt32(body, 4);
+                off = 8;
+            }
+
             for (uint i = 0; i < count && off + 8 <= body.Length; i++)
             {
                 rental.Items.Add(new RentalItemSnapshot
@@ -56,6 +70,23 @@ namespace DfoServer.Game.SelectCharacter
                 });
                 off += 8;
             }
+        }
+
+        public static byte[] BuildStorageBody(RentalInfoSnapshot rental)
+        {
+            var info = rental ?? new RentalInfoSnapshot();
+            var itemCount = info.Items.Count;
+            var storage = new byte[8 + itemCount * 8];
+            Buffer.BlockCopy(BitConverter.GetBytes(info.RentalId), 0, storage, 0, 4);
+            Buffer.BlockCopy(BitConverter.GetBytes((uint)itemCount), 0, storage, 4, 4);
+            for (var i = 0; i < itemCount; i++)
+            {
+                var off = 8 + i * 8;
+                Buffer.BlockCopy(BitConverter.GetBytes(info.Items[i].ItemId), 0, storage, off, 4);
+                Buffer.BlockCopy(BitConverter.GetBytes(info.Items[i].ExpireTime), 0, storage, off + 4, 4);
+            }
+
+            return storage;
         }
     }
 }
