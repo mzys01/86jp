@@ -86,7 +86,7 @@ namespace DfoServer.Game.Inventory
             public byte Reinforce;      
             public ushort Durability;   
             public uint Enchant;        
-            public byte EnchantUpgrade; 
+            public byte EnchantUpgradeCount;
             public byte AmplifyType;    
             public ushort AmplifyValue; 
             public ushort Rune;         
@@ -109,7 +109,7 @@ namespace DfoServer.Game.Inventory
                 Reinforce = raw.Length > 9 ? raw[9] : (byte)0,
                 Durability = raw.Length >= 12 ? BitConverter.ToUInt16(raw, 10) : (ushort)0,
                 Enchant = raw.Length >= 20 ? BitConverter.ToUInt32(raw, 16) : 0u,
-                EnchantUpgrade = raw.Length > 20 ? raw[20] : (byte)0,
+                EnchantUpgradeCount = raw.Length > 20 ? raw[20] : (byte)0,
                 AmplifyType = raw.Length > 21 ? raw[21] : (byte)0,
                 AmplifyValue = raw.Length >= 24 ? BitConverter.ToUInt16(raw, 22) : (ushort)0,
                 Forging = raw.Length >= 10 ? raw[raw.Length - 10] : (byte)0, 
@@ -242,7 +242,7 @@ namespace DfoServer.Game.Inventory
                 bw.Write(f.Durability);
                 bw.Write((uint)0);           
                 bw.Write(f.Enchant);
-                bw.Write(f.EnchantUpgrade);
+                bw.Write(f.EnchantUpgradeCount);
                 bw.Write(f.AmplifyType);
                 bw.Write(f.AmplifyValue);
                 

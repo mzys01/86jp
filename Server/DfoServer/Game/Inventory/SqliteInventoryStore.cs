@@ -1233,12 +1233,13 @@ ORDER BY slot_index;";
                     return false;
                 }
 
-                if (!ItemMetadataResolver.TryValidateEnchantByBeadTarget(bead.ItemTemplateId, target.ItemTemplateId, out var enchantCardItemId, out var rejectReason))
+                var enchantUpgradeCount = ReadEnchantUpgradeCount(bead.ExtraJson);
+                if (!ItemMetadataResolver.TryValidateEnchantByBeadTarget(bead.ItemTemplateId, target.ItemTemplateId, enchantUpgradeCount, out var enchantCardItemId, out var rejectReason))
                 {
                     var errorCode = rejectReason != null && rejectReason.StartsWith("target", StringComparison.Ordinal)
                         ? EnchantByBeadResult.ErrorInvalidTarget
                         : EnchantByBeadResult.ErrorUnsupported;
-                    FileLogger.Log($"  [EnchantByBead] REJECT: bead=0x{bead.ItemTemplateId:X8} target=0x{target.ItemTemplateId:X8} reason={rejectReason}");
+                    FileLogger.Log($"  [EnchantByBead] REJECT: bead=0x{bead.ItemTemplateId:X8} target=0x{target.ItemTemplateId:X8} upgrade={enchantUpgradeCount} reason={rejectReason}");
                     result = EnchantByBeadResult.Error(command, errorCode);
                     return false;
                 }
@@ -1252,8 +1253,9 @@ ORDER BY slot_index;";
 
                 targetCommon.PrefixData0E = NormalizeBytes(targetCommon.PrefixData0E, 8);
 
-                // 装备 common entry 的 +0x0E 前 4 字节是当前项目里承载附魔卡片 index 的动态字段。
+                // 装备 common entry 的 +0x0E 前 4 字节承载附魔卡片 index，后 1 字节承载 86 卡片升级次数。
                 BitConverter.GetBytes(enchantCardItemId).CopyTo(targetCommon.PrefixData0E, 0);
+                targetCommon.PrefixData0E[4] = enchantUpgradeCount;
                 UpdateCommonExtraJson(connection, transaction, target.ItemUid, targetCommon);
 
                 var remainingBeadCount = bead.StackCount - 1;
@@ -1272,10 +1274,10 @@ ORDER BY slot_index;";
                 }
 
                 WriteDeleteAuditLog(connection, transaction, bead, 1);
-                WriteEnchantAuditLog(connection, transaction, bead, target, enchantCardItemId);
+                WriteEnchantAuditLog(connection, transaction, bead, target, enchantCardItemId, enchantUpgradeCount);
                 transaction.Commit();
 
-                FileLogger.Log($"  [EnchantByBead] OK: beadSlot={command.BeadSlotIndex} targetSlot={command.TargetSlotIndex} enchantCard=0x{enchantCardItemId:X8} beadLeft={Math.Max(0, remainingBeadCount)}");
+                FileLogger.Log($"  [EnchantByBead] OK: beadSlot={command.BeadSlotIndex} targetSlot={command.TargetSlotIndex} enchantCard=0x{enchantCardItemId:X8} upgrade={enchantUpgradeCount} beadLeft={Math.Max(0, remainingBeadCount)}");
                 result = EnchantByBeadResult.Ok(command, targetCommon, beadCommon, enchantCardItemId);
                 return true;
             }
@@ -1763,7 +1765,7 @@ VALUES (
                         Durability = (ushort)reader.GetInt32(2),
                         Reinforce = (byte)ReadIntValue(extraJson, "extData0"),
                         Enchant = prefix.Length >= 4 ? BitConverter.ToUInt32(prefix, 0) : 0,
-                        EnchantUpgrade = prefix.Length >= 5 ? prefix[4] : (byte)0,
+                        EnchantUpgradeCount = prefix.Length >= 5 ? prefix[4] : (byte)0,
                         AmplifyType = prefix.Length >= 6 ? prefix[5] : (byte)0,
                         AmplifyValue = prefix.Length >= 8 ? BitConverter.ToUInt16(prefix, 6) : (ushort)0,
                     };
@@ -1936,7 +1938,7 @@ VALUES (
                 return;
 
             BitConverter.GetBytes(fields.Enchant).CopyTo(raw, 16);
-            raw[20] = fields.EnchantUpgrade;
+            raw[20] = fields.EnchantUpgradeCount;
             raw[21] = fields.AmplifyType;
             BitConverter.GetBytes(fields.AmplifyValue).CopyTo(raw, 22);
         }
@@ -1953,7 +1955,7 @@ VALUES (
             }
             //   durability(entry+10)     → 84B Durability(+11)
             //   enchant(entry+16,u32)    → 84B PrefixData0E[0..3] (enchantIndex +14)
-            //   flag20(entry+20)         → 84B PrefixData0E[4] (enchantUpgrade +18)
+            //   enchantUpgrade(entry+20) → 84B PrefixData0E[4] (卡片升级次数)
             //   amplifyType(entry+21)    → 84B PrefixData0E[5] (+19)
             //   amplifyValue(entry+22)   → 84B PrefixData0E[6..7] (+20)
             ushort dur = 0;
@@ -1966,7 +1968,7 @@ VALUES (
                 countOrIv = unchecked((int)f.InstanceValue);
                 var prefix = new byte[8];
                 BitConverter.GetBytes(f.Enchant).CopyTo(prefix, 0);
-                prefix[4] = f.EnchantUpgrade;
+                prefix[4] = f.EnchantUpgradeCount;
                 prefix[5] = f.AmplifyType;
                 BitConverter.GetBytes(f.AmplifyValue).CopyTo(prefix, 6);
                 var tail = new byte[37];
@@ -3059,7 +3061,7 @@ VALUES (
             }
         }
 
-        private void WriteEnchantAuditLog(SqliteConnection connection, SqliteTransaction transaction, ItemRecord bead, ItemRecord target, int enchantCardItemId)
+        private void WriteEnchantAuditLog(SqliteConnection connection, SqliteTransaction transaction, ItemRecord bead, ItemRecord target, int enchantCardItemId, byte enchantUpgradeCount)
         {
             using (var command = connection.CreateCommand())
             {
@@ -3082,6 +3084,7 @@ VALUES (
                     + ",\"beadItemTemplateId\":" + bead.ItemTemplateId
                     + ",\"beadSlotIndex\":" + bead.SlotIndex
                     + ",\"enchantCardItemId\":" + enchantCardItemId
+                    + ",\"enchantUpgradeCount\":" + enchantUpgradeCount
                     + "}");
                 command.ExecuteNonQuery();
             }
@@ -3400,6 +3403,13 @@ VALUES (
 
             var hex = json.Substring(start, end - start);
             return FromHex(hex, expectedLength);
+        }
+
+        private static byte ReadEnchantUpgradeCount(string extraJson)
+        {
+            // 86 附魔卡片升级次数跟随宝珠动态数据保存，写入装备时落到 common entry +0x12。
+            var prefix = ReadHexValue(extraJson ?? string.Empty, "prefixData0E", 8);
+            return prefix.Length >= 5 ? prefix[4] : (byte)0;
         }
 
         private static string ReadRawStringValue(string json, string propertyName)
