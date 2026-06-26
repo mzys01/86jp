@@ -30,6 +30,10 @@ namespace DfoServer.Infrastructure
                     ("happy_token_cera", "INTEGER NOT NULL DEFAULT 0"),
                     ("lucky_star", "INTEGER NOT NULL DEFAULT 0"),
                 });
+                DfoServer.Sqlite.SqliteSchemaMigrator.EnsureColumns(conn, "character_equipped_entries", new[]
+                {
+                    ("expire_time", "INTEGER NOT NULL DEFAULT 0"),
+                });
                 DfoServer.Game.Inventory.CurrencyService.MigrateCeraFromPacketTemplates(conn);
             }
             return connectionString;
