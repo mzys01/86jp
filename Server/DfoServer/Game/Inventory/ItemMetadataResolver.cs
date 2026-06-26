@@ -1,4 +1,4 @@
-﻿using DfoServer.GameWorld;
+using DfoServer.GameWorld;
 using PvfLib;
 using System;
 using System.Collections.Generic;
@@ -85,7 +85,7 @@ namespace DfoServer.Game.Inventory
 
     public static class ItemMetadataResolver 
     {
-        private static readonly Lazy<LstFile> EquipmentList = new Lazy<LstFile>(() => LstFile.Parse(PvfArchiveAccessor.ReadText("equipment/equipment.lst")));
+        internal static readonly Lazy<LstFile> EquipmentList = new Lazy<LstFile>(() => LstFile.Parse(PvfArchiveAccessor.ReadText("equipment/equipment.lst")));
         private static readonly Lazy<LstFile> StackableList = new Lazy<LstFile>(() => LstFile.Parse(PvfArchiveAccessor.ReadText("stackable/stackable.lst")));
         private static readonly Lazy<ItemSellRates> SellRates = new Lazy<ItemSellRates>(() => ItemSellRates.Parse(PvfArchiveAccessor.ReadText("equipment/pricetable.tbl")));
 
@@ -292,6 +292,17 @@ namespace DfoServer.Game.Inventory
                 return raw.Trim('`', ' ', '\t', '\r', '\n').ToLowerInvariant();
 
             return raw.Substring(start, end - start + 1).ToLowerInvariant();
+        }
+
+        /// <summary>
+        /// 判断物品是否为克隆装扮。克隆装扮的 PVF [item category] 段值为 "clear avatar"。
+        /// </summary>
+        public static bool IsCloneAvatarItem(int itemTemplateId)
+        {
+            var equipmentEntry = EquipmentList.Value.GetById(itemTemplateId);
+            if (equipmentEntry == null) return false;
+            var equipment = EquipmentFile.Parse(PvfArchiveAccessor.ReadText(Path.Combine("equipment", equipmentEntry.FilePath)));
+            return string.Equals(equipment.ItemCategory, "clear avatar", StringComparison.OrdinalIgnoreCase);
         }
     }
 }
