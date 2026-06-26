@@ -5,6 +5,7 @@ using DfoServer.Game.Session;
 using DfoServer.Infrastructure;
 using DfoServer.Network;
 using DfoServer.Network.Builders;
+using System;
 using System.Collections.Generic;
 
 namespace DfoServer.Game.Appearance
@@ -43,8 +44,17 @@ namespace DfoServer.Game.Appearance
             {
                 if (entry.Slot > 11) continue;
                 if (entry.ItemId == 0) continue;
+
+                int displayItemId = entry.ItemId;
+                if (entry.Slot <= 9 && entry.RawEntry != null && entry.RawEntry.Length >= 16)
+                {
+                    uint cloneTarget = BitConverter.ToUInt32(entry.RawEntry, 12);
+                    if (cloneTarget > 0)
+                        displayItemId = (int)cloneTarget;
+                }
+
                 result.Add(new CharacterAppearanceEntry(
-                    (byte)entry.Slot, entry.ItemId, 4, new byte[4], 0x00, 0, 0u, 0));
+                    (byte)entry.Slot, displayItemId, 4, new byte[4], 0x00, 0, 0u, 0));
             }
 
             return result.ToArray();

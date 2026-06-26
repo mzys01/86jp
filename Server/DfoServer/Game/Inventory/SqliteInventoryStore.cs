@@ -2024,6 +2024,9 @@ VALUES (
                 FileLogger.Log($"  [EquipMove] UNEQUIP(src): slot {equipSlot} not in equip list (no-op)");
                 return false;
             }
+            // 卸下克隆装扮时清零 raw[12..15] 克隆目标
+            if (ItemMetadataResolver.IsCloneAvatarItem(removed.ItemId))
+              Array.Clear(removed.Raw, 12, 4);
             entries.Remove(removed);
             SaveEquipEntriesTx(connection, transaction, entries);
             InsertUnequippedEntry(connection, transaction, removed.ItemId, removed.Raw);
@@ -2051,6 +2054,9 @@ VALUES (
                     FileLogger.Log($"  [EquipMove] slot {equipSlot} 已空, 无操作");
                     return EquipOutcome.Unequipped;
                 }
+                // 卸下克隆装扮时清零 raw[12..15] 克隆目标
+                if (ItemMetadataResolver.IsCloneAvatarItem(removed.ItemId))
+                  Array.Clear(removed.Raw, 12, 4);
                 entries.Remove(removed);
                 SaveEquipEntriesTx(connection, transaction, entries);
                 InsertUnequippedEntry(connection, transaction, removed.ItemId, removed.Raw);
@@ -2101,7 +2107,16 @@ VALUES (
                     }
                     entryRaw = MakeEquipListCodec.BuildEntryFromDisplayFields(equipSlot, wantId, fields.Value);
                     FileLogger.Log($"  [EquipMove] EQUIP: slot {equipSlot} 0x{wantId:X8} 从DB字段构造 entry ({entryRaw.Length}B)");
-                }
+                    }
+
+                    // 克隆装扮：计算并注入 raw[12..15] 克隆目标物品ID
+                    if (ItemMetadataResolver.IsCloneAvatarItem(wantId))
+                    {
+                        uint cloneTarget = 0;
+                        if (existing != null && !ItemMetadataResolver.IsCloneAvatarItem(existing.ItemId))
+                        cloneTarget = (uint)existing.ItemId;
+                        BitConverter.GetBytes(cloneTarget).CopyTo(entryRaw, 12);
+                    }
 
                 DeleteCharacterItemSlot(connection, transaction, dbSrcList, request.SourceSlotIndex);
 

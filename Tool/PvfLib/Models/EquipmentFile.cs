@@ -93,6 +93,11 @@ namespace PvfLib
         
         public string UsableJob { get; set; }
 
+        /// <summary>
+        /// PVF [item category] 段值，用于判定克隆装扮等特殊类别。
+        /// </summary>
+        public string ItemCategory { get; set; }
+
         #endregion
         #region 解析
 
@@ -171,6 +176,7 @@ namespace PvfLib
                     case "part set index": equ.PartSetIndex = ParseInt(data); break;
                     case "force result item rule": equ.ForceResultItemRule = ParseIntArray(data); break;
                     case "usable job": equ.UsableJob = StripBacktick(data); break;
+                    case "item category": equ.ItemCategory = StripBacktick(data); break;
                 }
             }
 
