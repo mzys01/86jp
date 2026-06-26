@@ -29,6 +29,7 @@ namespace DfoServer.Game.Characters
             using (var conn = new SqliteConnection(_connectionString))
             {
                 conn.Open();
+                SqliteSchemaMigrator.MigrateCharactersNameUniqueIndex(conn);
                 SqliteSchemaMigrator.EnsureColumns(conn, "characters", new[]
                 {
                     ("direction", "INTEGER NOT NULL DEFAULT 5"),

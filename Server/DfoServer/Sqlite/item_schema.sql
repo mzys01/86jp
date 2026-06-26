@@ -38,6 +38,9 @@ CREATE TABLE IF NOT EXISTS characters (
     FOREIGN KEY (account_id) REFERENCES accounts(account_id) ON DELETE CASCADE
 );
 
+CREATE UNIQUE INDEX IF NOT EXISTS idx_characters_name_unique
+    ON characters(name);
+
 CREATE INDEX IF NOT EXISTS idx_characters_account
     ON characters(account_id, delete_flag);
 
