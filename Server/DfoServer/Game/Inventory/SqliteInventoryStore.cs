@@ -95,6 +95,7 @@ namespace DfoServer.Game.Inventory
     {
         private const int DefaultAvatarUnknownFixed30 = 0x00001E00;
         private const ushort DefaultAvatarUnknownFixed4 = 0x0400;
+        private const short ReviveCoinSlotIndex = 1;
 
         private int _activeCharacterId = 1000;
         private int _activeAccountId = 1;
@@ -267,15 +268,38 @@ DELETE FROM character_subtype1_fields;";
                     cmd.Parameters.AddWithValue("@cid", characterId);
                     count = Convert.ToInt32(cmd.ExecuteScalar());
                 }
-                if (count > 0) return;
-
                 using (var tx = connection.BeginTransaction())
                 {
-                    UpsertContainerState(connection, tx, InventoryListType.Main, 24);
-                    UpsertContainerState(connection, tx, InventoryListType.Avatar, 0);
-                    UpsertContainerState(connection, tx, InventoryListType.PersonalCargo, 0);
+                    if (count <= 0)
+                    {
+                        UpsertContainerState(connection, tx, InventoryListType.Main, 24);
+                        UpsertContainerState(connection, tx, InventoryListType.Avatar, 0);
+                        UpsertContainerState(connection, tx, InventoryListType.PersonalCargo, 0);
+                    }
+
+                    EnsureReviveCoinSlot(connection, tx, characterId);
                     tx.Commit();
                 }
+            }
+        }
+
+        private static void EnsureReviveCoinSlot(SqliteConnection connection, SqliteTransaction transaction, int characterId)
+        {
+            using (var cmd = connection.CreateCommand())
+            {
+                cmd.Transaction = transaction;
+                cmd.CommandText = @"
+INSERT OR IGNORE INTO character_items (
+    owner_scope, owner_id, character_id, list_type, slot_index, item_template_id, item_kind,
+    stack_count, instance_value, durability, seal_flag, option_value, expire_time, marker_16,
+    pet_serial_or_handle, extra_json)
+VALUES (
+    'character', @cid, @cid, 0, @slotIndex, 1, 'stackable',
+    0, 0, 0, 0, 0, 0, 0,
+    0, '{}');";
+                cmd.Parameters.AddWithValue("@cid", characterId);
+                cmd.Parameters.AddWithValue("@slotIndex", ReviveCoinSlotIndex);
+                cmd.ExecuteNonQuery();
             }
         }
 
