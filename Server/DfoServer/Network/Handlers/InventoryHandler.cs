@@ -702,5 +702,82 @@ namespace DfoServer.Network.Handlers
             w.WriteInt32(BitConverter.ToInt32(body, 16));
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, header.type, w.ToArray()));
         }
+
+        // 合并装扮(时装合成) CMD 0x63(99)
+        // 请求 body 布局(22字节): off0 short consumeSlot, off2 short slot1, off8 short slot2,
+        // off14 int reqItemId(请求的目标时装), 其余字段未用到。
+        public async Task Handle_COMPOUND_AVATAR(EnhancedClientSession session, GamePacketHeader header, byte[] body)
+        {
+            FileLogger.Log($"[{ProtocolName}] COMPOUND_AVATAR raw body({body?.Length ?? 0}): {(body != null ? BitConverter.ToString(body) : "null")}");
+            if (body == null || body.Length < 22)
+                return;
+
+            short consumeSlot = BitConverter.ToInt16(body, 0);
+            short slot1 = BitConverter.ToInt16(body, 2);
+            short slot2 = BitConverter.ToInt16(body, 8);
+            int reqItemId = BitConverter.ToInt32(body, 14);
+
+            var (cid, aid) = ResolveOwner(session);
+            var job = _characterRepository.GetById(cid)?.Job ?? 0;
+            byte newOption = 0;
+
+            if (!_sqliteSelectCharacterDataSource.TryCompoundAvatar(cid, aid, slot1, slot2, consumeSlot,
+                    (old1, old2, materialId) =>
+                    {
+                        var prob = CompoundAvatarProbabilityService.Resolve(job, old1, old2, materialId, reqItemId);
+                        if (!prob.Success)
+                            FileLogger.Log($"  [CompoundAvatar] probability resolve failed: {prob.FailReason}, falling back to requested item {reqItemId}");
+                        return prob.Success ? prob.NewItemIds : new List<int> { reqItemId };
+                    },
+                    newOption,
+                    out List<int> newSlots, out int oldItemId1, out int oldItemId2, out List<int> newItemIds,
+                    out int consumedItemTemplateId, out int consumedItemRemainingCount))
+            {
+                // 失败回包: 成功标志=0, 不删不加。客户端据此把放进去的2件时装还原。
+                var err = new GamePacketWriter();
+                err.WriteByte(0x00);
+                err.WriteByte(0x16); // errcode 22 (物品删除失败), 与台服一致
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0063, err.ToArray()));
+                FileLogger.Log($"[{ProtocolName}] COMPOUND_AVATAR: FAILED slot1={slot1} slot2={slot2} consumeSlot={consumeSlot}");
+                return;
+            }
+
+            var w = new GamePacketWriter();
+            w.WriteByte(0x01);              // 成功标志
+            w.WriteByte(0x03);              // count = 2件被删时装 + 1个被扣消耗品
+            // 被删时装1
+            w.WriteByte(0x01);              // listType=1(时装)
+            w.WriteInt16(slot1);            // slot
+            w.WriteInt32(1);                // 固定1
+            // 被删时装2
+            w.WriteByte(0x01);
+            w.WriteInt16(slot2);
+            w.WriteInt32(1);
+            // 被扣消耗品(合成器): 第三个字段是本次消耗数量, 客户端据此对槛位做增量扣减。
+            // 86JP合成器消耗规则恒为每次1个。
+            w.WriteByte(0x00);              // listType=0(消耗品/event item)
+            w.WriteInt16(consumeSlot);      // slot
+            w.WriteInt32(1);                // 本次消耗数量
+            // 新时装信息: 客户端固定读2组, 未命中稀有池时第2组填占位(slot=-1, itemId=0)。
+            for (int i = 0; i < 2; i++)
+            {
+                bool hasItem = i < newItemIds.Count;
+                w.WriteInt16(hasItem ? (short)newSlots[i] : (short)-1); // 新时装真实slot(找到的空位), 占位=-1
+                w.WriteInt32(hasItem ? newItemIds[i] : 0);  // 新时装itemId, 占位=0
+                w.WriteInt32(0);                   // RemainDate(剩余期限天, 0=永久)
+                w.WriteInt16(newOption);           // option(附加属性index)
+                w.WriteInt32(30);                  // 镶嵌孔数据长度
+                w.WriteZeroBytes(30);              // JewelSocketData(暂全0)
+                w.WriteInt32(4);                   // 扩展信息长度
+                w.WriteZeroBytes(4);               // ExpansionInfo(暂全0)
+            }
+
+            var respBody = w.ToArray();
+            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0063, respBody));
+            FileLogger.Log($"[{ProtocolName}] COMPOUND_AVATAR: OK slot1={slot1}(item {oldItemId1}) slot2={slot2}(item {oldItemId2}) " +
+                           $"consumeSlot={consumeSlot}(template {consumedItemTemplateId}, remain {consumedItemRemainingCount}) -> " +
+                           $"newSlots=[{string.Join(",", newSlots)}] newItemIds=[{string.Join(",", newItemIds)}]");
+            FileLogger.Log($"[{ProtocolName}] COMPOUND_AVATAR resp body({respBody.Length}): {BitConverter.ToString(respBody)}");
+        }
     }
 }

@@ -261,6 +261,16 @@ namespace DfoServer.Game.SelectCharacter
                 return _inventoryStore.TryEnchantByBead(command, out result);
         }
 
+        public bool TryCompoundAvatar(int characterId, int accountId, short slot1, short slot2, short consumeSlot,
+                Func<int, int, int, System.Collections.Generic.List<int>> resolveNewItemIds, byte newOption,
+                out System.Collections.Generic.List<int> newSlots, out int oldItemId1, out int oldItemId2, out System.Collections.Generic.List<int> newItemIds,
+                out int consumedItemTemplateId, out int consumedItemRemainingCount)
+        {
+            using (_inventoryStore.BeginScope(characterId, accountId))
+                return _inventoryStore.TryCompoundAvatar(slot1, slot2, consumeSlot, resolveNewItemIds, newOption,
+                    out newSlots, out oldItemId1, out oldItemId2, out newItemIds, out consumedItemTemplateId, out consumedItemRemainingCount);
+        }
+
         public bool TrySortItems(int characterId, int accountId, InventoryListType listType, byte category)
         {
             using (_inventoryStore.BeginScope(characterId, accountId))

@@ -161,6 +161,7 @@ namespace DfoServer.Network
             d[0x0207] = _inventoryHandler.Handle_OPEN_AVATAR_PACKAGE;
             d[0x0218] = _inventoryHandler.Handle_USE_BOOSTER_ITEM;
             d[0x0239] = _inventoryHandler.Handle_SET_CLONE_TITLE;                  //569
+            d[0x0063] = _inventoryHandler.Handle_COMPOUND_AVATAR;                  //99 合并装扮(时装合成)
         }
 
         private void RegisterDungeonHandlers(Dictionary<ushort, Func<EnhancedClientSession, GamePacketHeader, byte[], Task>> d)
