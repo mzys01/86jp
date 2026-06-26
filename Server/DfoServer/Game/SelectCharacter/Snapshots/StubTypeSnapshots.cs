@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 
 namespace DfoServer.Game.SelectCharacter
@@ -33,5 +34,28 @@ namespace DfoServer.Game.SelectCharacter
     {
         public uint RentalId { get; set; }
         public List<RentalItemSnapshot> Items { get; } = new List<RentalItemSnapshot>();
+
+        public static void ParseStorageBody(byte[] body, RentalInfoSnapshot rental)
+        {
+            if (rental == null)
+                return;
+
+            rental.Items.Clear();
+            if (body == null || body.Length < 8)
+                return;
+
+            rental.RentalId = BitConverter.ToUInt32(body, 0);
+            var count = BitConverter.ToUInt32(body, 4);
+            var off = 8;
+            for (uint i = 0; i < count && off + 8 <= body.Length; i++)
+            {
+                rental.Items.Add(new RentalItemSnapshot
+                {
+                    ItemId = BitConverter.ToUInt32(body, off),
+                    ExpireTime = BitConverter.ToUInt32(body, off + 4),
+                });
+                off += 8;
+            }
+        }
     }
 }
