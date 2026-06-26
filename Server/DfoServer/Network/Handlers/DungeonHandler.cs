@@ -277,15 +277,6 @@ namespace DfoServer.Network.Handlers
 
         private static readonly System.Random _seedGen = new System.Random();
 
-        // PVF [visible on dungeon clear]=1: 德利拉(1000) 加百利(1002/1003/1004)
-        private static readonly int[] SecretShopNpcIds = { 1000, 1002, 1003, 1004 };
-
-        private async Task SendSecretShopNpc(EnhancedClientSession session)
-        {
-            var npcId = SecretShopNpcIds[_seedGen.Next(SecretShopNpcIds.Length)];
-            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0117, BitConverter.GetBytes(npcId)));
-        }
-
         private static List<Game.Dungeon.PassiveObjectDropEntry> GeneratePassiveObjectDrops(
             int dungeonId, int mazeIndex, ref ushort itemSeqCounter)
         {
@@ -460,7 +451,6 @@ namespace DfoServer.Network.Handlers
             if (session.Player.CurBossKilled && roomCleared)
             {
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x001F, DungeonNotificationBuilder.BuildEnableClearDungeon()));
-                await SendSecretShopNpc(session);
                 FileLogger.Log($"[DungeonHandler] ENABLE_CLEAR_DUNGEON sent: isBossMonster={isBossMonster} isBossRoom={isBossRoom}");
             }
 
@@ -944,7 +934,6 @@ namespace DfoServer.Network.Handlers
                 {
                     session.Player.CurBossKilled = true;
                     await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x001F, new byte[] { 0x00 }));
-                    await SendSecretShopNpc(session);
                     FileLogger.Log($"[{ProtocolName}] STORY_PAUSE: APC dialog + all normals dead → ENABLE_CLEAR_DUNGEON");
                 }
             }
