@@ -1296,7 +1296,9 @@ ORDER BY slot_index;";
 
             FileLogger.Log($"  [MoveItem] dbSrc={dbSrcList}({(int)dbSrcList}) slot={request.SourceSlotIndex}, dbDst={dbDstList}({(int)dbDstList}) slot={request.DestinationSlotIndex}");
 
-            if (dbSrcList == dbDstList && request.SourceSlotIndex == request.DestinationSlotIndex)
+            if (dbSrcList == dbDstList && request.SourceSlotIndex == request.DestinationSlotIndex
+                && request.DestinationListType != InventoryListType.Equipment
+                && request.SourceListType != InventoryListType.Equipment)
             {
                 result = CreateMoveResult(request, 0, mutated: false);
                 return true;
