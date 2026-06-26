@@ -180,6 +180,10 @@ namespace DfoServer.Game.Inventory
             {
                 ("item_count", "INTEGER NOT NULL DEFAULT 0"),
             });
+            DfoServer.Sqlite.SqliteSchemaMigrator.EnsureColumns(connection, "character_equipped_entries", new[]
+            {
+                ("expire_time", "INTEGER NOT NULL DEFAULT 0"),
+            });
             // 点券/代币券/欢乐代币券账号化: 旧库补列(账号级钱包)
             DfoServer.Sqlite.SqliteSchemaMigrator.EnsureColumns(connection, "accounts", new[]
             {
@@ -371,6 +375,100 @@ ORDER BY slot_index;";
                 }
                 return snapshot;
             }
+        }
+
+        public int DeleteExpiredRentalEquipment()
+        {
+            var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            var removed = 0;
+
+            using (var connection = OpenConnection())
+            using (var transaction = connection.BeginTransaction())
+            {
+                var expiredBagItems = new List<(long itemUid, int slotIndex, int itemTemplateId, int expireTime)>();
+                using (var command = connection.CreateCommand())
+                {
+                    command.Transaction = transaction;
+                    command.CommandText = @"
+SELECT item_uid, slot_index, item_template_id, expire_time
+FROM character_items
+WHERE character_id = @characterId
+  AND list_type = @listType
+  AND slot_index >= @slotStart
+  AND slot_index <= @slotEnd
+  AND expire_time > 0
+  AND expire_time <= @now
+ORDER BY slot_index;";
+                    command.Parameters.AddWithValue("@characterId", DefaultCharacterId);
+                    command.Parameters.AddWithValue("@listType", (int)InventoryListType.Main);
+                    command.Parameters.AddWithValue("@slotStart", QuickSlotStart);
+                    command.Parameters.AddWithValue("@slotEnd", RentalBagSlotEnd);
+                    command.Parameters.AddWithValue("@now", now);
+                    using (var reader = command.ExecuteReader())
+                    {
+                        while (reader.Read())
+                        {
+                            var itemTemplateId = reader.GetInt32(2);
+                            if (!RentalWeaponInventoryMapper.IsValidInventoryTemplate(itemTemplateId))
+                                continue;
+
+                            expiredBagItems.Add((
+                                reader.GetInt64(0),
+                                reader.GetInt32(1),
+                                itemTemplateId,
+                                reader.GetInt32(3)));
+                        }
+                    }
+                }
+
+                foreach (var item in expiredBagItems)
+                {
+                    DeleteItem(connection, transaction, item.itemUid);
+                    removed++;
+                    FileLogger.Log($"[RentalExpire] DELETE inventory char={DefaultCharacterId} slot={item.slotIndex} item=0x{item.itemTemplateId:X8} expire={item.expireTime}");
+                }
+
+                var expiredEquippedItems = new List<(int slot, int itemId, int expireTime)>();
+                using (var command = connection.CreateCommand())
+                {
+                    command.Transaction = transaction;
+                    command.CommandText = @"
+SELECT slot, item_id, expire_time
+FROM character_equipped_entries
+WHERE character_id = @characterId
+  AND expire_time > 0
+  AND expire_time <= @now
+ORDER BY slot;";
+                    command.Parameters.AddWithValue("@characterId", DefaultCharacterId);
+                    command.Parameters.AddWithValue("@now", now);
+                    using (var reader = command.ExecuteReader())
+                    {
+                        while (reader.Read())
+                        {
+                            var itemId = reader.GetInt32(1);
+                            if (!RentalWeaponInventoryMapper.IsValidInventoryTemplate(itemId))
+                                continue;
+
+                            expiredEquippedItems.Add((
+                                reader.GetInt32(0),
+                                itemId,
+                                reader.GetInt32(2)));
+                        }
+                    }
+                }
+
+                foreach (var item in expiredEquippedItems)
+                {
+                    DeleteEquippedEntry(connection, transaction, item.slot);
+                    removed++;
+                    FileLogger.Log($"[RentalExpire] DELETE equipped char={DefaultCharacterId} slot={item.slot} item=0x{item.itemId:X8} expire={item.expireTime}");
+                }
+
+                if (removed > 0)
+                    transaction.Commit();
+            }
+
+            return removed;
         }
 
         public bool TryDeleteItem(InventoryListType listType, short slotIndex, short deleteCount, out InventoryMutationResult result)
@@ -1083,11 +1181,73 @@ ORDER BY slot_index;";
 
         private const int QuickSlotStart = 3;
         private const int QuickSlotEnd = 8;
+        private const int RentalBagSlotStart = 9;
+        private const int RentalBagSlotEnd = 64;
 
         // 宠物栏(list 7)"宠物"本体分页槽段(category 5): slot 0..139 共 140 格(实测计数)。
         // 其后 宠物装备=140..188(cat6)、宠物耗品=189..237(cat7)。新购宠物从本页首格开始填。
         private const int PetInventorySlotStart = 0;
         private const int PetInventorySlotEnd = 139;
+        private const string DefaultEquipmentExtraJson =
+            "{\"extData0\":0,\"prefixData0E\":\"0000000000000000\",\"middleData1A\":\"0000000000000000000000000000000000\",\"tailData2F\":\"00000000000000000000000000000000000000000000000000000000000000000000000000\"}";
+
+        public bool TryPickupRentalWeapon(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            int itemTemplateId,
+            int expireTime,
+            out short assignedSlot,
+            out int instanceValue)
+        {
+            assignedSlot = -1;
+            instanceValue = 0;
+            if (connection == null || transaction == null)
+                return false;
+
+            var itemKind = "special";
+            var durability = RentalWeaponRequestCodec.RentalWeaponDurability;
+            if (!RentalWeaponInventoryMapper.IsValidInventoryTemplate(itemTemplateId))
+                return false;
+
+            var seriesKey = RentalWeaponInventoryMapper.GetSeriesKey(itemTemplateId);
+
+            var equipped = FindEquippedRentalBySeriesKey(connection, transaction, seriesKey);
+            if (equipped != null)
+            {
+                instanceValue = RentalWeaponRequestCodec.RentalWeaponQualitySeed;
+                UpdateEquippedRentalWeaponEntry(
+                    connection, transaction, equipped, itemTemplateId, instanceValue, expireTime);
+                return true;
+            }
+
+            var existing = FindRentalBySeriesKey(
+                connection, transaction, InventoryListType.Main, seriesKey, QuickSlotStart, RentalBagSlotEnd);
+
+            if (existing != null
+                && existing.SlotIndex >= QuickSlotStart
+                && existing.SlotIndex <= RentalBagSlotEnd)
+            {
+                instanceValue = RentalWeaponRequestCodec.RentalWeaponQualitySeed;
+                UpdateRentalWeaponEntry(
+                    connection, transaction, existing.ItemUid, itemTemplateId, instanceValue, expireTime);
+                assignedSlot = existing.SlotIndex;
+                return true;
+            }
+
+            var targetSlot = FindEmptySlot(connection, transaction, InventoryListType.Main, QuickSlotStart, QuickSlotEnd);
+            if (targetSlot < 0)
+                targetSlot = FindEmptySlot(connection, transaction, InventoryListType.Main, RentalBagSlotStart, RentalBagSlotEnd);
+            if (targetSlot < 0)
+                return false;
+
+            instanceValue = RentalWeaponRequestCodec.RentalWeaponQualitySeed;
+            InsertCharacterItem(
+                connection, transaction, InventoryListType.Main, (short)targetSlot,
+                itemTemplateId, itemKind, instanceValue, instanceValue,
+                durability, 0, 0, expireTime, -1, 0, DefaultEquipmentExtraJson);
+            assignedSlot = (short)targetSlot;
+            return true;
+        }
 
         public bool TryPickupItem(int itemTemplateId, int stackCount, out short assignedSlot)
         {
@@ -1693,12 +1853,18 @@ VALUES (
             using (var cmd = connection.CreateCommand())
             {
                 cmd.Transaction = transaction;
-                cmd.CommandText = "SELECT slot, item_id, raw_entry FROM character_equipped_entries WHERE character_id = @cid ORDER BY slot";
+                cmd.CommandText = "SELECT slot, item_id, raw_entry, expire_time FROM character_equipped_entries WHERE character_id = @cid ORDER BY slot";
                 cmd.Parameters.AddWithValue("@cid", DefaultCharacterId);
                 using (var r = cmd.ExecuteReader())
                 {
                     while (r.Read())
-                        entries.Add(new MakeEquipListCodec.Entry { Slot = r.GetInt32(0), ItemId = r.GetInt32(1), Raw = (byte[])r.GetValue(2) });
+                        entries.Add(new MakeEquipListCodec.Entry
+                        {
+                            Slot = r.GetInt32(0),
+                            ItemId = r.GetInt32(1),
+                            Raw = (byte[])r.GetValue(2),
+                            ExpireTime = r.GetInt32(3),
+                        });
                 }
             }
             return entries;
@@ -1718,10 +1884,11 @@ VALUES (
                 using (var cmd = connection.CreateCommand())
                 {
                     cmd.Transaction = transaction;
-                    cmd.CommandText = "INSERT INTO character_equipped_entries(character_id, slot, item_id, raw_entry) VALUES(@cid, @s, @iid, @raw)";
+                    cmd.CommandText = "INSERT INTO character_equipped_entries(character_id, slot, item_id, expire_time, raw_entry) VALUES(@cid, @s, @iid, @expireTime, @raw)";
                     cmd.Parameters.AddWithValue("@cid", DefaultCharacterId);
                     cmd.Parameters.AddWithValue("@s", e.Slot);
                     cmd.Parameters.AddWithValue("@iid", e.ItemId);
+                    cmd.Parameters.AddWithValue("@expireTime", e.ExpireTime);
                     cmd.Parameters.AddWithValue("@raw", e.Raw);
                     cmd.ExecuteNonQuery();
                 }
@@ -1887,7 +2054,7 @@ VALUES (
                 entries.Remove(removed);
                 SaveEquipEntriesTx(connection, transaction, entries);
                 InsertUnequippedEntry(connection, transaction, removed.ItemId, removed.Raw);
-                InsertEquipToContainer(connection, transaction, dbSrcList, request.SourceSlotIndex, removed.ItemId, removed.Raw);
+                InsertEquipToContainer(connection, transaction, dbSrcList, request.SourceSlotIndex, removed.ItemId, removed.Raw, removed.ExpireTime);
                 FileLogger.Log($"  [EquipMove] UNEQUIP: removed equip slot {equipSlot} itemId=0x{removed.ItemId:X8}, cached + {dbSrcList} slot {request.SourceSlotIndex}");
                 return EquipOutcome.Unequipped;
             }
@@ -1942,11 +2109,17 @@ VALUES (
                 {
                     entries.Remove(existing);
                     InsertUnequippedEntry(connection, transaction, existing.ItemId, existing.Raw);
-                    InsertEquipToContainer(connection, transaction, dbSrcList, request.SourceSlotIndex, existing.ItemId, existing.Raw);
+                    InsertEquipToContainer(connection, transaction, dbSrcList, request.SourceSlotIndex, existing.ItemId, existing.Raw, existing.ExpireTime);
                     FileLogger.Log($"  [EquipMove] REPLACE: slot {equipSlot} old 0x{existing.ItemId:X8} -> {dbSrcList} slot {request.SourceSlotIndex}");
                 }
 
-                var newEntry = new MakeEquipListCodec.Entry { Slot = equipSlot, ItemId = wantId, Raw = entryRaw };
+                var newEntry = new MakeEquipListCodec.Entry
+                {
+                    Slot = equipSlot,
+                    ItemId = wantId,
+                    Raw = entryRaw,
+                    ExpireTime = mainSource != null ? mainSource.ExpireTime : 0,
+                };
                 int insertAt = entries.FindIndex(e => e.Slot > equipSlot);
                 if (insertAt < 0) entries.Add(newEntry); else entries.Insert(insertAt, newEntry);
                 SaveEquipEntriesTx(connection, transaction, entries);
@@ -1967,7 +2140,7 @@ VALUES (
             BitConverter.GetBytes(fields.AmplifyValue).CopyTo(raw, 22);
         }
 
-        private void InsertEquipToContainer(SqliteConnection connection, SqliteTransaction transaction, InventoryListType listType, short slot, int itemId, byte[] entryRaw)
+        private void InsertEquipToContainer(SqliteConnection connection, SqliteTransaction transaction, InventoryListType listType, short slot, int itemId, byte[] entryRaw, int entryExpireTime)
         {
             if (listType == InventoryListType.Pet)
             {
@@ -1984,6 +2157,7 @@ VALUES (
             //   amplifyValue(entry+22)   → 84B PrefixData0E[6..7] (+20)
             ushort dur = 0;
             int countOrIv = itemId;
+            int expireTime = entryExpireTime;
             string extraJson = "{}";
             if (entryRaw != null && entryRaw.Length >= 24)
             {
@@ -2024,7 +2198,21 @@ VALUES (
             }
             InsertCharacterItem(connection, transaction, listType, slot, itemId, "equipment",
                 stackCount: countOrIv, instanceValue: 0, durability: dur, sealFlag: 0, optionValue: 0,
-                expireTime: 0, marker16: -1, petSerialOrHandle: 0, extraJson: extraJson);
+                expireTime: expireTime, marker16: -1, petSerialOrHandle: 0, extraJson: extraJson);
+        }
+
+        private static bool IsRentalRecord(int itemTemplateId, int expireTime, string seriesKey)
+        {
+            if (expireTime <= 0 || !RentalWeaponInventoryMapper.IsValidInventoryTemplate(itemTemplateId))
+                return false;
+
+            if (!string.Equals(
+                    RentalWeaponInventoryMapper.GetSeriesKey(itemTemplateId),
+                    seriesKey,
+                    StringComparison.Ordinal))
+                return false;
+
+            return true;
         }
 
         private byte[] FindEntryTemplate(SqliteConnection connection, SqliteTransaction transaction, List<MakeEquipListCodec.Entry> entries, int slot)
@@ -2391,6 +2579,137 @@ WHERE item_uid = @itemUid;";
             }
         }
 
+        private MakeEquipListCodec.Entry FindEquippedRentalBySeriesKey(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            string seriesKey)
+        {
+            var entries = LoadEquipEntriesTx(connection, transaction);
+            foreach (var entry in entries)
+            {
+                if (!IsRentalRecord(entry.ItemId, entry.ExpireTime, seriesKey))
+                    continue;
+
+                return entry;
+            }
+
+            return null;
+        }
+
+        private void UpdateEquippedRentalWeaponEntry(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            MakeEquipListCodec.Entry entry,
+            int itemTemplateId,
+            int wireValue,
+            int expireTime)
+        {
+            var item = InvenItem.Parse(entry.Raw);
+            item.ItemId = itemTemplateId;
+            item.Value = unchecked((uint)wireValue);
+            item.Durability = RentalWeaponRequestCodec.RentalWeaponDurability;
+            if (item.Slot <= 10)
+                item.Expansion = BitConverter.GetBytes(expireTime);
+
+            var raw = item.ToBytes();
+            using (var cmd = connection.CreateCommand())
+            {
+                cmd.Transaction = transaction;
+                cmd.CommandText = @"
+UPDATE character_equipped_entries
+SET item_id = @itemId,
+    expire_time = @expireTime,
+    raw_entry = @raw
+WHERE character_id = @cid AND slot = @slot;";
+                cmd.Parameters.AddWithValue("@itemId", itemTemplateId);
+                cmd.Parameters.AddWithValue("@expireTime", expireTime);
+                cmd.Parameters.AddWithValue("@raw", raw);
+                cmd.Parameters.AddWithValue("@cid", DefaultCharacterId);
+                cmd.Parameters.AddWithValue("@slot", entry.Slot);
+                cmd.ExecuteNonQuery();
+            }
+        }
+
+        private ItemRecord FindRentalBySeriesKey(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            InventoryListType listType,
+            string seriesKey,
+            int slotStart,
+            int slotEnd)
+        {
+            using (var command = connection.CreateCommand())
+            {
+                command.Transaction = transaction;
+                command.CommandText = @"
+SELECT item_uid, slot_index, item_template_id, stack_count, instance_value, expire_time
+FROM character_items
+WHERE character_id = @characterId AND list_type = @listType
+  AND slot_index >= @slotStart AND slot_index <= @slotEnd
+  AND expire_time > 0
+ORDER BY slot_index;";
+                command.Parameters.AddWithValue("@characterId", DefaultCharacterId);
+                command.Parameters.AddWithValue("@listType", (int)listType);
+                command.Parameters.AddWithValue("@slotStart", slotStart);
+                command.Parameters.AddWithValue("@slotEnd", slotEnd);
+                using (var reader = command.ExecuteReader())
+                {
+                    while (reader.Read())
+                    {
+                        var templateId = reader.GetInt32(2);
+                        var expireTime = reader.GetInt32(5);
+                        if (!IsRentalRecord(templateId, expireTime, seriesKey))
+                            continue;
+
+                        return new ItemRecord
+                        {
+                            ItemUid = reader.GetInt64(0),
+                            SlotIndex = Convert.ToInt16(reader.GetInt32(1), CultureInfo.InvariantCulture),
+                            ItemTemplateId = templateId,
+                            StackCount = reader.GetInt32(3),
+                            InstanceValue = reader.GetInt32(4),
+                            ExpireTime = expireTime,
+                        };
+                    }
+                }
+            }
+
+            return null;
+        }
+
+        private void UpdateRentalWeaponEntry(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            long itemUid,
+            int itemTemplateId,
+            int wireValue,
+            int expireTime)
+        {
+            using (var command = connection.CreateCommand())
+            {
+                command.Transaction = transaction;
+                command.CommandText = @"
+UPDATE character_items
+SET item_template_id = @itemTemplateId,
+    expire_time = @expireTime,
+    stack_count = @wireValue,
+    instance_value = @wireValue,
+    item_kind = 'special',
+    durability = @durability,
+    marker_16 = -1,
+    extra_json = CASE WHEN extra_json IS NULL OR extra_json = '{}' THEN @extraJson ELSE extra_json END,
+    updated_at = CURRENT_TIMESTAMP
+WHERE item_uid = @itemUid;";
+                command.Parameters.AddWithValue("@itemTemplateId", itemTemplateId);
+                command.Parameters.AddWithValue("@expireTime", expireTime);
+                command.Parameters.AddWithValue("@wireValue", wireValue);
+                command.Parameters.AddWithValue("@durability", RentalWeaponRequestCodec.RentalWeaponDurability);
+                command.Parameters.AddWithValue("@extraJson", DefaultEquipmentExtraJson);
+                command.Parameters.AddWithValue("@itemUid", itemUid);
+                command.ExecuteNonQuery();
+            }
+        }
+
         private  void UpdateItemPosition(SqliteConnection connection, SqliteTransaction transaction, long itemUid, InventoryListType listType, short slotIndex)
         {
             using (var command = connection.CreateCommand())
@@ -2432,6 +2751,18 @@ SET extra_json = @extraJson,
 WHERE item_uid = @itemUid;";
                 command.Parameters.AddWithValue("@extraJson", SerializeCommon(item));
                 command.Parameters.AddWithValue("@itemUid", itemUid);
+                command.ExecuteNonQuery();
+            }
+        }
+
+        private void DeleteEquippedEntry(SqliteConnection connection, SqliteTransaction transaction, int slot)
+        {
+            using (var command = connection.CreateCommand())
+            {
+                command.Transaction = transaction;
+                command.CommandText = "DELETE FROM character_equipped_entries WHERE character_id = @cid AND slot = @slot;";
+                command.Parameters.AddWithValue("@cid", DefaultCharacterId);
+                command.Parameters.AddWithValue("@slot", slot);
                 command.ExecuteNonQuery();
             }
         }

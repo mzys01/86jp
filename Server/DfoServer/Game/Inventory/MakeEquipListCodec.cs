@@ -23,6 +23,7 @@ namespace DfoServer.Game.Inventory
         {
             public int Slot;
             public int ItemId;
+            public int ExpireTime;
             public byte[] Raw;   
         }
 
