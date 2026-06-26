@@ -38,11 +38,11 @@ echo  Step 3/4: Building PvfProxy...
 echo ================================
 dotnet build "%ROOT%Tool\PvfProxy\PvfProxy.csproj" -c Release --nologo
 if %ERRORLEVEL% neq 0 (
-    echo Failed to build PvfProxy. Make sure .NET 9 SDK is installed.
+    echo Failed to build PvfProxy. Make sure .NET 10 SDK is installed.
     pause
     exit /b %ERRORLEVEL%
 )
-set "PVFPROXY=%ROOT%Tool\PvfProxy\bin\Release\net9.0\PvfProxy.exe"
+set "PVFPROXY=%ROOT%Tool\PvfProxy\bin\Release\net10.0\PvfProxy.exe"
 
 echo.
 echo ================================
@@ -52,7 +52,7 @@ echo.
 echo  [Proxy] PvfProxy listens on 7001/10011
 echo  [Proxy] Forwards to server on 7002/10012
 
-set "CAPTURE_DIR=%ROOT%capture_logs"
+set "CAPTURE_DIR=%ROOT%\Server\DfoServer\bin\Debug\capture_logs"
 if not exist "%CAPTURE_DIR%" mkdir "%CAPTURE_DIR%"
 
 taskkill /f /im DNF.exe >nul 2>&1
@@ -64,8 +64,19 @@ timeout /t 1 /nobreak >nul
 start "" "%SERVER_DIR%\DfoServer.exe" --server-ip "127.0.0.1" --packet-capture "%CAPTURE_DIR%" --proxy
 timeout /t 2 /nobreak >nul
 
-start "" /d "%CAPTURE_DIR%" "%PVFPROXY%"
+start "" /d "%CAPTURE_DIR%" "%PVFPROXY%" --log-dir "%CAPTURE_DIR%"
 timeout /t 2 /nobreak >nul
+
+netstat -ano | findstr /R "TCP.*:7001 .*LISTENING" >nul
+if %ERRORLEVEL% neq 0 (
+    echo.
+    echo  ERROR: PvfProxy failed to start on port 7001.
+    echo  Check that .NET 10 runtime is installed and no other process uses 7001/10011.
+    echo  Proxy log: %CAPTURE_DIR%\pvfproxy_*.log
+    taskkill /f /im DfoServer.exe >nul 2>&1
+    pause
+    exit /b 1
+)
 
 echo.
 echo  Starting game client...
