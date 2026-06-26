@@ -162,7 +162,7 @@ namespace DfoServer.Game.Inventory
             };
         }
 
-        public static bool TryValidateEnchantByBeadTarget(int beadItemTemplateId, int targetItemTemplateId, out int enchantCardItemId, out string rejectReason)
+        public static bool TryValidateEnchantByBeadTarget(int beadItemTemplateId, int targetItemTemplateId, byte enchantUpgradeCount, out int enchantCardItemId, out string rejectReason)
         {
             enchantCardItemId = 0;
             rejectReason = null;
@@ -196,21 +196,47 @@ namespace DfoServer.Game.Inventory
                 return false;
             }
 
-            // monster card 的 string data: 第一个是图片资源，后续是允许附魔的 equipment type。
+            StackableItemFile card = null;
             if (bead.MonsterCardId > 0)
             {
-                if (!TryLoadStackable(bead.MonsterCardId, out var card))
+                if (!TryLoadStackable(bead.MonsterCardId, out card))
                 {
                     rejectReason = "monster card is not found in stackable.lst";
                     return false;
                 }
+            }
+            else
+            {
+                TryLoadStackable(enchantCardItemId, out card);
+            }
 
+            if (card != null)
+            {
+                // monster card 的 string data: 第一个是图片资源，后续是允许附魔的 equipment type。
                 var allowedTypes = ExtractAllowedEquipmentTypes(card.StringDataItems);
                 if (allowedTypes.Count > 0 && !allowedTypes.Contains(targetEquipmentType))
                 {
                     rejectReason = "target equipment type is not allowed by monster card string data";
                     return false;
                 }
+
+                if (card.EnchantTable.Count > 0 && !card.EnchantTable.Contains(enchantUpgradeCount))
+                {
+                    rejectReason = "enchant upgrade count is not allowed by monster card enchant table";
+                    return false;
+                }
+
+                if (card.EnchantTable.Count == 0 && enchantUpgradeCount != 0)
+                {
+                    rejectReason = "monster card has no enchant table for upgraded bead";
+                    return false;
+                }
+            }
+
+            if (card == null && enchantUpgradeCount != 0)
+            {
+                rejectReason = "upgraded enchant bead requires monster card enchant table";
+                return false;
             }
 
             return true;

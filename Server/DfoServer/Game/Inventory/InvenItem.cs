@@ -29,7 +29,7 @@ namespace DfoServer.Game.Inventory
         public ushort Durability;         
         public uint ClearAvatar;          
         public uint EnchantIndex;         
-        public byte Flag20;               
+        public byte EnchantUpgradeCount;
         public byte AmplifyType;          
         public ushort AmplifyValue;       
 
@@ -82,7 +82,7 @@ namespace DfoServer.Game.Inventory
             it.Durability = BitConverter.ToUInt16(raw, o); o += 2;
             it.ClearAvatar = BitConverter.ToUInt32(raw, o); o += 4;
             it.EnchantIndex = BitConverter.ToUInt32(raw, o); o += 4;
-            it.Flag20 = raw[o]; o += 1;
+            it.EnchantUpgradeCount = raw[o]; o += 1;
             it.AmplifyType = raw[o]; o += 1;
             it.AmplifyValue = BitConverter.ToUInt16(raw, o); o += 2;
 
@@ -147,7 +147,7 @@ namespace DfoServer.Game.Inventory
             w.WriteUInt16(Durability);
             w.WriteUInt32(ClearAvatar);
             w.WriteUInt32(EnchantIndex);
-            w.WriteByte(Flag20);
+            w.WriteByte(EnchantUpgradeCount);
             w.WriteByte(AmplifyType);
             w.WriteUInt16(AmplifyValue);
 

@@ -67,7 +67,7 @@ namespace PvfLib
         #region 强化/合成
 
         public int EnchantIndex { get; set; } = -1;
-        public string EnchantTable { get; set; }
+        public List<int> EnchantTable { get; set; } = new List<int>();
         public string BoosterInfo { get; set; }
         public int BoosterCategoryNum { get; set; } = -1;
         public int BoosterSelectionNum { get; set; } = -1;
@@ -160,7 +160,7 @@ namespace PvfLib
 
                     
                     case "enchant index": stk.EnchantIndex = ParseInt(data); break;
-                    case "enchant table": stk.EnchantTable = data; break;
+                    case "enchant table": stk.EnchantTable = ParseEnchantTableIndexes(node, content); break;
                     case "booster info": stk.BoosterInfo = data; break;
                     case "booster category num": stk.BoosterCategoryNum = ParseInt(data); break;
                     case "booster selection num": stk.BoosterSelectionNum = ParseInt(data); break;
@@ -236,6 +236,23 @@ namespace PvfLib
                     if (int.TryParse(StripBacktick(token), out var value))
                         result.Add(value);
                 }
+            }
+
+            return result;
+        }
+
+        private static List<int> ParseEnchantTableIndexes(ScriptNode node, string content)
+        {
+            var result = new List<int>();
+            if (node == null)
+                return result;
+
+            foreach (var enchantIndexNode in node.GetChildren("enchant index"))
+            {
+                var rawIndex = enchantIndexNode.GetFirstDataContent(content);
+                var index = ParseInt(rawIndex);
+                if (index >= 0 && !result.Contains(index))
+                    result.Add(index);
             }
 
             return result;
