@@ -112,6 +112,69 @@ namespace DfoServer.Game.Inventory
             if (!SqliteInventoryStore.CanMoveToListType(metadata.ItemKind, InventoryListType.Main))
                 return false;
 
+            if (CurrencyService.IsCubeFragment(itemTemplateId))
+            {
+                using (var connection = _context.OpenConnection())
+                using (var transaction = connection.BeginTransaction())
+                {
+                    var wallet = _db.LoadWallet(connection, transaction);
+                    var totalGoldCost = metadata.BuyGold * buyCount;
+                    if (wallet.Gold < totalGoldCost)
+                        return false;
+
+                    int materialNewCount = -1;
+                    short materialSlotIndex = -1;
+                    if (metadata.IsMaterialExchange)
+                    {
+                        var totalMaterialCost = metadata.NeedMaterialCount * buyCount;
+                        if (CurrencyService.IsCubeFragment(metadata.NeedMaterialId))
+                        {
+                            var cubes = CurrencyService.LoadCubeFragments(connection, transaction, _context.AccountId);
+                            var have = 0;
+                            foreach (var c in cubes)
+                                if (c.ItemId == metadata.NeedMaterialId) have = c.Count;
+                            if (have < totalMaterialCost)
+                                return false;
+                            CurrencyService.AddCubeFragment(connection, transaction, _context.AccountId, metadata.NeedMaterialId, -totalMaterialCost);
+                            materialNewCount = have - totalMaterialCost;
+                            materialSlotIndex = (short)CurrencyService.GetCubeFragmentSlot(metadata.NeedMaterialId);
+                        }
+                        else
+                        {
+                            var materialItem = _db.FindItemByTemplateId(connection, transaction, InventoryListType.Main, metadata.NeedMaterialId);
+                            if (materialItem == null || materialItem.StackCount < totalMaterialCost)
+                                return false;
+                            _db.UpdateStackCount(connection, transaction, materialItem.ItemUid, materialItem.StackCount - totalMaterialCost);
+                            materialNewCount = materialItem.StackCount - totalMaterialCost;
+                            materialSlotIndex = materialItem.SlotIndex;
+                        }
+                    }
+
+                    if (totalGoldCost > 0)
+                        _db.UpdateWallet(connection, transaction, wallet.Gold - totalGoldCost, wallet.Coin);
+                    CurrencyService.AddCubeFragment(connection, transaction, _context.AccountId, itemTemplateId, buyCount);
+                    _auditLogger.WriteBuyAuditLog(connection, transaction, itemTemplateId, (short)CurrencyService.GetCubeFragmentSlot(itemTemplateId), totalGoldCost, 0);
+                    transaction.Commit();
+                    result = new InventoryMutationResult
+                    {
+                        ListType = InventoryListType.Main,
+                        SlotIndex = (short)CurrencyService.GetCubeFragmentSlot(itemTemplateId),
+                        ItemTemplateId = itemTemplateId,
+                        RemainingStackCount = buyCount,
+                        InstanceValue = buyCount,
+                        UpdatedGold = wallet.Gold - totalGoldCost,
+                        UpdatedSp = wallet.Sp,
+                        UpdatedCoin = wallet.Coin,
+                        RequestedCount = (short)buyCount,
+                        AppliedCount = (short)buyCount,
+                        CostItemTemplateId = metadata.IsMaterialExchange ? metadata.NeedMaterialId : 0,
+                        CostItemNewStackCount = materialNewCount,
+                        CostItemSlotIndex = materialSlotIndex,
+                    };
+                    return true;
+                }
+            }
+
             using (var connection = _context.OpenConnection())
             using (var transaction = connection.BeginTransaction())
             {

@@ -35,6 +35,18 @@ namespace DfoServer.Infrastructure
                     ("expire_time", "INTEGER NOT NULL DEFAULT 0"),
                 });
                 DfoServer.Game.Inventory.CurrencyService.MigrateCeraFromPacketTemplates(conn);
+
+                // 晶块账号化: 旧库补列 + 从 character_items slot 354-359 迁移到 accounts 表
+                DfoServer.Sqlite.SqliteSchemaMigrator.EnsureColumns(conn, "accounts", new[]
+                {
+                    ("cube_black", "INTEGER NOT NULL DEFAULT 0"),
+                    ("cube_white", "INTEGER NOT NULL DEFAULT 0"),
+                    ("cube_red", "INTEGER NOT NULL DEFAULT 0"),
+                    ("cube_blue", "INTEGER NOT NULL DEFAULT 0"),
+                    ("cube_clear", "INTEGER NOT NULL DEFAULT 0"),
+                    ("cube_gold", "INTEGER NOT NULL DEFAULT 0"),
+                });
+                DfoServer.Game.Inventory.CurrencyService.MigrateCubeFragmentsFromCharacterItems(conn);
             }
             return connectionString;
         }

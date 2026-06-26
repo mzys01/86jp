@@ -294,17 +294,12 @@ namespace DfoServer.Game.Quests
             var consumedEntries = new List<ConsumedItemEntry>();
             var insertedEntries = new List<InsertedItemEntry>();
 
+            uint goldReward;
             using (var conn = new SqliteConnection(connStr))
             {
                 conn.Open();
                 using (var tx = conn.BeginTransaction())
                 {
-                    if (reward.ChainType == 0 && reward.Items != null && reward.Items.Count > 0)
-                    {
-                        if (!CheckInventorySpace(conn, tx, characterId, reward.Items))
-                            return BuildFailAck(4);
-                    }
-
                     if (q != null)
                     {
                         using (var cmd = new SqliteCommand(
@@ -316,7 +311,6 @@ namespace DfoServer.Game.Quests
                         }
                     }
 
-                    // Consume event items (depend_give_item taken back)
                     if (reward.ConsumeItems != null)
                     {
                         foreach (var ci in reward.ConsumeItems)
@@ -326,7 +320,6 @@ namespace DfoServer.Game.Quests
                         }
                     }
 
-                    // Consume seeking items ([int data] for type 0/25)
                     var seekItems = GameWorld.QuestData.GetSeekingConsumeItems(questId);
                     foreach (var si in seekItems)
                     {
@@ -335,35 +328,45 @@ namespace DfoServer.Game.Quests
                         if (entry != null) consumedEntries.Add(entry);
                     }
 
-                    // Add gold reward
-                    uint goldReward = reward.Gold * multiplier;
+                    goldReward = reward.Gold * multiplier;
                     if (goldReward > 0)
                     {
                         var wallet = Game.Inventory.CurrencyService.LoadWallet(conn, tx, characterId);
                         Game.Inventory.CurrencyService.UpdateGold(conn, tx, characterId, wallet.Gold + (int)goldReward);
                     }
 
-                    // Insert reward items + gold entry
-                    if (reward.ChainType == 0)
-                    {
-                        if (goldReward > 0)
-                            insertedEntries.Add(new InsertedItemEntry { SlotIndex = 0, ItemId = 0, CountOrSeed = goldReward });
-
-                        if (reward.Items != null)
-                        {
-                            foreach (var ri in reward.Items)
-                            {
-                                if (ri.ItemId <= 0) continue;
-                                int count = ri.Count * multiplier;
-                                var entry = InsertRewardItem(conn, tx, characterId, ri.ItemId, count);
-                                if (entry != null) insertedEntries.Add(entry);
-                            }
-                        }
-                    }
-
                     if (!GameWorld.QuestData.IsRepeatableQuest(questId))
                         MarkQuestCleared(conn, tx, characterId, questId);
                     tx.Commit();
+                }
+            }
+
+            if (reward.ChainType == 0)
+            {
+                if (goldReward > 0)
+                    insertedEntries.Add(new InsertedItemEntry { SlotIndex = 0, ItemId = 0, CountOrSeed = goldReward });
+
+                if (reward.Items != null)
+                {
+                    var store = new Inventory.SqliteInventoryStore(
+                        Infrastructure.ServerPaths.DatabasePath, Infrastructure.ServerPaths.SchemaFilePath);
+                    int accountId = GetAccountIdByConnStr(connStr, characterId);
+                    using (store.BeginScope(characterId, accountId))
+                    {
+                        foreach (var ri in reward.Items)
+                        {
+                            if (ri.ItemId <= 0) continue;
+                            int count = ri.Count * multiplier;
+                            short assignedSlot;
+                            if (store.TryPickupItem(ri.ItemId, count, out assignedSlot))
+                            {
+                                var meta = Inventory.ItemMetadataResolver.Resolve(ri.ItemId);
+                                insertedEntries.Add(meta.IsStackable
+                                    ? new InsertedItemEntry { SlotIndex = (ushort)assignedSlot, ItemId = ri.ItemId, CountOrSeed = (uint)count }
+                                    : new InsertedItemEntry { SlotIndex = (ushort)assignedSlot, ItemId = ri.ItemId, IsEquipment = true, CountOrSeed = 999999998u, EquipDurability = (ushort)meta.Durability });
+                            }
+                        }
+                    }
                 }
             }
 
@@ -483,121 +486,6 @@ namespace DfoServer.Game.Quests
             }
         }
 
-        private static bool CheckInventorySpace(SqliteConnection conn, SqliteTransaction tx, int characterId, List<GameWorld.QuestRewardItem> items)
-        {
-            if (items == null || items.Count == 0) return true;
-
-            var usedSlots = new HashSet<int>();
-            using (var cmd = new SqliteCommand(
-                "SELECT slot_index FROM character_items WHERE character_id=@cid AND list_type=0", conn, tx))
-            {
-                cmd.Parameters.AddWithValue("@cid", characterId);
-                using (var r = cmd.ExecuteReader())
-                    while (r.Read()) usedSlots.Add(r.GetInt32(0));
-            }
-
-            foreach (var ri in items)
-            {
-                if (ri.ItemId <= 0) continue;
-                var meta = Inventory.ItemMetadataResolver.Resolve(ri.ItemId);
-                if (meta.IsStackable)
-                {
-                    bool exists = false;
-                    using (var cmd = new SqliteCommand(
-                        "SELECT 1 FROM character_items WHERE character_id=@cid AND list_type=0 AND item_template_id=@tid LIMIT 1", conn, tx))
-                    {
-                        cmd.Parameters.AddWithValue("@cid", characterId);
-                        cmd.Parameters.AddWithValue("@tid", ri.ItemId);
-                        exists = cmd.ExecuteScalar() != null;
-                    }
-                    if (exists) continue;
-                }
-
-                int slotStart, slotEnd;
-                meta.GetSlotRange(out slotStart, out slotEnd);
-                bool found = false;
-                for (int s = slotStart; s <= slotEnd; s++)
-                {
-                    if (!usedSlots.Contains(s)) { usedSlots.Add(s); found = true; break; }
-                }
-                if (!found) return false;
-            }
-            return true;
-        }
-
-        private static InsertedItemEntry InsertRewardItem(SqliteConnection conn, SqliteTransaction tx, int characterId, int itemTemplateId, int count)
-        {
-            var meta = Inventory.ItemMetadataResolver.Resolve(itemTemplateId);
-
-            if (meta.IsStackable)
-            {
-                using (var cmd = new SqliteCommand(
-                    "SELECT slot_index, stack_count FROM character_items WHERE character_id=@cid AND list_type=0 AND item_template_id=@tid LIMIT 1", conn, tx))
-                {
-                    cmd.Parameters.AddWithValue("@cid", characterId);
-                    cmd.Parameters.AddWithValue("@tid", itemTemplateId);
-                    using (var r = cmd.ExecuteReader())
-                    {
-                        if (r.Read())
-                        {
-                            int existSlot = r.GetInt32(0);
-                            int existStack = r.GetInt32(1);
-                            r.Close();
-                            int newStack = existStack + count;
-                            using (var upd = new SqliteCommand(
-                                "UPDATE character_items SET stack_count=@ns, instance_value=@ns WHERE character_id=@cid AND list_type=0 AND slot_index=@slot", conn, tx))
-                            {
-                                upd.Parameters.AddWithValue("@ns", newStack);
-                                upd.Parameters.AddWithValue("@cid", characterId);
-                                upd.Parameters.AddWithValue("@slot", existSlot);
-                                upd.ExecuteNonQuery();
-                            }
-                            return new InsertedItemEntry { SlotIndex = (ushort)existSlot, ItemId = itemTemplateId, CountOrSeed = (uint)count };
-                        }
-                    }
-                }
-            }
-
-            int slotStart, slotEnd;
-            meta.GetSlotRange(out slotStart, out slotEnd);
-            int slot = -1;
-            var usedSlots = new HashSet<int>();
-            using (var cmd = new SqliteCommand(
-                "SELECT slot_index FROM character_items WHERE character_id=@cid AND list_type=0 AND slot_index BETWEEN @s AND @e", conn, tx))
-            {
-                cmd.Parameters.AddWithValue("@cid", characterId);
-                cmd.Parameters.AddWithValue("@s", slotStart);
-                cmd.Parameters.AddWithValue("@e", slotEnd);
-                using (var r = cmd.ExecuteReader())
-                    while (r.Read()) usedSlots.Add(r.GetInt32(0));
-            }
-            for (int s = slotStart; s <= slotEnd; s++)
-            {
-                if (!usedSlots.Contains(s)) { slot = s; break; }
-            }
-            if (slot < 0) return null;
-
-            int instanceValue = meta.IsStackable ? count : (itemTemplateId * 397 ^ slot);
-            using (var cmd = new SqliteCommand(@"
-INSERT OR REPLACE INTO character_items (owner_scope, owner_id, character_id, list_type, slot_index, item_template_id, item_kind, stack_count, instance_value, durability, seal_flag, option_value, expire_time, marker_16)
-VALUES ('character', @cid, @cid, 0, @slot, @tid, @kind, @cnt, @inst, @dur, 0, 0, 0, @marker)", conn, tx))
-            {
-                cmd.Parameters.AddWithValue("@cid", characterId);
-                cmd.Parameters.AddWithValue("@slot", slot);
-                cmd.Parameters.AddWithValue("@tid", itemTemplateId);
-                cmd.Parameters.AddWithValue("@kind", meta.ItemKind);
-                cmd.Parameters.AddWithValue("@cnt", meta.IsStackable ? count : 999999998);
-                cmd.Parameters.AddWithValue("@inst", instanceValue);
-                cmd.Parameters.AddWithValue("@dur", (int)meta.Durability);
-                cmd.Parameters.AddWithValue("@marker", meta.IsStackable ? 0 : -1);
-                cmd.ExecuteNonQuery();
-            }
-
-            return meta.IsStackable
-                ? new InsertedItemEntry { SlotIndex = (ushort)slot, ItemId = itemTemplateId, CountOrSeed = (uint)count }
-                : new InsertedItemEntry { SlotIndex = (ushort)slot, ItemId = itemTemplateId, IsEquipment = true, CountOrSeed = 999999998u, EquipDurability = (ushort)meta.Durability };
-        }
-
         private static int GetCharacterLevel(string connStr, int characterId)
         {
             using (var conn = new SqliteConnection(connStr))
@@ -622,6 +510,20 @@ VALUES ('character', @cid, @cid, 0, @slot, @tid, @kind, @cnt, @inst, @dur, 0, 0,
                     cmd.Parameters.AddWithValue("@cid", characterId);
                     var result = cmd.ExecuteScalar();
                     return (result != null) ? Convert.ToInt32(result) : -1;
+                }
+            }
+        }
+
+        private static int GetAccountIdByConnStr(string connStr, int characterId)
+        {
+            using (var conn = new SqliteConnection(connStr))
+            {
+                conn.Open();
+                using (var cmd = new SqliteCommand("SELECT account_id FROM characters WHERE character_id=@cid", conn))
+                {
+                    cmd.Parameters.AddWithValue("@cid", characterId);
+                    var result = cmd.ExecuteScalar();
+                    return result != null ? Convert.ToInt32(result) : 1;
                 }
             }
         }

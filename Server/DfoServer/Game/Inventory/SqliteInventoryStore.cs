@@ -294,6 +294,22 @@ ORDER BY slot_index;";
                             snapshot.AccountCargoItems.Add(InventoryItemCodec.ReadCommonItem(reader, reader.IsDBNull(12) ? "{}" : reader.GetString(12)));
                     }
                 }
+
+                // 读取账号级晶块, 合成虚拟 slot 条目添加到 MainItems
+                var cubeFragments = CurrencyService.LoadCubeFragments(connection, null, _context.AccountId);
+                foreach (var (itemId, slot, count) in cubeFragments)
+                {
+                    if (count > 0)
+                    {
+                        snapshot.MainItems.Add(new CommonInventoryItem
+                        {
+                            SlotIndex = (short)slot,
+                            ItemTemplateId = itemId,
+                            CountOrInstanceValue = count,
+                        });
+                    }
+                }
+
                 return snapshot;
             }
         }
@@ -384,6 +400,20 @@ ORDER BY slot_index;";
         public bool TryPickupItem(int itemTemplateId, int stackCount, out short assignedSlot)
         {
             assignedSlot = -1;
+
+            // 晶块走账号级存储, 不进 character_items
+            if (CurrencyService.IsCubeFragment(itemTemplateId))
+            {
+                using (var connection = _context.OpenConnection())
+                using (var transaction = connection.BeginTransaction())
+                {
+                    CurrencyService.AddCubeFragment(connection, transaction, _context.AccountId, itemTemplateId, stackCount);
+                    transaction.Commit();
+                    assignedSlot = (short)CurrencyService.GetCubeFragmentSlot(itemTemplateId);
+                    return true;
+                }
+            }
+
             var metadata = ItemMetadataResolver.Resolve(itemTemplateId);
             if (metadata.ItemKind == "special")
                 return false;

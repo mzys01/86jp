@@ -38,9 +38,15 @@ ORDER BY slot_index;";
                 }
             }
 
-            var maxSlot = slotEnd >= 0 ? slotEnd : (listType == InventoryListType.Main ? 359 : 199);
+            var maxSlot = slotEnd >= 0 ? slotEnd : (listType == InventoryListType.Main ? 353 : 199);
             for (var slot = slotStart; slot <= maxSlot; slot++)
             {
+                // 晶块固定 slot 354-359 保留给账号级晶块, 普通物品不得占用
+                if (listType == InventoryListType.Main
+                    && slot >= CurrencyService.CubeFragmentSlotStart
+                    && slot <= CurrencyService.CubeFragmentSlotEnd)
+                    continue;
+
                 if (!occupiedSlots.Contains(slot))
                     return slot;
             }
@@ -80,10 +86,15 @@ ORDER BY slot_index;";
                 }
             }
 
-            var maxSlot = slotEnd >= 0 ? slotEnd : (listType == InventoryListType.Main ? 359 : 199);
+            var maxSlot = slotEnd >= 0 ? slotEnd : (listType == InventoryListType.Main ? 353 : 199);
             for (var slot = slotStart; slot <= maxSlot; slot++)
             {
                 if (slot == excludedSlot)
+                    continue;
+
+                if (listType == InventoryListType.Main
+                    && slot >= CurrencyService.CubeFragmentSlotStart
+                    && slot <= CurrencyService.CubeFragmentSlotEnd)
                     continue;
 
                 if (!occupiedSlots.Contains(slot))
@@ -551,6 +562,21 @@ WHERE character_id = @characterId AND list_type = @listType;";
             var metadata = ItemMetadataResolver.Resolve(itemTemplateId);
             if (metadata.ItemKind == "special")
                 return false;
+
+            if (CurrencyService.IsCubeFragment(itemTemplateId))
+            {
+                var count = Math.Max(1, stackCount);
+                CurrencyService.AddCubeFragment(connection, transaction, _context.AccountId, itemTemplateId, count);
+                result = new BoosterRewardResult
+                {
+                    ListType = InventoryListType.Main,
+                    SlotIndex = (short)CurrencyService.GetCubeFragmentSlot(itemTemplateId),
+                    ItemTemplateId = itemTemplateId,
+                    StackCount = count,
+                    GrantedCount = count,
+                };
+                return true;
+            }
 
             var effectiveCount = Math.Max(1, stackCount);
             var isAvatarReward = InventoryPackageStore.IsAvatarReward(metadata);

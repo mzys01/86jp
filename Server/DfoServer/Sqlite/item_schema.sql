@@ -10,7 +10,13 @@ CREATE TABLE IF NOT EXISTS accounts (
     cera           INTEGER NOT NULL DEFAULT 0,
     token_cera     INTEGER NOT NULL DEFAULT 0,
     happy_token_cera INTEGER NOT NULL DEFAULT 0,
-    lucky_star     INTEGER NOT NULL DEFAULT 0
+    lucky_star     INTEGER NOT NULL DEFAULT 0,
+    cube_black     INTEGER NOT NULL DEFAULT 0,
+    cube_white     INTEGER NOT NULL DEFAULT 0,
+    cube_red       INTEGER NOT NULL DEFAULT 0,
+    cube_blue      INTEGER NOT NULL DEFAULT 0,
+    cube_clear     INTEGER NOT NULL DEFAULT 0,
+    cube_gold      INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS characters (
