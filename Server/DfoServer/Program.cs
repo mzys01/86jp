@@ -54,6 +54,22 @@ namespace DfoServer
                 return;
             }
 
+            Console.Write("Loading Script.pvf... ");
+            try
+            {
+                GameWorld.PvfArchiveAccessor.ReadText("character/character.lst");
+                Console.WriteLine("OK");
+            }
+            catch (Exception ex)
+            {
+                Console.ForegroundColor = ConsoleColor.Red;
+                Console.WriteLine("FAILED");
+                Console.WriteLine($"Error: Failed to load Script.pvf: {ex.Message}");
+                Console.ResetColor();
+                Environment.Exit(1);
+                return;
+            }
+
             var server = new MultiStructureTcpServer();
 
             int channelPort = GameNetworkConfig.ProxyMode ? 7002 : 7001;
