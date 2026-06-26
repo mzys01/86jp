@@ -36,6 +36,10 @@ namespace DfoServer
 
             GameNetworkConfig.Configure(args);
 
+            PacketFileLogger.Initialize();
+            if (GameNetworkConfig.PacketCaptureEnabled)
+                Console.WriteLine("[PacketCapture] ENABLED – all SEND/RECV packets logged to packet_log.txt");
+
             try
             {
                 _ = GameWorld.GameWorldConfig.PvfArchivePath;
@@ -52,13 +56,19 @@ namespace DfoServer
 
             var server = new MultiStructureTcpServer();
 
+            int channelPort = GameNetworkConfig.ProxyMode ? 7002 : 7001;
+            int gamePort = GameNetworkConfig.ProxyMode ? 10012 : 10011;
+
             var portConfigs = new Dictionary<int, (IProtocolHandler handler, IPacketHeader structure)>
             {
-                { 7001, (new ChannelProtocolHandler(), new ChannelPacketHeader()) },
-                { 10011, (new GameProtocolHandler(), new GamePacketHeader()) }
+                { channelPort, (new ChannelProtocolHandler(), new ChannelPacketHeader()) },
+                { gamePort, (new GameProtocolHandler(), new GamePacketHeader()) }
             };
 
             server.Start(portConfigs);
+
+            if (GameNetworkConfig.ProxyMode)
+                Console.WriteLine($"[ProxyMode] Server listening on {channelPort}(channel) / {gamePort}(game) – PvfProxy forwards 7001/10011 to these ports.");
 
             Console.WriteLine("Multi-structure TCP server started!");
             Console.WriteLine($"Advertised server IP: {GameNetworkConfig.ServerIp} (ports 7001 channel, 10011 game)");

@@ -24,6 +24,12 @@ namespace DfoServer.Network
 
         public const int NotificationPacketCount = 1036;
 
+        public static bool PacketCaptureEnabled { get; private set; } = false;
+
+        public static string PacketCaptureDir { get; private set; } = null;
+
+        public static bool ProxyMode { get; private set; } = false;
+
         public static void Configure(string[] args)
         {
             string serverIp = null;
@@ -35,7 +41,20 @@ namespace DfoServer.Network
                     if (string.Equals(args[i], "--server-ip", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
                     {
                         serverIp = args[i + 1];
-                        break;
+                        i++;
+                    }
+                    else if (string.Equals(args[i], "--packet-capture", StringComparison.OrdinalIgnoreCase))
+                    {
+                        PacketCaptureEnabled = true;
+                        if (i + 1 < args.Length && !args[i + 1].StartsWith("-"))
+                        {
+                            PacketCaptureDir = args[i + 1];
+                            i++;
+                        }
+                    }
+                    else if (string.Equals(args[i], "--proxy", StringComparison.OrdinalIgnoreCase))
+                    {
+                        ProxyMode = true;
                     }
                 }
             }
