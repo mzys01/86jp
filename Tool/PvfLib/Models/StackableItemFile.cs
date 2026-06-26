@@ -4,6 +4,16 @@ using System.Text.RegularExpressions;
 
 namespace PvfLib
 {
+    public class BoosterRewardEntry
+    {
+        public string RewardKind { get; set; }
+        public int Group { get; set; }
+        public int DrawCount { get; set; } = 1;
+        public int ItemId { get; set; }
+        public int Weight { get; set; } = 10000;
+        public int Count { get; set; } = 1;
+    }
+
     
     
     
@@ -73,6 +83,8 @@ namespace PvfLib
         public int BoosterSelectionNum { get; set; } = -1;
         public string BoosterSelectCategory { get; set; }
         public string BoosterCategoryName { get; set; }
+        public List<BoosterRewardEntry> BoosterRewards { get; set; } = new List<BoosterRewardEntry>();
+        public List<BoosterRewardEntry> BoosterSelectionRewards { get; set; } = new List<BoosterRewardEntry>();
 
         #endregion
 
@@ -88,6 +100,7 @@ namespace PvfLib
         public string IntData { get; set; }
         
         public string PackageData { get; set; }
+        public List<BoosterRewardEntry> PackageRewards { get; set; } = new List<BoosterRewardEntry>();
         public string OutputItem { get; set; }
         public string InputItem { get; set; }
         public string NeedSkill { get; set; }
@@ -190,7 +203,158 @@ namespace PvfLib
                 }
             }
 
+            stk.BoosterRewards = ParseBoosterInfo(root.GetChild("booster info"), content);
+            stk.BoosterSelectionRewards = ParseBoosterSelection(root.GetChildren("booster select category"), content);
+            stk.PackageRewards = ParsePackageRewards(stk.PackageData);
+
             return stk;
+        }
+
+        private static List<BoosterRewardEntry> ParseBoosterInfo(ScriptNode node, string content)
+        {
+            var rewards = new List<BoosterRewardEntry>();
+            if (node == null)
+                return rewards;
+
+            var fallbackGroup = 0;
+            foreach (var child in node.Children)
+            {
+                fallbackGroup++;
+                ParseBoosterRewardNode(child, content, child.Tag, fallbackGroup, rewards, weighted: true);
+            }
+
+            return rewards;
+        }
+
+        private static List<BoosterRewardEntry> ParseBoosterSelection(List<ScriptNode> categories, string content)
+        {
+            var rewards = new List<BoosterRewardEntry>();
+            if (categories == null)
+                return rewards;
+
+            var fallbackGroup = 0;
+            foreach (var category in categories)
+            {
+                fallbackGroup++;
+                foreach (var child in category.Children)
+                    ParseBoosterRewardNode(child, content, child.Tag, fallbackGroup, rewards, weighted: false);
+            }
+
+            return rewards;
+        }
+
+        private static List<BoosterRewardEntry> ParsePackageRewards(string packageData)
+        {
+            var rewards = new List<BoosterRewardEntry>();
+            var ints = ParseInts(packageData);
+            for (var i = 0; i + 1 < ints.Count; i += 2)
+            {
+                if (ints[i] <= 0)
+                    continue;
+
+                rewards.Add(new BoosterRewardEntry
+                {
+                    RewardKind = "package",
+                    Group = 0,
+                    ItemId = ints[i],
+                    Count = Math.Max(1, ints[i + 1]),
+                });
+            }
+
+            return rewards;
+        }
+
+        private static void ParseBoosterRewardNode(
+            ScriptNode node,
+            string content,
+            string rewardKind,
+            int fallbackGroup,
+            List<BoosterRewardEntry> rewards,
+            bool weighted)
+        {
+            if (node == null)
+                return;
+
+            var ints = new List<int>();
+            foreach (var item in node.DataItems)
+                ints.AddRange(ParseInts(item.GetContent(content)));
+
+            if (weighted)
+                AddWeightedRewards(ints, rewardKind, fallbackGroup, rewards);
+            else
+                AddPairRewards(ints, rewardKind, fallbackGroup, rewards);
+
+            foreach (var child in node.Children)
+                ParseBoosterRewardNode(child, content, child.Tag, fallbackGroup, rewards, weighted);
+        }
+
+        private static void AddWeightedRewards(List<int> ints, string rewardKind, int fallbackGroup, List<BoosterRewardEntry> rewards)
+        {
+            if (ints == null || ints.Count == 0)
+                return;
+
+            var group = fallbackGroup;
+            var drawCount = 1;
+            var start = 0;
+            if (ints.Count >= 4 && (ints.Count - 1) % 3 == 0)
+            {
+                group = ints[0];
+                start = 1;
+            }
+
+            for (var i = start; i + 2 < ints.Count; i += 3)
+            {
+                if (ints[i] <= 0)
+                    continue;
+
+                rewards.Add(new BoosterRewardEntry
+                {
+                    RewardKind = rewardKind,
+                    Group = group,
+                    DrawCount = drawCount,
+                    ItemId = ints[i],
+                    Weight = Math.Max(0, ints[i + 1]),
+                    Count = Math.Max(1, ints[i + 2]),
+                });
+            }
+        }
+
+        private static void AddPairRewards(List<int> ints, string rewardKind, int fallbackGroup, List<BoosterRewardEntry> rewards)
+        {
+            if (ints == null || ints.Count == 0)
+                return;
+
+            var start = (ints.Count % 2) == 1 ? 1 : 0;
+            var group = start == 1 ? ints[0] : fallbackGroup;
+            for (var i = start; i + 1 < ints.Count; i += 2)
+            {
+                if (ints[i] <= 0)
+                    continue;
+
+                rewards.Add(new BoosterRewardEntry
+                {
+                    RewardKind = rewardKind,
+                    Group = group,
+                    ItemId = ints[i],
+                    Count = Math.Max(1, ints[i + 1]),
+                });
+            }
+        }
+
+        private static List<int> ParseInts(string text)
+        {
+            var result = new List<int>();
+            if (string.IsNullOrWhiteSpace(text))
+                return result;
+
+            var matches = Regex.Matches(text, @"-?\d+");
+            foreach (Match match in matches)
+            {
+                if (int.TryParse(match.Value, out var value))
+                    result.Add(value);
+            }
+
+            return result;
         }
 
         private static List<string> ParseStringList(ScriptNode node, string content)

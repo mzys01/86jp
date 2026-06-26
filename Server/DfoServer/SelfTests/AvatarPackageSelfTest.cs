@@ -14,7 +14,15 @@ namespace DfoServer.SelfTests
         private const int AccountId = 1;
         private const int CharacterId = 999207;
         private const short PackageSlot = 67;
-        private const int PackageItemTemplateId = 10008287;
+        // PVF sample IDs used only to exercise generic avatar package behavior.
+        // Production logic resolves package/reward data from PVF, not from these constants.
+        private const int SampleAvatarPackageId = 10008287;
+        private const int SampleExpiringAvatarPackageId = 10008359;
+        private const int SampleExpiringAuraPackageId = 10008357;
+        private const int SampleExpiringCreaturePackageId = 10008358;
+        private const int SampleExpiringTitlePackageId = 10008360;
+        private const int SampleExpiringEmblemPackageId = 10008361;
+        private const int SampleExpiringConsumableRewardId = 10008362;
         private const int ExpectedAvatarUnknownFixed30 = 0x00001E00;
         private const ushort ExpectedAvatarUnknownFixed4 = 0x0400;
         private const int AvatarEntryLength = 126;
@@ -81,17 +89,17 @@ namespace DfoServer.SelfTests
 
             if (result != null)
             {
-                Check($"result package item={result.PackageItemTemplateId}", result.PackageItemTemplateId == PackageItemTemplateId);
+                Check($"result package item={result.PackageItemTemplateId}", result.PackageItemTemplateId == SampleAvatarPackageId);
                 Check($"result avatar count={result.AddedAvatarCount}", result.AddedAvatarCount == ExpectedAvatarItemIds.Length);
                 Check("result granted popup item count covers known rewards", result.GrantedItems.Count >= ExpectedAvatarItemIds.Length + 6);
                 foreach (var expectedItemId in ExpectedAvatarItemIds)
                     Check($"granted avatar reward {expectedItemId}", result.GrantedItems.Exists(x => x.ListType == InventoryListType.Avatar && x.ItemTemplateId == expectedItemId && x.DisplayCount == 1));
-                Check("granted expiring reward 10008359", result.GrantedItems.Exists(x => x.ListType == InventoryListType.Main && x.ItemTemplateId == 10008359 && x.DisplayCount == 1));
-                Check("granted expiring reward 10008357", result.GrantedItems.Exists(x => x.ListType == InventoryListType.Main && x.ItemTemplateId == 10008357 && x.DisplayCount == 1));
-                Check("granted expiring reward 10008358", result.GrantedItems.Exists(x => x.ListType == InventoryListType.Main && x.ItemTemplateId == 10008358 && x.DisplayCount == 1));
-                Check("granted expiring reward 10008360", result.GrantedItems.Exists(x => x.ListType == InventoryListType.Main && x.ItemTemplateId == 10008360 && x.DisplayCount == 1));
-                Check("granted expiring reward 10008361", result.GrantedItems.Exists(x => x.ListType == InventoryListType.Main && x.ItemTemplateId == 10008361 && x.DisplayCount == 1));
-                Check("granted expiring reward 10008362", result.GrantedItems.Exists(x => x.ListType == InventoryListType.Main && x.ItemTemplateId == 10008362 && x.DisplayCount == 5));
+                Check($"granted expiring reward {SampleExpiringAvatarPackageId}", result.GrantedItems.Exists(x => x.ListType == InventoryListType.Main && x.ItemTemplateId == SampleExpiringAvatarPackageId && x.DisplayCount == 1));
+                Check($"granted expiring reward {SampleExpiringAuraPackageId}", result.GrantedItems.Exists(x => x.ListType == InventoryListType.Main && x.ItemTemplateId == SampleExpiringAuraPackageId && x.DisplayCount == 1));
+                Check($"granted expiring reward {SampleExpiringCreaturePackageId}", result.GrantedItems.Exists(x => x.ListType == InventoryListType.Main && x.ItemTemplateId == SampleExpiringCreaturePackageId && x.DisplayCount == 1));
+                Check($"granted expiring reward {SampleExpiringTitlePackageId}", result.GrantedItems.Exists(x => x.ListType == InventoryListType.Main && x.ItemTemplateId == SampleExpiringTitlePackageId && x.DisplayCount == 1));
+                Check($"granted expiring reward {SampleExpiringEmblemPackageId}", result.GrantedItems.Exists(x => x.ListType == InventoryListType.Main && x.ItemTemplateId == SampleExpiringEmblemPackageId && x.DisplayCount == 1));
+                Check($"granted expiring reward {SampleExpiringConsumableRewardId}", result.GrantedItems.Exists(x => x.ListType == InventoryListType.Main && x.ItemTemplateId == SampleExpiringConsumableRewardId && x.DisplayCount == 5));
 
                 var ackBody = AvatarPackageAckBuilder.BuildSuccess(result.SlotIndex);
                 Check("0x0207 success ACK carries result flag", ackBody.Length >= 1 && ackBody[0] == 1);
@@ -111,12 +119,12 @@ namespace DfoServer.SelfTests
                 var snapshot = store.LoadCharacterItemListSnapshot();
                 Check($"snapshot avatar count={snapshot.AvatarItems.Count}", snapshot.AvatarItems.Count == ExpectedAvatarItemIds.Length);
                 Check("snapshot no package in main inventory", snapshot.MainItems.Find(x => x.SlotIndex == PackageSlot) == null);
-                CheckExpiringReward(snapshot, 10008359, 1, "2027-11-19 06:00:00");
-                CheckExpiringReward(snapshot, 10008357, 1, "2027-11-19 06:00:00");
-                CheckExpiringReward(snapshot, 10008358, 1, "2027-11-19 06:00:00");
-                CheckExpiringReward(snapshot, 10008360, 1, "2027-12-29 06:00:00");
-                CheckExpiringReward(snapshot, 10008361, 1, "2027-12-29 06:00:00");
-                CheckExpiringReward(snapshot, 10008362, 5, "2027-11-19 06:00:00");
+                CheckExpiringReward(snapshot, SampleExpiringAvatarPackageId, 1, "2027-11-19 06:00:00");
+                CheckExpiringReward(snapshot, SampleExpiringAuraPackageId, 1, "2027-11-19 06:00:00");
+                CheckExpiringReward(snapshot, SampleExpiringCreaturePackageId, 1, "2027-11-19 06:00:00");
+                CheckExpiringReward(snapshot, SampleExpiringTitlePackageId, 1, "2027-12-29 06:00:00");
+                CheckExpiringReward(snapshot, SampleExpiringEmblemPackageId, 1, "2027-12-29 06:00:00");
+                CheckExpiringReward(snapshot, SampleExpiringConsumableRewardId, 5, "2027-11-19 06:00:00");
 
                 var optionByItemId = ToOptionMap(request);
                 foreach (var expectedItemId in ExpectedAvatarItemIds)
@@ -237,7 +245,7 @@ VALUES (
                     command.Parameters.AddWithValue("@accountId", AccountId);
                     command.Parameters.AddWithValue("@characterId", CharacterId);
                     command.Parameters.AddWithValue("@slot", PackageSlot);
-                    command.Parameters.AddWithValue("@templateId", PackageItemTemplateId);
+                    command.Parameters.AddWithValue("@templateId", SampleAvatarPackageId);
                     command.ExecuteNonQuery();
                 }
             }
