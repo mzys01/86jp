@@ -56,7 +56,7 @@ namespace DfoServer.Network.Handlers.Dungeon
                 var monsterLevel = monster.Level;
 
                 var weight = DungeonData.GetExperienceWeight(session.Player.CurDungeon);
-                var gainedExp = (uint)MonsterRewardTable.CalcExp(monsterLevel, weight);
+                var gainedExp = (uint)MonsterRewardTable.CalcExp(monsterLevel, weight, session.Player.CurDungeonDifficulty);
 
                 var dropPool = MonsterDropTable.GetDropPool(monster.Code);
 
