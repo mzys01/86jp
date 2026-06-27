@@ -301,8 +301,7 @@ namespace DfoServer.Network.Handlers
                     }
 
                     var snapshot = _sqliteSelectCharacterDataSource.LoadItemListSnapshot(cid, aid);
-                    var mainUpdateBody = BuildGrantedMainItemUpdates(snapshot, result.GrantedItems);
-                    await SendItemListRefresh(session, InventoryListType.Main);
+                    var mainUpdateBody = BuildGrantedMainItemUpdates(snapshot, result.GrantedItems, result.SlotIndex, result.PackageItemTemplateId);
                     if (mainUpdateBody != null)
                         await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000E, mainUpdateBody));
 
@@ -344,8 +343,7 @@ namespace DfoServer.Network.Handlers
                     await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x00A0, SelectablePackageAckBuilder.BuildSuccess(result.SlotIndex, result.GrantedItems)));
 
                     var snapshot = _sqliteSelectCharacterDataSource.LoadItemListSnapshot(cid, aid);
-                    var mainUpdateBody = BuildGrantedMainItemUpdates(snapshot, result.GrantedItems);
-                    await SendItemListRefresh(session, InventoryListType.Main);
+                    var mainUpdateBody = BuildGrantedMainItemUpdates(snapshot, result.GrantedItems, result.SlotIndex, result.PackageItemTemplateId);
                     if (mainUpdateBody != null)
                         await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000E, mainUpdateBody));
 
@@ -460,9 +458,6 @@ namespace DfoServer.Network.Handlers
             var (cid, aid) = ResolveOwner(session);
             var snapshot = _sqliteSelectCharacterDataSource.LoadItemListSnapshot(cid, aid);
             var mainUpdateBody = BuildBoosterMainItemUpdates(snapshot, result);
-            if (result.SourceRemainingStackCount <= 0)
-                await SendItemListRefresh(session, InventoryListType.Main);
-
             if (mainUpdateBody != null)
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000E, mainUpdateBody));
 
@@ -489,15 +484,20 @@ namespace DfoServer.Network.Handlers
                     slots.Add(reward.SlotIndex);
             }
 
-            if (result.SourceRemainingStackCount > 0)
-                slots.Add(result.SourceSlotIndex);
+            slots.Add(result.SourceSlotIndex);
 
             var updates = new List<CommonInventoryItem>();
             foreach (var slot in slots)
             {
                 var item = snapshot.MainItems.FirstOrDefault(x => x.SlotIndex == slot);
                 if (item != null)
+                {
                     updates.Add(item);
+                    continue;
+                }
+
+                if (slot == result.SourceSlotIndex)
+                    updates.Add(CreateConsumedSourceItem(result));
             }
 
             if (updates.Count == 0)
@@ -506,12 +506,17 @@ namespace DfoServer.Network.Handlers
             return ItemListUpdateBuilder.BuildCommonUpdates(updates);
         }
 
-        private static byte[] BuildGrantedMainItemUpdates(CharacterItemListSnapshot snapshot, IReadOnlyList<PackageGrantedItem> grantedItems)
+        private static byte[] BuildGrantedMainItemUpdates(
+            CharacterItemListSnapshot snapshot,
+            IReadOnlyList<PackageGrantedItem> grantedItems,
+            short sourceSlotIndex,
+            int sourceItemTemplateId)
         {
             if (snapshot == null || grantedItems == null)
                 return null;
 
             var slots = new HashSet<short>();
+            slots.Add(sourceSlotIndex);
             foreach (var reward in grantedItems)
             {
                 if (reward.ListType == InventoryListType.Main)
@@ -523,7 +528,13 @@ namespace DfoServer.Network.Handlers
             {
                 var item = snapshot.MainItems.FirstOrDefault(x => x.SlotIndex == slot);
                 if (item != null)
+                {
                     updates.Add(item);
+                    continue;
+                }
+
+                if (slot == sourceSlotIndex)
+                    updates.Add(CreateConsumedSourceItem(sourceSlotIndex, sourceItemTemplateId));
             }
 
             if (updates.Count == 0)
