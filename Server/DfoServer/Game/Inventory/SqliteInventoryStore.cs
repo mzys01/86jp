@@ -139,13 +139,13 @@ namespace DfoServer.Game.Inventory
         public SqliteInventoryStore(string databasePath, string schemaFilePath)
         {
             _context = new ScopedStoreContext(databasePath, schemaFilePath);
-            _auditLogger = new InventoryAuditLogger(_context);
-            _db = new InventoryDbPrimitives(_context);
-            _enchantStore = new InventoryEnchantStore(_context, _db, _auditLogger);
-            _packageStore = new InventoryPackageStore(_context, _db, _auditLogger);
-            _shopStore = new InventoryShopStore(_context, _db, _auditLogger);
-            _equipStore = new InventoryEquipmentStore(_context, _db, _auditLogger);
-            _migrationRunner = new InventoryMigrationRunner(_context);
+            _auditLogger = new InventoryAuditLogger();
+            _db = new InventoryDbPrimitives();
+            _enchantStore = new InventoryEnchantStore(_db, _auditLogger);
+            _packageStore = new InventoryPackageStore(_db, _auditLogger);
+            _shopStore = new InventoryShopStore(_db, _auditLogger);
+            _equipStore = new InventoryEquipmentStore(_db, _auditLogger);
+            _migrationRunner = new InventoryMigrationRunner();
         }
 
         public IDisposable BeginScope(int characterId, int accountId) => _context.BeginScope(characterId, accountId);
@@ -167,7 +167,11 @@ namespace DfoServer.Game.Inventory
         }
 
 
-        public void RunMigrations() => _migrationRunner.RunMigrations();
+        public void RunMigrations()
+        {
+            using (var connection = _context.OpenConnection())
+                _migrationRunner.RunMigrations(connection);
+        }
 
         public void EnsureDatabase(CharacterItemListSnapshot seedSnapshot)
         {
@@ -197,9 +201,9 @@ namespace DfoServer.Game.Inventory
                 {
                     if (count <= 0)
                     {
-                        _equipStore.UpsertContainerState(connection, tx, InventoryListType.Main, 24);
-                        _equipStore.UpsertContainerState(connection, tx, InventoryListType.Avatar, 0);
-                        _equipStore.UpsertContainerState(connection, tx, InventoryListType.PersonalCargo, 0);
+                        _equipStore.UpsertContainerState(connection, tx, characterId, _context.AccountId, InventoryListType.Main, 24);
+                        _equipStore.UpsertContainerState(connection, tx, characterId, _context.AccountId, InventoryListType.Avatar, 0);
+                        _equipStore.UpsertContainerState(connection, tx, characterId, _context.AccountId, InventoryListType.PersonalCargo, 0);
                     }
 
                     EnsureReviveCoinSlot(connection, tx, characterId);
@@ -233,11 +237,11 @@ VALUES (
             using (var connection = _context.OpenConnection())
             {
                 var snapshot = new CharacterItemListSnapshot();
-                var listParams = _equipStore.LoadContainerState(connection);
+                var listParams = _equipStore.LoadContainerState(connection, null, _context.CharacterId, _context.AccountId);
                 snapshot.MainListParam16 = GetListParam(listParams, InventoryListType.Main);
                 snapshot.AvatarListParam16 = GetListParam(listParams, InventoryListType.Avatar);
                 snapshot.PersonalCargoListParam16 = GetListParam(listParams, InventoryListType.PersonalCargo);
-                snapshot.AccountCargoState = _equipStore.LoadAccountCargoState(connection);
+                snapshot.AccountCargoState = _equipStore.LoadAccountCargoState(connection, null, _context.CharacterId, _context.AccountId);
 
                 using (var command = connection.CreateCommand())
                 {
@@ -315,7 +319,15 @@ ORDER BY slot_index;";
         }
 
         public int DeleteExpiredRentalEquipment()
-            => _equipStore.DeleteExpiredRentalEquipment();
+        {
+            using (var connection = _context.OpenConnection())
+            using (var transaction = connection.BeginTransaction())
+            {
+                var count = _equipStore.DeleteExpiredRentalEquipment(connection, transaction, _context.CharacterId, _context.AccountId);
+                if (count > 0) transaction.Commit();
+                return count;
+            }
+        }
 
         public bool TryDeleteItem(InventoryListType listType, short slotIndex, short deleteCount, out InventoryMutationResult result)
         {
@@ -328,7 +340,7 @@ ORDER BY slot_index;";
             using (var connection = _context.OpenConnection())
             using (var transaction = connection.BeginTransaction())
             {
-                var item = _db.LoadItemRecord(connection, transaction, dbListType, slotIndex);
+                var item = _db.LoadItemRecord(connection, transaction, _context.CharacterId, dbListType, slotIndex);
                 if (item == null)
                     return false;
 
@@ -342,8 +354,8 @@ ORDER BY slot_index;";
                     _db.DeleteItem(connection, transaction, item.ItemUid);
                 }
 
-                _auditLogger.WriteDeleteAuditLog(connection, transaction, item, appliedCount);
-                var wallet = _db.LoadWallet(connection, transaction);
+                _auditLogger.WriteDeleteAuditLog(connection, transaction, _context.CharacterId, item, appliedCount);
+                var wallet = _db.LoadWallet(connection, transaction, _context.CharacterId);
                 transaction.Commit();
 
                 result = new InventoryMutationResult
@@ -365,19 +377,59 @@ ORDER BY slot_index;";
         }
 
         public bool TryOpenAvatarPackage(AvatarPackageOpenRequest request, out AvatarPackageOpenResult result)
-            => _packageStore.TryOpenAvatarPackage(request, out result);
+        {
+            using (var connection = _context.OpenConnection())
+            using (var transaction = connection.BeginTransaction())
+            {
+                var ok = _packageStore.TryOpenAvatarPackage(connection, transaction, _context.CharacterId, _context.AccountId, request, out result);
+                if (ok) transaction.Commit();
+                return ok;
+            }
+        }
 
         public bool TryOpenSelectablePackage(SelectablePackageOpenRequest request, out SelectablePackageOpenResult result)
-            => _packageStore.TryOpenSelectablePackage(request, out result);
+        {
+            using (var connection = _context.OpenConnection())
+            using (var transaction = connection.BeginTransaction())
+            {
+                var ok = _packageStore.TryOpenSelectablePackage(connection, transaction, _context.CharacterId, _context.AccountId, request, out result);
+                if (ok) transaction.Commit();
+                return ok;
+            }
+        }
 
         public bool TryUseBoosterItem(short? slotIndex, IReadOnlyList<int> selectedItemTemplateIds, out BoosterUseResult result)
-            => _packageStore.TryUseBoosterItem(slotIndex, selectedItemTemplateIds, out result);
+        {
+            using (var connection = _context.OpenConnection())
+            using (var transaction = connection.BeginTransaction())
+            {
+                var ok = _packageStore.TryUseBoosterItem(connection, transaction, _context.CharacterId, _context.AccountId, slotIndex, selectedItemTemplateIds, out result);
+                if (ok) transaction.Commit();
+                return ok;
+            }
+        }
 
         public bool TryOpenPackage0207(short slotIndex, IReadOnlyList<int> selectedItemTemplateIds, out BoosterUseResult result)
-            => _packageStore.TryOpenPackage0207(slotIndex, selectedItemTemplateIds, out result);
+        {
+            using (var connection = _context.OpenConnection())
+            using (var transaction = connection.BeginTransaction())
+            {
+                var ok = _packageStore.TryOpenPackage0207(connection, transaction, _context.CharacterId, _context.AccountId, slotIndex, selectedItemTemplateIds, out result);
+                if (ok) transaction.Commit();
+                return ok;
+            }
+        }
 
         public bool TryBuyItem(int itemTemplateId, int buyCount, out InventoryMutationResult result)
-            => _shopStore.TryBuyItem(itemTemplateId, buyCount, out result);
+        {
+            using (var connection = _context.OpenConnection())
+            using (var transaction = connection.BeginTransaction())
+            {
+                var ok = _shopStore.TryBuyItem(connection, transaction, _context.CharacterId, _context.AccountId, itemTemplateId, buyCount, out result);
+                if (ok) transaction.Commit();
+                return ok;
+            }
+        }
 
         internal const int QuickSlotStart = 3;
         internal const int QuickSlotEnd = 8;
@@ -395,100 +447,119 @@ ORDER BY slot_index;";
             int expireTime,
             out short assignedSlot,
             out int instanceValue)
-            => _equipStore.TryPickupRentalWeapon(connection, transaction, itemTemplateId, expireTime, out assignedSlot, out instanceValue);
+            => _equipStore.TryPickupRentalWeapon(connection, transaction, _context.CharacterId, _context.AccountId, itemTemplateId, expireTime, out assignedSlot, out instanceValue);
 
         public bool TryPickupItem(int itemTemplateId, int stackCount, out short assignedSlot)
+        {
+            using (var connection = _context.OpenConnection())
+            using (var transaction = connection.BeginTransaction())
+            {
+                var result = TryPickupItemCore(connection, transaction,
+                    _context.CharacterId, _context.AccountId,
+                    itemTemplateId, stackCount, out assignedSlot);
+                if (result) transaction.Commit();
+                return result;
+            }
+        }
+
+        internal bool TryPickupItemCore(
+            SqliteConnection connection, SqliteTransaction transaction,
+            int characterId, int accountId,
+            int itemTemplateId, int stackCount, out short assignedSlot)
         {
             assignedSlot = -1;
 
             // 晶块走账号级存储, 不进 character_items
             if (CurrencyService.IsCubeFragment(itemTemplateId))
             {
-                using (var connection = _context.OpenConnection())
-                using (var transaction = connection.BeginTransaction())
-                {
-                    CurrencyService.AddCubeFragment(connection, transaction, _context.AccountId, itemTemplateId, stackCount);
-                    transaction.Commit();
-                    assignedSlot = (short)CurrencyService.GetCubeFragmentSlot(itemTemplateId);
-                    return true;
-                }
+                CurrencyService.AddCubeFragment(connection, transaction, accountId, itemTemplateId, stackCount);
+                assignedSlot = (short)CurrencyService.GetCubeFragmentSlot(itemTemplateId);
+                return true;
             }
 
             var metadata = ItemMetadataResolver.Resolve(itemTemplateId);
             if (metadata.ItemKind == "special")
                 return false;
 
-            using (var connection = _context.OpenConnection())
-            using (var transaction = connection.BeginTransaction())
+            bool isConsumable = metadata.IsStackable
+                && metadata.StackableType != null
+                && metadata.StackableType.IndexOf("[waste]", System.StringComparison.OrdinalIgnoreCase) >= 0;
+
+            if (metadata.IsStackable)
             {
-                bool isConsumable = metadata.IsStackable
-                    && metadata.StackableType != null
-                    && metadata.StackableType.IndexOf("[waste]", System.StringComparison.OrdinalIgnoreCase) >= 0;
-
-                if (metadata.IsStackable)
-                {
-                    if (isConsumable)
-                    {
-                        var existingQuick = _db.FindItemByTemplateIdInRange(connection, transaction, InventoryListType.Main, itemTemplateId, QuickSlotStart, QuickSlotEnd);
-                        if (existingQuick != null && (metadata.StackLimit <= 0 || existingQuick.StackCount + stackCount <= metadata.StackLimit))
-                        {
-                            _db.UpdateStackCount(connection, transaction, existingQuick.ItemUid, existingQuick.StackCount + stackCount);
-                            transaction.Commit();
-                            assignedSlot = existingQuick.SlotIndex;
-                            return true;
-                        }
-                    }
-
-                    var existing = _db.FindItemByTemplateId(connection, transaction, InventoryListType.Main, itemTemplateId);
-                    if (existing != null && (metadata.StackLimit <= 0 || existing.StackCount + stackCount <= metadata.StackLimit))
-                    {
-                        _db.UpdateStackCount(connection, transaction, existing.ItemUid, existing.StackCount + stackCount);
-                        transaction.Commit();
-                        assignedSlot = existing.SlotIndex;
-                        return true;
-                    }
-                }
-
-                int slotStart, slotEnd;
-                metadata.GetSlotRange(out slotStart, out slotEnd);
-
                 if (isConsumable)
                 {
-                    var quickSlot = _db.FindEmptySlot(connection, transaction, InventoryListType.Main, QuickSlotStart, QuickSlotEnd);
-                    if (quickSlot >= 0)
+                    var existingQuick = _db.FindItemByTemplateIdInRange(connection, transaction, characterId, InventoryListType.Main, itemTemplateId, QuickSlotStart, QuickSlotEnd);
+                    if (existingQuick != null && (metadata.StackLimit <= 0 || existingQuick.StackCount + stackCount <= metadata.StackLimit))
                     {
-                        _db.InsertCharacterItem(
-                            connection, transaction, InventoryListType.Main, (short)quickSlot,
-                            itemTemplateId, metadata.ItemKind, stackCount, stackCount,
-                            metadata.Durability, 0, 0, 0, 0, 0, "{}");
-                        transaction.Commit();
-                        assignedSlot = (short)quickSlot;
+                        _db.UpdateStackCount(connection, transaction, existingQuick.ItemUid, existingQuick.StackCount + stackCount);
+                        assignedSlot = existingQuick.SlotIndex;
                         return true;
                     }
                 }
 
-                var targetSlot = _db.FindEmptySlot(connection, transaction, InventoryListType.Main, slotStart, slotEnd);
-                if (targetSlot < 0)
-                    return false;
-
-                var qualitySeed = InventoryDbPrimitives.GenerateInstanceValue(itemTemplateId, targetSlot);
-                var dbStackCount = metadata.IsStackable ? stackCount : qualitySeed;
-                var dbInstanceValue = metadata.IsStackable ? stackCount : qualitySeed;
-                _db.InsertCharacterItem(
-                    connection, transaction, InventoryListType.Main, (short)targetSlot,
-                    itemTemplateId, metadata.ItemKind, dbStackCount, dbInstanceValue,
-                    metadata.Durability, 0, 0, 0, metadata.IsStackable ? 0 : -1, 0, "{}");
-                transaction.Commit();
-                assignedSlot = (short)targetSlot;
-                return true;
+                var existing = _db.FindItemByTemplateId(connection, transaction, characterId, InventoryListType.Main, itemTemplateId);
+                if (existing != null && (metadata.StackLimit <= 0 || existing.StackCount + stackCount <= metadata.StackLimit))
+                {
+                    _db.UpdateStackCount(connection, transaction, existing.ItemUid, existing.StackCount + stackCount);
+                    assignedSlot = existing.SlotIndex;
+                    return true;
+                }
             }
+
+            int slotStart, slotEnd;
+            metadata.GetSlotRange(out slotStart, out slotEnd);
+
+            if (isConsumable)
+            {
+                var quickSlot = _db.FindEmptySlot(connection, transaction, characterId, InventoryListType.Main, QuickSlotStart, QuickSlotEnd);
+                if (quickSlot >= 0)
+                {
+                    _db.InsertCharacterItem(
+                        connection, transaction, characterId, InventoryListType.Main, (short)quickSlot,
+                        itemTemplateId, metadata.ItemKind, stackCount, stackCount,
+                        metadata.Durability, 0, 0, 0, 0, 0, "{}");
+                    assignedSlot = (short)quickSlot;
+                    return true;
+                }
+            }
+
+            var targetSlot = _db.FindEmptySlot(connection, transaction, characterId, InventoryListType.Main, slotStart, slotEnd);
+            if (targetSlot < 0)
+                return false;
+
+            var qualitySeed = InventoryDbPrimitives.GenerateInstanceValue(itemTemplateId, targetSlot);
+            var dbStackCount = metadata.IsStackable ? stackCount : qualitySeed;
+            var dbInstanceValue = metadata.IsStackable ? stackCount : qualitySeed;
+            _db.InsertCharacterItem(
+                connection, transaction, characterId, InventoryListType.Main, (short)targetSlot,
+                itemTemplateId, metadata.ItemKind, dbStackCount, dbInstanceValue,
+                metadata.Durability, 0, 0, 0, metadata.IsStackable ? 0 : -1, 0, "{}");
+            assignedSlot = (short)targetSlot;
+            return true;
         }
 
         public bool TrySellItem(InventoryListType listType, short slotIndex, short sellCount, out InventoryMutationResult result)
-            => _shopStore.TrySellItem(listType, slotIndex, sellCount, out result);
+        {
+            using (var connection = _context.OpenConnection())
+            using (var transaction = connection.BeginTransaction())
+            {
+                var ok = _shopStore.TrySellItem(connection, transaction, _context.CharacterId, _context.AccountId, listType, slotIndex, sellCount, out result);
+                if (ok) transaction.Commit();
+                return ok;
+            }
+        }
 
         public bool TryEnchantByBead(EnchantByBeadCommand command, out EnchantByBeadResult result)
-            => _enchantStore.TryEnchantByBead(command, out result);
+        {
+            using (var connection = _context.OpenConnection())
+            using (var transaction = connection.BeginTransaction())
+            {
+                var ok = _enchantStore.TryEnchantByBead(connection, transaction, _context.CharacterId, _context.AccountId, command, out result);
+                if (ok) transaction.Commit();
+                return ok;
+            }
+        }
 
         public bool TryMoveItem(InventoryMoveRequest request, out InventoryMoveResult result)
         {
@@ -516,14 +587,14 @@ ORDER BY slot_index;";
             using (var connection = _context.OpenConnection())
             using (var transaction = connection.BeginTransaction())
             {
-                var source = _db.LoadItemRecord(connection, transaction, dbSrcList, request.SourceSlotIndex);
-                var destination = _db.LoadItemRecord(connection, transaction, dbDstList, request.DestinationSlotIndex);
+                var source = _db.LoadItemRecord(connection, transaction, _context.CharacterId, dbSrcList, request.SourceSlotIndex);
+                var destination = _db.LoadItemRecord(connection, transaction, _context.CharacterId, dbDstList, request.DestinationSlotIndex);
 
                 FileLogger.Log($"  [MoveItem] source={(source != null ? $"uid={source.ItemUid} kind={source.ItemKind} tmpl=0x{source.ItemTemplateId:X8}" : "null")}, destination={(destination != null ? $"uid={destination.ItemUid} kind={destination.ItemKind} tmpl=0x{destination.ItemTemplateId:X8}" : "null")}");
 
                 if (request.DestinationListType == InventoryListType.Equipment)
                 {
-                    var outcome = _equipStore.HandleEquipSlotMove(connection, transaction, request, source, dbSrcList);
+                    var outcome = _equipStore.HandleEquipSlotMove(connection, transaction, _context.CharacterId, _context.AccountId, request, source, dbSrcList);
                     bool changed = outcome == EquipOutcome.Equipped || outcome == EquipOutcome.Unequipped;
                     if (changed)
                         transaction.Commit();
@@ -533,7 +604,7 @@ ORDER BY slot_index;";
                 }
                 if (request.SourceListType == InventoryListType.Equipment)
                 {
-                    bool ok = _equipStore.HandleUnequipFromSlot(connection, transaction, request.SourceSlotIndex);
+                    bool ok = _equipStore.HandleUnequipFromSlot(connection, transaction, _context.CharacterId, _context.AccountId, request.SourceSlotIndex);
                     if (ok) transaction.Commit();
                     result = CreateMoveResult(request, request.MoveCount, mutated: ok);
                     return true;
@@ -545,7 +616,7 @@ ORDER BY slot_index;";
                     {
                         FileLogger.Log($"  [MoveItem] MOVE(empty-src): dst uid={destination.ItemUid} tmpl=0x{destination.ItemTemplateId:X8} → ({dbSrcList},{request.SourceSlotIndex})");
                         _db.UpdateItemPosition(connection, transaction, destination.ItemUid, dbSrcList, request.SourceSlotIndex);
-                        _auditLogger.WriteAuditLog(connection, transaction, "move_itemspace", destination, dbSrcList, request.SourceSlotIndex, request.MoveCount);
+                        _auditLogger.WriteAuditLog(connection, transaction, _context.CharacterId, "move_itemspace", destination, dbSrcList, request.SourceSlotIndex, request.MoveCount);
                         transaction.Commit();
                         result = CreateMoveResult(request, request.MoveCount);
                         return true;
@@ -570,7 +641,7 @@ ORDER BY slot_index;";
                     else
                         _db.UpdateStackCount(connection, transaction, source.ItemUid, source.StackCount - moveCount);
 
-                    _auditLogger.WriteAuditLog(connection, transaction, "move_itemspace", source, dbDstList, request.DestinationSlotIndex, moveCount);
+                    _auditLogger.WriteAuditLog(connection, transaction, _context.CharacterId, "move_itemspace", source, dbDstList, request.DestinationSlotIndex, moveCount);
                     transaction.Commit();
                     result = CreateMoveResult(request, request.MoveCount);
                     return true;
@@ -579,8 +650,8 @@ ORDER BY slot_index;";
                 if (source.ItemKind == "stackable" && moveCount > 0 && moveCount < source.StackCount && destination == null)
                 {
                     _db.UpdateStackCount(connection, transaction, source.ItemUid, source.StackCount - moveCount);
-                    _db.InsertSplitItem(connection, transaction, source, dbDstList, request.DestinationSlotIndex, moveCount);
-                    _auditLogger.WriteAuditLog(connection, transaction, "move_itemspace", source, dbDstList, request.DestinationSlotIndex, moveCount);
+                    _db.InsertSplitItem(connection, transaction, _context.CharacterId, source, dbDstList, request.DestinationSlotIndex, moveCount);
+                    _auditLogger.WriteAuditLog(connection, transaction, _context.CharacterId, "move_itemspace", source, dbDstList, request.DestinationSlotIndex, moveCount);
                     transaction.Commit();
                     result = CreateMoveResult(request, request.MoveCount);
                     return true;
@@ -590,7 +661,7 @@ ORDER BY slot_index;";
                 {
                     FileLogger.Log($"  [MoveItem] MOVE: src uid={source.ItemUid} kind={source.ItemKind} tmpl=0x{source.ItemTemplateId:X8} → ({dbDstList},{request.DestinationSlotIndex})");
                     _db.UpdateItemPosition(connection, transaction, source.ItemUid, dbDstList, request.DestinationSlotIndex);
-                    _auditLogger.WriteAuditLog(connection, transaction, "move_itemspace", source, dbDstList, request.DestinationSlotIndex, moveCount);
+                    _auditLogger.WriteAuditLog(connection, transaction, _context.CharacterId, "move_itemspace", source, dbDstList, request.DestinationSlotIndex, moveCount);
                     transaction.Commit();
                     result = CreateMoveResult(request, request.MoveCount);
                     return true;
@@ -601,7 +672,7 @@ ORDER BY slot_index;";
 
                 FileLogger.Log($"  [MoveItem] SWAP: src uid={source.ItemUid} kind={source.ItemKind} tmpl=0x{source.ItemTemplateId:X8} ↔ dst uid={destination.ItemUid} kind={destination.ItemKind} tmpl=0x{destination.ItemTemplateId:X8}");
                 _db.SwapItems(connection, transaction, source, destination);
-                _auditLogger.WriteAuditLog(connection, transaction, "move_itemspace", source, dbDstList, request.DestinationSlotIndex, moveCount);
+                _auditLogger.WriteAuditLog(connection, transaction, _context.CharacterId, "move_itemspace", source, dbDstList, request.DestinationSlotIndex, moveCount);
                 transaction.Commit();
                 result = CreateMoveResult(request, request.MoveCount);
                 return true;
@@ -726,36 +797,50 @@ ORDER BY slot_index;";
         {
             using (var transaction = connection.BeginTransaction())
             {
-                _equipStore.UpsertContainerState(connection, transaction, InventoryListType.Main, snapshot.MainListParam16);
-                _equipStore.UpsertContainerState(connection, transaction, InventoryListType.Avatar, snapshot.AvatarListParam16);
-                _equipStore.UpsertContainerState(connection, transaction, InventoryListType.PersonalCargo, snapshot.PersonalCargoListParam16);
-                _equipStore.UpsertContainerState(connection, transaction, InventoryListType.Pet, 0);
-                _equipStore.UpsertAccountCargoState(connection, transaction, snapshot.AccountCargoState);
+                _equipStore.UpsertContainerState(connection, transaction, _context.CharacterId, _context.AccountId, InventoryListType.Main, snapshot.MainListParam16);
+                _equipStore.UpsertContainerState(connection, transaction, _context.CharacterId, _context.AccountId, InventoryListType.Avatar, snapshot.AvatarListParam16);
+                _equipStore.UpsertContainerState(connection, transaction, _context.CharacterId, _context.AccountId, InventoryListType.PersonalCargo, snapshot.PersonalCargoListParam16);
+                _equipStore.UpsertContainerState(connection, transaction, _context.CharacterId, _context.AccountId, InventoryListType.Pet, 0);
+                _equipStore.UpsertAccountCargoState(connection, transaction, _context.CharacterId, _context.AccountId, snapshot.AccountCargoState);
 
                 foreach (var item in snapshot.MainItems)
-                    _db.InsertCommonItem(connection, transaction, InventoryListType.Main, item);
+                    _db.InsertCommonItem(connection, transaction, _context.CharacterId, InventoryListType.Main, item);
 
                 foreach (var item in snapshot.AvatarItems)
-                    _db.InsertAvatarItem(connection, transaction, item);
+                    _db.InsertAvatarItem(connection, transaction, _context.CharacterId, item);
 
                 foreach (var item in snapshot.PersonalCargoItems)
-                    _db.InsertCommonItem(connection, transaction, InventoryListType.PersonalCargo, item);
+                    _db.InsertCommonItem(connection, transaction, _context.CharacterId, InventoryListType.PersonalCargo, item);
 
                 foreach (var item in snapshot.PetItems)
-                    _db.InsertPetItem(connection, transaction, item);
+                    _db.InsertPetItem(connection, transaction, _context.CharacterId, item);
 
                 foreach (var item in snapshot.AccountCargoItems)
-                    _db.InsertAccountCargoItem(connection, transaction, item);
+                    _db.InsertAccountCargoItem(connection, transaction, _context.CharacterId, _context.AccountId, item);
 
                 transaction.Commit();
             }
         }
 
         public void SaveEquipListBlob(byte[] blob)
-            => _equipStore.SaveEquipListBlob(blob);
+        {
+            using (var connection = _context.OpenConnection())
+            using (var transaction = connection.BeginTransaction())
+            {
+                _equipStore.SaveEquipListBlob(connection, transaction, _context.CharacterId, _context.AccountId, blob);
+                transaction.Commit();
+            }
+        }
 
         public void SeedNewCharacterEquipment((short slot, int itemId)[] equipment)
-            => _equipStore.SeedNewCharacterEquipment(equipment);
+        {
+            using (var connection = _context.OpenConnection())
+            using (var transaction = connection.BeginTransaction())
+            {
+                _equipStore.SeedNewCharacterEquipment(connection, transaction, _context.CharacterId, _context.AccountId, equipment);
+                transaction.Commit();
+            }
+        }
 
         private static ushort GetListParam(Dictionary<InventoryListType, ushort> states, InventoryListType listType)
         {
@@ -869,7 +954,15 @@ ORDER BY slot_index;";
         }
 
         public bool TryBuyCeraShopItem(int productId, int buyCount, out InventoryMutationResult result)
-            => _shopStore.TryBuyCeraShopItem(productId, buyCount, out result);
+        {
+            using (var connection = _context.OpenConnection())
+            using (var transaction = connection.BeginTransaction())
+            {
+                var ok = _shopStore.TryBuyCeraShopItem(connection, transaction, _context.CharacterId, _context.AccountId, productId, buyCount, out result);
+                if (ok) transaction.Commit();
+                return ok;
+            }
+        }
 
         // 宠物判定: 物品在 equipment.lst 且 .equ 的 [equipment type] 为 [creature]。
         // CreatureExtraResolver 对不在 equipment.lst 的物品会抛异常, 这里吞掉返回 false。

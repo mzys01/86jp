@@ -8,13 +8,11 @@ namespace DfoServer.Game.Inventory
 {
     internal sealed class InventoryShopStore
     {
-        private readonly ScopedStoreContext _context;
         private readonly InventoryDbPrimitives _db;
         private readonly InventoryAuditLogger _auditLogger;
 
-        internal InventoryShopStore(ScopedStoreContext context, InventoryDbPrimitives db, InventoryAuditLogger auditLogger)
+        internal InventoryShopStore(InventoryDbPrimitives db, InventoryAuditLogger auditLogger)
         {
-            _context = context;
             _db = db;
             _auditLogger = auditLogger;
         }
@@ -94,15 +92,15 @@ namespace DfoServer.Game.Inventory
         }
 
         // 落库: 把四种货币的扣费后余额写入。
-        private void ApplyCeraShopPayment(SqliteConnection connection, SqliteTransaction transaction, CeraShopPaymentPlan plan)
+        private void ApplyCeraShopPayment(SqliteConnection connection, SqliteTransaction transaction, int characterId, CeraShopPaymentPlan plan)
         {
-            CurrencyService.UpdateGold(connection, transaction, _context.CharacterId, plan.NewGold);
-            CurrencyService.UpdateCera(connection, transaction, _context.CharacterId, plan.NewCera);
-            CurrencyService.UpdateTokenCera(connection, transaction, _context.CharacterId, plan.NewTokenCera);
-            CurrencyService.UpdateHappyTokenCera(connection, transaction, _context.CharacterId, plan.NewHappyTokenCera);
+            CurrencyService.UpdateGold(connection, transaction, characterId, plan.NewGold);
+            CurrencyService.UpdateCera(connection, transaction, characterId, plan.NewCera);
+            CurrencyService.UpdateTokenCera(connection, transaction, characterId, plan.NewTokenCera);
+            CurrencyService.UpdateHappyTokenCera(connection, transaction, characterId, plan.NewHappyTokenCera);
         }
 
-        public bool TryBuyItem(int itemTemplateId, int buyCount, out InventoryMutationResult result)
+        public bool TryBuyItem(SqliteConnection connection, SqliteTransaction transaction, int characterId, int accountId, int itemTemplateId, int buyCount, out InventoryMutationResult result)
         {
             result = null;
             var metadata = ItemMetadataResolver.Resolve(itemTemplateId);
@@ -114,237 +112,226 @@ namespace DfoServer.Game.Inventory
 
             if (CurrencyService.IsCubeFragment(itemTemplateId))
             {
-                using (var connection = _context.OpenConnection())
-                using (var transaction = connection.BeginTransaction())
-                {
-                    var wallet = _db.LoadWallet(connection, transaction);
-                    var totalGoldCost = metadata.BuyGold * buyCount;
-                    if (wallet.Gold < totalGoldCost)
-                        return false;
+                var wallet = _db.LoadWallet(connection, transaction, characterId);
+                var totalGoldCost = metadata.BuyGold * buyCount;
+                if (wallet.Gold < totalGoldCost)
+                    return false;
 
-                    int materialNewCount = -1;
-                    short materialSlotIndex = -1;
-                    if (metadata.IsMaterialExchange)
-                    {
-                        var totalMaterialCost = metadata.NeedMaterialCount * buyCount;
-                        if (CurrencyService.IsCubeFragment(metadata.NeedMaterialId))
-                        {
-                            var cubes = CurrencyService.LoadCubeFragments(connection, transaction, _context.AccountId);
-                            var have = 0;
-                            foreach (var c in cubes)
-                                if (c.ItemId == metadata.NeedMaterialId) have = c.Count;
-                            if (have < totalMaterialCost)
-                                return false;
-                            CurrencyService.AddCubeFragment(connection, transaction, _context.AccountId, metadata.NeedMaterialId, -totalMaterialCost);
-                            materialNewCount = have - totalMaterialCost;
-                            materialSlotIndex = (short)CurrencyService.GetCubeFragmentSlot(metadata.NeedMaterialId);
-                        }
-                        else
-                        {
-                            var materialItem = _db.FindItemByTemplateId(connection, transaction, InventoryListType.Main, metadata.NeedMaterialId);
-                            if (materialItem == null || materialItem.StackCount < totalMaterialCost)
-                                return false;
-                            _db.UpdateStackCount(connection, transaction, materialItem.ItemUid, materialItem.StackCount - totalMaterialCost);
-                            materialNewCount = materialItem.StackCount - totalMaterialCost;
-                            materialSlotIndex = materialItem.SlotIndex;
-                        }
-                    }
-
-                    if (totalGoldCost > 0)
-                        _db.UpdateWallet(connection, transaction, wallet.Gold - totalGoldCost, wallet.Coin);
-                    CurrencyService.AddCubeFragment(connection, transaction, _context.AccountId, itemTemplateId, buyCount);
-                    _auditLogger.WriteBuyAuditLog(connection, transaction, itemTemplateId, (short)CurrencyService.GetCubeFragmentSlot(itemTemplateId), totalGoldCost, 0);
-                    transaction.Commit();
-                    result = new InventoryMutationResult
-                    {
-                        ListType = InventoryListType.Main,
-                        SlotIndex = (short)CurrencyService.GetCubeFragmentSlot(itemTemplateId),
-                        ItemTemplateId = itemTemplateId,
-                        RemainingStackCount = buyCount,
-                        InstanceValue = buyCount,
-                        UpdatedGold = wallet.Gold - totalGoldCost,
-                        UpdatedSp = wallet.Sp,
-                        UpdatedCoin = wallet.Coin,
-                        RequestedCount = (short)buyCount,
-                        AppliedCount = (short)buyCount,
-                        CostItemTemplateId = metadata.IsMaterialExchange ? metadata.NeedMaterialId : 0,
-                        CostItemNewStackCount = materialNewCount,
-                        CostItemSlotIndex = materialSlotIndex,
-                    };
-                    return true;
-                }
-            }
-
-            using (var connection = _context.OpenConnection())
-            using (var transaction = connection.BeginTransaction())
-            {
+                int materialNewCount = -1;
+                short materialSlotIndex = -1;
                 if (metadata.IsMaterialExchange)
                 {
-                    var wallet = _db.LoadWallet(connection, transaction);
-                    var totalGoldCost = metadata.BuyGold * buyCount;
                     var totalMaterialCost = metadata.NeedMaterialCount * buyCount;
-                    if (wallet.Gold < totalGoldCost)
+                    if (CurrencyService.IsCubeFragment(metadata.NeedMaterialId))
                     {
-                        FileLogger.Log($"  [BuyItem] REJECT: need {totalGoldCost} gold, have {wallet.Gold}");
-                        return false;
-                    }
-
-                    var materialItem = _db.FindItemByTemplateId(connection, transaction, InventoryListType.Main, metadata.NeedMaterialId);
-                    if (materialItem == null || materialItem.StackCount < totalMaterialCost)
-                    {
-                        FileLogger.Log($"  [BuyItem] REJECT: need {totalMaterialCost}x item {metadata.NeedMaterialId}, have {materialItem?.StackCount ?? 0}");
-                        return false;
-                    }
-
-                    short matTargetSlot;
-                    var targetItem = _db.FindItemByTemplateId(connection, transaction, InventoryListType.Main, itemTemplateId);
-                    if (targetItem == null)
-                    {
-                        int matSlotStart, matSlotEnd;
-                        metadata.GetSlotRange(out matSlotStart, out matSlotEnd);
-                        var emptySlot = _db.FindEmptySlot(connection, transaction, InventoryListType.Main, matSlotStart, matSlotEnd);
-                        if (emptySlot < 0)
-                        {
-                            FileLogger.Log($"  [BuyItem] REJECT: no empty slot for material exchange item {itemTemplateId}");
+                        var cubes = CurrencyService.LoadCubeFragments(connection, transaction, accountId);
+                        var have = 0;
+                        foreach (var c in cubes)
+                            if (c.ItemId == metadata.NeedMaterialId) have = c.Count;
+                        if (have < totalMaterialCost)
                             return false;
-                        }
-                        _db.UpdateStackCount(connection, transaction, materialItem.ItemUid, materialItem.StackCount - totalMaterialCost);
-                        _db.InsertCharacterItem(connection, transaction, InventoryListType.Main, (short)emptySlot,
-                            itemTemplateId, metadata.ItemKind, buyCount, buyCount,
-                            metadata.Durability, 0, 0, 0, 0, 0, "{}");
-                        matTargetSlot = (short)emptySlot;
+                        CurrencyService.AddCubeFragment(connection, transaction, accountId, metadata.NeedMaterialId, -totalMaterialCost);
+                        materialNewCount = have - totalMaterialCost;
+                        materialSlotIndex = (short)CurrencyService.GetCubeFragmentSlot(metadata.NeedMaterialId);
                     }
                     else
                     {
-                        _db.UpdateStackCount(connection, transaction, materialItem.ItemUid, materialItem.StackCount - totalMaterialCost);
-                        _db.UpdateStackCount(connection, transaction, targetItem.ItemUid, targetItem.StackCount + buyCount);
-                        matTargetSlot = targetItem.SlotIndex;
-                    }
-                    var newMaterialCount = materialItem.StackCount - totalMaterialCost;
-
-                    if (totalGoldCost > 0)
-                        _db.UpdateWallet(connection, transaction, wallet.Gold - totalGoldCost, wallet.Coin);
-                    var goldAfterBuy = wallet.Gold - totalGoldCost;
-                    _auditLogger.WriteBuyAuditLog(connection, transaction, itemTemplateId, matTargetSlot, totalGoldCost, 0);
-                    transaction.Commit();
-
-                    result = new InventoryMutationResult
-                    {
-                        ListType = InventoryListType.Main,
-                        SlotIndex = matTargetSlot,
-                        ItemTemplateId = itemTemplateId,
-                        RemainingStackCount = buyCount,
-                        InstanceValue = buyCount,
-                        Durability = 0,
-                        UpdatedGold = goldAfterBuy,
-                        UpdatedSp = wallet.Sp,
-                        UpdatedCoin = wallet.Coin,
-                        RequestedCount = (short)buyCount,
-                        AppliedCount = (short)buyCount,
-                        CostItemTemplateId = metadata.NeedMaterialId,
-                        CostItemNewStackCount = newMaterialCount,
-                        CostItemSlotIndex = materialItem.SlotIndex,
-                    };
-                    return true;
-                }
-
-                var walletCheck = _db.LoadWallet(connection, transaction);
-                if (walletCheck.Gold < metadata.BuyGold || walletCheck.Coin < metadata.BuyCoin)
-                    return false;
-
-                // For stackable items, try to stack onto existing item first
-                if (metadata.IsStackable)
-                {
-                    var existingItem = _db.FindItemByTemplateId(connection, transaction, InventoryListType.Main, itemTemplateId);
-                    if (existingItem != null)
-                    {
-                        var totalCostGold = metadata.BuyGold * buyCount;
-                        var totalCostCoin = metadata.BuyCoin * buyCount;
-                        if (walletCheck.Gold < totalCostGold || walletCheck.Coin < totalCostCoin)
+                        var materialItem = _db.FindItemByTemplateId(connection, transaction, characterId, InventoryListType.Main, metadata.NeedMaterialId);
+                        if (materialItem == null || materialItem.StackCount < totalMaterialCost)
                             return false;
-                        _db.UpdateStackCount(connection, transaction, existingItem.ItemUid, existingItem.StackCount + buyCount);
-                        var updGold = walletCheck.Gold - totalCostGold;
-                        var updCoin = walletCheck.Coin - totalCostCoin;
-                        if (totalCostGold > 0 || totalCostCoin > 0)
-                            _db.UpdateWallet(connection, transaction, updGold, updCoin);
-                        _auditLogger.WriteBuyAuditLog(connection, transaction, itemTemplateId, existingItem.SlotIndex, totalCostGold, totalCostCoin);
-                        transaction.Commit();
-
-                        result = new InventoryMutationResult
-                        {
-                            ListType = InventoryListType.Main,
-                            SlotIndex = existingItem.SlotIndex,
-                            ItemTemplateId = itemTemplateId,
-                            RemainingStackCount = buyCount,
-                            InstanceValue = buyCount,
-                            Durability = 0,
-                            UpdatedGold = updGold,
-                            UpdatedSp = walletCheck.Sp,
-                            UpdatedCoin = updCoin,
-                            RequestedCount = (short)buyCount,
-                            AppliedCount = (short)buyCount,
-                        };
-                        return true;
+                        _db.UpdateStackCount(connection, transaction, materialItem.ItemUid, materialItem.StackCount - totalMaterialCost);
+                        materialNewCount = materialItem.StackCount - totalMaterialCost;
+                        materialSlotIndex = materialItem.SlotIndex;
                     }
                 }
 
-                var effectiveCount = metadata.IsStackable ? buyCount : 1;
-                var totalBuyGold = metadata.BuyGold * effectiveCount;
-                var totalBuyCoin = metadata.BuyCoin * effectiveCount;
-                if (walletCheck.Gold < totalBuyGold || walletCheck.Coin < totalBuyCoin)
+                if (totalGoldCost > 0)
+                    _db.UpdateWallet(connection, transaction, characterId, wallet.Gold - totalGoldCost, wallet.Coin);
+                CurrencyService.AddCubeFragment(connection, transaction, accountId, itemTemplateId, buyCount);
+                _auditLogger.WriteBuyAuditLog(connection, transaction, characterId, itemTemplateId, (short)CurrencyService.GetCubeFragmentSlot(itemTemplateId), totalGoldCost, 0);
+                result = new InventoryMutationResult
+                {
+                    ListType = InventoryListType.Main,
+                    SlotIndex = (short)CurrencyService.GetCubeFragmentSlot(itemTemplateId),
+                    ItemTemplateId = itemTemplateId,
+                    RemainingStackCount = buyCount,
+                    InstanceValue = buyCount,
+                    UpdatedGold = wallet.Gold - totalGoldCost,
+                    UpdatedSp = wallet.Sp,
+                    UpdatedCoin = wallet.Coin,
+                    RequestedCount = (short)buyCount,
+                    AppliedCount = (short)buyCount,
+                    CostItemTemplateId = metadata.IsMaterialExchange ? metadata.NeedMaterialId : 0,
+                    CostItemNewStackCount = materialNewCount,
+                    CostItemSlotIndex = materialSlotIndex,
+                };
+                return true;
+            }
+
+            if (metadata.IsMaterialExchange)
+            {
+                var wallet = _db.LoadWallet(connection, transaction, characterId);
+                var totalGoldCost = metadata.BuyGold * buyCount;
+                var totalMaterialCost = metadata.NeedMaterialCount * buyCount;
+                if (wallet.Gold < totalGoldCost)
+                {
+                    FileLogger.Log($"  [BuyItem] REJECT: need {totalGoldCost} gold, have {wallet.Gold}");
                     return false;
+                }
 
-                int slotStart, slotEnd;
-                metadata.GetSlotRange(out slotStart, out slotEnd);
-                var targetSlot = _db.FindEmptySlot(connection, transaction, InventoryListType.Main, slotStart, slotEnd);
-                if (targetSlot < 0)
+                var materialItem = _db.FindItemByTemplateId(connection, transaction, characterId, InventoryListType.Main, metadata.NeedMaterialId);
+                if (materialItem == null || materialItem.StackCount < totalMaterialCost)
+                {
+                    FileLogger.Log($"  [BuyItem] REJECT: need {totalMaterialCost}x item {metadata.NeedMaterialId}, have {materialItem?.StackCount ?? 0}");
                     return false;
+                }
 
-                var qualitySeed = InventoryDbPrimitives.GenerateInstanceValue(itemTemplateId, targetSlot);
-                var buyStackCount = metadata.IsStackable ? effectiveCount : qualitySeed;
-                var buyInstanceValue = metadata.IsStackable ? effectiveCount : qualitySeed;
-                _db.InsertCharacterItem(
-                    connection,
-                    transaction,
-                    InventoryListType.Main,
-                    (short)targetSlot,
-                    itemTemplateId,
-                    metadata.ItemKind,
-                    buyStackCount,
-                    buyInstanceValue,
-                    metadata.Durability,
-                    0,
-                    0,
-                    0,
-                    metadata.IsStackable ? 0 : -1,
-                    0,
-                    "{}");
+                short matTargetSlot;
+                var targetItem = _db.FindItemByTemplateId(connection, transaction, characterId, InventoryListType.Main, itemTemplateId);
+                if (targetItem == null)
+                {
+                    int matSlotStart, matSlotEnd;
+                    metadata.GetSlotRange(out matSlotStart, out matSlotEnd);
+                    var emptySlot = _db.FindEmptySlot(connection, transaction, characterId, InventoryListType.Main, matSlotStart, matSlotEnd);
+                    if (emptySlot < 0)
+                    {
+                        FileLogger.Log($"  [BuyItem] REJECT: no empty slot for material exchange item {itemTemplateId}");
+                        return false;
+                    }
+                    _db.UpdateStackCount(connection, transaction, materialItem.ItemUid, materialItem.StackCount - totalMaterialCost);
+                    _db.InsertCharacterItem(connection, transaction, characterId, InventoryListType.Main, (short)emptySlot,
+                        itemTemplateId, metadata.ItemKind, buyCount, buyCount,
+                        metadata.Durability, 0, 0, 0, 0, 0, "{}");
+                    matTargetSlot = (short)emptySlot;
+                }
+                else
+                {
+                    _db.UpdateStackCount(connection, transaction, materialItem.ItemUid, materialItem.StackCount - totalMaterialCost);
+                    _db.UpdateStackCount(connection, transaction, targetItem.ItemUid, targetItem.StackCount + buyCount);
+                    matTargetSlot = targetItem.SlotIndex;
+                }
+                var newMaterialCount = materialItem.StackCount - totalMaterialCost;
 
-                var updatedGold = walletCheck.Gold - totalBuyGold;
-                var updatedCoin = walletCheck.Coin - totalBuyCoin;
-                _db.UpdateWallet(connection, transaction, updatedGold, updatedCoin);
-                _auditLogger.WriteBuyAuditLog(connection, transaction, itemTemplateId, (short)targetSlot, totalBuyGold, totalBuyCoin);
-                transaction.Commit();
+                if (totalGoldCost > 0)
+                    _db.UpdateWallet(connection, transaction, characterId, wallet.Gold - totalGoldCost, wallet.Coin);
+                var goldAfterBuy = wallet.Gold - totalGoldCost;
+                _auditLogger.WriteBuyAuditLog(connection, transaction, characterId, itemTemplateId, matTargetSlot, totalGoldCost, 0);
 
                 result = new InventoryMutationResult
                 {
                     ListType = InventoryListType.Main,
-                    SlotIndex = (short)targetSlot,
+                    SlotIndex = matTargetSlot,
                     ItemTemplateId = itemTemplateId,
-                    RemainingStackCount = effectiveCount,
-                    InstanceValue = buyInstanceValue,
-                    Durability = metadata.Durability,
-                    UpdatedGold = updatedGold,
-                    UpdatedSp = walletCheck.Sp,
-                    UpdatedCoin = updatedCoin,
-                    RequestedCount = (short)effectiveCount,
-                    AppliedCount = (short)effectiveCount,
+                    RemainingStackCount = buyCount,
+                    InstanceValue = buyCount,
+                    Durability = 0,
+                    UpdatedGold = goldAfterBuy,
+                    UpdatedSp = wallet.Sp,
+                    UpdatedCoin = wallet.Coin,
+                    RequestedCount = (short)buyCount,
+                    AppliedCount = (short)buyCount,
+                    CostItemTemplateId = metadata.NeedMaterialId,
+                    CostItemNewStackCount = newMaterialCount,
+                    CostItemSlotIndex = materialItem.SlotIndex,
                 };
                 return true;
             }
+
+            var walletCheck = _db.LoadWallet(connection, transaction, characterId);
+            if (walletCheck.Gold < metadata.BuyGold || walletCheck.Coin < metadata.BuyCoin)
+                return false;
+
+            // For stackable items, try to stack onto existing item first
+            if (metadata.IsStackable)
+            {
+                var existingItem = _db.FindItemByTemplateId(connection, transaction, characterId, InventoryListType.Main, itemTemplateId);
+                if (existingItem != null)
+                {
+                    var totalCostGold = metadata.BuyGold * buyCount;
+                    var totalCostCoin = metadata.BuyCoin * buyCount;
+                    if (walletCheck.Gold < totalCostGold || walletCheck.Coin < totalCostCoin)
+                        return false;
+                    _db.UpdateStackCount(connection, transaction, existingItem.ItemUid, existingItem.StackCount + buyCount);
+                    var updGold = walletCheck.Gold - totalCostGold;
+                    var updCoin = walletCheck.Coin - totalCostCoin;
+                    if (totalCostGold > 0 || totalCostCoin > 0)
+                        _db.UpdateWallet(connection, transaction, characterId, updGold, updCoin);
+                    _auditLogger.WriteBuyAuditLog(connection, transaction, characterId, itemTemplateId, existingItem.SlotIndex, totalCostGold, totalCostCoin);
+
+                    result = new InventoryMutationResult
+                    {
+                        ListType = InventoryListType.Main,
+                        SlotIndex = existingItem.SlotIndex,
+                        ItemTemplateId = itemTemplateId,
+                        RemainingStackCount = buyCount,
+                        InstanceValue = buyCount,
+                        Durability = 0,
+                        UpdatedGold = updGold,
+                        UpdatedSp = walletCheck.Sp,
+                        UpdatedCoin = updCoin,
+                        RequestedCount = (short)buyCount,
+                        AppliedCount = (short)buyCount,
+                    };
+                    return true;
+                }
+            }
+
+            var effectiveCount = metadata.IsStackable ? buyCount : 1;
+            var totalBuyGold = metadata.BuyGold * effectiveCount;
+            var totalBuyCoin = metadata.BuyCoin * effectiveCount;
+            if (walletCheck.Gold < totalBuyGold || walletCheck.Coin < totalBuyCoin)
+                return false;
+
+            int slotStart, slotEnd;
+            metadata.GetSlotRange(out slotStart, out slotEnd);
+            var targetSlot = _db.FindEmptySlot(connection, transaction, characterId, InventoryListType.Main, slotStart, slotEnd);
+            if (targetSlot < 0)
+                return false;
+
+            var qualitySeed = InventoryDbPrimitives.GenerateInstanceValue(itemTemplateId, targetSlot);
+            var buyStackCount = metadata.IsStackable ? effectiveCount : qualitySeed;
+            var buyInstanceValue = metadata.IsStackable ? effectiveCount : qualitySeed;
+            _db.InsertCharacterItem(
+                connection,
+                transaction,
+                characterId,
+                InventoryListType.Main,
+                (short)targetSlot,
+                itemTemplateId,
+                metadata.ItemKind,
+                buyStackCount,
+                buyInstanceValue,
+                metadata.Durability,
+                0,
+                0,
+                0,
+                metadata.IsStackable ? 0 : -1,
+                0,
+                "{}");
+
+            var updatedGold = walletCheck.Gold - totalBuyGold;
+            var updatedCoin = walletCheck.Coin - totalBuyCoin;
+            _db.UpdateWallet(connection, transaction, characterId, updatedGold, updatedCoin);
+            _auditLogger.WriteBuyAuditLog(connection, transaction, characterId, itemTemplateId, (short)targetSlot, totalBuyGold, totalBuyCoin);
+
+            result = new InventoryMutationResult
+            {
+                ListType = InventoryListType.Main,
+                SlotIndex = (short)targetSlot,
+                ItemTemplateId = itemTemplateId,
+                RemainingStackCount = effectiveCount,
+                InstanceValue = buyInstanceValue,
+                Durability = metadata.Durability,
+                UpdatedGold = updatedGold,
+                UpdatedSp = walletCheck.Sp,
+                UpdatedCoin = updatedCoin,
+                RequestedCount = (short)effectiveCount,
+                AppliedCount = (short)effectiveCount,
+            };
+            return true;
         }
 
-        public bool TrySellItem(InventoryListType listType, short slotIndex, short sellCount, out InventoryMutationResult result)
+        public bool TrySellItem(SqliteConnection connection, SqliteTransaction transaction, int characterId, int accountId, InventoryListType listType, short slotIndex, short sellCount, out InventoryMutationResult result)
         {
             result = null;
             if (!SqliteInventoryStore.IsSupportedDeleteOrSellListType(listType))
@@ -356,53 +343,48 @@ namespace DfoServer.Game.Inventory
             var dbListType = SqliteInventoryStore.MapToDbListType(listType);
             FileLogger.Log($"  [SellItem] wireListType={listType} dbListType={dbListType} slot={slotIndex} count={sellCount}");
 
-            using (var connection = _context.OpenConnection())
-            using (var transaction = connection.BeginTransaction())
+            var item = _db.LoadItemRecord(connection, transaction, characterId, dbListType, slotIndex);
+            if (item == null)
             {
-                var item = _db.LoadItemRecord(connection, transaction, dbListType, slotIndex);
-                if (item == null)
-                {
-                    FileLogger.Log($"  [SellItem] FAIL: no item at dbListType={dbListType} slot={slotIndex}");
-                    return false;
-                }
-
-                var metadata = ItemMetadataResolver.Resolve(item.ItemTemplateId);
-                var appliedCount = SqliteInventoryStore.NormalizeRemovalCount(item, sellCount);
-                if (item.ItemKind == "stackable" && appliedCount < item.StackCount)
-                {
-                    _db.UpdateStackCount(connection, transaction, item.ItemUid, item.StackCount - appliedCount);
-                }
-                else
-                {
-                    _db.DeleteItem(connection, transaction, item.ItemUid);
-                }
-
-                var wallet = _db.LoadWallet(connection, transaction);
-                var goldDelta = metadata.SellGold * appliedCount;
-                var updatedGold = wallet.Gold + goldDelta;
-                _db.UpdateWallet(connection, transaction, updatedGold, wallet.Coin);
-                _auditLogger.WriteSellAuditLog(connection, transaction, item, appliedCount, goldDelta);
-                transaction.Commit();
-
-                result = new InventoryMutationResult
-                {
-                    ListType = listType,
-                    SlotIndex = slotIndex,
-                    ItemTemplateId = item.ItemTemplateId,
-                    RemainingStackCount = Math.Max(0, item.StackCount - appliedCount),
-                    InstanceValue = item.InstanceValue,
-                    Durability = item.Durability,
-                    UpdatedGold = updatedGold,
-                    UpdatedSp = wallet.Sp,
-                    UpdatedCoin = wallet.Coin,
-                    RequestedCount = sellCount,
-                    AppliedCount = (short)appliedCount,
-                };
-                return true;
+                FileLogger.Log($"  [SellItem] FAIL: no item at dbListType={dbListType} slot={slotIndex}");
+                return false;
             }
+
+            var metadata = ItemMetadataResolver.Resolve(item.ItemTemplateId);
+            var appliedCount = SqliteInventoryStore.NormalizeRemovalCount(item, sellCount);
+            if (item.ItemKind == "stackable" && appliedCount < item.StackCount)
+            {
+                _db.UpdateStackCount(connection, transaction, item.ItemUid, item.StackCount - appliedCount);
+            }
+            else
+            {
+                _db.DeleteItem(connection, transaction, item.ItemUid);
+            }
+
+            var wallet = _db.LoadWallet(connection, transaction, characterId);
+            var goldDelta = metadata.SellGold * appliedCount;
+            var updatedGold = wallet.Gold + goldDelta;
+            _db.UpdateWallet(connection, transaction, characterId, updatedGold, wallet.Coin);
+            _auditLogger.WriteSellAuditLog(connection, transaction, characterId, item, appliedCount, goldDelta);
+
+            result = new InventoryMutationResult
+            {
+                ListType = listType,
+                SlotIndex = slotIndex,
+                ItemTemplateId = item.ItemTemplateId,
+                RemainingStackCount = Math.Max(0, item.StackCount - appliedCount),
+                InstanceValue = item.InstanceValue,
+                Durability = item.Durability,
+                UpdatedGold = updatedGold,
+                UpdatedSp = wallet.Sp,
+                UpdatedCoin = wallet.Coin,
+                RequestedCount = sellCount,
+                AppliedCount = (short)appliedCount,
+            };
+            return true;
         }
 
-        public bool TryBuyCeraShopItem(int productId, int buyCount, out InventoryMutationResult result)
+        public bool TryBuyCeraShopItem(SqliteConnection connection, SqliteTransaction transaction, int characterId, int accountId, int productId, int buyCount, out InventoryMutationResult result)
         {
             result = null;
             FileLogger.Log($"  [CeraShopBuy] clientProductId=0x{productId:X8} ({productId}) buyCount={buyCount}");
@@ -470,197 +452,192 @@ namespace DfoServer.Game.Inventory
                 : CeraShopProductCatalog.IsBuyOnlyCeraPoint(itemTemplateId) ? CeraPayMode.OnlyCeraPoint
                 : CeraPayMode.Default;
 
-            using (var connection = _context.OpenConnection())
-            using (var transaction = connection.BeginTransaction())
+            var wallet = _db.LoadWallet(connection, transaction, characterId);
+            var plan = ComputeCeraShopPayment(wallet, totalGoldCost, totalCeraCost, ceraMode);
+            FileLogger.Log($"  [CeraShopBuy] product=0x{productId:X8} -> item=0x{itemTemplateId:X8} section={product.Section} kind={itemKind} count={effectiveCount} gold={totalGoldCost} cera={totalCeraCost} mode={ceraMode} wallet(g={wallet.Gold},c={wallet.Coin},t={wallet.TokenCera},h={wallet.HappyTokenCera}) ok={plan.Ok}");
+            if (!plan.Ok)
             {
-                var wallet = _db.LoadWallet(connection, transaction);
-                var plan = ComputeCeraShopPayment(wallet, totalGoldCost, totalCeraCost, ceraMode);
-                FileLogger.Log($"  [CeraShopBuy] product=0x{productId:X8} -> item=0x{itemTemplateId:X8} section={product.Section} kind={itemKind} count={effectiveCount} gold={totalGoldCost} cera={totalCeraCost} mode={ceraMode} wallet(g={wallet.Gold},c={wallet.Coin},t={wallet.TokenCera},h={wallet.HappyTokenCera}) ok={plan.Ok}");
-                if (!plan.Ok)
-                {
-                    FileLogger.Log($"  [CeraShopBuy] REJECT: insufficient funds gold={totalGoldCost} cera={totalCeraCost} mode={ceraMode}");
-                    return false;
-                }
-                var goldSpent = totalGoldCost > 0;
+                FileLogger.Log($"  [CeraShopBuy] REJECT: insufficient funds gold={totalGoldCost} cera={totalCeraCost} mode={ceraMode}");
+                return false;
+            }
+            var goldSpent = totalGoldCost > 0;
 
-                if (InventoryPackageStore.TryResolveMallAutoOpenRewards(itemTemplateId, out var autoOpenRewards))
+            if (InventoryPackageStore.TryResolveMallAutoOpenRewards(itemTemplateId, out var autoOpenRewards))
+            {
+                var openedResults = new List<InventoryMutationResult>();
+                for (var openIndex = 0; openIndex < effectiveCount; openIndex++)
                 {
-                    var openedResults = new List<InventoryMutationResult>();
-                    for (var openIndex = 0; openIndex < effectiveCount; openIndex++)
+                    foreach (var reward in autoOpenRewards)
                     {
-                        foreach (var reward in autoOpenRewards)
+                        if (!_db.TryAddBoosterRewardItem(connection, transaction, characterId, accountId, reward.ItemId, reward.Count, out var rewardResult))
                         {
-                            if (!_db.TryAddBoosterRewardItem(connection, transaction, reward.ItemId, reward.Count, out var rewardResult))
-                            {
-                                FileLogger.Log($"  [CeraShopBuy] auto-open failed source=0x{itemTemplateId:X8} reward=0x{reward.ItemId:X8} count={reward.Count}");
-                                return false;
-                            }
-
-                            openedResults.Add(ToInventoryMutationResult(rewardResult));
+                            FileLogger.Log($"  [CeraShopBuy] auto-open failed source=0x{itemTemplateId:X8} reward=0x{reward.ItemId:X8} count={reward.Count}");
+                            return false;
                         }
-                    }
 
-                    if (openedResults.Count == 0)
-                        return false;
-
-                    ApplyCeraShopPayment(connection, transaction, plan);
-                    _auditLogger.WriteBuyAuditLog(connection, transaction, itemTemplateId, 0, totalGoldCost, totalCeraCost);
-                    foreach (var rewardResult in openedResults)
-                        _auditLogger.WriteBuyAuditLog(connection, transaction, rewardResult.ItemTemplateId, rewardResult.SlotIndex, 0, 0);
-                    transaction.Commit();
-
-                    result = openedResults[0];
-                    result.UpdatedGold = plan.NewGold;
-                    result.UpdatedSp = wallet.Sp;
-                    result.UpdatedCoin = plan.NewCera;
-                    result.UpdatedTokenCera = plan.NewTokenCera;
-                    result.UpdatedHappyTokenCera = plan.NewHappyTokenCera;
-                    result.GoldSpent = goldSpent;
-                    result.RequestedCount = (short)Math.Min(short.MaxValue, effectiveCount);
-                    result.AppliedCount = (short)Math.Min(short.MaxValue, effectiveCount);
-                    for (var i = 1; i < openedResults.Count; i++)
-                        result.ExtraResults.Add(openedResults[i]);
-
-                    FileLogger.Log($"  [CeraShopBuy] auto-open source=0x{itemTemplateId:X8} rewards={string.Join(",", openedResults.Select(r => $"{r.ListType}:0x{r.ItemTemplateId:X8}x{r.RemainingStackCount}@{r.SlotIndex}"))}");
-                    return true;
-                }
-
-                if (isStackable)
-                {
-                    var existingItem = _db.FindItemByTemplateId(connection, transaction, InventoryListType.Main, itemTemplateId);
-                    var stackLimit = metadata.StackLimit;
-                    if (existingItem != null && (stackLimit <= 0 || existingItem.StackCount + effectiveCount <= stackLimit))
-                    {
-                        var newStackCount = existingItem.StackCount + effectiveCount;
-                        _db.UpdateStackCount(connection, transaction, existingItem.ItemUid, newStackCount);
-                        ApplyCeraShopPayment(connection, transaction, plan);
-                        _auditLogger.WriteBuyAuditLog(connection, transaction, itemTemplateId, existingItem.SlotIndex, totalGoldCost, totalCeraCost);
-                        transaction.Commit();
-
-                        result = new InventoryMutationResult
-                        {
-                            ListType = InventoryListType.Main,
-                            SlotIndex = existingItem.SlotIndex,
-                            ItemTemplateId = itemTemplateId,
-                            RemainingStackCount = newStackCount,
-                            InstanceValue = newStackCount,
-                            Durability = 0,
-                            UpdatedGold = plan.NewGold,
-                            UpdatedSp = wallet.Sp,
-                            UpdatedCoin = plan.NewCera,
-                            UpdatedTokenCera = plan.NewTokenCera,
-                            UpdatedHappyTokenCera = plan.NewHappyTokenCera,
-                            GoldSpent = goldSpent,
-                            RequestedCount = (short)effectiveCount,
-                            AppliedCount = (short)effectiveCount,
-                        };
-                        return true;
+                        openedResults.Add(ToInventoryMutationResult(rewardResult));
                     }
                 }
 
-                int slotStart;
-                int slotEnd;
-                var insertListType = InventoryListType.Main;
-                var insertKind = itemKind;
-                var expireTime = isStackable ? 0 : -1;   // -1 = 永久(装备/永久时装)
-                if (isAvatar)
-                {
-                    insertListType = InventoryListType.Avatar;  // 时装进时装库存, 不进主库存装备槽
-                    insertKind = "avatar";
-                    slotStart = 0;
-                    slotEnd = 500;
-                    if (avatarDurationDays > 0)
-                    {
-                        var unixNow = (long)(DateTime.UtcNow - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalSeconds;
-                        expireTime = (int)Math.Min(int.MaxValue, unixNow + (long)avatarDurationDays * 86400L);
-                    }
-                }
-                else if (isCreature)
-                {
-                    insertListType = InventoryListType.Pet;  // 宠物进专用宠物栏(list 7), 不进主背包装备格
-                    insertKind = "pet";
-                    slotStart = SqliteInventoryStore.PetInventorySlotStart;
-                    slotEnd = SqliteInventoryStore.PetInventorySlotEnd;
-                    expireTime = 0;
-                }
-                else
-                {
-                    metadata.GetSlotRange(out slotStart, out slotEnd);
-                }
-
-                var targetSlot = _db.FindEmptySlot(connection, transaction, insertListType, slotStart, slotEnd);
-                if (targetSlot < 0)
-                {
-                    FileLogger.Log($"  [CeraShopBuy] REJECT: no empty slot product=0x{productId:X8} item=0x{itemTemplateId:X8} list={insertListType} slotRange={slotStart}-{slotEnd}");
+                if (openedResults.Count == 0)
                     return false;
-                }
 
-                var petSerial = isCreature ? _db.NextPetSerialOrHandle(connection, transaction) : 0;
-                var instanceValue = isStackable ? effectiveCount : (isCreature || isAvatar ? 0 : InventoryDbPrimitives.GenerateInstanceValue(itemTemplateId, targetSlot));
-                var durability = (isAvatar || isCreature) ? (ushort)0 : metadata.Durability;
-                if (isAvatar)
-                {
-                    var avatarItem = SqliteInventoryStore.CreateDefaultAvatarItem((short)targetSlot, itemTemplateId, 0);
-                    _db.InsertCharacterItem(
-                        connection,
-                        transaction,
-                        insertListType,
-                        avatarItem.SlotIndex,
-                        avatarItem.AvatarItemId,
-                        insertKind,
-                        0,
-                        0,
-                        durability,
-                        0,
-                        avatarItem.OptionValue,
-                        expireTime,
-                        avatarItem.UnknownFixed30,
-                        0,
-                        InventoryItemCodec.SerializeAvatar(avatarItem));
-                }
-                else
-                {
-                    _db.InsertCharacterItem(
-                        connection,
-                        transaction,
-                        insertListType,
-                        (short)targetSlot,
-                        itemTemplateId,
-                        insertKind,
-                        isCreature ? 0 : effectiveCount,
-                        instanceValue,
-                        durability,
-                        0,
-                        0,
-                        expireTime,
-                        0,
-                        petSerial,
-                        "{}");
-                }
+                ApplyCeraShopPayment(connection, transaction, characterId, plan);
+                _auditLogger.WriteBuyAuditLog(connection, transaction, characterId, itemTemplateId, 0, totalGoldCost, totalCeraCost);
+                foreach (var rewardResult in openedResults)
+                    _auditLogger.WriteBuyAuditLog(connection, transaction, characterId, rewardResult.ItemTemplateId, rewardResult.SlotIndex, 0, 0);
 
-                ApplyCeraShopPayment(connection, transaction, plan);
-                _auditLogger.WriteBuyAuditLog(connection, transaction, itemTemplateId, (short)targetSlot, totalGoldCost, totalCeraCost);
-                transaction.Commit();
+                result = openedResults[0];
+                result.UpdatedGold = plan.NewGold;
+                result.UpdatedSp = wallet.Sp;
+                result.UpdatedCoin = plan.NewCera;
+                result.UpdatedTokenCera = plan.NewTokenCera;
+                result.UpdatedHappyTokenCera = plan.NewHappyTokenCera;
+                result.GoldSpent = goldSpent;
+                result.RequestedCount = (short)Math.Min(short.MaxValue, effectiveCount);
+                result.AppliedCount = (short)Math.Min(short.MaxValue, effectiveCount);
+                for (var i = 1; i < openedResults.Count; i++)
+                    result.ExtraResults.Add(openedResults[i]);
 
-                result = new InventoryMutationResult
-                {
-                    ListType = insertListType,
-                    SlotIndex = (short)targetSlot,
-                    ItemTemplateId = itemTemplateId,
-                    RemainingStackCount = effectiveCount,
-                    InstanceValue = instanceValue,
-                    Durability = durability,
-                    UpdatedGold = plan.NewGold,
-                    UpdatedSp = wallet.Sp,
-                    UpdatedCoin = plan.NewCera,
-                    UpdatedTokenCera = plan.NewTokenCera,
-                    UpdatedHappyTokenCera = plan.NewHappyTokenCera,
-                    GoldSpent = goldSpent,
-                    RequestedCount = (short)effectiveCount,
-                    AppliedCount = (short)effectiveCount,
-                };
+                FileLogger.Log($"  [CeraShopBuy] auto-open source=0x{itemTemplateId:X8} rewards={string.Join(",", openedResults.Select(r => $"{r.ListType}:0x{r.ItemTemplateId:X8}x{r.RemainingStackCount}@{r.SlotIndex}"))}");
                 return true;
             }
+
+            if (isStackable)
+            {
+                var existingItem = _db.FindItemByTemplateId(connection, transaction, characterId, InventoryListType.Main, itemTemplateId);
+                var stackLimit = metadata.StackLimit;
+                if (existingItem != null && (stackLimit <= 0 || existingItem.StackCount + effectiveCount <= stackLimit))
+                {
+                    var newStackCount = existingItem.StackCount + effectiveCount;
+                    _db.UpdateStackCount(connection, transaction, existingItem.ItemUid, newStackCount);
+                    ApplyCeraShopPayment(connection, transaction, characterId, plan);
+                    _auditLogger.WriteBuyAuditLog(connection, transaction, characterId, itemTemplateId, existingItem.SlotIndex, totalGoldCost, totalCeraCost);
+
+                    result = new InventoryMutationResult
+                    {
+                        ListType = InventoryListType.Main,
+                        SlotIndex = existingItem.SlotIndex,
+                        ItemTemplateId = itemTemplateId,
+                        RemainingStackCount = newStackCount,
+                        InstanceValue = newStackCount,
+                        Durability = 0,
+                        UpdatedGold = plan.NewGold,
+                        UpdatedSp = wallet.Sp,
+                        UpdatedCoin = plan.NewCera,
+                        UpdatedTokenCera = plan.NewTokenCera,
+                        UpdatedHappyTokenCera = plan.NewHappyTokenCera,
+                        GoldSpent = goldSpent,
+                        RequestedCount = (short)effectiveCount,
+                        AppliedCount = (short)effectiveCount,
+                    };
+                    return true;
+                }
+            }
+
+            int slotStart;
+            int slotEnd;
+            var insertListType = InventoryListType.Main;
+            var insertKind = itemKind;
+            var expireTime = isStackable ? 0 : -1;   // -1 = 永久(装备/永久时装)
+            if (isAvatar)
+            {
+                insertListType = InventoryListType.Avatar;  // 时装进时装库存, 不进主库存装备槽
+                insertKind = "avatar";
+                slotStart = 0;
+                slotEnd = 500;
+                if (avatarDurationDays > 0)
+                {
+                    var unixNow = (long)(DateTime.UtcNow - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalSeconds;
+                    expireTime = (int)Math.Min(int.MaxValue, unixNow + (long)avatarDurationDays * 86400L);
+                }
+            }
+            else if (isCreature)
+            {
+                insertListType = InventoryListType.Pet;  // 宠物进专用宠物栏(list 7), 不进主背包装备格
+                insertKind = "pet";
+                slotStart = SqliteInventoryStore.PetInventorySlotStart;
+                slotEnd = SqliteInventoryStore.PetInventorySlotEnd;
+                expireTime = 0;
+            }
+            else
+            {
+                metadata.GetSlotRange(out slotStart, out slotEnd);
+            }
+
+            var targetSlot = _db.FindEmptySlot(connection, transaction, characterId, insertListType, slotStart, slotEnd);
+            if (targetSlot < 0)
+            {
+                FileLogger.Log($"  [CeraShopBuy] REJECT: no empty slot product=0x{productId:X8} item=0x{itemTemplateId:X8} list={insertListType} slotRange={slotStart}-{slotEnd}");
+                return false;
+            }
+
+            var petSerial = isCreature ? _db.NextPetSerialOrHandle(connection, transaction, characterId) : 0;
+            var instanceValue = isStackable ? effectiveCount : (isCreature || isAvatar ? 0 : InventoryDbPrimitives.GenerateInstanceValue(itemTemplateId, targetSlot));
+            var durability = (isAvatar || isCreature) ? (ushort)0 : metadata.Durability;
+            if (isAvatar)
+            {
+                var avatarItem = SqliteInventoryStore.CreateDefaultAvatarItem((short)targetSlot, itemTemplateId, 0);
+                _db.InsertCharacterItem(
+                    connection,
+                    transaction,
+                    characterId,
+                    insertListType,
+                    avatarItem.SlotIndex,
+                    avatarItem.AvatarItemId,
+                    insertKind,
+                    0,
+                    0,
+                    durability,
+                    0,
+                    avatarItem.OptionValue,
+                    expireTime,
+                    avatarItem.UnknownFixed30,
+                    0,
+                    InventoryItemCodec.SerializeAvatar(avatarItem));
+            }
+            else
+            {
+                _db.InsertCharacterItem(
+                    connection,
+                    transaction,
+                    characterId,
+                    insertListType,
+                    (short)targetSlot,
+                    itemTemplateId,
+                    insertKind,
+                    isCreature ? 0 : effectiveCount,
+                    instanceValue,
+                    durability,
+                    0,
+                    0,
+                    expireTime,
+                    0,
+                    petSerial,
+                    "{}");
+            }
+
+            ApplyCeraShopPayment(connection, transaction, characterId, plan);
+            _auditLogger.WriteBuyAuditLog(connection, transaction, characterId, itemTemplateId, (short)targetSlot, totalGoldCost, totalCeraCost);
+
+            result = new InventoryMutationResult
+            {
+                ListType = insertListType,
+                SlotIndex = (short)targetSlot,
+                ItemTemplateId = itemTemplateId,
+                RemainingStackCount = effectiveCount,
+                InstanceValue = instanceValue,
+                Durability = durability,
+                UpdatedGold = plan.NewGold,
+                UpdatedSp = wallet.Sp,
+                UpdatedCoin = plan.NewCera,
+                UpdatedTokenCera = plan.NewTokenCera,
+                UpdatedHappyTokenCera = plan.NewHappyTokenCera,
+                GoldSpent = goldSpent,
+                RequestedCount = (short)effectiveCount,
+                AppliedCount = (short)effectiveCount,
+            };
+            return true;
         }
     }
 }

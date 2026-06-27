@@ -224,10 +224,12 @@ namespace DfoServer.Network.Handlers.Dungeon
                 return;
             }
 
+            var accountId = session.Account?.AccountId ?? 1;
+
             if (matchedDrop.IsGold)
             {
                 var goldAmount = (int)matchedDrop.StackCount;
-                _svc.PersistGold(session.Player.CharacterId, goldAmount);
+                _svc.PersistGold(session.Player.CharacterId, accountId, goldAmount);
                 session.Player.CurDungeonDrops.Remove(req.SrcSlot);
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0027,
                     DropItemBuilder.BuildPickupGold(req.SrcSlot, session.Player.UserId, goldAmount)));
@@ -236,7 +238,7 @@ namespace DfoServer.Network.Handlers.Dungeon
             else
             {
                 short invSlot;
-                if (!_svc.TryPickupItemToInventory(session.Player.CharacterId, (int)matchedDrop.TemplateId, (int)matchedDrop.StackCount, out invSlot))
+                if (!_svc.TryPickupItemToInventory(session.Player.CharacterId, accountId, (int)matchedDrop.TemplateId, (int)matchedDrop.StackCount, out invSlot))
                 {
                     FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] GET_ITEM: FAILED to insert item templateId={matchedDrop.TemplateId} -- inventory full or special, drop preserved for retry");
                     return;

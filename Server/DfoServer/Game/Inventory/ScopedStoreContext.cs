@@ -6,6 +6,7 @@ using DfoServer.Infrastructure;
 
 namespace DfoServer.Game.Inventory
 {
+    [Obsolete("Use DbScope for new code")]
     public sealed class ScopedStoreContext
     {
         private int _activeCharacterId = 1000;

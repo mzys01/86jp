@@ -66,6 +66,7 @@ namespace DfoServer.Network.Handlers.Dungeon
 
             // RewardTutorial: PVF serverparameter.etc [escalade tutorial reward]
             var inserted = new List<(short slot, int itemId, int count)>();
+            var accountId = session.Account?.AccountId ?? 1;
             if (rewardFlag != 0)
             {
                 var rewards = TutorialRewardProvider.GetRewards(flagIndex);
@@ -74,7 +75,7 @@ namespace DfoServer.Network.Handlers.Dungeon
                     foreach (var r in rewards)
                     {
                         short slot;
-                        if (_svc.TryPickupItemToInventory(session.Player.CharacterId, r.ItemId, r.Count, out slot))
+                        if (_svc.TryPickupItemToInventory(session.Player.CharacterId, accountId, r.ItemId, r.Count, out slot))
                         {
                             inserted.Add((slot, r.ItemId, r.Count));
                             FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] RewardTutorial: flag={flagIndex} gave item {r.ItemId} x{r.Count} -> slot {slot}");

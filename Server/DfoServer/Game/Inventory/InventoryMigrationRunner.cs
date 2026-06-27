@@ -7,17 +7,9 @@ namespace DfoServer.Game.Inventory
 {
     internal sealed class InventoryMigrationRunner
     {
-        private readonly ScopedStoreContext _context;
-
-        public InventoryMigrationRunner(ScopedStoreContext context)
+        public void RunMigrations(SqliteConnection connection)
         {
-            _context = context;
-        }
-
-        public void RunMigrations()
-        {
-            using (var connection = _context.OpenConnection())
-                RunMigrationsInternal(connection);
+            RunMigrationsInternal(connection);
         }
 
         internal void RunMigrationsInternal(SqliteConnection connection)

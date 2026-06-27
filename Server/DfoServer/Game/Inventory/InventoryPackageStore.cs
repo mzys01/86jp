@@ -8,256 +8,67 @@ namespace DfoServer.Game.Inventory
 {
     internal sealed class InventoryPackageStore
     {
-        private readonly ScopedStoreContext _context;
         private readonly InventoryDbPrimitives _db;
         private readonly InventoryAuditLogger _auditLogger;
 
-        internal InventoryPackageStore(ScopedStoreContext context, InventoryDbPrimitives db, InventoryAuditLogger auditLogger)
+        internal InventoryPackageStore(InventoryDbPrimitives db, InventoryAuditLogger auditLogger)
         {
-            _context = context;
             _db = db;
             _auditLogger = auditLogger;
         }
 
-        public bool TryOpenAvatarPackage(AvatarPackageOpenRequest request, out AvatarPackageOpenResult result)
+        public bool TryOpenAvatarPackage(SqliteConnection connection, SqliteTransaction transaction, int characterId, int accountId, AvatarPackageOpenRequest request, out AvatarPackageOpenResult result)
         {
             result = null;
             if (request == null || request.Choices.Count == 0)
                 return false;
 
-            using (var connection = _context.OpenConnection())
-            using (var transaction = connection.BeginTransaction())
+            var packageItem = _db.LoadItemRecord(connection, transaction, characterId, InventoryListType.Main, request.SlotIndex);
+            if (packageItem == null || packageItem.StackCount <= 0)
             {
-                var packageItem = _db.LoadItemRecord(connection, transaction, InventoryListType.Main, request.SlotIndex);
-                if (packageItem == null || packageItem.StackCount <= 0)
-                {
-                    FileLogger.Log($"  [AvatarPackage] REJECT: no usable package at slot={request.SlotIndex}");
-                    return false;
-                }
-
-                if (!AvatarPackageDefinitionResolver.TryResolve(packageItem.ItemTemplateId, out var definition))
-                {
-                    FileLogger.Log($"  [AvatarPackage] REJECT: item=0x{packageItem.ItemTemplateId:X8} is not a supported avatar package");
-                    return false;
-                }
-
-                if (!ValidateAvatarPackageChoices(definition, request, out var optionByItemId))
-                {
-                    FileLogger.Log($"  [AvatarPackage] REJECT: choices do not match package item=0x{packageItem.ItemTemplateId:X8}");
-                    return false;
-                }
-
-                var addedAvatarCount = 0;
-                var addedMainItemCount = 0;
-                var addedPetCount = 0;
-                var grantedItems = new List<PackageGrantedItem>();
-
-                if (!_db.ConsumePackageItem(connection, transaction, packageItem))
-                    return false;
-
-                foreach (var reward in definition.Rewards)
-                {
-                    if (reward.IsAvatar)
-                    {
-                        var optionValue = optionByItemId[reward.ItemTemplateId];
-                        for (var i = 0; i < reward.Count; i++)
-                        {
-                            var targetSlot = _db.FindEmptySlot(connection, transaction, InventoryListType.Avatar, 0, 500);
-                            if (targetSlot < 0)
-                            {
-                                FileLogger.Log($"  [AvatarPackage] REJECT: no avatar slot for item=0x{reward.ItemTemplateId:X8}");
-                                return false;
-                            }
-
-                            _db.InsertAvatarItem(
-                                connection,
-                                transaction,
-                                SqliteInventoryStore.CreateDefaultAvatarItem((short)targetSlot, reward.ItemTemplateId, optionValue));
-                            grantedItems.Add(new PackageGrantedItem
-                            {
-                                ListType = InventoryListType.Avatar,
-                                SlotIndex = (short)targetSlot,
-                                ItemTemplateId = reward.ItemTemplateId,
-                                DisplayCount = 1,
-                                Durability = 0,
-                            });
-                            addedAvatarCount++;
-                        }
-
-                        continue;
-                    }
-
-                    if (!TryInsertPackageReward(connection, transaction, reward, ref addedMainItemCount, ref addedPetCount, grantedItems, packageItem.SlotIndex))
-                    {
-                        FileLogger.Log($"  [AvatarPackage] REJECT: cannot insert package reward item=0x{reward.ItemTemplateId:X8} count={reward.Count}");
-                        return false;
-                    }
-                }
-
-                _auditLogger.WriteOpenPackageAuditLog(connection, transaction, packageItem, addedAvatarCount, addedMainItemCount, addedPetCount);
-                transaction.Commit();
-
-                result = new AvatarPackageOpenResult
-                {
-                    SlotIndex = request.SlotIndex,
-                    PackageItemTemplateId = packageItem.ItemTemplateId,
-                    AddedAvatarCount = addedAvatarCount,
-                    AddedMainItemCount = addedMainItemCount,
-                    AddedPetCount = addedPetCount,
-                };
-                result.GrantedItems.AddRange(grantedItems);
-                return true;
+                FileLogger.Log($"  [AvatarPackage] REJECT: no usable package at slot={request.SlotIndex}");
+                return false;
             }
-        }
 
-        public bool TryOpenSelectablePackage(SelectablePackageOpenRequest request, out SelectablePackageOpenResult result)
-        {
-            result = null;
-            if (request == null)
+            if (!AvatarPackageDefinitionResolver.TryResolve(packageItem.ItemTemplateId, out var definition))
+            {
+                FileLogger.Log($"  [AvatarPackage] REJECT: item=0x{packageItem.ItemTemplateId:X8} is not a supported avatar package");
+                return false;
+            }
+
+            if (!ValidateAvatarPackageChoices(definition, request, out var optionByItemId))
+            {
+                FileLogger.Log($"  [AvatarPackage] REJECT: choices do not match package item=0x{packageItem.ItemTemplateId:X8}");
+                return false;
+            }
+
+            var addedAvatarCount = 0;
+            var addedMainItemCount = 0;
+            var addedPetCount = 0;
+            var grantedItems = new List<PackageGrantedItem>();
+
+            if (!_db.ConsumePackageItem(connection, transaction, packageItem))
                 return false;
 
-            using (var connection = _context.OpenConnection())
-            using (var transaction = connection.BeginTransaction())
+            foreach (var reward in definition.Rewards)
             {
-                var packageItem = _db.LoadItemRecord(connection, transaction, InventoryListType.Main, request.SlotIndex);
-                if (packageItem == null || packageItem.StackCount <= 0)
+                if (reward.IsAvatar)
                 {
-                    FileLogger.Log($"  [SelectablePackage] REJECT: no usable package at slot={request.SlotIndex}");
-                    return false;
-                }
-
-                if (packageItem.ExpireTime > 0 && packageItem.ExpireTime <= DateTimeOffset.Now.ToUnixTimeSeconds())
-                {
-                    FileLogger.Log($"  [SelectablePackage] REJECT: expired package item=0x{packageItem.ItemTemplateId:X8} expire={packageItem.ExpireTime}");
-                    return false;
-                }
-
-                if (!SelectablePackageDefinitionResolver.TryResolve(packageItem.ItemTemplateId, out var definition))
-                {
-                    FileLogger.Log($"  [SelectablePackage] REJECT: item=0x{packageItem.ItemTemplateId:X8} has no selectable package data");
-                    return false;
-                }
-
-                var addedMainItemCount = 0;
-                var addedAvatarCount = 0;
-                var addedPetCount = 0;
-                var grantedItems = new List<PackageGrantedItem>();
-                PackageRewardEntry rewardForResult = null;
-
-                if (!_db.ConsumePackageItem(connection, transaction, packageItem))
-                    return false;
-
-                if (request.HasAvatarChoices)
-                {
-                    var seenAvatarChoices = new HashSet<int>();
-                    if (!DefinitionHasAvatarReward(definition))
+                    var optionValue = optionByItemId[reward.ItemTemplateId];
+                    for (var i = 0; i < reward.Count; i++)
                     {
-                        FileLogger.Log($"  [SelectablePackage] REJECT: package item=0x{packageItem.ItemTemplateId:X8} has no avatar rewards for long 0x00A0 body");
-                        return false;
-                    }
-
-                    foreach (var choice in request.AvatarChoices)
-                    {
-                        if (!seenAvatarChoices.Add(choice.ItemTemplateId))
-                        {
-                            FileLogger.Log($"  [SelectablePackage] REJECT: duplicate avatar choice item=0x{choice.ItemTemplateId:X8}");
-                            return false;
-                        }
-
-                        if (!SelectablePackageDefinitionResolver.IsAvatarEquipment(choice.ItemTemplateId))
-                        {
-                            FileLogger.Log($"  [SelectablePackage] REJECT: avatar choice item=0x{choice.ItemTemplateId:X8} is not valid for package item=0x{packageItem.ItemTemplateId:X8}");
-                            return false;
-                        }
-
-                        if (!definition.TryGetReward(choice.ItemTemplateId, out var avatarReward))
-                        {
-                            avatarReward = new PackageRewardEntry
-                            {
-                                ItemTemplateId = choice.ItemTemplateId,
-                                Count = 1,
-                                ExpireTime = SelectablePackageDefinitionResolver.ResolveItemExpirationUnixTime(choice.ItemTemplateId),
-                            };
-                            FileLogger.Log($"  [SelectablePackage] WARN: avatar choice item=0x{choice.ItemTemplateId:X8} accepted by equipment metadata but missing from parsed package rewards item=0x{packageItem.ItemTemplateId:X8}");
-                        }
-
-                        if (rewardForResult == null)
-                            rewardForResult = avatarReward;
-
-                        if (avatarReward.ExpireTime > 0 && avatarReward.ExpireTime <= DateTimeOffset.Now.ToUnixTimeSeconds())
-                        {
-                            FileLogger.Log($"  [SelectablePackage] REJECT: avatar choice item=0x{choice.ItemTemplateId:X8} expired at {avatarReward.ExpireTime}");
-                            return false;
-                        }
-
-                        var targetSlot = _db.FindEmptySlot(connection, transaction, InventoryListType.Avatar, 0, 500);
+                        var targetSlot = _db.FindEmptySlot(connection, transaction, characterId, InventoryListType.Avatar, 0, 500);
                         if (targetSlot < 0)
                         {
-                            FileLogger.Log($"  [SelectablePackage] REJECT: no avatar slot for selected item=0x{choice.ItemTemplateId:X8}");
+                            FileLogger.Log($"  [AvatarPackage] REJECT: no avatar slot for item=0x{reward.ItemTemplateId:X8}");
                             return false;
                         }
 
                         _db.InsertAvatarItem(
                             connection,
                             transaction,
-                            SqliteInventoryStore.CreateDefaultAvatarItem((short)targetSlot, choice.ItemTemplateId, choice.OptionValue));
-                        grantedItems.Add(new PackageGrantedItem
-                        {
-                            ListType = InventoryListType.Avatar,
-                            SlotIndex = (short)targetSlot,
-                            ItemTemplateId = choice.ItemTemplateId,
-                            DisplayCount = 1,
-                            Durability = 0,
-                        });
-                        addedAvatarCount++;
-                    }
-                }
-                else
-                {
-                    if (!definition.TryGetReward(request.SelectedItemTemplateId, out var reward))
-                    {
-                        if (!DefinitionHasAvatarReward(definition) ||
-                            !SelectablePackageDefinitionResolver.IsAvatarEquipment(request.SelectedItemTemplateId))
-                        {
-                            FileLogger.Log($"  [SelectablePackage] REJECT: selected item=0x{request.SelectedItemTemplateId:X8} is not in package item=0x{packageItem.ItemTemplateId:X8}");
-                            return false;
-                        }
-
-                        reward = new PackageRewardEntry
-                        {
-                            ItemTemplateId = request.SelectedItemTemplateId,
-                            Count = 1,
-                            ExpireTime = SelectablePackageDefinitionResolver.ResolveItemExpirationUnixTime(request.SelectedItemTemplateId),
-                        };
-                        FileLogger.Log($"  [SelectablePackage] WARN: selected avatar item=0x{request.SelectedItemTemplateId:X8} accepted by equipment metadata but missing from parsed package rewards item=0x{packageItem.ItemTemplateId:X8}");
-                    }
-
-                    if (reward.ExpireTime > 0 && reward.ExpireTime <= DateTimeOffset.Now.ToUnixTimeSeconds())
-                    {
-                        FileLogger.Log($"  [SelectablePackage] REJECT: selected reward item=0x{reward.ItemTemplateId:X8} expired at {reward.ExpireTime}");
-                        return false;
-                    }
-
-                    var metadata = ItemMetadataResolver.Resolve(reward.ItemTemplateId);
-                    if (metadata.ItemKind == "special")
-                    {
-                        FileLogger.Log($"  [SelectablePackage] REJECT: selected reward item=0x{reward.ItemTemplateId:X8} has unsupported metadata");
-                        return false;
-                    }
-
-                    if (SelectablePackageDefinitionResolver.IsAvatarEquipment(reward.ItemTemplateId))
-                    {
-                        var targetSlot = _db.FindEmptySlot(connection, transaction, InventoryListType.Avatar, 0, 500);
-                        if (targetSlot < 0)
-                        {
-                            FileLogger.Log($"  [SelectablePackage] REJECT: no avatar slot for selected item=0x{reward.ItemTemplateId:X8}");
-                            return false;
-                        }
-
-                        _db.InsertAvatarItem(
-                            connection,
-                            transaction,
-                            SqliteInventoryStore.CreateDefaultAvatarItem((short)targetSlot, reward.ItemTemplateId, request.SelectionFlag));
+                            characterId,
+                            SqliteInventoryStore.CreateDefaultAvatarItem((short)targetSlot, reward.ItemTemplateId, optionValue));
                         grantedItems.Add(new PackageGrantedItem
                         {
                             ListType = InventoryListType.Avatar,
@@ -268,149 +79,320 @@ namespace DfoServer.Game.Inventory
                         });
                         addedAvatarCount++;
                     }
-                    else if (!TryInsertPackageReward(connection, transaction, reward, ref addedMainItemCount, ref addedPetCount, grantedItems, packageItem.SlotIndex))
+
+                    continue;
+                }
+
+                if (!TryInsertPackageReward(connection, transaction, characterId, reward, ref addedMainItemCount, ref addedPetCount, grantedItems, packageItem.SlotIndex))
+                {
+                    FileLogger.Log($"  [AvatarPackage] REJECT: cannot insert package reward item=0x{reward.ItemTemplateId:X8} count={reward.Count}");
+                    return false;
+                }
+            }
+
+            _auditLogger.WriteOpenPackageAuditLog(connection, transaction, characterId, packageItem, addedAvatarCount, addedMainItemCount, addedPetCount);
+
+            result = new AvatarPackageOpenResult
+            {
+                SlotIndex = request.SlotIndex,
+                PackageItemTemplateId = packageItem.ItemTemplateId,
+                AddedAvatarCount = addedAvatarCount,
+                AddedMainItemCount = addedMainItemCount,
+                AddedPetCount = addedPetCount,
+            };
+            result.GrantedItems.AddRange(grantedItems);
+            return true;
+        }
+
+        public bool TryOpenSelectablePackage(SqliteConnection connection, SqliteTransaction transaction, int characterId, int accountId, SelectablePackageOpenRequest request, out SelectablePackageOpenResult result)
+        {
+            result = null;
+            if (request == null)
+                return false;
+
+            var packageItem = _db.LoadItemRecord(connection, transaction, characterId, InventoryListType.Main, request.SlotIndex);
+            if (packageItem == null || packageItem.StackCount <= 0)
+            {
+                FileLogger.Log($"  [SelectablePackage] REJECT: no usable package at slot={request.SlotIndex}");
+                return false;
+            }
+
+            if (packageItem.ExpireTime > 0 && packageItem.ExpireTime <= DateTimeOffset.Now.ToUnixTimeSeconds())
+            {
+                FileLogger.Log($"  [SelectablePackage] REJECT: expired package item=0x{packageItem.ItemTemplateId:X8} expire={packageItem.ExpireTime}");
+                return false;
+            }
+
+            if (!SelectablePackageDefinitionResolver.TryResolve(packageItem.ItemTemplateId, out var definition))
+            {
+                FileLogger.Log($"  [SelectablePackage] REJECT: item=0x{packageItem.ItemTemplateId:X8} has no selectable package data");
+                return false;
+            }
+
+            var addedMainItemCount = 0;
+            var addedAvatarCount = 0;
+            var addedPetCount = 0;
+            var grantedItems = new List<PackageGrantedItem>();
+            PackageRewardEntry rewardForResult = null;
+
+            if (!_db.ConsumePackageItem(connection, transaction, packageItem))
+                return false;
+
+            if (request.HasAvatarChoices)
+            {
+                var seenAvatarChoices = new HashSet<int>();
+                if (!DefinitionHasAvatarReward(definition))
+                {
+                    FileLogger.Log($"  [SelectablePackage] REJECT: package item=0x{packageItem.ItemTemplateId:X8} has no avatar rewards for long 0x00A0 body");
+                    return false;
+                }
+
+                foreach (var choice in request.AvatarChoices)
+                {
+                    if (!seenAvatarChoices.Add(choice.ItemTemplateId))
                     {
-                        FileLogger.Log($"  [SelectablePackage] REJECT: cannot insert selected reward item=0x{reward.ItemTemplateId:X8} count={reward.Count}");
+                        FileLogger.Log($"  [SelectablePackage] REJECT: duplicate avatar choice item=0x{choice.ItemTemplateId:X8}");
                         return false;
                     }
 
-                    rewardForResult = reward;
+                    if (!SelectablePackageDefinitionResolver.IsAvatarEquipment(choice.ItemTemplateId))
+                    {
+                        FileLogger.Log($"  [SelectablePackage] REJECT: avatar choice item=0x{choice.ItemTemplateId:X8} is not valid for package item=0x{packageItem.ItemTemplateId:X8}");
+                        return false;
+                    }
+
+                    if (!definition.TryGetReward(choice.ItemTemplateId, out var avatarReward))
+                    {
+                        avatarReward = new PackageRewardEntry
+                        {
+                            ItemTemplateId = choice.ItemTemplateId,
+                            Count = 1,
+                            ExpireTime = SelectablePackageDefinitionResolver.ResolveItemExpirationUnixTime(choice.ItemTemplateId),
+                        };
+                        FileLogger.Log($"  [SelectablePackage] WARN: avatar choice item=0x{choice.ItemTemplateId:X8} accepted by equipment metadata but missing from parsed package rewards item=0x{packageItem.ItemTemplateId:X8}");
+                    }
+
+                    if (rewardForResult == null)
+                        rewardForResult = avatarReward;
+
+                    if (avatarReward.ExpireTime > 0 && avatarReward.ExpireTime <= DateTimeOffset.Now.ToUnixTimeSeconds())
+                    {
+                        FileLogger.Log($"  [SelectablePackage] REJECT: avatar choice item=0x{choice.ItemTemplateId:X8} expired at {avatarReward.ExpireTime}");
+                        return false;
+                    }
+
+                    var targetSlot = _db.FindEmptySlot(connection, transaction, characterId, InventoryListType.Avatar, 0, 500);
+                    if (targetSlot < 0)
+                    {
+                        FileLogger.Log($"  [SelectablePackage] REJECT: no avatar slot for selected item=0x{choice.ItemTemplateId:X8}");
+                        return false;
+                    }
+
+                    _db.InsertAvatarItem(
+                        connection,
+                        transaction,
+                        characterId,
+                        SqliteInventoryStore.CreateDefaultAvatarItem((short)targetSlot, choice.ItemTemplateId, choice.OptionValue));
+                    grantedItems.Add(new PackageGrantedItem
+                    {
+                        ListType = InventoryListType.Avatar,
+                        SlotIndex = (short)targetSlot,
+                        ItemTemplateId = choice.ItemTemplateId,
+                        DisplayCount = 1,
+                        Durability = 0,
+                    });
+                    addedAvatarCount++;
+                }
+            }
+            else
+            {
+                if (!definition.TryGetReward(request.SelectedItemTemplateId, out var reward))
+                {
+                    if (!DefinitionHasAvatarReward(definition) ||
+                        !SelectablePackageDefinitionResolver.IsAvatarEquipment(request.SelectedItemTemplateId))
+                    {
+                        FileLogger.Log($"  [SelectablePackage] REJECT: selected item=0x{request.SelectedItemTemplateId:X8} is not in package item=0x{packageItem.ItemTemplateId:X8}");
+                        return false;
+                    }
+
+                    reward = new PackageRewardEntry
+                    {
+                        ItemTemplateId = request.SelectedItemTemplateId,
+                        Count = 1,
+                        ExpireTime = SelectablePackageDefinitionResolver.ResolveItemExpirationUnixTime(request.SelectedItemTemplateId),
+                    };
+                    FileLogger.Log($"  [SelectablePackage] WARN: selected avatar item=0x{request.SelectedItemTemplateId:X8} accepted by equipment metadata but missing from parsed package rewards item=0x{packageItem.ItemTemplateId:X8}");
                 }
 
-                if (rewardForResult == null)
-                    rewardForResult = new PackageRewardEntry { ItemTemplateId = request.SelectedItemTemplateId, Count = Math.Max(1, request.AvatarChoices.Count) };
-
-                _auditLogger.WriteOpenSelectablePackageAuditLog(connection, transaction, packageItem, rewardForResult, addedMainItemCount, addedPetCount);
-                transaction.Commit();
-
-                result = new SelectablePackageOpenResult
+                if (reward.ExpireTime > 0 && reward.ExpireTime <= DateTimeOffset.Now.ToUnixTimeSeconds())
                 {
-                    SlotIndex = request.SlotIndex,
-                    PackageItemTemplateId = packageItem.ItemTemplateId,
-                    RewardItemTemplateId = rewardForResult.ItemTemplateId,
-                    AddedMainItemCount = addedMainItemCount,
-                    AddedAvatarCount = addedAvatarCount,
-                    AddedPetCount = addedPetCount,
-                };
-                result.GrantedItems.AddRange(grantedItems);
-                return true;
+                    FileLogger.Log($"  [SelectablePackage] REJECT: selected reward item=0x{reward.ItemTemplateId:X8} expired at {reward.ExpireTime}");
+                    return false;
+                }
+
+                var metadata = ItemMetadataResolver.Resolve(reward.ItemTemplateId);
+                if (metadata.ItemKind == "special")
+                {
+                    FileLogger.Log($"  [SelectablePackage] REJECT: selected reward item=0x{reward.ItemTemplateId:X8} has unsupported metadata");
+                    return false;
+                }
+
+                if (SelectablePackageDefinitionResolver.IsAvatarEquipment(reward.ItemTemplateId))
+                {
+                    var targetSlot = _db.FindEmptySlot(connection, transaction, characterId, InventoryListType.Avatar, 0, 500);
+                    if (targetSlot < 0)
+                    {
+                        FileLogger.Log($"  [SelectablePackage] REJECT: no avatar slot for selected item=0x{reward.ItemTemplateId:X8}");
+                        return false;
+                    }
+
+                    _db.InsertAvatarItem(
+                        connection,
+                        transaction,
+                        characterId,
+                        SqliteInventoryStore.CreateDefaultAvatarItem((short)targetSlot, reward.ItemTemplateId, request.SelectionFlag));
+                    grantedItems.Add(new PackageGrantedItem
+                    {
+                        ListType = InventoryListType.Avatar,
+                        SlotIndex = (short)targetSlot,
+                        ItemTemplateId = reward.ItemTemplateId,
+                        DisplayCount = 1,
+                        Durability = 0,
+                    });
+                    addedAvatarCount++;
+                }
+                else if (!TryInsertPackageReward(connection, transaction, characterId, reward, ref addedMainItemCount, ref addedPetCount, grantedItems, packageItem.SlotIndex))
+                {
+                    FileLogger.Log($"  [SelectablePackage] REJECT: cannot insert selected reward item=0x{reward.ItemTemplateId:X8} count={reward.Count}");
+                    return false;
+                }
+
+                rewardForResult = reward;
             }
+
+            if (rewardForResult == null)
+                rewardForResult = new PackageRewardEntry { ItemTemplateId = request.SelectedItemTemplateId, Count = Math.Max(1, request.AvatarChoices.Count) };
+
+            _auditLogger.WriteOpenSelectablePackageAuditLog(connection, transaction, characterId, packageItem, rewardForResult, addedMainItemCount, addedPetCount);
+
+            result = new SelectablePackageOpenResult
+            {
+                SlotIndex = request.SlotIndex,
+                PackageItemTemplateId = packageItem.ItemTemplateId,
+                RewardItemTemplateId = rewardForResult.ItemTemplateId,
+                AddedMainItemCount = addedMainItemCount,
+                AddedAvatarCount = addedAvatarCount,
+                AddedPetCount = addedPetCount,
+            };
+            result.GrantedItems.AddRange(grantedItems);
+            return true;
         }
 
-        public bool TryUseBoosterItem(short? slotIndex, IReadOnlyList<int> selectedItemTemplateIds, out BoosterUseResult result)
+        public bool TryUseBoosterItem(SqliteConnection connection, SqliteTransaction transaction, int characterId, int accountId, short? slotIndex, IReadOnlyList<int> selectedItemTemplateIds, out BoosterUseResult result)
         {
             result = null;
 
-            using (var connection = _context.OpenConnection())
-            using (var transaction = connection.BeginTransaction())
+            var source = slotIndex.HasValue
+                ? _db.LoadItemRecord(connection, transaction, characterId, InventoryListType.Main, slotIndex.Value)
+                : _db.FindFirstPackageItem(connection, transaction, characterId);
+            if (source == null)
+                return false;
+
+            var stackable = InventoryDbPrimitives.LoadStackableItem(source.ItemTemplateId);
+            if (stackable == null)
+                return false;
+
+            var stackableType = NormalizeStackableType(stackable.StackableType);
+            if (!TryResolvePackageRewards(stackable, stackableType, selectedItemTemplateIds, out var rewards))
             {
-                var source = slotIndex.HasValue
-                    ? _db.LoadItemRecord(connection, transaction, InventoryListType.Main, slotIndex.Value)
-                    : _db.FindFirstPackageItem(connection, transaction);
-                if (source == null)
-                    return false;
-
-                var stackable = InventoryDbPrimitives.LoadStackableItem(source.ItemTemplateId);
-                if (stackable == null)
-                    return false;
-
-                var stackableType = NormalizeStackableType(stackable.StackableType);
-                if (!TryResolvePackageRewards(stackable, stackableType, selectedItemTemplateIds, out var rewards))
-                {
-                    var selectedText = selectedItemTemplateIds == null || selectedItemTemplateIds.Count == 0
-                        ? "none"
-                        : string.Join(",", selectedItemTemplateIds.Select(id => $"0x{id:X8}"));
-                    FileLogger.Log($"  [Booster] unsupported/empty item=0x{source.ItemTemplateId:X8} type={stackableType} selected={selectedText} rewards(random={stackable.BoosterRewards.Count},select={stackable.BoosterSelectionRewards.Count},package={stackable.PackageRewards.Count})");
-                    return false;
-                }
-
-                if (!_db.ConsumeOneStackable(connection, transaction, source))
-                    return false;
-
-                var useResult = new BoosterUseResult
-                {
-                    SourceSlotIndex = source.SlotIndex,
-                    SourceItemTemplateId = source.ItemTemplateId,
-                    SourceRemainingStackCount = Math.Max(0, source.StackCount - 1),
-                    SourceInstanceValue = source.InstanceValue,
-                };
-
-                foreach (var reward in rewards)
-                {
-                    if (!_db.TryAddBoosterRewardItem(connection, transaction, reward.ItemId, reward.Count, out var rewardResult))
-                        return false;
-
-                    useResult.Rewards.Add(rewardResult);
-                }
-
-                _auditLogger.WriteDeleteAuditLog(connection, transaction, source, 1);
-                foreach (var reward in useResult.Rewards)
-                    _auditLogger.WriteBuyAuditLog(connection, transaction, reward.ItemTemplateId, reward.SlotIndex, 0, 0);
-                transaction.Commit();
-                result = useResult;
-                return true;
+                var selectedText = selectedItemTemplateIds == null || selectedItemTemplateIds.Count == 0
+                    ? "none"
+                    : string.Join(",", selectedItemTemplateIds.Select(id => $"0x{id:X8}"));
+                FileLogger.Log($"  [Booster] unsupported/empty item=0x{source.ItemTemplateId:X8} type={stackableType} selected={selectedText} rewards(random={stackable.BoosterRewards.Count},select={stackable.BoosterSelectionRewards.Count},package={stackable.PackageRewards.Count})");
+                return false;
             }
+
+            if (!_db.ConsumeOneStackable(connection, transaction, source))
+                return false;
+
+            var useResult = new BoosterUseResult
+            {
+                SourceSlotIndex = source.SlotIndex,
+                SourceItemTemplateId = source.ItemTemplateId,
+                SourceRemainingStackCount = Math.Max(0, source.StackCount - 1),
+                SourceInstanceValue = source.InstanceValue,
+            };
+
+            foreach (var reward in rewards)
+            {
+                if (!_db.TryAddBoosterRewardItem(connection, transaction, characterId, accountId, reward.ItemId, reward.Count, out var rewardResult))
+                    return false;
+
+                useResult.Rewards.Add(rewardResult);
+            }
+
+            _auditLogger.WriteDeleteAuditLog(connection, transaction, characterId, source, 1);
+            foreach (var reward in useResult.Rewards)
+                _auditLogger.WriteBuyAuditLog(connection, transaction, characterId, reward.ItemTemplateId, reward.SlotIndex, 0, 0);
+            result = useResult;
+            return true;
         }
 
-        public bool TryOpenPackage0207(short slotIndex, IReadOnlyList<int> selectedItemTemplateIds, out BoosterUseResult result)
+        public bool TryOpenPackage0207(SqliteConnection connection, SqliteTransaction transaction, int characterId, int accountId, short slotIndex, IReadOnlyList<int> selectedItemTemplateIds, out BoosterUseResult result)
         {
             result = null;
             if (selectedItemTemplateIds == null || selectedItemTemplateIds.Count == 0)
                 return false;
 
-            using (var connection = _context.OpenConnection())
-            using (var transaction = connection.BeginTransaction())
+            var source = _db.LoadItemRecord(connection, transaction, characterId, InventoryListType.Main, slotIndex);
+            if (source == null)
+                return false;
+
+            var stackable = InventoryDbPrimitives.LoadStackableItem(source.ItemTemplateId);
+            if (stackable == null)
+                return false;
+
+            var stackableType = NormalizeStackableType(stackable.StackableType);
+            if (!stackableType.Equals("[usable cera package]", StringComparison.OrdinalIgnoreCase)
+                && !stackableType.Equals("[booster selection]", StringComparison.OrdinalIgnoreCase))
+                return false;
+
+            if (!TryResolveClientSelectedRewards(stackable, selectedItemTemplateIds, out var rewards))
             {
-                var source = _db.LoadItemRecord(connection, transaction, InventoryListType.Main, slotIndex);
-                if (source == null)
-                    return false;
-
-                var stackable = InventoryDbPrimitives.LoadStackableItem(source.ItemTemplateId);
-                if (stackable == null)
-                    return false;
-
-                var stackableType = NormalizeStackableType(stackable.StackableType);
-                if (!stackableType.Equals("[usable cera package]", StringComparison.OrdinalIgnoreCase)
-                    && !stackableType.Equals("[booster selection]", StringComparison.OrdinalIgnoreCase))
-                    return false;
-
-                if (!TryResolveClientSelectedRewards(stackable, selectedItemTemplateIds, out var rewards))
-                {
-                    FileLogger.Log($"  [OpenPkg0207] PVF validation failed source=0x{source.ItemTemplateId:X8} selected={string.Join(",", selectedItemTemplateIds.Select(id => $"0x{id:X8}"))}");
-                    return false;
-                }
-
-                if (!_db.ConsumeOneStackable(connection, transaction, source))
-                    return false;
-
-                var useResult = new BoosterUseResult
-                {
-                    SourceSlotIndex = source.SlotIndex,
-                    SourceItemTemplateId = source.ItemTemplateId,
-                    SourceRemainingStackCount = Math.Max(0, source.StackCount - 1),
-                    SourceInstanceValue = source.InstanceValue,
-                };
-
-                foreach (var reward in rewards)
-                {
-                    if (!_db.TryAddBoosterRewardItem(connection, transaction, reward.ItemId, reward.Count, out var rewardResult))
-                        return false;
-
-                    useResult.Rewards.Add(rewardResult);
-                }
-
-                _auditLogger.WriteDeleteAuditLog(connection, transaction, source, 1);
-                foreach (var reward in useResult.Rewards)
-                    _auditLogger.WriteBuyAuditLog(connection, transaction, reward.ItemTemplateId, reward.SlotIndex, 0, 0);
-                transaction.Commit();
-                result = useResult;
-                return true;
+                FileLogger.Log($"  [OpenPkg0207] PVF validation failed source=0x{source.ItemTemplateId:X8} selected={string.Join(",", selectedItemTemplateIds.Select(id => $"0x{id:X8}"))}");
+                return false;
             }
+
+            if (!_db.ConsumeOneStackable(connection, transaction, source))
+                return false;
+
+            var useResult = new BoosterUseResult
+            {
+                SourceSlotIndex = source.SlotIndex,
+                SourceItemTemplateId = source.ItemTemplateId,
+                SourceRemainingStackCount = Math.Max(0, source.StackCount - 1),
+                SourceInstanceValue = source.InstanceValue,
+            };
+
+            foreach (var reward in rewards)
+            {
+                if (!_db.TryAddBoosterRewardItem(connection, transaction, characterId, accountId, reward.ItemId, reward.Count, out var rewardResult))
+                    return false;
+
+                useResult.Rewards.Add(rewardResult);
+            }
+
+            _auditLogger.WriteDeleteAuditLog(connection, transaction, characterId, source, 1);
+            foreach (var reward in useResult.Rewards)
+                _auditLogger.WriteBuyAuditLog(connection, transaction, characterId, reward.ItemTemplateId, reward.SlotIndex, 0, 0);
+            result = useResult;
+            return true;
         }
 
         private bool TryInsertPackageReward(
             SqliteConnection connection,
             SqliteTransaction transaction,
+            int characterId,
             PackageRewardEntry reward,
             ref int addedMainItemCount,
             ref int addedPetCount,
@@ -436,6 +418,7 @@ namespace DfoServer.Game.Inventory
                 var existingItem = _db.FindStackableItemByTemplateIdAndExpireTime(
                     connection,
                     transaction,
+                    characterId,
                     InventoryListType.Main,
                     reward.ItemTemplateId,
                     reward.ExpireTime,
@@ -461,6 +444,7 @@ namespace DfoServer.Game.Inventory
                     existingItem = _db.FindStackableItemByTemplateIdAndExpireTime(
                         connection,
                         transaction,
+                        characterId,
                         InventoryListType.Main,
                         reward.ItemTemplateId,
                         reward.ExpireTime,
@@ -472,13 +456,14 @@ namespace DfoServer.Game.Inventory
                     var insertCount = metadata.StackLimit > 0 ? Math.Min(metadata.StackLimit, remaining) : remaining;
                     int slotStart, slotEnd;
                     metadata.GetSlotRange(out slotStart, out slotEnd);
-                    var targetSlot = _db.FindEmptySlotPreferOther(connection, transaction, InventoryListType.Main, slotStart, slotEnd, sourceSlotToUseLast);
+                    var targetSlot = _db.FindEmptySlotPreferOther(connection, transaction, characterId, InventoryListType.Main, slotStart, slotEnd, sourceSlotToUseLast);
                     if (targetSlot < 0)
                         return false;
 
                     _db.InsertCharacterItem(
                         connection,
                         transaction,
+                        characterId,
                         InventoryListType.Main,
                         (short)targetSlot,
                         reward.ItemTemplateId,
@@ -513,13 +498,14 @@ namespace DfoServer.Game.Inventory
             {
                 if (isCreature)
                 {
-                    var petSlot = _db.FindEmptySlot(connection, transaction, InventoryListType.Pet, SqliteInventoryStore.PetInventorySlotStart, SqliteInventoryStore.PetInventorySlotEnd);
+                    var petSlot = _db.FindEmptySlot(connection, transaction, characterId, InventoryListType.Pet, SqliteInventoryStore.PetInventorySlotStart, SqliteInventoryStore.PetInventorySlotEnd);
                     if (petSlot < 0)
                         return false;
 
                     _db.InsertCharacterItem(
                         connection,
                         transaction,
+                        characterId,
                         InventoryListType.Pet,
                         (short)petSlot,
                         reward.ItemTemplateId,
@@ -531,7 +517,7 @@ namespace DfoServer.Game.Inventory
                         0,
                         0,
                         0,
-                        _db.NextPetSerialOrHandle(connection, transaction),
+                        _db.NextPetSerialOrHandle(connection, transaction, characterId),
                         "{}");
                     grantedItems?.Add(new PackageGrantedItem
                     {
@@ -547,7 +533,7 @@ namespace DfoServer.Game.Inventory
 
                 int slotStart, slotEnd;
                 metadata.GetSlotRange(out slotStart, out slotEnd);
-                var targetSlot = _db.FindEmptySlotPreferOther(connection, transaction, InventoryListType.Main, slotStart, slotEnd, sourceSlotToUseLast);
+                var targetSlot = _db.FindEmptySlotPreferOther(connection, transaction, characterId, InventoryListType.Main, slotStart, slotEnd, sourceSlotToUseLast);
                 if (targetSlot < 0)
                     return false;
 
@@ -555,6 +541,7 @@ namespace DfoServer.Game.Inventory
                 _db.InsertCharacterItem(
                     connection,
                     transaction,
+                    characterId,
                     InventoryListType.Main,
                     (short)targetSlot,
                     reward.ItemTemplateId,

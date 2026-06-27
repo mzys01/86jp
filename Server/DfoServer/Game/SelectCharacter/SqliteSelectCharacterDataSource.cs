@@ -13,6 +13,7 @@ namespace DfoServer.Game.SelectCharacter
     public sealed class SqliteSelectCharacterDataSource : ISelectCharacterDataSource
     {
         private readonly IInventoryStore _inventoryStore;
+        private readonly IAssetService _assetService;
         private readonly SqliteCharacterProgressRepository _initDataRepository;
         private readonly SqliteUserInfoBlobRepository _userInfoBlobRepository;
         private readonly ICharacterStateRepository _initFlagsRepository;
@@ -23,12 +24,13 @@ namespace DfoServer.Game.SelectCharacter
         private readonly string _databasePath;
         private readonly string _schemaFilePath;
 
-        public SqliteSelectCharacterDataSource(string databasePath, string schemaFilePath, ICharacterRepository characterRepository)
+        public SqliteSelectCharacterDataSource(string databasePath, string schemaFilePath, ICharacterRepository characterRepository, IAssetService assetService = null)
         {
             _databasePath = databasePath;
             _schemaFilePath = schemaFilePath;
             _connectionString = Infrastructure.SqliteDatabaseBootstrap.Initialize(databasePath, schemaFilePath);
             _inventoryStore = new SqliteInventoryStore(databasePath, schemaFilePath);
+            _assetService = assetService;
             _initDataRepository = new SqliteCharacterProgressRepository(databasePath, schemaFilePath);
             _userInfoBlobRepository = new SqliteUserInfoBlobRepository(databasePath, schemaFilePath);
             _initFlagsRepository = new SqliteCharacterStateRepository(databasePath, schemaFilePath);
@@ -81,8 +83,17 @@ namespace DfoServer.Game.SelectCharacter
             
             LoadInitFieldsFromPacketTemplates(characterId, initSnapshot);
 
-            var luckyStar = CurrencyService.LoadLuckyStar(_connectionString, accountId);
-            initSnapshot.LuckyStar = luckyStar;
+            if (_assetService != null)
+            {
+                using (var assetScope = _assetService.OpenScope(characterId, accountId))
+                {
+                    initSnapshot.LuckyStar = _assetService.LoadWallet(assetScope).LuckyStar;
+                }
+            }
+            else
+            {
+                initSnapshot.LuckyStar = CurrencyService.LoadLuckyStar(_connectionString, accountId);
+            }
 
             var acctSettings = _accountSettingsRepository.Load(accountId);
             initSnapshot.MainGameOptionBlob = acctSettings?.MainGameOption ?? Settings.AccountSettings.DefaultMainGameOption;
@@ -197,6 +208,11 @@ namespace DfoServer.Game.SelectCharacter
 
         public CharacterItemListSnapshot LoadItemListSnapshot(int characterId, int accountId)
         {
+            if (_assetService != null)
+            {
+                using (var scope = _assetService.OpenScope(characterId, accountId))
+                    return _assetService.LoadSnapshot(scope);
+            }
             using (_inventoryStore.BeginScope(characterId, accountId))
                 return _inventoryStore.LoadCharacterItemListSnapshot();
         }

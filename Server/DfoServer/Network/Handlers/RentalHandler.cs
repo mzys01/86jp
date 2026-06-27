@@ -1,8 +1,6 @@
 using DfoServer.Game.Inventory;
 using DfoServer.Game.SelectCharacter;
-using DfoServer.Infrastructure;
 using DfoServer.Network.Builders;
-using Microsoft.Data.Sqlite;
 using System;
 using System.Linq;
 using System.Threading.Tasks;
@@ -14,15 +12,14 @@ namespace DfoServer.Network.Handlers
     {
         private const ushort NotiRental = 0x0357;
 
-        private readonly string _connectionString;
+        private readonly IAssetService _assetService;
         private readonly SqliteSelectCharacterDataSource _dataSource;
 
         public RentalHandler(
-            string databasePath,
-            string schemaFilePath,
+            IAssetService assetService,
             SqliteSelectCharacterDataSource dataSource)
         {
-            _connectionString = SqliteDatabaseBootstrap.Initialize(databasePath, schemaFilePath);
+            _assetService = assetService ?? throw new ArgumentNullException(nameof(assetService));
             _dataSource = dataSource;
         }
 
@@ -47,7 +44,11 @@ namespace DfoServer.Network.Handlers
             }
 
             var inventoryTemplateId = (int)parsedInventoryId;
-            var currentLuckyStar = CurrencyService.LoadLuckyStar(_connectionString, accountId);
+            ushort currentLuckyStar;
+            using (var readScope = _assetService.OpenScope(characterId, accountId))
+            {
+                currentLuckyStar = _assetService.LoadWallet(readScope).LuckyStar;
+            }
             if (currentLuckyStar < starCost)
             {
                 FileLogger.Log($"[Rental] RENT_WEAPON: insufficient stars need={starCost} have={currentLuckyStar} char={characterId}");
@@ -64,20 +65,16 @@ namespace DfoServer.Network.Handlers
             var pickupSucceeded = false;
             var luckyStar = (ushort)Math.Max(0, currentLuckyStar - starCost);
 
-            using (var conn = new SqliteConnection(_connectionString))
+            using (var scope = _assetService.OpenScope(characterId, accountId))
             {
-                conn.Open();
-                using (var tx = conn.BeginTransaction())
-                {
-                    pickupSucceeded = _dataSource.TryPickupRentalWeapon(
-                        conn, tx, characterId, accountId, inventoryTemplateId, expireTime, out invSlot, out instanceValue);
+                pickupSucceeded = _dataSource.TryPickupRentalWeapon(
+                    scope.Connection, scope.Transaction, characterId, accountId, inventoryTemplateId, expireTime, out invSlot, out instanceValue);
 
-                    if (pickupSucceeded)
-                    {
-                        _dataSource.SaveRentalInfo(conn, tx, characterId, rental);
-                        CurrencyService.UpdateLuckyStar(conn, tx, accountId, luckyStar);
-                        tx.Commit();
-                    }
+                if (pickupSucceeded)
+                {
+                    _dataSource.SaveRentalInfo(scope.Connection, scope.Transaction, characterId, rental);
+                    _assetService.AddLuckyStar(scope, -starCost);
+                    scope.Commit();
                 }
             }
 

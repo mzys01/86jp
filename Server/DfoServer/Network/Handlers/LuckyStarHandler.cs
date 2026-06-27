@@ -2,7 +2,7 @@ using DfoServer.Game.Inventory;
 using DfoServer.Game.SelectCharacter;
 using DfoServer.Infrastructure;
 using DfoServer.Network.Builders;
-using Microsoft.Data.Sqlite;
+
 using System;
 using System.Threading.Tasks;
 
@@ -13,12 +13,12 @@ namespace DfoServer.Network.Handlers
     {
         private const ushort NotiRental = 0x0357;
 
-        private readonly string _connectionString;
+        private readonly IAssetService _assetService;
         private readonly SqliteSelectCharacterDataSource _dataSource;
 
-        public LuckyStarHandler(string databasePath, string schemaFilePath, SqliteSelectCharacterDataSource dataSource)
+        public LuckyStarHandler(IAssetService assetService, SqliteSelectCharacterDataSource dataSource)
         {
-            _connectionString = SqliteDatabaseBootstrap.Initialize(databasePath, schemaFilePath);
+            _assetService = assetService;
             _dataSource = dataSource;
         }
 
@@ -50,31 +50,27 @@ namespace DfoServer.Network.Handlers
             var newLuckyStar = (ushort)0;
             int newGold;
 
-            using (var conn = new SqliteConnection(_connectionString))
+            using (var scope = _assetService.OpenScope(characterId, accountId))
             {
-                conn.Open();
-                using (var tx = conn.BeginTransaction())
+                var wallet = _assetService.LoadWallet(scope);
+                if (wallet.LuckyStar + buyCount > RentalCatalogCodec.MaxLuckyStar)
                 {
-                    var wallet = CurrencyService.LoadWallet(conn, tx, characterId);
-                    if (wallet.LuckyStar + buyCount > RentalCatalogCodec.MaxLuckyStar)
-                    {
-                        await Send0373Error(session);
-                        return;
-                    }
-
-                    if (wallet.Gold < totalGoldCost)
-                    {
-                        FileLogger.Log($"[LuckyStar] BUY: insufficient gold need={totalGoldCost} have={wallet.Gold} char={characterId}");
-                        await Send0373Error(session);
-                        return;
-                    }
-
-                    newGold = wallet.Gold - totalGoldCost;
-                    newLuckyStar = (ushort)(wallet.LuckyStar + buyCount);
-                    CurrencyService.UpdateGold(conn, tx, characterId, newGold);
-                    CurrencyService.UpdateLuckyStar(conn, tx, accountId, newLuckyStar);
-                    tx.Commit();
+                    await Send0373Error(session);
+                    return;
                 }
+
+                if (wallet.Gold < totalGoldCost)
+                {
+                    FileLogger.Log($"[LuckyStar] BUY: insufficient gold need={totalGoldCost} have={wallet.Gold} char={characterId}");
+                    await Send0373Error(session);
+                    return;
+                }
+
+                newGold = wallet.Gold - totalGoldCost;
+                newLuckyStar = (ushort)(wallet.LuckyStar + buyCount);
+                _assetService.AddGold(scope, -totalGoldCost);
+                _assetService.AddLuckyStar(scope, buyCount);
+                scope.Commit();
             }
 
             FileLogger.Log($"[LuckyStar] BUY: char={characterId} count={buyCount} gold=-{totalGoldCost} -> {newGold} stars={newLuckyStar}");

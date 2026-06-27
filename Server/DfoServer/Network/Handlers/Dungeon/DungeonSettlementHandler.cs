@@ -89,12 +89,13 @@ namespace DfoServer.Network.Handlers.Dungeon
                 if (cards != null)
                 {
                     var entries = new List<byte[]>();
+                    var accountId = session.Account?.AccountId ?? 1;
 
                     // Free card gold
                     if (cards.Count > 0 && cards[0].IsGold && cards[0].GoldAmount > 0)
                     {
-                        _svc.PersistGold(session.Player.CharacterId, cards[0].GoldAmount);
-                        int totalGold = _svc.ReadGold(session.Player.CharacterId);
+                        _svc.PersistGold(session.Player.CharacterId, accountId, cards[0].GoldAmount);
+                        int totalGold = _svc.ReadGold(session.Player.CharacterId, accountId);
                         entries.Add(DungeonSharedServices.BuildItemEntry(0, 0, (uint)totalGold));
                     }
 
@@ -102,7 +103,7 @@ namespace DfoServer.Network.Handlers.Dungeon
                     if (cards.Count > 1 && !cards[1].IsGold && cards[1].ItemId > 0)
                     {
                         short slot;
-                        if (_svc.TryPickupItemToInventory(session.Player.CharacterId, cards[1].ItemId, cards[1].StackCount, out slot))
+                        if (_svc.TryPickupItemToInventory(session.Player.CharacterId, accountId, cards[1].ItemId, cards[1].StackCount, out slot))
                             entries.Add(cards[1].IsEquipment
                                 ? DungeonSharedServices.BuildEquipEntry(slot, (uint)cards[1].ItemId)
                                 : DungeonSharedServices.BuildItemEntry(slot, (uint)cards[1].ItemId, (uint)cards[1].StackCount));
@@ -111,8 +112,8 @@ namespace DfoServer.Network.Handlers.Dungeon
                     // Paid card gold
                     if (cards.Count > 4 && cards[4].IsGold && cards[4].GoldAmount > 0)
                     {
-                        _svc.PersistGold(session.Player.CharacterId, cards[4].GoldAmount);
-                        int totalGold = _svc.ReadGold(session.Player.CharacterId);
+                        _svc.PersistGold(session.Player.CharacterId, accountId, cards[4].GoldAmount);
+                        int totalGold = _svc.ReadGold(session.Player.CharacterId, accountId);
                         entries.Add(DungeonSharedServices.BuildItemEntry(0, 0, (uint)totalGold));
                     }
 
@@ -120,7 +121,7 @@ namespace DfoServer.Network.Handlers.Dungeon
                     if (cards.Count > 5 && !cards[5].IsGold && cards[5].ItemId > 0)
                     {
                         short slot;
-                        if (_svc.TryPickupItemToInventory(session.Player.CharacterId, cards[5].ItemId, cards[5].StackCount, out slot))
+                        if (_svc.TryPickupItemToInventory(session.Player.CharacterId, accountId, cards[5].ItemId, cards[5].StackCount, out slot))
                             entries.Add(cards[5].IsEquipment
                                 ? DungeonSharedServices.BuildEquipEntry(slot, (uint)cards[5].ItemId)
                                 : DungeonSharedServices.BuildItemEntry(slot, (uint)cards[5].ItemId, (uint)cards[5].StackCount));

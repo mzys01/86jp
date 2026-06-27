@@ -4,14 +4,8 @@ namespace DfoServer.Game.Inventory
 {
     internal sealed class InventoryAuditLogger
     {
-        private readonly ScopedStoreContext _context;
 
-        internal InventoryAuditLogger(ScopedStoreContext context)
-        {
-            _context = context;
-        }
-
-        internal void WriteAuditLog(SqliteConnection connection, SqliteTransaction transaction, string actionName, SqliteInventoryStore.ItemRecord source, InventoryListType destinationListType, short destinationSlotIndex, int moveCount)
+        internal void WriteAuditLog(SqliteConnection connection, SqliteTransaction transaction, int characterId, string actionName, SqliteInventoryStore.ItemRecord source, InventoryListType destinationListType, short destinationSlotIndex, int moveCount)
         {
             using (var command = connection.CreateCommand())
             {
@@ -23,8 +17,8 @@ INSERT INTO item_audit_log (
 VALUES (
     'character', @ownerId, @characterId, @actionName, @listType, @slotIndex, @itemUid,
     @itemTemplateId, @deltaStackCount, @payloadJson);";
-                command.Parameters.AddWithValue("@ownerId", _context.CharacterId);
-                command.Parameters.AddWithValue("@characterId", _context.CharacterId);
+                command.Parameters.AddWithValue("@ownerId", characterId);
+                command.Parameters.AddWithValue("@characterId", characterId);
                 command.Parameters.AddWithValue("@actionName", actionName);
                 command.Parameters.AddWithValue("@listType", (int)destinationListType);
                 command.Parameters.AddWithValue("@slotIndex", destinationSlotIndex);
@@ -36,7 +30,7 @@ VALUES (
             }
         }
 
-        internal void WriteDeleteAuditLog(SqliteConnection connection, SqliteTransaction transaction, SqliteInventoryStore.ItemRecord source, int deleteCount)
+        internal void WriteDeleteAuditLog(SqliteConnection connection, SqliteTransaction transaction, int characterId, SqliteInventoryStore.ItemRecord source, int deleteCount)
         {
             using (var command = connection.CreateCommand())
             {
@@ -48,8 +42,8 @@ INSERT INTO item_audit_log (
 VALUES (
     'character', @ownerId, @characterId, 'delete_item', @listType, @slotIndex, @itemUid,
     @itemTemplateId, @deltaStackCount, @payloadJson);";
-                command.Parameters.AddWithValue("@ownerId", _context.CharacterId);
-                command.Parameters.AddWithValue("@characterId", _context.CharacterId);
+                command.Parameters.AddWithValue("@ownerId", characterId);
+                command.Parameters.AddWithValue("@characterId", characterId);
                 command.Parameters.AddWithValue("@listType", (int)source.ListType);
                 command.Parameters.AddWithValue("@slotIndex", source.SlotIndex);
                 command.Parameters.AddWithValue("@itemUid", source.ItemUid);
@@ -60,7 +54,7 @@ VALUES (
             }
         }
 
-        internal void WriteEnchantAuditLog(SqliteConnection connection, SqliteTransaction transaction, SqliteInventoryStore.ItemRecord bead, SqliteInventoryStore.ItemRecord target, int enchantCardItemId, byte enchantUpgradeCount)
+        internal void WriteEnchantAuditLog(SqliteConnection connection, SqliteTransaction transaction, int characterId, SqliteInventoryStore.ItemRecord bead, SqliteInventoryStore.ItemRecord target, int enchantCardItemId, byte enchantUpgradeCount)
         {
             using (var command = connection.CreateCommand())
             {
@@ -72,8 +66,8 @@ INSERT INTO item_audit_log (
 VALUES (
     'character', @ownerId, @characterId, 'enchant_by_bead', @listType, @slotIndex, @itemUid,
     @itemTemplateId, 0, @payloadJson);";
-                command.Parameters.AddWithValue("@ownerId", _context.CharacterId);
-                command.Parameters.AddWithValue("@characterId", _context.CharacterId);
+                command.Parameters.AddWithValue("@ownerId", characterId);
+                command.Parameters.AddWithValue("@characterId", characterId);
                 command.Parameters.AddWithValue("@listType", (int)target.ListType);
                 command.Parameters.AddWithValue("@slotIndex", target.SlotIndex);
                 command.Parameters.AddWithValue("@itemUid", target.ItemUid);
@@ -89,7 +83,7 @@ VALUES (
             }
         }
 
-        internal void WriteBuyAuditLog(SqliteConnection connection, SqliteTransaction transaction, int itemTemplateId, short slotIndex, int buyGold, int buyCoin)
+        internal void WriteBuyAuditLog(SqliteConnection connection, SqliteTransaction transaction, int characterId, int itemTemplateId, short slotIndex, int buyGold, int buyCoin)
         {
             using (var command = connection.CreateCommand())
             {
@@ -101,8 +95,8 @@ INSERT INTO item_audit_log (
 VALUES (
     'character', @ownerId, @characterId, 'buy_item', @listType, @slotIndex,
     @itemTemplateId, 1, @payloadJson);";
-                command.Parameters.AddWithValue("@ownerId", _context.CharacterId);
-                command.Parameters.AddWithValue("@characterId", _context.CharacterId);
+                command.Parameters.AddWithValue("@ownerId", characterId);
+                command.Parameters.AddWithValue("@characterId", characterId);
                 command.Parameters.AddWithValue("@listType", (int)InventoryListType.Main);
                 command.Parameters.AddWithValue("@slotIndex", slotIndex);
                 command.Parameters.AddWithValue("@itemTemplateId", itemTemplateId);
@@ -114,6 +108,7 @@ VALUES (
         internal void WriteOpenPackageAuditLog(
             SqliteConnection connection,
             SqliteTransaction transaction,
+            int characterId,
             SqliteInventoryStore.ItemRecord packageItem,
             int addedAvatarCount,
             int addedMainItemCount,
@@ -129,8 +124,8 @@ INSERT INTO item_audit_log (
 VALUES (
     'character', @ownerId, @characterId, 'open_avatar_package', @listType, @slotIndex, @itemUid,
     @itemTemplateId, -1, @payloadJson);";
-                command.Parameters.AddWithValue("@ownerId", _context.CharacterId);
-                command.Parameters.AddWithValue("@characterId", _context.CharacterId);
+                command.Parameters.AddWithValue("@ownerId", characterId);
+                command.Parameters.AddWithValue("@characterId", characterId);
                 command.Parameters.AddWithValue("@listType", (int)packageItem.ListType);
                 command.Parameters.AddWithValue("@slotIndex", packageItem.SlotIndex);
                 command.Parameters.AddWithValue("@itemUid", packageItem.ItemUid);
@@ -146,6 +141,7 @@ VALUES (
         internal void WriteOpenSelectablePackageAuditLog(
             SqliteConnection connection,
             SqliteTransaction transaction,
+            int characterId,
             SqliteInventoryStore.ItemRecord packageItem,
             PackageRewardEntry reward,
             int addedMainItemCount,
@@ -161,8 +157,8 @@ INSERT INTO item_audit_log (
 VALUES (
     'character', @ownerId, @characterId, 'open_selectable_package', @listType, @slotIndex, @itemUid,
     @itemTemplateId, -1, @payloadJson);";
-                command.Parameters.AddWithValue("@ownerId", _context.CharacterId);
-                command.Parameters.AddWithValue("@characterId", _context.CharacterId);
+                command.Parameters.AddWithValue("@ownerId", characterId);
+                command.Parameters.AddWithValue("@characterId", characterId);
                 command.Parameters.AddWithValue("@listType", (int)packageItem.ListType);
                 command.Parameters.AddWithValue("@slotIndex", packageItem.SlotIndex);
                 command.Parameters.AddWithValue("@itemUid", packageItem.ItemUid);
@@ -176,7 +172,7 @@ VALUES (
             }
         }
 
-        internal void WriteSellAuditLog(SqliteConnection connection, SqliteTransaction transaction, SqliteInventoryStore.ItemRecord source, int sellCount, int goldDelta)
+        internal void WriteSellAuditLog(SqliteConnection connection, SqliteTransaction transaction, int characterId, SqliteInventoryStore.ItemRecord source, int sellCount, int goldDelta)
         {
             using (var command = connection.CreateCommand())
             {
@@ -188,8 +184,8 @@ INSERT INTO item_audit_log (
 VALUES (
     'character', @ownerId, @characterId, 'sell_item', @listType, @slotIndex, @itemUid,
     @itemTemplateId, @deltaStackCount, @payloadJson);";
-                command.Parameters.AddWithValue("@ownerId", _context.CharacterId);
-                command.Parameters.AddWithValue("@characterId", _context.CharacterId);
+                command.Parameters.AddWithValue("@ownerId", characterId);
+                command.Parameters.AddWithValue("@characterId", characterId);
                 command.Parameters.AddWithValue("@listType", (int)source.ListType);
                 command.Parameters.AddWithValue("@slotIndex", source.SlotIndex);
                 command.Parameters.AddWithValue("@itemUid", source.ItemUid);
@@ -200,7 +196,7 @@ VALUES (
             }
         }
 
-        internal void WriteSortAuditLog(SqliteConnection connection, SqliteTransaction transaction, InventoryListType listType, int affectedCount)
+        internal void WriteSortAuditLog(SqliteConnection connection, SqliteTransaction transaction, int characterId, InventoryListType listType, int affectedCount)
         {
             using (var command = connection.CreateCommand())
             {
@@ -210,8 +206,8 @@ INSERT INTO item_audit_log (
     owner_scope, owner_id, character_id, action_name, list_type, delta_stack_count, payload_json)
 VALUES (
     'character', @ownerId, @characterId, 'sort_item', @listType, 0, @payloadJson);";
-                command.Parameters.AddWithValue("@ownerId", _context.CharacterId);
-                command.Parameters.AddWithValue("@characterId", _context.CharacterId);
+                command.Parameters.AddWithValue("@ownerId", characterId);
+                command.Parameters.AddWithValue("@characterId", characterId);
                 command.Parameters.AddWithValue("@listType", (int)listType);
                 command.Parameters.AddWithValue("@payloadJson", "{\"affectedCount\":" + affectedCount + "}");
                 command.ExecuteNonQuery();

@@ -9,16 +9,9 @@ namespace DfoServer.Game.Inventory
 {
     internal sealed class InventoryDbPrimitives
     {
-        private readonly ScopedStoreContext _context;
-
-        internal InventoryDbPrimitives(ScopedStoreContext context)
-        {
-            _context = context;
-        }
-
         // ── Query ──────────────────────────────────────────────
 
-        internal int FindEmptySlot(SqliteConnection connection, SqliteTransaction transaction, InventoryListType listType, int slotStart = 0, int slotEnd = -1)
+        internal int FindEmptySlot(SqliteConnection connection, SqliteTransaction transaction, int characterId, InventoryListType listType, int slotStart = 0, int slotEnd = -1)
         {
             var occupiedSlots = new HashSet<int>();
             using (var command = connection.CreateCommand())
@@ -29,7 +22,7 @@ SELECT slot_index
 FROM character_items
 WHERE character_id = @characterId AND list_type = @listType
 ORDER BY slot_index;";
-                command.Parameters.AddWithValue("@characterId", _context.CharacterId);
+                command.Parameters.AddWithValue("@characterId", characterId);
                 command.Parameters.AddWithValue("@listType", (int)listType);
                 using (var reader = command.ExecuteReader())
                 {
@@ -54,19 +47,19 @@ ORDER BY slot_index;";
             return -1;
         }
 
-        internal int FindEmptySlotPreferOther(SqliteConnection connection, SqliteTransaction transaction, InventoryListType listType, int slotStart, int slotEnd, short? useLastSlot)
+        internal int FindEmptySlotPreferOther(SqliteConnection connection, SqliteTransaction transaction, int characterId, InventoryListType listType, int slotStart, int slotEnd, short? useLastSlot)
         {
             if (!useLastSlot.HasValue)
-                return FindEmptySlot(connection, transaction, listType, slotStart, slotEnd);
+                return FindEmptySlot(connection, transaction, characterId, listType, slotStart, slotEnd);
 
-            var preferred = FindEmptySlotExcept(connection, transaction, listType, slotStart, slotEnd, useLastSlot.Value);
+            var preferred = FindEmptySlotExcept(connection, transaction, characterId, listType, slotStart, slotEnd, useLastSlot.Value);
             if (preferred >= 0)
                 return preferred;
 
-            return FindEmptySlot(connection, transaction, listType, slotStart, slotEnd);
+            return FindEmptySlot(connection, transaction, characterId, listType, slotStart, slotEnd);
         }
 
-        internal int FindEmptySlotExcept(SqliteConnection connection, SqliteTransaction transaction, InventoryListType listType, int slotStart, int slotEnd, short excludedSlot)
+        internal int FindEmptySlotExcept(SqliteConnection connection, SqliteTransaction transaction, int characterId, InventoryListType listType, int slotStart, int slotEnd, short excludedSlot)
         {
             var occupiedSlots = new HashSet<int>();
             using (var command = connection.CreateCommand())
@@ -77,7 +70,7 @@ SELECT slot_index
 FROM character_items
 WHERE character_id = @characterId AND list_type = @listType
 ORDER BY slot_index;";
-                command.Parameters.AddWithValue("@characterId", _context.CharacterId);
+                command.Parameters.AddWithValue("@characterId", characterId);
                 command.Parameters.AddWithValue("@listType", (int)listType);
                 using (var reader = command.ExecuteReader())
                 {
@@ -104,7 +97,7 @@ ORDER BY slot_index;";
             return -1;
         }
 
-        internal SqliteInventoryStore.ItemRecord FindItemByTemplateId(SqliteConnection connection, SqliteTransaction transaction, InventoryListType listType, int templateId)
+        internal SqliteInventoryStore.ItemRecord FindItemByTemplateId(SqliteConnection connection, SqliteTransaction transaction, int characterId, InventoryListType listType, int templateId)
         {
             using (var command = connection.CreateCommand())
             {
@@ -114,7 +107,7 @@ SELECT item_uid, list_type, slot_index, item_template_id, item_kind, stack_count
 FROM character_items
 WHERE character_id = @characterId AND list_type = @listType AND item_template_id = @templateId
 LIMIT 1;";
-                command.Parameters.AddWithValue("@characterId", _context.CharacterId);
+                command.Parameters.AddWithValue("@characterId", characterId);
                 command.Parameters.AddWithValue("@listType", (int)listType);
                 command.Parameters.AddWithValue("@templateId", templateId);
                 using (var reader = command.ExecuteReader())
@@ -138,7 +131,7 @@ LIMIT 1;";
             return null;
         }
 
-        internal SqliteInventoryStore.ItemRecord FindItemByTemplateIdInRange(SqliteConnection connection, SqliteTransaction transaction, InventoryListType listType, int templateId, int slotStart, int slotEnd)
+        internal SqliteInventoryStore.ItemRecord FindItemByTemplateIdInRange(SqliteConnection connection, SqliteTransaction transaction, int characterId, InventoryListType listType, int templateId, int slotStart, int slotEnd)
         {
             using (var command = connection.CreateCommand())
             {
@@ -149,7 +142,7 @@ FROM character_items
 WHERE character_id = @characterId AND list_type = @listType AND item_template_id = @templateId
   AND slot_index >= @slotStart AND slot_index <= @slotEnd
 LIMIT 1;";
-                command.Parameters.AddWithValue("@characterId", _context.CharacterId);
+                command.Parameters.AddWithValue("@characterId", characterId);
                 command.Parameters.AddWithValue("@listType", (int)listType);
                 command.Parameters.AddWithValue("@templateId", templateId);
                 command.Parameters.AddWithValue("@slotStart", slotStart);
@@ -175,7 +168,7 @@ LIMIT 1;";
             return null;
         }
 
-        internal SqliteInventoryStore.ItemRecord FindStackableItemByTemplateIdAndExpireTime(SqliteConnection connection, SqliteTransaction transaction, InventoryListType listType, int templateId, int expireTime, int stackLimit)
+        internal SqliteInventoryStore.ItemRecord FindStackableItemByTemplateIdAndExpireTime(SqliteConnection connection, SqliteTransaction transaction, int characterId, InventoryListType listType, int templateId, int expireTime, int stackLimit)
         {
             using (var command = connection.CreateCommand())
             {
@@ -187,7 +180,7 @@ WHERE character_id = @characterId AND list_type = @listType AND item_template_id
   AND (@stackLimit <= 0 OR stack_count < @stackLimit)
 ORDER BY stack_count DESC, slot_index ASC
 LIMIT 1;";
-                command.Parameters.AddWithValue("@characterId", _context.CharacterId);
+                command.Parameters.AddWithValue("@characterId", characterId);
                 command.Parameters.AddWithValue("@listType", (int)listType);
                 command.Parameters.AddWithValue("@templateId", templateId);
                 command.Parameters.AddWithValue("@expireTime", expireTime);
@@ -213,7 +206,7 @@ LIMIT 1;";
             return null;
         }
 
-        internal SqliteInventoryStore.ItemRecord LoadItemRecord(SqliteConnection connection, SqliteTransaction transaction, InventoryListType listType, short slotIndex)
+        internal SqliteInventoryStore.ItemRecord LoadItemRecord(SqliteConnection connection, SqliteTransaction transaction, int characterId, InventoryListType listType, short slotIndex)
         {
             using (var command = connection.CreateCommand())
             {
@@ -223,7 +216,7 @@ SELECT item_uid, list_type, slot_index, item_template_id, item_kind, stack_count
        durability, seal_flag, option_value, expire_time, marker_16, pet_serial_or_handle, extra_json
 FROM character_items
 WHERE character_id = @characterId AND list_type = @listType AND slot_index = @slotIndex;";
-                command.Parameters.AddWithValue("@characterId", _context.CharacterId);
+                command.Parameters.AddWithValue("@characterId", characterId);
                 command.Parameters.AddWithValue("@listType", (int)listType);
                 command.Parameters.AddWithValue("@slotIndex", slotIndex);
 
@@ -237,7 +230,7 @@ WHERE character_id = @characterId AND list_type = @listType AND slot_index = @sl
             }
         }
 
-        internal CommonInventoryItem LoadCommonItem(SqliteConnection connection, SqliteTransaction transaction, InventoryListType listType, short slotIndex)
+        internal CommonInventoryItem LoadCommonItem(SqliteConnection connection, SqliteTransaction transaction, int characterId, InventoryListType listType, short slotIndex)
         {
             using (var command = connection.CreateCommand())
             {
@@ -247,7 +240,7 @@ SELECT list_type, slot_index, item_template_id, item_kind, stack_count, instance
        durability, seal_flag, option_value, expire_time, marker_16, pet_serial_or_handle, extra_json
 FROM character_items
 WHERE character_id = @characterId AND list_type = @listType AND slot_index = @slotIndex;";
-                command.Parameters.AddWithValue("@characterId", _context.CharacterId);
+                command.Parameters.AddWithValue("@characterId", characterId);
                 command.Parameters.AddWithValue("@listType", (int)listType);
                 command.Parameters.AddWithValue("@slotIndex", slotIndex);
 
@@ -261,7 +254,7 @@ WHERE character_id = @characterId AND list_type = @listType AND slot_index = @sl
             }
         }
 
-        internal List<SqliteInventoryStore.ItemRecord> LoadItemsByListType(SqliteConnection connection, SqliteTransaction transaction, InventoryListType listType)
+        internal List<SqliteInventoryStore.ItemRecord> LoadItemsByListType(SqliteConnection connection, SqliteTransaction transaction, int characterId, InventoryListType listType)
         {
             var items = new List<SqliteInventoryStore.ItemRecord>();
 
@@ -274,7 +267,7 @@ SELECT item_uid, list_type, slot_index, item_template_id, item_kind, stack_count
 FROM character_items
 WHERE character_id = @characterId AND list_type = @listType
 ORDER BY slot_index;";
-                command.Parameters.AddWithValue("@characterId", _context.CharacterId);
+                command.Parameters.AddWithValue("@characterId", characterId);
                 command.Parameters.AddWithValue("@listType", (int)listType);
 
                 using (var reader = command.ExecuteReader())
@@ -289,7 +282,7 @@ ORDER BY slot_index;";
 
         // ── Write ──────────────────────────────────────────────
 
-        internal void InsertCharacterItem(SqliteConnection connection, SqliteTransaction transaction, InventoryListType listType, short slotIndex, int templateId, string itemKind, int stackCount, int instanceValue, ushort durability, byte sealFlag, byte optionValue, int expireTime, int marker16, int petSerialOrHandle, string extraJson)
+        internal void InsertCharacterItem(SqliteConnection connection, SqliteTransaction transaction, int characterId, InventoryListType listType, short slotIndex, int templateId, string itemKind, int stackCount, int instanceValue, ushort durability, byte sealFlag, byte optionValue, int expireTime, int marker16, int petSerialOrHandle, string extraJson)
         {
             using (var command = connection.CreateCommand())
             {
@@ -303,8 +296,8 @@ VALUES (
     'character', @ownerId, @characterId, @listType, @slotIndex, @templateId, @itemKind,
     @stackCount, @instanceValue, @durability, @sealFlag, @optionValue, @expireTime, @marker16,
     @petSerialOrHandle, @extraJson);";
-                command.Parameters.AddWithValue("@ownerId", _context.CharacterId);
-                command.Parameters.AddWithValue("@characterId", _context.CharacterId);
+                command.Parameters.AddWithValue("@ownerId", characterId);
+                command.Parameters.AddWithValue("@characterId", characterId);
                 command.Parameters.AddWithValue("@listType", (int)listType);
                 command.Parameters.AddWithValue("@slotIndex", slotIndex);
                 command.Parameters.AddWithValue("@templateId", templateId);
@@ -322,22 +315,22 @@ VALUES (
             }
         }
 
-        internal void InsertCommonItem(SqliteConnection connection, SqliteTransaction transaction, InventoryListType listType, CommonInventoryItem item)
+        internal void InsertCommonItem(SqliteConnection connection, SqliteTransaction transaction, int characterId, InventoryListType listType, CommonInventoryItem item)
         {
-            InsertCharacterItem(connection, transaction, listType, item.SlotIndex, item.ItemTemplateId, InventoryItemCodec.InferCommonItemKind(item), item.CountOrInstanceValue, item.CountOrInstanceValue, item.Durability, item.SealFlag, 0, item.ExpireTime, item.Marker16, 0, InventoryItemCodec.SerializeCommon(item));
+            InsertCharacterItem(connection, transaction, characterId, listType, item.SlotIndex, item.ItemTemplateId, InventoryItemCodec.InferCommonItemKind(item), item.CountOrInstanceValue, item.CountOrInstanceValue, item.Durability, item.SealFlag, 0, item.ExpireTime, item.Marker16, 0, InventoryItemCodec.SerializeCommon(item));
         }
 
-        internal void InsertAvatarItem(SqliteConnection connection, SqliteTransaction transaction, AvatarInventoryItem item)
+        internal void InsertAvatarItem(SqliteConnection connection, SqliteTransaction transaction, int characterId, AvatarInventoryItem item)
         {
-            InsertCharacterItem(connection, transaction, InventoryListType.Avatar, item.SlotIndex, item.AvatarItemId, "avatar", 0, 0, 0, 0, item.OptionValue, 0, item.UnknownFixed30, 0, InventoryItemCodec.SerializeAvatar(item));
+            InsertCharacterItem(connection, transaction, characterId, InventoryListType.Avatar, item.SlotIndex, item.AvatarItemId, "avatar", 0, 0, 0, 0, item.OptionValue, 0, item.UnknownFixed30, 0, InventoryItemCodec.SerializeAvatar(item));
         }
 
-        internal void InsertPetItem(SqliteConnection connection, SqliteTransaction transaction, PetInventoryItem item)
+        internal void InsertPetItem(SqliteConnection connection, SqliteTransaction transaction, int characterId, PetInventoryItem item)
         {
-            InsertCharacterItem(connection, transaction, InventoryListType.Pet, item.SlotIndex, item.CreatureItemId, "pet", 0, 0, 0, 0, 0, 0, 0, item.CreatureSerialOrHandle, InventoryItemCodec.SerializePet(item));
+            InsertCharacterItem(connection, transaction, characterId, InventoryListType.Pet, item.SlotIndex, item.CreatureItemId, "pet", 0, 0, 0, 0, 0, 0, 0, item.CreatureSerialOrHandle, InventoryItemCodec.SerializePet(item));
         }
 
-        internal void InsertAccountCargoItem(SqliteConnection connection, SqliteTransaction transaction, CommonInventoryItem item)
+        internal void InsertAccountCargoItem(SqliteConnection connection, SqliteTransaction transaction, int characterId, int accountId, CommonInventoryItem item)
         {
             using (var command = connection.CreateCommand())
             {
@@ -351,8 +344,8 @@ VALUES (
     'account', @ownerId, @characterId, @listType, @slotIndex, @templateId, @itemKind,
     @stackCount, @instanceValue, @durability, @sealFlag, @optionValue, @expireTime, @marker16,
     0, @extraJson);";
-                command.Parameters.AddWithValue("@ownerId", _context.AccountId);
-                command.Parameters.AddWithValue("@characterId", _context.CharacterId);
+                command.Parameters.AddWithValue("@ownerId", accountId);
+                command.Parameters.AddWithValue("@characterId", characterId);
                 command.Parameters.AddWithValue("@listType", (int)InventoryListType.AccountCargo);
                 command.Parameters.AddWithValue("@slotIndex", item.SlotIndex);
                 command.Parameters.AddWithValue("@templateId", item.ItemTemplateId);
@@ -369,11 +362,12 @@ VALUES (
             }
         }
 
-        internal void InsertSplitItem(SqliteConnection connection, SqliteTransaction transaction, SqliteInventoryStore.ItemRecord source, InventoryListType listType, short slotIndex, int moveCount)
+        internal void InsertSplitItem(SqliteConnection connection, SqliteTransaction transaction, int characterId, SqliteInventoryStore.ItemRecord source, InventoryListType listType, short slotIndex, int moveCount)
         {
             InsertCharacterItem(
                 connection,
                 transaction,
+                characterId,
                 listType,
                 slotIndex,
                 source.ItemTemplateId,
@@ -451,13 +445,13 @@ WHERE item_uid = @itemUid;";
             }
         }
 
-        internal void DeleteCharacterItemSlot(SqliteConnection connection, SqliteTransaction transaction, InventoryListType listType, short slotIndex)
+        internal void DeleteCharacterItemSlot(SqliteConnection connection, SqliteTransaction transaction, int characterId, InventoryListType listType, short slotIndex)
         {
             using (var command = connection.CreateCommand())
             {
                 command.Transaction = transaction;
                 command.CommandText = "DELETE FROM character_items WHERE character_id = @cid AND list_type = @listType AND slot_index = @slot;";
-                command.Parameters.AddWithValue("@cid", _context.CharacterId);
+                command.Parameters.AddWithValue("@cid", characterId);
                 command.Parameters.AddWithValue("@listType", (int)listType);
                 command.Parameters.AddWithValue("@slot", slotIndex);
                 command.ExecuteNonQuery();
@@ -473,15 +467,15 @@ WHERE item_uid = @itemUid;";
 
         // ── Wallet ─────────────────────────────────────────────
 
-        internal SqliteInventoryStore.WalletState LoadWallet(SqliteConnection connection, SqliteTransaction transaction)
+        internal SqliteInventoryStore.WalletState LoadWallet(SqliteConnection connection, SqliteTransaction transaction, int characterId)
         {
-            var snap = CurrencyService.LoadWallet(connection, transaction, _context.CharacterId);
+            var snap = CurrencyService.LoadWallet(connection, transaction, characterId);
             var w = new SqliteInventoryStore.WalletState { Gold = snap.Gold, Coin = snap.Cera, TokenCera = snap.TokenCera, HappyTokenCera = snap.HappyTokenCera };
             using (var cmd = connection.CreateCommand())
             {
                 cmd.Transaction = transaction;
                 cmd.CommandText = "SELECT stack_count FROM character_items WHERE character_id = @cid AND list_type = 0 AND slot_index = 2;";
-                cmd.Parameters.AddWithValue("@cid", _context.CharacterId);
+                cmd.Parameters.AddWithValue("@cid", characterId);
                 var result = cmd.ExecuteScalar();
                 if (result != null && result != DBNull.Value)
                     w.Sp = Convert.ToInt32(result);
@@ -489,15 +483,15 @@ WHERE item_uid = @itemUid;";
             return w;
         }
 
-        internal void UpdateWallet(SqliteConnection connection, SqliteTransaction transaction, int gold, int coin)
+        internal void UpdateWallet(SqliteConnection connection, SqliteTransaction transaction, int characterId, int gold, int coin)
         {
-            CurrencyService.UpdateGold(connection, transaction, _context.CharacterId, gold);
-            CurrencyService.UpdateCera(connection, transaction, _context.CharacterId, coin);
+            CurrencyService.UpdateGold(connection, transaction, characterId, gold);
+            CurrencyService.UpdateCera(connection, transaction, characterId, coin);
         }
 
         // ── Tool ───────────────────────────────────────────────
 
-        internal int NextPetSerialOrHandle(SqliteConnection connection, SqliteTransaction transaction)
+        internal int NextPetSerialOrHandle(SqliteConnection connection, SqliteTransaction transaction, int characterId)
         {
             using (var command = connection.CreateCommand())
             {
@@ -506,7 +500,7 @@ WHERE item_uid = @itemUid;";
 SELECT COALESCE(MAX(pet_serial_or_handle), 0) + 1
 FROM character_items
 WHERE character_id = @characterId AND list_type = @listType;";
-                command.Parameters.AddWithValue("@characterId", _context.CharacterId);
+                command.Parameters.AddWithValue("@characterId", characterId);
                 command.Parameters.AddWithValue("@listType", (int)InventoryListType.Pet);
                 var next = Convert.ToInt32(command.ExecuteScalar(), CultureInfo.InvariantCulture);
                 return next < 1 ? 1 : next;
@@ -541,9 +535,9 @@ WHERE character_id = @characterId AND list_type = @listType;";
             return true;
         }
 
-        internal SqliteInventoryStore.ItemRecord FindFirstPackageItem(SqliteConnection connection, SqliteTransaction transaction)
+        internal SqliteInventoryStore.ItemRecord FindFirstPackageItem(SqliteConnection connection, SqliteTransaction transaction, int characterId)
         {
-            foreach (var item in LoadItemsByListType(connection, transaction, InventoryListType.Main))
+            foreach (var item in LoadItemsByListType(connection, transaction, characterId, InventoryListType.Main))
             {
                 var stackable = LoadStackableItem(item.ItemTemplateId);
                 if (stackable == null)
@@ -556,7 +550,7 @@ WHERE character_id = @characterId AND list_type = @listType;";
             return null;
         }
 
-        internal bool TryAddBoosterRewardItem(SqliteConnection connection, SqliteTransaction transaction, int itemTemplateId, int stackCount, out BoosterRewardResult result)
+        internal bool TryAddBoosterRewardItem(SqliteConnection connection, SqliteTransaction transaction, int characterId, int accountId, int itemTemplateId, int stackCount, out BoosterRewardResult result)
         {
             result = null;
             var metadata = ItemMetadataResolver.Resolve(itemTemplateId);
@@ -566,7 +560,7 @@ WHERE character_id = @characterId AND list_type = @listType;";
             if (CurrencyService.IsCubeFragment(itemTemplateId))
             {
                 var count = Math.Max(1, stackCount);
-                CurrencyService.AddCubeFragment(connection, transaction, _context.AccountId, itemTemplateId, count);
+                CurrencyService.AddCubeFragment(connection, transaction, accountId, itemTemplateId, count);
                 result = new BoosterRewardResult
                 {
                     ListType = InventoryListType.Main,
@@ -582,7 +576,7 @@ WHERE character_id = @characterId AND list_type = @listType;";
             var isAvatarReward = InventoryPackageStore.IsAvatarReward(metadata);
             if (metadata.IsStackable && !isAvatarReward)
             {
-                var existing = FindItemByTemplateId(connection, transaction, InventoryListType.Main, itemTemplateId);
+                var existing = FindItemByTemplateId(connection, transaction, characterId, InventoryListType.Main, itemTemplateId);
                 if (existing != null && (metadata.StackLimit <= 0 || existing.StackCount + effectiveCount <= metadata.StackLimit))
                 {
                     var newStackCount = existing.StackCount + effectiveCount;
@@ -623,14 +617,14 @@ WHERE character_id = @characterId AND list_type = @listType;";
                 slotEnd = SqliteInventoryStore.PetInventorySlotEnd;
                 expireTime = 0;
                 marker16 = 0;
-                petSerial = NextPetSerialOrHandle(connection, transaction);
+                petSerial = NextPetSerialOrHandle(connection, transaction, characterId);
             }
             else
             {
                 metadata.GetSlotRange(out slotStart, out slotEnd);
             }
 
-            var targetSlot = FindEmptySlot(connection, transaction, insertListType, slotStart, slotEnd);
+            var targetSlot = FindEmptySlot(connection, transaction, characterId, insertListType, slotStart, slotEnd);
             if (targetSlot < 0)
             {
                 FileLogger.Log($"  [Booster] no empty slot item=0x{itemTemplateId:X8} list={insertListType} range={slotStart}-{slotEnd}");
@@ -656,6 +650,7 @@ WHERE character_id = @characterId AND list_type = @listType;";
             InsertCharacterItem(
                 connection,
                 transaction,
+                characterId,
                 insertListType,
                 (short)targetSlot,
                 itemTemplateId,
@@ -704,6 +699,86 @@ WHERE character_id = @characterId AND list_type = @listType;";
             {
                 FileLogger.Log($"  [Booster] failed to load item=0x{itemTemplateId:X8}: {ex.Message}");
                 return null;
+            }
+        }
+
+        // ── Static item removal (used by QuestService) ────────
+
+        /// <summary>
+        /// Remove <paramref name="count"/> units of an item identified by template ID.
+        /// For cube fragments the deduction targets the accounts table;
+        /// for normal items it targets character_items (list_type=0).
+        /// Returns null when the item is not found or the balance is insufficient.
+        /// </summary>
+        internal static (short SlotIndex, int RemovedCount, int RemainingCount)? RemoveItemByTemplateId(
+            SqliteConnection conn, SqliteTransaction tx,
+            int characterId, int itemTemplateId, int count)
+        {
+            // ── Cube fragment path ──
+            if (CurrencyService.IsCubeFragment(itemTemplateId))
+            {
+                int accountId;
+                using (var cmd = conn.CreateCommand())
+                {
+                    cmd.Transaction = tx;
+                    cmd.CommandText = "SELECT account_id FROM characters WHERE character_id = @cid;";
+                    cmd.Parameters.AddWithValue("@cid", characterId);
+                    var result = cmd.ExecuteScalar();
+                    if (result == null) return null;
+                    accountId = Convert.ToInt32(result);
+                }
+
+                var cubes = CurrencyService.LoadCubeFragments(conn, tx, accountId);
+                int idx = cubes.FindIndex(c => c.ItemId == itemTemplateId);
+                if (idx < 0 || cubes[idx].Count < count) return null;
+
+                CurrencyService.AddCubeFragment(conn, tx, accountId, itemTemplateId, -count);
+                return ((short)cubes[idx].Slot, count, cubes[idx].Count - count);
+            }
+
+            // ── Normal item path ──
+            using (var cmd = conn.CreateCommand())
+            {
+                cmd.Transaction = tx;
+                cmd.CommandText = "SELECT slot_index, stack_count FROM character_items WHERE character_id = @cid AND list_type = 0 AND item_template_id = @tid LIMIT 1;";
+                cmd.Parameters.AddWithValue("@cid", characterId);
+                cmd.Parameters.AddWithValue("@tid", itemTemplateId);
+                using (var reader = cmd.ExecuteReader())
+                {
+                    if (!reader.Read()) return null;
+                    int slot = reader.GetInt32(0);
+                    int stackCount = reader.GetInt32(1);
+                    reader.Close();
+
+                    if (stackCount <= count)
+                    {
+                        // Full removal
+                        using (var del = conn.CreateCommand())
+                        {
+                            del.Transaction = tx;
+                            del.CommandText = "DELETE FROM character_items WHERE character_id = @cid AND list_type = 0 AND slot_index = @slot;";
+                            del.Parameters.AddWithValue("@cid", characterId);
+                            del.Parameters.AddWithValue("@slot", slot);
+                            del.ExecuteNonQuery();
+                        }
+                        return ((short)slot, count, 0);
+                    }
+                    else
+                    {
+                        // Partial deduction
+                        int remaining = stackCount - count;
+                        using (var upd = conn.CreateCommand())
+                        {
+                            upd.Transaction = tx;
+                            upd.CommandText = "UPDATE character_items SET stack_count = @ns WHERE character_id = @cid AND list_type = 0 AND slot_index = @slot;";
+                            upd.Parameters.AddWithValue("@ns", remaining);
+                            upd.Parameters.AddWithValue("@cid", characterId);
+                            upd.Parameters.AddWithValue("@slot", slot);
+                            upd.ExecuteNonQuery();
+                        }
+                        return ((short)slot, count, remaining);
+                    }
+                }
             }
         }
     }

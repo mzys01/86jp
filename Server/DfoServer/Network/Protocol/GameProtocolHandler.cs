@@ -28,6 +28,7 @@ namespace DfoServer.Network
         private readonly RentalHandler _rentalHandler;
         private readonly ICharacterRepository _characterRepository;
         private readonly SqliteSelectCharacterDataSource _selectCharacterDataSource;
+        private readonly SqliteAssetService _assetService;
         private readonly Dictionary<ushort, Func<EnhancedClientSession, GamePacketHeader, byte[], Task>> _cmdDispatch;
 
         public override string ProtocolName => "GameProtocol";
@@ -40,10 +41,13 @@ namespace DfoServer.Network
             var characterRepository = new SqliteCharacterRepository(databasePath, schemaFilePath);
             var accountRepository = new SqliteAccountRepository(databasePath, schemaFilePath);
 
+            _assetService = new SqliteAssetService(databasePath, schemaFilePath);
+
             var sqliteSelectCharacterDataSource = new SqliteSelectCharacterDataSource(
                 databasePath,
                 schemaFilePath,
-                characterRepository);
+                characterRepository,
+                _assetService);
 
             var userInfoBlobRepository = new Game.CharacterData.SqliteUserInfoBlobRepository(databasePath, schemaFilePath);
             var getUserInfoTemplate = userInfoBlobRepository.LoadGetUserInfoTemplate();
@@ -54,12 +58,12 @@ namespace DfoServer.Network
             _characterSelectHandler = new CharacterSelectHandler(sqliteSelectCharacterDataSource, characterRepository, getUserInfoTemplate);
             _inventoryHandler = new InventoryHandler(sqliteSelectCharacterDataSource, characterRepository);
             _townHandler = new TownHandler(characterRepository, sqliteSelectCharacterDataSource);
-            _dungeonHandler = new DungeonHandler();
+            _dungeonHandler = new DungeonHandler(_assetService);
             _skillHandler = new SkillHandler(characterRepository);
             _settingsHandler = new SettingsHandler();
             _ceraShopHandler = new CeraShopHandler(sqliteSelectCharacterDataSource);
-            _luckyStarHandler = new LuckyStarHandler(databasePath, schemaFilePath, sqliteSelectCharacterDataSource);
-            _rentalHandler = new RentalHandler(databasePath, schemaFilePath, sqliteSelectCharacterDataSource);
+            _luckyStarHandler = new LuckyStarHandler(_assetService, sqliteSelectCharacterDataSource);
+            _rentalHandler = new RentalHandler(_assetService, sqliteSelectCharacterDataSource);
 
             _cmdDispatch = new Dictionary<ushort, Func<EnhancedClientSession, GamePacketHeader, byte[], Task>>();
             RegisterLoginHandlers(_cmdDispatch);
@@ -136,7 +140,7 @@ namespace DfoServer.Network
                 {
                     var gsConnStr = SqliteDatabaseBootstrap.Initialize(
                         ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
-                    s.GameSession = new Game.Session.GameSession(s, gsConnStr);
+                    s.GameSession = new Game.Session.GameSession(s, gsConnStr, _assetService);
                 }
             };
             d[0x0005] = _characterSelectHandler.Handle_ENUM_CMDPACKET_CREATE_CHARACTER;

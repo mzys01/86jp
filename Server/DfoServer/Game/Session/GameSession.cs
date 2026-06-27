@@ -1,4 +1,5 @@
 using System.Threading.Tasks;
+using DfoServer.Game.Inventory;
 using DfoServer.Game.Quests;
 using DfoServer.Network;
 
@@ -15,11 +16,11 @@ namespace DfoServer.Game.Session
         public int CharacterId { get { return _networkSession.Player != null ? _networkSession.Player.CharacterId : 0; } }
         public int AccountId { get { return _networkSession.Account != null ? _networkSession.Account.AccountId : 1; } }
 
-        public GameSession(EnhancedClientSession networkSession, string connStr)
+        public GameSession(EnhancedClientSession networkSession, string connStr, IAssetService assetService)
         {
             _networkSession = networkSession;
             _connStr = connStr;
-            QuestManager = new QuestManager(this, connStr);
+            QuestManager = new QuestManager(this, connStr, assetService);
         }
 
         public Task SendPacketAsync(byte[] rawPacket)

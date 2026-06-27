@@ -4,6 +4,7 @@ using System.Threading.Tasks;
 using DfoServer.Game.Characters;
 using DfoServer.Game.CharacterData;
 using DfoServer.Game.Dungeon;
+using DfoServer.Game.Inventory;
 using DfoServer.Game.Session;
 using DfoServer.Game.Skills;
 using DfoServer.Infrastructure;
@@ -15,11 +16,13 @@ namespace DfoServer.Game.Quests
     {
         private readonly ISessionPacketSender _sender;
         private readonly string _connStr;
+        private readonly IAssetService _assetService;
 
-        public QuestManager(ISessionPacketSender sender, string connStr)
+        public QuestManager(ISessionPacketSender sender, string connStr, IAssetService assetService)
         {
             _sender = sender;
             _connStr = connStr;
+            _assetService = assetService;
         }
 
         private static byte[] StripEcho(byte[] body)
@@ -63,7 +66,7 @@ namespace DfoServer.Game.Quests
             var qBody = StripEcho(body);
             int cid = _sender.CharacterId;
             if (cid <= 0) return;
-            var ack = QuestService.HandleFinishQuest(_connStr, cid, qBody);
+            var ack = QuestService.HandleFinishQuest(_connStr, cid, qBody, _assetService);
             await _sender.SendCmdAckAsync(wireType, ack);
 
             if (ack != null && ack.Length > 1 && ack[0] == 0x01)

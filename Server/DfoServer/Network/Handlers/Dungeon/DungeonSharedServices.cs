@@ -19,6 +19,13 @@ namespace DfoServer.Network.Handlers.Dungeon
         internal const string ProtocolLogName = "GameProtocol";
         internal static readonly Random SeedGen = new Random();
 
+        private readonly IAssetService _assetService;
+
+        internal DungeonSharedServices(IAssetService assetService)
+        {
+            _assetService = assetService ?? throw new ArgumentNullException(nameof(assetService));
+        }
+
         public static void ResetDungeonState(EnhancedClientSession session)
         {
             session.Player.CurDungeon = 0;
@@ -68,22 +75,15 @@ namespace DfoServer.Network.Handlers.Dungeon
             }
         }
 
-        internal void PersistGold(int characterId, int goldGained)
+        internal void PersistGold(int characterId, int accountId, int goldGained)
         {
             if (goldGained <= 0) return;
             try
             {
-                var connStr = SqliteDatabaseBootstrap.Initialize(
-                    ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
-                using (var conn = new Microsoft.Data.Sqlite.SqliteConnection(connStr))
+                using (var scope = _assetService.OpenScope(characterId, accountId))
                 {
-                    conn.Open();
-                    using (var tx = conn.BeginTransaction())
-                    {
-                        var wallet = CurrencyService.LoadWallet(conn, tx, characterId);
-                        CurrencyService.UpdateGold(conn, tx, characterId, wallet.Gold + goldGained);
-                        tx.Commit();
-                    }
+                    _assetService.AddGold(scope, goldGained);
+                    scope.Commit();
                 }
             }
             catch (Exception ex)
@@ -92,16 +92,13 @@ namespace DfoServer.Network.Handlers.Dungeon
             }
         }
 
-        internal int ReadGold(int characterId)
+        internal int ReadGold(int characterId, int accountId)
         {
             try
             {
-                var connStr = SqliteDatabaseBootstrap.Initialize(
-                    ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
-                using (var conn = new Microsoft.Data.Sqlite.SqliteConnection(connStr))
+                using (var scope = _assetService.OpenScope(characterId, accountId))
                 {
-                    conn.Open();
-                    var wallet = CurrencyService.LoadWallet(conn, null, characterId);
+                    var wallet = _assetService.LoadWallet(scope);
                     return wallet.Gold;
                 }
             }
@@ -201,16 +198,16 @@ namespace DfoServer.Network.Handlers.Dungeon
             }
         }
 
-        internal bool TryPickupItemToInventory(int characterId, int itemTemplateId, int stackCount, out short assignedSlot)
+        internal bool TryPickupItemToInventory(int characterId, int accountId, int itemTemplateId, int stackCount, out short assignedSlot)
         {
             assignedSlot = -1;
             try
             {
-                var store = new SqliteInventoryStore(
-                    ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
-                using (store.BeginScope(characterId, 1))
+                using (var scope = _assetService.OpenScope(characterId, accountId))
                 {
-                    return store.TryPickupItem(itemTemplateId, stackCount, out assignedSlot);
+                    var result = _assetService.TryAddItem(scope, itemTemplateId, stackCount, out assignedSlot);
+                    if (result) scope.Commit();
+                    return result;
                 }
             }
             catch (Exception ex)
@@ -264,15 +261,15 @@ namespace DfoServer.Network.Handlers.Dungeon
                 activeQuestIds, session.Player.CurDungeon, monsterCode);
             if (candidates == null) return;
 
+            var accountId = session.Account?.AccountId ?? 1;
+
             foreach (var candidate in candidates)
             {
                 int currentHeld = 0;
                 try
                 {
-                    var store = new SqliteInventoryStore(
-                        ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
-                    using (store.BeginScope(session.Player.CharacterId, 1))
-                        currentHeld = store.CountItem(candidate.ItemId);
+                    using (var scope = _assetService.OpenScope(session.Player.CharacterId, accountId))
+                        currentHeld = _assetService.CountItem(scope, candidate.ItemId);
                 }
                 catch { }
 
@@ -280,7 +277,7 @@ namespace DfoServer.Network.Handlers.Dungeon
                 if (dropCount <= 0) continue;
 
                 short slot;
-                if (!TryPickupItemToInventory(session.Player.CharacterId, candidate.ItemId, dropCount, out slot))
+                if (!TryPickupItemToInventory(session.Player.CharacterId, accountId, candidate.ItemId, dropCount, out slot))
                     continue;
 
                 // NOTI 14 UPDATE_ITEM_LIST (independent send, 86JP 84B fixed format)
