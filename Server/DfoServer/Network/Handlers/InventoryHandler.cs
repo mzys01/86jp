@@ -305,13 +305,13 @@ namespace DfoServer.Network.Handlers
                     if (mainUpdateBody != null)
                         await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000E, mainUpdateBody));
 
-                    var refreshTypes = new System.Collections.Generic.List<InventoryListType>();
-                    if (result.AddedAvatarCount > 0)
-                        refreshTypes.Add(InventoryListType.Avatar);
-                    if (result.AddedPetCount > 0)
-                        refreshTypes.Add(InventoryListType.Pet);
-                    if (refreshTypes.Count > 0)
-                        await SendItemListRefresh(session, refreshTypes.ToArray());
+                    var petUpdateBody = BuildGrantedPetItemUpdates(snapshot, result.GrantedItems);
+                    if (petUpdateBody != null)
+                        await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000E, petUpdateBody));
+
+                    var avatarUpdateBody = BuildGrantedAvatarItemUpdates(snapshot, result.GrantedItems);
+                    if (avatarUpdateBody != null)
+                        await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000E, avatarUpdateBody));
 
                     FileLogger.Log($"[{ProtocolName}] OPEN_AVATAR_PACKAGE: OK slot={result.SlotIndex} item=0x{result.PackageItemTemplateId:X8} avatar={result.AddedAvatarCount} main={result.AddedMainItemCount} pet={result.AddedPetCount}");
                     return;
@@ -347,13 +347,13 @@ namespace DfoServer.Network.Handlers
                     if (mainUpdateBody != null)
                         await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000E, mainUpdateBody));
 
-                    var refreshTypes = new System.Collections.Generic.List<InventoryListType>();
-                    if (result.AddedAvatarCount > 0)
-                        refreshTypes.Add(InventoryListType.Avatar);
-                    if (result.AddedPetCount > 0)
-                        refreshTypes.Add(InventoryListType.Pet);
-                    if (refreshTypes.Count > 0)
-                        await SendItemListRefresh(session, refreshTypes.ToArray());
+                    var petUpdateBody = BuildGrantedPetItemUpdates(snapshot, result.GrantedItems);
+                    if (petUpdateBody != null)
+                        await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000E, petUpdateBody));
+
+                    var avatarUpdateBody = BuildGrantedAvatarItemUpdates(snapshot, result.GrantedItems);
+                    if (avatarUpdateBody != null)
+                        await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000E, avatarUpdateBody));
 
                     FileLogger.Log($"[{ProtocolName}] OPEN_SELECTABLE_PACKAGE: OK slot={result.SlotIndex} item=0x{result.PackageItemTemplateId:X8} reward=0x{result.RewardItemTemplateId:X8} main={result.AddedMainItemCount} avatar={result.AddedAvatarCount} pet={result.AddedPetCount} ackItems={result.GrantedItems.Count}");
                     return;
@@ -461,15 +461,13 @@ namespace DfoServer.Network.Handlers
             if (mainUpdateBody != null)
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000E, mainUpdateBody));
 
-            var refreshTypes = new List<InventoryListType>();
-            foreach (var reward in result.Rewards)
-            {
-                if (reward.ListType != InventoryListType.Main && !refreshTypes.Contains(reward.ListType))
-                    refreshTypes.Add(reward.ListType);
-            }
+            var petUpdateBody = BuildBoosterPetItemUpdates(snapshot, result);
+            if (petUpdateBody != null)
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000E, petUpdateBody));
 
-            if (refreshTypes.Count > 0)
-                await SendItemListRefresh(session, refreshTypes.ToArray());
+            var avatarUpdateBody = BuildBoosterAvatarItemUpdates(snapshot, result);
+            if (avatarUpdateBody != null)
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000E, avatarUpdateBody));
         }
 
         private static byte[] BuildBoosterMainItemUpdates(CharacterItemListSnapshot snapshot, BoosterUseResult result)
@@ -504,6 +502,22 @@ namespace DfoServer.Network.Handlers
                 return null;
 
             return ItemListUpdateBuilder.BuildCommonUpdates(updates);
+        }
+
+        private static byte[] BuildBoosterPetItemUpdates(CharacterItemListSnapshot snapshot, BoosterUseResult result)
+        {
+            if (snapshot == null || result == null)
+                return null;
+
+            return BuildPetItemUpdates(snapshot, CollectBoosterRewardSlots(result.Rewards, InventoryListType.Pet));
+        }
+
+        private static byte[] BuildBoosterAvatarItemUpdates(CharacterItemListSnapshot snapshot, BoosterUseResult result)
+        {
+            if (snapshot == null || result == null)
+                return null;
+
+            return BuildAvatarItemUpdates(snapshot, CollectBoosterRewardSlots(result.Rewards, InventoryListType.Avatar));
         }
 
         private static byte[] BuildGrantedMainItemUpdates(
@@ -541,6 +555,90 @@ namespace DfoServer.Network.Handlers
                 return null;
 
             return ItemListUpdateBuilder.BuildCommonUpdates(updates);
+        }
+
+        private static byte[] BuildGrantedPetItemUpdates(CharacterItemListSnapshot snapshot, IReadOnlyList<PackageGrantedItem> grantedItems)
+        {
+            if (snapshot == null || grantedItems == null)
+                return null;
+
+            return BuildPetItemUpdates(snapshot, CollectGrantedItemSlots(grantedItems, InventoryListType.Pet));
+        }
+
+        private static byte[] BuildGrantedAvatarItemUpdates(CharacterItemListSnapshot snapshot, IReadOnlyList<PackageGrantedItem> grantedItems)
+        {
+            if (snapshot == null || grantedItems == null)
+                return null;
+
+            return BuildAvatarItemUpdates(snapshot, CollectGrantedItemSlots(grantedItems, InventoryListType.Avatar));
+        }
+
+        private static HashSet<short> CollectBoosterRewardSlots(IEnumerable<BoosterRewardResult> rewards, InventoryListType listType)
+        {
+            var slots = new HashSet<short>();
+            if (rewards == null)
+                return slots;
+
+            foreach (var reward in rewards)
+            {
+                if (reward.ListType == listType)
+                    slots.Add(reward.SlotIndex);
+            }
+
+            return slots;
+        }
+
+        private static HashSet<short> CollectGrantedItemSlots(IEnumerable<PackageGrantedItem> grantedItems, InventoryListType listType)
+        {
+            var slots = new HashSet<short>();
+            if (grantedItems == null)
+                return slots;
+
+            foreach (var item in grantedItems)
+            {
+                if (item.ListType == listType)
+                    slots.Add(item.SlotIndex);
+            }
+
+            return slots;
+        }
+
+        private static byte[] BuildPetItemUpdates(CharacterItemListSnapshot snapshot, HashSet<short> slots)
+        {
+            if (snapshot == null || slots == null || slots.Count == 0)
+                return null;
+
+            var updates = new List<PetInventoryItem>();
+            foreach (var slot in slots)
+            {
+                var item = snapshot.PetItems.FirstOrDefault(x => x.SlotIndex == slot);
+                if (item != null)
+                    updates.Add(item);
+            }
+
+            if (updates.Count == 0)
+                return null;
+
+            return ItemListUpdateBuilder.BuildPetUpdates(updates);
+        }
+
+        private static byte[] BuildAvatarItemUpdates(CharacterItemListSnapshot snapshot, HashSet<short> slots)
+        {
+            if (snapshot == null || slots == null || slots.Count == 0)
+                return null;
+
+            var updates = new List<AvatarInventoryItem>();
+            foreach (var slot in slots)
+            {
+                var item = snapshot.AvatarItems.FirstOrDefault(x => x.SlotIndex == slot);
+                if (item != null)
+                    updates.Add(item);
+            }
+
+            if (updates.Count == 0)
+                return null;
+
+            return ItemListUpdateBuilder.BuildAvatarUpdates(updates);
         }
 
         private static CommonInventoryItem CreateConsumedSourceItem(BoosterUseResult result)

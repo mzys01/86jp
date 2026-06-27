@@ -5,6 +5,7 @@ using DfoServer.Network.Builders;
 using DfoServer.Network.Builders.CeraShop;
 using DfoServer.Network.Parsers.CeraShop;
 using System;
+using System.Collections.Generic;
 using System.Threading.Tasks;
 
 namespace DfoServer.Network.Handlers
@@ -78,8 +79,8 @@ namespace DfoServer.Network.Handlers
 
             // 普通商品走 NOTI 0x0E。多商品购物车时合并成一个 UPDATE_ITEM_LIST,
             // 与地下城翻牌/任务掉落一致, 避免连续多个 0x0E 时客户端漏刷新 slot0 金币。
-            var hasAvatarResult = false;
-            var hasPetResult = false;
+            var avatarSlots = new HashSet<short>();
+            var petSlots = new HashSet<short>();
             var itemUpdateResults = new System.Collections.Generic.List<InventoryMutationResult>();
             InventoryMutationResult goldResult = null;
             foreach (var result in results)
@@ -91,12 +92,12 @@ namespace DfoServer.Network.Handlers
                 {
                     if (updateResult.ListType == InventoryListType.Avatar)
                     {
-                        hasAvatarResult = true;
+                        avatarSlots.Add(updateResult.SlotIndex);
                         continue;
                     }
                     if (updateResult.ListType == InventoryListType.Pet)
                     {
-                        hasPetResult = true;
+                        petSlots.Add(updateResult.SlotIndex);
                         continue;
                     }
                     itemUpdateResults.Add(updateResult);
@@ -124,20 +125,26 @@ namespace DfoServer.Network.Handlers
                     BuildItemListUpdate(itemUpdateResults, snapshot)));
             }
 
-            if (hasAvatarResult || hasPetResult)
+            if (avatarSlots.Count > 0 || petSlots.Count > 0)
             {
                 var snapshot = _sqliteSelectCharacterDataSource.LoadItemListSnapshot(cid, aid);
-                if (hasAvatarResult)
+                if (avatarSlots.Count > 0)
                 {
-                    var avatarListBody = ItemListPacketBuilder.BuildBody(snapshot, InventoryListType.Avatar);
-                    await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000D, avatarListBody));
-                    FileLogger.Log($"[{ProtocolName}] CERA_SHOP_BUY: avatar ITEM_LIST refresh sent count={snapshot.AvatarItems.Count}");
+                    var avatarUpdateBody = BuildAvatarItemListUpdate(snapshot, avatarSlots);
+                    if (avatarUpdateBody != null)
+                    {
+                        await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000E, avatarUpdateBody));
+                        FileLogger.Log($"[{ProtocolName}] CERA_SHOP_BUY: avatar ITEM_LIST update sent count={avatarSlots.Count}");
+                    }
                 }
-                if (hasPetResult)
+                if (petSlots.Count > 0)
                 {
-                    var petListBody = ItemListPacketBuilder.BuildBody(snapshot, InventoryListType.Pet);
-                    await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000D, petListBody));
-                    FileLogger.Log($"[{ProtocolName}] CERA_SHOP_BUY: pet ITEM_LIST refresh sent count={snapshot.PetItems.Count}");
+                    var petUpdateBody = BuildPetItemListUpdate(snapshot, petSlots);
+                    if (petUpdateBody != null)
+                    {
+                        await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000E, petUpdateBody));
+                        FileLogger.Log($"[{ProtocolName}] CERA_SHOP_BUY: pet ITEM_LIST update sent count={petSlots.Count}");
+                    }
                 }
             }
 
@@ -199,6 +206,44 @@ namespace DfoServer.Network.Handlers
                 return null;
 
             return snapshot.MainItems.Find(item => item.SlotIndex == update.SlotIndex);
+        }
+
+        private static byte[] BuildAvatarItemListUpdate(CharacterItemListSnapshot snapshot, HashSet<short> slots)
+        {
+            if (snapshot == null || slots == null || slots.Count == 0)
+                return null;
+
+            var updates = new List<AvatarInventoryItem>();
+            foreach (var slot in slots)
+            {
+                var item = snapshot.AvatarItems.Find(x => x.SlotIndex == slot);
+                if (item != null)
+                    updates.Add(item);
+            }
+
+            if (updates.Count == 0)
+                return null;
+
+            return ItemListUpdateBuilder.BuildAvatarUpdates(updates);
+        }
+
+        private static byte[] BuildPetItemListUpdate(CharacterItemListSnapshot snapshot, HashSet<short> slots)
+        {
+            if (snapshot == null || slots == null || slots.Count == 0)
+                return null;
+
+            var updates = new List<PetInventoryItem>();
+            foreach (var slot in slots)
+            {
+                var item = snapshot.PetItems.Find(x => x.SlotIndex == slot);
+                if (item != null)
+                    updates.Add(item);
+            }
+
+            if (updates.Count == 0)
+                return null;
+
+            return ItemListUpdateBuilder.BuildPetUpdates(updates);
         }
 
         private static void WriteCompactItemListUpdate(GamePacketWriter writer, InventoryMutationResult update)
