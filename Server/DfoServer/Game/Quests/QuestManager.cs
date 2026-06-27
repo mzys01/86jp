@@ -96,7 +96,7 @@ namespace DfoServer.Game.Quests
                     }
                 }
 
-                ushort spTree0 = 0, spTree1 = 0;
+                ushort remainSp = 0, remainTp = 0;
                 try
                 {
                     var charRepo = new SqliteCharacterRepository(ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
@@ -106,14 +106,14 @@ namespace DfoServer.Game.Quests
                     {
                         var synced = SkillStateService.LoadAndSync(
                             skillRepo, cid, rec.Job, player.Level, rec.BonusSp, rec.BonusTp, persist: player.Level > prevLevel);
-                        spTree0 = (ushort)synced.Points.RemainingSp;
-                        spTree1 = (ushort)synced.Points.RemainingSp;
+                        remainSp = (ushort)synced.Points.RemainingSp;
+                        remainTp = (ushort)synced.Points.RemainingTp;
                     }
                 }
                 catch (Exception ex) { FileLogger.Log($"[QuestManager] SP calc ERROR: {ex.Message}"); }
 
                 await _sender.SendNotiAsync(0x0025,
-                    ExpNotificationBuilder.Build(player.Level, player.Exp, spTree0, spTree1));
+                    ExpNotificationBuilder.Build(player.Level, player.Exp, remainSp, remainTp));
 
                 if (player.Level > prevLevel)
                 {

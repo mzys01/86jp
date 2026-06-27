@@ -27,7 +27,7 @@ namespace DfoServer.Game.Skills
         public bool Success;
         public byte SkillTree;
         public ushort RemainSp;
-        public ushort RemainSfp;
+        public ushort RemainTp;
         public readonly List<BuySkillResultEntry> Entries = new List<BuySkillResultEntry>();
         public byte ErrorCode;    
     }
@@ -54,7 +54,7 @@ namespace DfoServer.Game.Skills
             var points = SkillStateService.ResolvePointState(
                 snapshot, persistedPoints, (byte)job, level, bonusSp, bonusTp);
             int remainSp = points.RemainingSp;
-            int remainSfp = points.RemainingSfp;
+            int remainTp = points.RemainingTp;
 
             var result = new BuySkillResult { Success = true, SkillTree = (byte)skillTree };
 
@@ -97,14 +97,15 @@ namespace DfoServer.Game.Skills
                         slotForEntry = (byte)allocatedSlot;
                     }
 
-                    int cost = sd.SpCostFor(curLevel, newLevel);
-                    if (sd.IsSpecial)
+                    if (sd.IsTpSkill)
                     {
-                        if (remainSfp < cost) { result.Success = false; result.ErrorCode = 2; return result; }
-                        remainSfp -= cost;
+                        int tpCost = sd.TpCostFor(curLevel, newLevel);
+                        if (remainTp < tpCost) { result.Success = false; result.ErrorCode = 2; return result; }
+                        remainTp -= tpCost;
                     }
                     else
                     {
+                        int cost = sd.SpCostFor(curLevel, newLevel);
                         if (remainSp < cost) { result.Success = false; result.ErrorCode = 2; return result; }
                         remainSp -= cost;
                     }
@@ -142,8 +143,16 @@ namespace DfoServer.Game.Skills
                     if (newLevel < baseLevel) newLevel = baseLevel;
                     if (newLevel >= curLevel) continue;
 
-                    int refund = sd.SpCostFor(newLevel, curLevel);
-                    if (sd.IsSpecial) remainSfp += refund; else remainSp += refund;
+                    if (sd.IsTpSkill)
+                    {
+                        int refund = sd.TpCostFor(newLevel, curLevel);
+                        remainTp += refund;
+                    }
+                    else
+                    {
+                        int refund = sd.SpCostFor(newLevel, curLevel);
+                        remainSp += refund;
+                    }
 
                     if (newLevel == 0)
                     {
@@ -166,11 +175,11 @@ namespace DfoServer.Game.Skills
             }
 
             points.RemainingSp = Math.Max(0, Math.Min(remainSp, points.TotalSp));
-            points.RemainingSfp = Math.Max(0, Math.Min(remainSfp, points.TotalSfp));
+            points.RemainingTp = Math.Max(0, Math.Min(remainTp, points.TotalTp));
             SkillStateService.Persist(repo, cid, snapshot, points);
 
             result.RemainSp = (ushort)points.RemainingSp;
-            result.RemainSfp = (ushort)points.RemainingSfp;
+            result.RemainTp = (ushort)points.RemainingTp;
             return result;
         }
 

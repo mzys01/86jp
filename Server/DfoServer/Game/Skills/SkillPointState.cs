@@ -9,10 +9,6 @@ namespace DfoServer.Game.Skills
 
         public int RemainingSp { get; set; }
 
-        public int TotalSfp { get; set; }
-
-        public int RemainingSfp { get; set; }
-
         public int TotalTp { get; set; }
 
         public int RemainingTp { get; set; }
@@ -46,18 +42,13 @@ namespace DfoServer.Game.Skills
             {
                 var gainedSp = calculated.TotalSp - persisted.TotalSp;
                 var gainedTp = calculated.TotalTp - persisted.TotalTp;
-                var totalSfp = Max(persisted.TotalSfp, persisted.RemainingSfp);
                 state.RemainingSp = Clamp(persisted.RemainingSp + gainedSp, 0, calculated.TotalSp);
                 state.RemainingTp = Clamp(persisted.RemainingTp + gainedTp, 0, calculated.TotalTp);
-                state.TotalSfp = totalSfp;
-                state.RemainingSfp = Clamp(persisted.RemainingSfp, 0, totalSfp);
             }
             else
             {
                 state.RemainingSp = calculated.RemainingSp;
                 state.RemainingTp = calculated.RemainingTp;
-                state.TotalSfp = 0;
-                state.RemainingSfp = 0;
             }
 
             return state;
@@ -70,8 +61,8 @@ namespace DfoServer.Game.Skills
                 skills.Pages.Add(new SkillInfoPageSnapshot());
 
             skills.Pages[0].HeaderValue = ToUInt16(state.RemainingSp);
-            skills.Tail0 = ToUInt16(state.RemainingSfp);
-            skills.Tail1 = ToUInt16(state.RemainingSp);
+            skills.Tail0 = ToUInt16(state.RemainingTp);
+            skills.Tail1 = 0;
             skills.HasTailValues = true;
         }
 
@@ -98,7 +89,6 @@ namespace DfoServer.Game.Skills
             var points = ResolvePointState(skills, null, job, level, bonusSp, bonusTp);
             points.RemainingSp = points.TotalSp;
             points.RemainingTp = points.TotalTp;
-            points.RemainingSfp = points.TotalSfp;
             Persist(repository, characterId, skills, points);
             return (skills, points);
         }

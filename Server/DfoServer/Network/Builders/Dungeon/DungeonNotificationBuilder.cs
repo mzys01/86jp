@@ -248,16 +248,16 @@ namespace DfoServer.Network.Builders
             return writer.ToArray();
         }
 
-        public static byte[] BuildExp(byte level, uint totalExp, ushort spTree0 = 0, ushort spTree1 = 0)
+        public static byte[] BuildExp(byte level, uint totalExp, ushort remainSp = 0, ushort remainTp = 0)
         {
             var writer = new GamePacketWriter();
             writer.WriteByte(level);
             writer.WriteUInt32(totalExp);
             writer.WriteUInt32(0);
             writer.WriteUInt32(0);
-            writer.WriteUInt16(spTree0);
-            writer.WriteUInt16(spTree1);
-            writer.WriteUInt16(0);
+            writer.WriteUInt16(remainSp);
+            writer.WriteUInt16(remainSp);
+            writer.WriteUInt16(remainTp);
             writer.WriteUInt16(0);
             writer.WriteUInt32(0);
             writer.WriteUInt32(0);

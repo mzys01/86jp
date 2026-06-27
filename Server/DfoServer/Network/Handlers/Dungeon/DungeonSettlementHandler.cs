@@ -173,19 +173,19 @@ namespace DfoServer.Network.Handlers.Dungeon
                 DungeonNotificationBuilder.BuildPlayResult(
                     session.Player.UserId, session.Player.CurBossCode,
                     session.Player.CurDungeonTotalExp, allKill: true)));
-            ushort spTree0 = 0, spTree1 = 0;
+            ushort remainSp = 0, remainTp = 0;
             try
             {
                 var points = _svc.LoadSyncedSkillState(session.Player.CharacterId, session.Player.Level, persist: false).Points;
                 if (points != null)
                 {
-                    spTree0 = (ushort)points.RemainingSp;
-                    spTree1 = (ushort)points.RemainingSp;
+                    remainSp = (ushort)points.RemainingSp;
+                    remainTp = (ushort)points.RemainingTp;
                 }
             }
             catch { }
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0025,
-                DungeonNotificationBuilder.BuildExp(session.Player.Level, session.Player.Exp, spTree0, spTree1)));
+                DungeonNotificationBuilder.BuildExp(session.Player.Level, session.Player.Exp, remainSp, remainTp)));
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0023,
                 DungeonNotificationBuilder.BuildClearDungeonReward(
                     session.Player.CurDungeonTotalExp, session.Player.CurDungeonTotalGold,

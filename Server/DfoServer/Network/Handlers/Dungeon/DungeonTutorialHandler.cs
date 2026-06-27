@@ -147,20 +147,20 @@ namespace DfoServer.Network.Handlers.Dungeon
             _svc.PersistLevelAndExp(session.Player.CharacterId, session.Player.Level, session.Player.Exp);
             FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] TUTORIAL_LEVEL_UP: {1}->{target} exp={targetExp}");
 
-            ushort spTree0 = 0, spTree1 = 0;
+            ushort remainSp = 0, remainTp = 0;
             try
             {
                 var points = _svc.LoadSyncedSkillState(session.Player.CharacterId, session.Player.Level, persist: true).Points;
                 if (points != null)
                 {
-                    spTree0 = (ushort)points.RemainingSp;
-                    spTree1 = (ushort)points.RemainingSp;
+                    remainSp = (ushort)points.RemainingSp;
+                    remainTp = (ushort)points.RemainingTp;
                 }
             }
             catch { }
 
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0025,
-                ExpNotificationBuilder.Build(session.Player.Level, session.Player.Exp, spTree0, spTree1)));
+                ExpNotificationBuilder.Build(session.Player.Level, session.Player.Exp, remainSp, remainTp)));
 
             await _svc.SendQuestListRefresh(session);
             await _svc.SendUserInfoBroadcast(session);

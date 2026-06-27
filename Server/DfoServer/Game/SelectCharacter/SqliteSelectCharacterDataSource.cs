@@ -402,7 +402,6 @@ namespace DfoServer.Game.SelectCharacter
                     initialSkills, null, job, 1, 0, 0);
                 points.RemainingSp = points.TotalSp;
                 points.RemainingTp = points.TotalTp;
-                points.RemainingSfp = points.TotalSfp;
                 Skills.SkillStateService.Persist(_initDataRepository, characterId, initialSkills, points);
             }
 

@@ -20,10 +20,11 @@ namespace DfoServer.Game.Skills
         public int RequiredLevel;       
         public int NumGrowtypes;        
         public int RawGroup;            
-        public bool IsSpecial;          
-        public int[] SpCostPerLevel;    
+        public bool IsSpecial;
+        public bool IsTpSkill;
+        public int[] SpCostPerLevel;
+        public int[] TpCostPerLevel;
 
-        
         public int SpCostFor(int fromLevel, int toLevel)
         {
             if (SpCostPerLevel == null || SpCostPerLevel.Length == 0) return 0;
@@ -32,6 +33,18 @@ namespace DfoServer.Game.Skills
             {
                 int idx = lv < SpCostPerLevel.Length ? lv : SpCostPerLevel.Length - 1;
                 sum += SpCostPerLevel[idx];
+            }
+            return sum;
+        }
+
+        public int TpCostFor(int fromLevel, int toLevel)
+        {
+            if (TpCostPerLevel == null || TpCostPerLevel.Length == 0) return 0;
+            int sum = 0;
+            for (int lv = fromLevel; lv < toLevel; lv++)
+            {
+                int idx = lv < TpCostPerLevel.Length ? lv : TpCostPerLevel.Length - 1;
+                sum += TpCostPerLevel[idx];
             }
             return sum;
         }
@@ -106,7 +119,9 @@ namespace DfoServer.Game.Skills
                 NumGrowtypes = CountInts(skl.SkillFitnessGrowtype),
                 RawGroup = skl.SkillClass >= 0 ? skl.SkillClass : 0,
                 IsSpecial = skillIndex >= 200 && skillIndex <= 208,
+                IsTpSkill = !string.IsNullOrWhiteSpace(skl.FeatureSkillType) && skl.FeatureSkillType.Trim() != "0",
                 SpCostPerLevel = ParseInts(skl.PurchaseCost),
+                TpCostPerLevel = ParseInts(skl.SpecialPurchaseCost),
             };
             return data;
         }

@@ -50,7 +50,6 @@ namespace DfoServer.Game.Skills
 
             CheckCalculatedPointStateBootstrap(testLevel);
             CheckSeedFromSnapshotCreatesPointState(testLevel);
-            CheckSfpRefundDoesNotInflateTotal(testLevel);
 
             string tempDb = Path.Combine(Path.GetTempPath(), "buyskill_selftest.db");
             DeleteSqliteFiles(tempDb);
@@ -174,7 +173,7 @@ namespace DfoServer.Game.Skills
             var reload3 = repo2.LoadSkills(cid);
             var notLearned = reload3.Pages.Count > 0 ? reload3.Pages[0].Entries.Find(x => x.SkillId == 64) : null;
             Check("SP-insufficient does not add skill64", notLearned == null);
-            Check($"SP-insufficient keeps Tail1={reload3.Tail1}, expected {poorSp}", reload3.Tail1 == poorSp);
+            Check($"SP-insufficient keeps Tail1={reload3.Tail1}, expected 0", reload3.Tail1 == 0);
 
             var reset = SkillStateService.ResetToInitial(repo, cid, 0, testLevel, 0, 0);
             Check("reset removes learned skill64", reset.Skills.Pages[0].Entries.Find(x => x.SkillId == 64) == null);
@@ -229,115 +228,8 @@ namespace DfoServer.Game.Skills
             Check("seed snapshot creates skill point state", points != null && points.HasPersistedState);
             Check($"seed snapshot remaining SP={points?.RemainingSp ?? -1}, expected {calculated.RemainingSp}",
                 points != null && points.RemainingSp == calculated.RemainingSp);
-            Check($"seed snapshot Tail1 mirror={reloaded.Tail1}, expected {calculated.RemainingSp}",
-                reloaded.Tail1 == calculated.RemainingSp);
-        }
-
-        private static void CheckSfpRefundDoesNotInflateTotal(byte level)
-        {
-            var special = FindSpecialSkill(0, out int specialSkillId);
-            var refundCost = special != null ? special.SpCostFor(0, 1) : 0;
-            if (special == null || refundCost <= 0)
-            {
-                specialSkillId = 208;
-                refundCost = 5;
-                InstallSpecialSkillFixture(0, specialSkillId, refundCost);
-            }
-
-            const int specialCid = 999003;
-            string tempDb = Path.Combine(Path.GetTempPath(), "buyskill_sfp_selftest.db");
-            DeleteSqliteFiles(tempDb);
-
-            var repo = new SqliteCharacterProgressRepository(tempDb, ServerPaths.SchemaFilePath);
-            _ = new Game.Characters.SqliteCharacterRepository(tempDb, ServerPaths.SchemaFilePath);
-            EnsureTestCharacter(tempDb, specialCid, level);
-
-            var skills = InitialCharacterSkills.Build(0);
-            while (skills.Pages.Count < 2)
-                skills.Pages.Add(new SkillInfoPageSnapshot());
-            byte specialSlot = FindFreeSlot(skills.Pages[1]);
-            skills.Pages[1].Entries.Add(new SkillInfoEntrySnapshot
-            {
-                Slot = specialSlot,
-                SkillId = (ushort)specialSkillId,
-                Level = 1,
-            });
-
-            var points = SkillStateService.ResolvePointState(skills, null, 0, level, 0, 0);
-            points.TotalSfp = 0;
-            points.RemainingSfp = 0;
-            SkillStateService.Persist(repo, specialCid, skills, points);
-
-            var refunded = BuySkillService.Execute(repo, specialCid, 0, 1, new List<BuySkillEntry>
-            {
-                new BuySkillEntry { SkillIndex = (byte)specialSkillId, Level = 0, IsRefund = 1 }
-            }, level: level);
-            var persisted = repo.LoadSkillPointState(specialCid);
-
-            Check($"SFP refund keeps ACK remaining SFP={refunded?.RemainSfp ?? ushort.MaxValue}, expected 0",
-                refunded != null && refunded.RemainSfp == 0);
-            Check($"SFP refund keeps persisted total/remaining SFP={persisted?.TotalSfp ?? -1}/{persisted?.RemainingSfp ?? -1}, expected 0/0",
-                persisted != null && persisted.TotalSfp == 0 && persisted.RemainingSfp == 0);
-        }
-
-        private static SkillStaticData FindSpecialSkill(int job, out int skillId)
-        {
-            for (int id = 200; id <= 208; id++)
-            {
-                var data = SkillDataProvider.GetSkill(job, id);
-                if (data != null && data.IsSpecial)
-                {
-                    skillId = id;
-                    return data;
-                }
-            }
-
-            skillId = 0;
-            return null;
-        }
-
-        private static byte FindFreeSlot(SkillInfoPageSnapshot page)
-        {
-            for (int slot = 0; slot <= byte.MaxValue; slot++)
-            {
-                bool used = false;
-                foreach (var entry in page.Entries)
-                {
-                    if (entry.Slot == slot)
-                    {
-                        used = true;
-                        break;
-                    }
-                }
-
-                if (!used) return (byte)slot;
-            }
-
-            return byte.MaxValue;
-        }
-
-        private static void InstallSpecialSkillFixture(int job, int skillId, int cost)
-        {
-            var field = typeof(SkillDataProvider).GetField(
-                "_cache",
-                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
-            var cache = field?.GetValue(null) as Dictionary<int, SkillStaticData>;
-            if (cache == null) return;
-
-            int key = (job << 16) | (skillId & 0xFFFF);
-            cache[key] = new SkillStaticData
-            {
-                Job = job,
-                SkillIndex = skillId,
-                Name = "selftest special skill",
-                IsActive = false,
-                MaxLevel = 10,
-                RequiredLevel = 1,
-                NumGrowtypes = 0,
-                RawGroup = 0,
-                IsSpecial = true,
-                SpCostPerLevel = new[] { cost },
-            };
+            Check($"seed snapshot Tail0 mirror={reloaded.Tail0}, expected TP={calculated.RemainingTp}",
+                reloaded.Tail0 == calculated.RemainingTp);
         }
 
         private static void SeedSkillProgress(
@@ -354,8 +246,6 @@ namespace DfoServer.Game.Skills
                 RemainingSp = remainingSp,
                 TotalTp = calculated.TotalTp,
                 RemainingTp = calculated.TotalTp,
-                TotalSfp = 0,
-                RemainingSfp = 0,
                 SyncedLevel = level,
                 HasPersistedState = true,
             };

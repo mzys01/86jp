@@ -25,7 +25,7 @@ namespace DfoServer.Network.Builders
             w.WriteByte(0x01);                                      
             w.WriteByte(result.SkillTree);                         
             w.WriteUInt16(result.RemainSp);                        
-            w.WriteUInt16(result.RemainSfp);                       
+            w.WriteUInt16(result.RemainTp);
             w.WriteByte((byte)result.Entries.Count);               
             foreach (var e in result.Entries)
             {

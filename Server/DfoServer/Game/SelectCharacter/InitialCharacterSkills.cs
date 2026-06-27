@@ -74,7 +74,7 @@ namespace DfoServer.Game.SelectCharacter
                         Add(page0, lifeSlot++, skillId, level);
                 }
 
-                var snap = new SkillInfoSnapshot { Tail0 = 0x0000, Tail1 = (ushort)Skills.SpTableProvider.GetTotalSp(1) };
+                var snap = new SkillInfoSnapshot { Tail0 = 0x0000, Tail1 = 0 };
                 snap.Pages.Add(page0);
                 
                 var page1 = new SkillInfoPageSnapshot { HeaderValue = 0x0000 };
@@ -92,7 +92,7 @@ namespace DfoServer.Game.SelectCharacter
 
         private static SkillInfoSnapshot BuildEmpty()
         {
-            var snap = new SkillInfoSnapshot { Tail0 = 0x0000, Tail1 = (ushort)Skills.SpTableProvider.GetTotalSp(1) };
+            var snap = new SkillInfoSnapshot { Tail0 = 0x0000, Tail1 = 0 };
             snap.Pages.Add(new SkillInfoPageSnapshot { HeaderValue = 0x0000 });
             snap.Pages.Add(new SkillInfoPageSnapshot { HeaderValue = 0x0000 });
             return snap;
