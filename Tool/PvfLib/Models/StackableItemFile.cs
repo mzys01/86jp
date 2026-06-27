@@ -298,7 +298,11 @@ namespace PvfLib
             var start = 0;
             if (ints.Count >= 4 && (ints.Count - 1) % 3 == 0)
             {
-                group = ints[0];
+                // Repeated [etc] blocks under [booster info] are independent
+                // reward pools. The leading value belongs to the block itself,
+                // so keep the parser-assigned block group instead of merging
+                // identical tags such as two "[etc] 1 ..." sections.
+                drawCount = Math.Max(1, ints[0]);
                 start = 1;
             }
 
