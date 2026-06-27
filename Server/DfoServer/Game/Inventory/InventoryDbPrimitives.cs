@@ -400,6 +400,25 @@ WHERE item_uid = @itemUid;";
             }
         }
 
+        // Pet list packets use pet_serial_or_handle as the third entry field, so stack counts must mirror there.
+        internal void UpdatePetStackCount(SqliteConnection connection, SqliteTransaction transaction, long itemUid, int stackCount)
+        {
+            using (var command = connection.CreateCommand())
+            {
+                command.Transaction = transaction;
+                command.CommandText = @"
+UPDATE character_items
+SET stack_count = @stackCount,
+    instance_value = @stackCount,
+    pet_serial_or_handle = @stackCount,
+    updated_at = CURRENT_TIMESTAMP
+WHERE item_uid = @itemUid;";
+                command.Parameters.AddWithValue("@stackCount", stackCount);
+                command.Parameters.AddWithValue("@itemUid", itemUid);
+                command.ExecuteNonQuery();
+            }
+        }
+
         internal void UpdateItemPosition(SqliteConnection connection, SqliteTransaction transaction, long itemUid, InventoryListType listType, short slotIndex)
         {
             using (var command = connection.CreateCommand())
@@ -574,16 +593,21 @@ WHERE character_id = @characterId AND list_type = @listType;";
 
             var effectiveCount = Math.Max(1, stackCount);
             var isAvatarReward = InventoryPackageStore.IsAvatarReward(metadata);
+            var isPetConsumable = SqliteInventoryStore.IsPetConsumableItem(metadata);
+            var stackListType = isPetConsumable ? InventoryListType.Pet : InventoryListType.Main;
             if (metadata.IsStackable && !isAvatarReward)
             {
-                var existing = FindItemByTemplateId(connection, transaction, characterId, InventoryListType.Main, itemTemplateId);
+                var existing = FindItemByTemplateId(connection, transaction, characterId, stackListType, itemTemplateId);
                 if (existing != null && (metadata.StackLimit <= 0 || existing.StackCount + effectiveCount <= metadata.StackLimit))
                 {
                     var newStackCount = existing.StackCount + effectiveCount;
-                    UpdateStackCount(connection, transaction, existing.ItemUid, newStackCount);
+                    if (isPetConsumable)
+                        UpdatePetStackCount(connection, transaction, existing.ItemUid, newStackCount);
+                    else
+                        UpdateStackCount(connection, transaction, existing.ItemUid, newStackCount);
                     result = new BoosterRewardResult
                     {
-                        ListType = InventoryListType.Main,
+                        ListType = stackListType,
                         SlotIndex = existing.SlotIndex,
                         ItemTemplateId = itemTemplateId,
                         StackCount = newStackCount,
@@ -600,6 +624,10 @@ WHERE character_id = @characterId AND list_type = @listType;";
             var expireTime = metadata.IsStackable ? 0 : -1;
             var marker16 = metadata.IsStackable ? 0 : -1;
             var petSerial = 0;
+            var isPetEquipment = string.Equals(metadata.ItemKind, "equipment", StringComparison.Ordinal) &&
+                SqliteInventoryStore.IsPetInventoryEquipment(itemTemplateId);
+            var isCreature = isPetEquipment && SqliteInventoryStore.IsCreatureItem(itemTemplateId);
+            var isPetArtifactEquipment = isPetEquipment && !isCreature;
             if (isAvatarReward)
             {
                 insertListType = InventoryListType.Avatar;
@@ -609,7 +637,7 @@ WHERE character_id = @characterId AND list_type = @listType;";
                 expireTime = 0;
                 marker16 = SqliteInventoryStore.DefaultAvatarUnknownFixed30;
             }
-            else if (string.Equals(metadata.ItemKind, "equipment", StringComparison.Ordinal) && SqliteInventoryStore.IsCreatureItem(itemTemplateId))
+            else if (isCreature)
             {
                 insertListType = InventoryListType.Pet;
                 insertKind = "pet";
@@ -618,6 +646,25 @@ WHERE character_id = @characterId AND list_type = @listType;";
                 expireTime = 0;
                 marker16 = 0;
                 petSerial = NextPetSerialOrHandle(connection, transaction, characterId);
+            }
+            else if (isPetArtifactEquipment)
+            {
+                insertListType = InventoryListType.Pet;
+                insertKind = "pet";
+                slotStart = SqliteInventoryStore.PetEquipmentSlotStart;
+                slotEnd = SqliteInventoryStore.PetEquipmentSlotEnd;
+                expireTime = 0;
+                marker16 = 0;
+            }
+            else if (isPetConsumable)
+            {
+                insertListType = InventoryListType.Pet;
+                insertKind = "pet";
+                slotStart = SqliteInventoryStore.PetConsumableSlotStart;
+                slotEnd = SqliteInventoryStore.PetConsumableSlotEnd;
+                expireTime = 0;
+                marker16 = 0;
+                petSerial = effectiveCount;
             }
             else
             {
@@ -631,8 +678,9 @@ WHERE character_id = @characterId AND list_type = @listType;";
                 return false;
             }
 
+            var petNonStackable = isCreature || isPetArtifactEquipment;
             var instanceValue = metadata.IsStackable ? effectiveCount : insertListType == InventoryListType.Pet || insertListType == InventoryListType.Avatar ? 0 : GenerateInstanceValue(itemTemplateId, targetSlot);
-            var storedStackCount = insertListType == InventoryListType.Pet || insertListType == InventoryListType.Avatar
+            var storedStackCount = petNonStackable || insertListType == InventoryListType.Avatar
                 ? 0
                 : metadata.IsStackable ? effectiveCount : instanceValue;
             var durability = insertListType == InventoryListType.Pet || insertListType == InventoryListType.Avatar

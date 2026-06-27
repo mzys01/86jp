@@ -200,6 +200,17 @@ namespace DfoServer.Network.Handlers
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000E, updBody));
                 FileLogger.Log($"[{ProtocolName}] BUY_ITEM: NOTI 14 cost update slot={result.CostItemSlotIndex} id=0x{result.CostItemTemplateId:X8} newCount={result.CostItemNewStackCount}");
             }
+
+            if (result.ListType == InventoryListType.Pet)
+            {
+                var snapshot = _sqliteSelectCharacterDataSource.LoadItemListSnapshot(cid, aid);
+                var petUpdateBody = BuildPetItemUpdates(snapshot, new HashSet<short> { result.SlotIndex });
+                if (petUpdateBody != null)
+                {
+                    await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000E, petUpdateBody));
+                    FileLogger.Log($"[{ProtocolName}] BUY_ITEM: pet ITEM_LIST update sent slot={result.SlotIndex}");
+                }
+            }
         }
 
         public async Task Handle_ENUM_CMDPACKET_SELL_ITEM(EnhancedClientSession session, GamePacketHeader header, byte[] body)
