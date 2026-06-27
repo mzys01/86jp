@@ -527,8 +527,18 @@ namespace DfoServer.Game.Inventory
 
                 if (isStackable)
                 {
-                    var existingItem = _db.FindItemByTemplateId(connection, transaction, InventoryListType.Main, itemTemplateId);
                     var stackLimit = metadata.StackLimit;
+                    if (IsCeraShopStackablePackage(product.Section))
+                        stackLimit = int.MaxValue;
+
+                    var existingItem = _db.FindStackableItemByTemplateIdAndExpireTime(
+                        connection,
+                        transaction,
+                        InventoryListType.Main,
+                        itemTemplateId,
+                        0,
+                        stackLimit);
+
                     if (existingItem != null && (stackLimit <= 0 || existingItem.StackCount + effectiveCount <= stackLimit))
                     {
                         var newStackCount = existingItem.StackCount + effectiveCount;
@@ -661,6 +671,15 @@ namespace DfoServer.Game.Inventory
                 };
                 return true;
             }
+        }
+
+        private static bool IsCeraShopStackablePackage(string section)
+        {
+            if (string.IsNullOrWhiteSpace(section))
+                return false;
+
+            return section.Equals("package", StringComparison.OrdinalIgnoreCase)
+                || section.Equals("booster", StringComparison.OrdinalIgnoreCase);
         }
     }
 }
