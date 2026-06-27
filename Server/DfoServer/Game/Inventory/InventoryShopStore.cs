@@ -575,7 +575,13 @@ namespace DfoServer.Game.Inventory
             {
                 var existingItem = _db.FindItemByTemplateId(connection, transaction, characterId, stackListType, itemTemplateId);
                 var stackLimit = metadata.StackLimit;
-                if (existingItem != null && (stackLimit <= 0 || existingItem.StackCount + effectiveCount <= stackLimit))
+                if (existingItem != null && stackLimit > 0 && existingItem.StackCount + effectiveCount > stackLimit)
+                {
+                    FileLogger.Log($"  [CeraShopBuy] REJECT: stack limit reached product=0x{productId:X8} item=0x{itemTemplateId:X8} slot={existingItem.SlotIndex} current={existingItem.StackCount} add={effectiveCount} limit={stackLimit}");
+                    return false;
+                }
+
+                if (existingItem != null)
                 {
                     var newStackCount = existingItem.StackCount + effectiveCount;
                     if (isPetConsumable)
@@ -606,44 +612,10 @@ namespace DfoServer.Game.Inventory
                 }
             }
 
-            if (isStackable)
+            if (isStackable && metadata.StackLimit > 0 && effectiveCount > metadata.StackLimit)
             {
-                var stackLimit = metadata.StackLimit;
-                if (IsCeraShopStackablePackage(product.Section))
-                    stackLimit = int.MaxValue;
-
-                var existingItem = _db.FindStackableItemByTemplateIdAndExpireTime(
-                    connection, transaction, characterId, stackListType, itemTemplateId, 0, stackLimit);
-
-                if (existingItem != null && (stackLimit <= 0 || existingItem.StackCount + effectiveCount <= stackLimit))
-                {
-                    var newStackCount = existingItem.StackCount + effectiveCount;
-                    if (isPetConsumable)
-                        _db.UpdatePetStackCount(connection, transaction, existingItem.ItemUid, newStackCount);
-                    else
-                        _db.UpdateStackCount(connection, transaction, existingItem.ItemUid, newStackCount);
-                    ApplyCeraShopPayment(connection, transaction, characterId, plan);
-                    _auditLogger.WriteBuyAuditLog(connection, transaction, characterId, itemTemplateId, existingItem.SlotIndex, totalGoldCost, totalCeraCost);
-
-                    result = new InventoryMutationResult
-                    {
-                        ListType = stackListType,
-                        SlotIndex = existingItem.SlotIndex,
-                        ItemTemplateId = itemTemplateId,
-                        RemainingStackCount = newStackCount,
-                        InstanceValue = newStackCount,
-                        Durability = 0,
-                        UpdatedGold = plan.NewGold,
-                        UpdatedSp = wallet.Sp,
-                        UpdatedCoin = plan.NewCera,
-                        UpdatedTokenCera = plan.NewTokenCera,
-                        UpdatedHappyTokenCera = plan.NewHappyTokenCera,
-                        GoldSpent = goldSpent,
-                        RequestedCount = (short)effectiveCount,
-                        AppliedCount = (short)effectiveCount,
-                    };
-                    return true;
-                }
+                FileLogger.Log($"  [CeraShopBuy] REJECT: stack limit exceeded product=0x{productId:X8} item=0x{itemTemplateId:X8} count={effectiveCount} limit={metadata.StackLimit}");
+                return false;
             }
 
             int slotStart;
@@ -767,15 +739,6 @@ namespace DfoServer.Game.Inventory
                 AppliedCount = (short)effectiveCount,
             };
             return true;
-        }
-
-        private static bool IsCeraShopStackablePackage(string section)
-        {
-            if (string.IsNullOrWhiteSpace(section))
-                return false;
-
-            return section.Equals("package", StringComparison.OrdinalIgnoreCase)
-                || section.Equals("booster", StringComparison.OrdinalIgnoreCase);
         }
     }
 }
