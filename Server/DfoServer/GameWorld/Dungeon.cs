@@ -64,6 +64,29 @@ namespace DfoServer.GameWorld
             return (byte)dngFile.BasisLevel;
         }
 
+        public static int GetMaxDifficultyCount(int dungeonId)
+        {
+            try
+            {
+                var dgnlst = LoadLstFile(Path.Combine("dungeon", "dungeon.lst"));
+                var dgnFilePath = ResolveFilePath(dgnlst, dungeonId, "地下城");
+                var dngFile = DungeonFile.Parse(PvfArchiveAccessor.ReadText(Path.Combine("dungeon", dgnFilePath)));
+                if (dngFile.DifficultyLevel != null && dngFile.DifficultyLevel.Length > 0)
+                {
+                    int count = 0;
+                    foreach (var v in dngFile.DifficultyLevel)
+                        if (v != 0) count++;
+                    return count;
+                }
+                if (dngFile.DesignateDungeonDifficulty != null && dngFile.DesignateDungeonDifficulty.Length > 0)
+                    return 5;
+                if (dngFile.Difficulty >= 0)
+                    return 5;
+                return 0;
+            }
+            catch { return 0; }
+        }
+
         public static float GetExperienceWeight(int dungeonId)
         {
             try

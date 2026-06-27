@@ -105,6 +105,35 @@ namespace DfoServer.Network.Handlers.Dungeon
             catch { return 0; }
         }
 
+        internal async Task UpdateDungeonPermission(EnhancedClientSession session, int dungeonId, int difficulty)
+        {
+            if (dungeonId <= 0) return;
+            int characterId = session.Player.CharacterId;
+            int maxClearState = GameWorld.Dungeon.GetMaxDifficultyCount(dungeonId) - 1;
+            if (maxClearState <= 0) return;
+            byte newClearState = (byte)(difficulty + 1);
+            if (newClearState < 1) newClearState = 1;
+            if (newClearState > maxClearState) newClearState = (byte)maxClearState;
+
+            try
+            {
+                var repo = new SqliteCharacterStateRepository(ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
+                if (!repo.UpsertDungeonPermission(characterId, dungeonId, newClearState))
+                    return;
+
+                var w = new GamePacketWriter();
+                w.WriteUInt16(1);
+                w.WriteUInt16((ushort)dungeonId);
+                w.WriteByte(newClearState);
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0005, w.ToArray()));
+                FileLogger.Log($"[DungeonHandler] DungeonPermission: dungeon={dungeonId} diff={difficulty} -> clearState={newClearState}");
+            }
+            catch (Exception ex)
+            {
+                FileLogger.Log($"[DungeonHandler] DungeonPermission ERROR: {ex.Message}");
+            }
+        }
+
         internal (SkillInfoSnapshot Skills, SkillPointState Points) LoadSyncedSkillState(
             int characterId,
             byte currentLevel,

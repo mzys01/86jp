@@ -75,6 +75,8 @@ namespace PvfLib
         public string WorldmapPatternInfo { get; set; }
         public string WorldmapInfo { get; set; }
         public int Difficulty { get; set; } = -1;
+        public int[] DifficultyLevel { get; set; }
+        public int[] DesignateDungeonDifficulty { get; set; }
         public bool NoFatigue { get; set; }
         public int[] NamedMonster { get; set; }
         public int[] RecommendedLevel { get; set; }         // [min, max]
@@ -187,6 +189,12 @@ namespace PvfLib
                         break;
                     case "difficulty":
                         dgn.Difficulty = ParseInt(data);
+                        break;
+                    case "difficulty level":
+                        dgn.DifficultyLevel = ParseIntArray(data);
+                        break;
+                    case "designate dungeon difficulty":
+                        dgn.DesignateDungeonDifficulty = ParseIntArray(data);
                         break;
                     case "no fatigue":
                         dgn.NoFatigue = true;

@@ -198,6 +198,13 @@ namespace DfoServer.Network.Handlers.Dungeon
             session.Player.CurCardFlipCount = 0;
             session.Player.CurFreeCardSlots = new byte[] { 0xFF, 0xFF, 0xFF, 0xFF };
             session.Player.CurPaidCardSlots = new byte[] { 0xFF, 0xFF, 0xFF, 0xFF };
+
+            // TODO: 完善难度解锁条件 — 老服务端 CParty::DungeonPermission (0x85B12F8) 按难度分级:
+            //   Normal通关 → 无条件解锁Hard
+            //   Hard通关   → 需评分达标 (a2 >= CDataManager+20784)
+            //   Ultimate通关 → 需在UltimateDungeonList + 死亡次数限制(10/30/50)
+            // 当前简化: 通关即解锁下一难度, 不检查评分和死亡次数
+            await _svc.UpdateDungeonPermission(session, session.Player.CurDungeon, session.Player.CurDungeonDifficulty);
         }
 
         // df_game_r CParty::ClearDungeon (0x85A9330)

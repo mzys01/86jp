@@ -273,6 +273,50 @@ namespace DfoServer.Game.CharacterData
             }
         }
 
+        public bool UpsertDungeonPermission(int characterId, int dungeonId, byte newClearState)
+        {
+            using (var conn = new SqliteConnection(_connectionString))
+            {
+                conn.Open();
+                int currentState = 0;
+                using (var cmd = new SqliteCommand(
+                    "SELECT clear_state FROM character_dungeon_permissions WHERE character_id = @cid AND dungeon_id = @did", conn))
+                {
+                    cmd.Parameters.AddWithValue("@cid", characterId);
+                    cmd.Parameters.AddWithValue("@did", dungeonId);
+                    var existing = cmd.ExecuteScalar();
+                    if (existing != null && existing != DBNull.Value)
+                        currentState = Convert.ToInt32(existing);
+                }
+                if (currentState >= newClearState) return false;
+
+                if (currentState > 0)
+                {
+                    using (var cmd = new SqliteCommand(
+                        "UPDATE character_dungeon_permissions SET clear_state = @cs WHERE character_id = @cid AND dungeon_id = @did", conn))
+                    {
+                        cmd.Parameters.AddWithValue("@cid", characterId);
+                        cmd.Parameters.AddWithValue("@did", dungeonId);
+                        cmd.Parameters.AddWithValue("@cs", (int)newClearState);
+                        cmd.ExecuteNonQuery();
+                    }
+                }
+                else
+                {
+                    using (var cmd = new SqliteCommand(@"
+INSERT INTO character_dungeon_permissions (character_id, sort_order, dungeon_id, clear_state)
+VALUES (@cid, (SELECT COALESCE(MAX(sort_order),0)+1 FROM character_dungeon_permissions WHERE character_id=@cid), @did, @cs)", conn))
+                    {
+                        cmd.Parameters.AddWithValue("@cid", characterId);
+                        cmd.Parameters.AddWithValue("@did", dungeonId);
+                        cmd.Parameters.AddWithValue("@cs", (int)newClearState);
+                        cmd.ExecuteNonQuery();
+                    }
+                }
+                return true;
+            }
+        }
+
         public void SaveFlags(int characterId, SelectCharacterInitializationSnapshot snapshot)
         {
             using (var conn = new SqliteConnection(_connectionString))
