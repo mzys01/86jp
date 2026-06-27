@@ -22,5 +22,37 @@ namespace DfoServer.Network.Builders
 
             return writer.ToArray();
         }
+
+        public static byte[] BuildPetUpdates(IReadOnlyList<PetInventoryItem> items)
+        {
+            var writer = new GamePacketWriter();
+
+            writer.WriteByte((byte)InventoryListType.Pet);
+            writer.WriteUInt16((ushort)(items != null ? items.Count : 0));
+
+            if (items != null)
+            {
+                foreach (var item in items)
+                    ItemListPacketBuilder.WritePetEntry(writer, item);
+            }
+
+            return writer.ToArray();
+        }
+
+        public static byte[] BuildAvatarUpdates(IReadOnlyList<AvatarInventoryItem> items)
+        {
+            var writer = new GamePacketWriter();
+
+            writer.WriteByte((byte)InventoryListType.Avatar);
+            writer.WriteUInt16((ushort)(items != null ? items.Count : 0));
+
+            if (items != null)
+            {
+                foreach (var item in items)
+                    ItemListPacketBuilder.WriteAvatarEntry(writer, item);
+            }
+
+            return writer.ToArray();
+        }
     }
 }

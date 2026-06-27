@@ -119,8 +119,11 @@ namespace DfoServer.Network.Builders
             return writer.ToArray();
         }
 
-        private static void WriteAvatarEntry(GamePacketWriter writer, AvatarInventoryItem item)
+        public static void WriteAvatarEntry(GamePacketWriter writer, AvatarInventoryItem item)
         {
+            if (writer == null) throw new ArgumentNullException(nameof(writer));
+            if (item == null) throw new ArgumentNullException(nameof(item));
+
             writer.WriteInt16(item.SlotIndex);
             writer.WriteInt32(item.AvatarItemId);
             writer.WriteBytes(item.Reserved0);
@@ -139,14 +142,20 @@ namespace DfoServer.Network.Builders
             writer.WriteUInt16((ushort)items.Count);
 
             foreach (var item in items)
-            {
-                writer.WriteInt16(item.SlotIndex);
-                writer.WriteInt32(item.CreatureItemId);
-                writer.WriteInt32(item.CreatureSerialOrHandle);
-                writer.WriteBytes(item.TailData0A);
-            }
+                WritePetEntry(writer, item);
 
             return writer.ToArray();
+        }
+
+        public static void WritePetEntry(GamePacketWriter writer, PetInventoryItem item)
+        {
+            if (writer == null) throw new ArgumentNullException(nameof(writer));
+            if (item == null) throw new ArgumentNullException(nameof(item));
+
+            writer.WriteInt16(item.SlotIndex);
+            writer.WriteInt32(item.CreatureItemId);
+            writer.WriteInt32(item.CreatureSerialOrHandle);
+            writer.WriteBytes(item.TailData0A);
         }
 
         private static byte[] BuildAccountCargoBody(AccountCargoStateSnapshot state, List<CommonInventoryItem> items)

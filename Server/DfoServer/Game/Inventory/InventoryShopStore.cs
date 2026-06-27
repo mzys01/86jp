@@ -535,6 +535,43 @@ namespace DfoServer.Game.Inventory
                 }
             }
 
+            if (isStackable)
+            {
+                var stackLimit = metadata.StackLimit;
+                if (IsCeraShopStackablePackage(product.Section))
+                    stackLimit = int.MaxValue;
+
+                var existingItem = _db.FindStackableItemByTemplateIdAndExpireTime(
+                    connection, transaction, characterId, InventoryListType.Main, itemTemplateId, 0, stackLimit);
+
+                if (existingItem != null && (stackLimit <= 0 || existingItem.StackCount + effectiveCount <= stackLimit))
+                {
+                    var newStackCount = existingItem.StackCount + effectiveCount;
+                    _db.UpdateStackCount(connection, transaction, existingItem.ItemUid, newStackCount);
+                    ApplyCeraShopPayment(connection, transaction, characterId, plan);
+                    _auditLogger.WriteBuyAuditLog(connection, transaction, characterId, itemTemplateId, existingItem.SlotIndex, totalGoldCost, totalCeraCost);
+
+                    result = new InventoryMutationResult
+                    {
+                        ListType = InventoryListType.Main,
+                        SlotIndex = existingItem.SlotIndex,
+                        ItemTemplateId = itemTemplateId,
+                        RemainingStackCount = newStackCount,
+                        InstanceValue = newStackCount,
+                        Durability = 0,
+                        UpdatedGold = plan.NewGold,
+                        UpdatedSp = wallet.Sp,
+                        UpdatedCoin = plan.NewCera,
+                        UpdatedTokenCera = plan.NewTokenCera,
+                        UpdatedHappyTokenCera = plan.NewHappyTokenCera,
+                        GoldSpent = goldSpent,
+                        RequestedCount = (short)effectiveCount,
+                        AppliedCount = (short)effectiveCount,
+                    };
+                    return true;
+                }
+            }
+
             int slotStart;
             int slotEnd;
             var insertListType = InventoryListType.Main;
@@ -638,6 +675,15 @@ namespace DfoServer.Game.Inventory
                 AppliedCount = (short)effectiveCount,
             };
             return true;
+        }
+
+        private static bool IsCeraShopStackablePackage(string section)
+        {
+            if (string.IsNullOrWhiteSpace(section))
+                return false;
+
+            return section.Equals("package", StringComparison.OrdinalIgnoreCase)
+                || section.Equals("booster", StringComparison.OrdinalIgnoreCase);
         }
     }
 }
