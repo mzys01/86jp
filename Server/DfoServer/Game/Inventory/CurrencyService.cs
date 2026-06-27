@@ -32,6 +32,21 @@ namespace DfoServer.Game.Inventory
             return -1;
         }
 
+        public static int GetCubeFragmentItemIdFromSlot(int slot)
+        {
+            foreach (var kv in CubeFragmentMap)
+            {
+                if (kv.Value.Slot == slot)
+                    return kv.Key;
+            }
+            return -1;
+        }
+
+        public static bool IsCubeFragmentSlot(int slot)
+        {
+            return slot >= CubeFragmentSlotStart && slot <= CubeFragmentSlotEnd;
+        }
+
         /// <summary>
         /// 读取账号的 6 种晶块数量, 返回 (itemId, slot, count) 列表。
         /// </summary>
@@ -74,6 +89,31 @@ namespace DfoServer.Game.Inventory
                 cmd.Parameters.AddWithValue("@count", count);
                 cmd.Parameters.AddWithValue("@aid", accountId);
                 cmd.ExecuteNonQuery();
+            }
+        }
+
+        /// <summary>
+        /// 从账号扣除指定晶块。
+        /// </summary>
+        public static bool SubCubeFragment(SqliteConnection conn, SqliteTransaction tx, int accountId, int itemId, int count)
+        {
+            if (!CubeFragmentMap.TryGetValue(itemId, out var entry))
+                return false;
+
+            using (var cmd = conn.CreateCommand())
+            {
+                cmd.Transaction = tx;
+                cmd.CommandText = $"SELECT {entry.ColumnName} FROM accounts WHERE account_id = @aid;";
+                cmd.Parameters.AddWithValue("@aid", accountId);
+                var result = cmd.ExecuteScalar();
+                var currentCount = result != null && result != DBNull.Value ? Convert.ToInt32(result) : 0;
+                if (currentCount < count)
+                    return false;
+
+                cmd.CommandText = $"UPDATE accounts SET {entry.ColumnName} = {entry.ColumnName} - @count WHERE account_id = @aid;";
+                cmd.Parameters.AddWithValue("@count", count);
+                cmd.ExecuteNonQuery();
+                return true;
             }
         }
 

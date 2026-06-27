@@ -340,6 +340,46 @@ ORDER BY slot_index;";
             using (var connection = _context.OpenConnection())
             using (var transaction = connection.BeginTransaction())
             {
+                if (CurrencyService.IsCubeFragmentSlot(slotIndex))
+                {
+                    var itemId = CurrencyService.GetCubeFragmentItemIdFromSlot(slotIndex);
+                    if (itemId <= 0)
+                        return false;
+
+                    if (!CurrencyService.SubCubeFragment(connection, transaction, _context.AccountId, itemId, deleteCount))
+                        return false;
+
+                    var cubeFragments = CurrencyService.LoadCubeFragments(connection, transaction, _context.AccountId);
+                    var remainingCount = 0;
+                    foreach (var (id, slot, count) in cubeFragments)
+                    {
+                        if (slot == slotIndex)
+                        {
+                            remainingCount = count;
+                            break;
+                        }
+                    }
+
+                    var cubeWallet = _db.LoadWallet(connection, transaction, _context.CharacterId);
+                    transaction.Commit();
+
+                    result = new InventoryMutationResult
+                    {
+                        ListType = listType,
+                        SlotIndex = slotIndex,
+                        ItemTemplateId = itemId,
+                        RemainingStackCount = remainingCount,
+                        InstanceValue = remainingCount,
+                        Durability = 0,
+                        UpdatedGold = cubeWallet.Gold,
+                        UpdatedSp = cubeWallet.Sp,
+                        UpdatedCoin = cubeWallet.Coin,
+                        RequestedCount = deleteCount,
+                        AppliedCount = deleteCount,
+                    };
+                    return true;
+                }
+
                 var item = _db.LoadItemRecord(connection, transaction, _context.CharacterId, dbListType, slotIndex);
                 if (item == null)
                     return false;
