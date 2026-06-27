@@ -593,7 +593,7 @@ WHERE character_id = @characterId AND list_type = @listType;";
 
             var effectiveCount = Math.Max(1, stackCount);
             var isAvatarReward = InventoryPackageStore.IsAvatarReward(metadata);
-            var isPetConsumable = SqliteInventoryStore.IsPetConsumableItem(metadata);
+            var isPetConsumable = ItemMetadataResolver.IsPetConsumableItem(metadata);
             var stackListType = isPetConsumable ? InventoryListType.Pet : InventoryListType.Main;
             if (metadata.IsStackable && !isAvatarReward)
             {
@@ -625,7 +625,7 @@ WHERE character_id = @characterId AND list_type = @listType;";
             var marker16 = metadata.IsStackable ? 0 : -1;
             var petSerial = 0;
             var isPetEquipment = string.Equals(metadata.ItemKind, "equipment", StringComparison.Ordinal) &&
-                SqliteInventoryStore.IsPetInventoryEquipment(itemTemplateId);
+                ItemMetadataResolver.IsPetInventoryEquipment(itemTemplateId);
             var isCreature = isPetEquipment && SqliteInventoryStore.IsCreatureItem(itemTemplateId);
             var isPetArtifactEquipment = isPetEquipment && !isCreature;
             if (isAvatarReward)

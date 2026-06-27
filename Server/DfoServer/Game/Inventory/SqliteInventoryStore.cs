@@ -1069,28 +1069,6 @@ ORDER BY slot_index;";
             }
         }
 
-        internal static bool IsPetInventoryEquipment(int itemTemplateId)
-        {
-            try
-            {
-                return CreatureExtraResolver.IsPetInventoryEquipment(itemTemplateId);
-            }
-            catch (Exception ex)
-            {
-                FileLogger.Log($"  [Inventory] IsPetInventoryEquipment(0x{itemTemplateId:X8}) failed, treating as non-pet: {ex.Message}");
-                return false;
-            }
-        }
-
-        internal static bool IsPetConsumableItem(ItemMetadata metadata)
-        {
-            if (metadata == null || !metadata.IsStackable || string.IsNullOrWhiteSpace(metadata.StackableType))
-                return false;
-
-            var stackableType = metadata.StackableType.Replace("`", "").Trim();
-            return stackableType.StartsWith("[creature]", StringComparison.OrdinalIgnoreCase)
-                || stackableType.StartsWith("[feed]", StringComparison.OrdinalIgnoreCase);
-        }
 
         internal static ItemRecord ReadItemRecord(SqliteDataReader reader)
         {

@@ -313,5 +313,19 @@ namespace DfoServer.Game.Inventory
             var equipment = EquipmentFile.Parse(PvfArchiveAccessor.ReadText(Path.Combine("equipment", equipmentEntry.FilePath)));
             return string.Equals(equipment.ItemCategory, "clear avatar", StringComparison.OrdinalIgnoreCase);
         }
+
+        public static bool IsPetInventoryEquipment(int itemTemplateId)
+        {
+            return CreatureExtraResolver.IsPetInventoryEquipment(itemTemplateId);
+        }
+
+        public static bool IsPetConsumableItem(ItemMetadata metadata)
+        {
+            if (metadata == null || !metadata.IsStackable || string.IsNullOrWhiteSpace(metadata.StackableType))
+                return false;
+            var stackableType = metadata.StackableType.Replace("`", "").Trim();
+            return stackableType.StartsWith("[creature]", StringComparison.OrdinalIgnoreCase)
+                || stackableType.StartsWith("[feed]", StringComparison.OrdinalIgnoreCase);
+        }
     }
 }

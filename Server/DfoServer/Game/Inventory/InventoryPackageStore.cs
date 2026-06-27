@@ -412,7 +412,7 @@ namespace DfoServer.Game.Inventory
                 return true;
             }
 
-            var isPetConsumable = SqliteInventoryStore.IsPetConsumableItem(metadata);
+            var isPetConsumable = ItemMetadataResolver.IsPetConsumableItem(metadata);
             var stackListType = isPetConsumable ? InventoryListType.Pet : InventoryListType.Main;
             if (metadata.IsStackable)
             {
@@ -510,7 +510,7 @@ namespace DfoServer.Game.Inventory
             }
 
             var isPetEquipment = string.Equals(metadata.ItemKind, "equipment", StringComparison.Ordinal) &&
-                SqliteInventoryStore.IsPetInventoryEquipment(reward.ItemTemplateId);
+                ItemMetadataResolver.IsPetInventoryEquipment(reward.ItemTemplateId);
             var isCreature = isPetEquipment && SqliteInventoryStore.IsCreatureItem(reward.ItemTemplateId);
             var isPetArtifactEquipment = isPetEquipment && !isCreature;
             for (var i = 0; i < reward.Count; i++)

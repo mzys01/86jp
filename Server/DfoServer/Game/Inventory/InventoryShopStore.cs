@@ -111,9 +111,9 @@ namespace DfoServer.Game.Inventory
                 return false;
 
             // NPC shops can sell pet tab items too; route them to the same category slot ranges as cera/package rewards.
-            var isPetConsumable = SqliteInventoryStore.IsPetConsumableItem(metadata);
+            var isPetConsumable = ItemMetadataResolver.IsPetConsumableItem(metadata);
             var isPetEquipment = string.Equals(metadata.ItemKind, "equipment", StringComparison.Ordinal) &&
-                SqliteInventoryStore.IsPetInventoryEquipment(itemTemplateId);
+                ItemMetadataResolver.IsPetInventoryEquipment(itemTemplateId);
             var isCreature = isPetEquipment && SqliteInventoryStore.IsCreatureItem(itemTemplateId);
             var isPetArtifactEquipment = isPetEquipment && !isCreature;
             var targetListType = isCreature || isPetArtifactEquipment || isPetConsumable
@@ -478,10 +478,10 @@ namespace DfoServer.Game.Inventory
             // 宠物(creature): 装备类且 .equ 的 [equipment type]=[creature], 应进专用宠物栏(Pet 列表 7),
             // 而不是主背包装备格。判定基于物品本身的 equipment type, 不依赖 cerashop 段名(段内还混有可堆叠饲料)。
             // Pet tab is split by client category slots: creature, artifact equipment, consumables.
-            var isPetEquipment = !isAvatar && string.Equals(itemKind, "equipment", StringComparison.Ordinal) && SqliteInventoryStore.IsPetInventoryEquipment(itemTemplateId);
+            var isPetEquipment = !isAvatar && string.Equals(itemKind, "equipment", StringComparison.Ordinal) && ItemMetadataResolver.IsPetInventoryEquipment(itemTemplateId);
             var isCreature = isPetEquipment && SqliteInventoryStore.IsCreatureItem(itemTemplateId);
             var isPetArtifactEquipment = isPetEquipment && !isCreature;
-            var isPetConsumable = !isAvatar && SqliteInventoryStore.IsPetConsumableItem(metadata);
+            var isPetConsumable = !isAvatar && ItemMetadataResolver.IsPetConsumableItem(metadata);
             var stackListType = isPetConsumable ? InventoryListType.Pet : InventoryListType.Main;
             var avatarDurationDays = 0;
             // 发货数量 = 份数 × 每份数量(cerashop count); 价格 = 每份价 × 份数 (avatar 恒为 1)
