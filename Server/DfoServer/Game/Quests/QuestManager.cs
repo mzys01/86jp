@@ -121,6 +121,16 @@ namespace DfoServer.Game.Quests
                     await SendUserInfoBroadcast(cid);
                 }
 
+                if (ack.Length >= 14)
+                {
+                    int chainType = ack[13];
+                    if (chainType == 1 || chainType == 2)
+                    {
+                        await SendJobChangeNotification(cid);
+                        await SendUserInfoBroadcast(cid);
+                    }
+                }
+
                 var noti = BuildAcceptedQuestNoti(cid);
                 await _sender.SendNotiAsync(0x023F, noti);
                 await SendAcceptableQuestListAsync();
@@ -195,6 +205,32 @@ namespace DfoServer.Game.Quests
             catch (Exception ex)
             {
                 FileLogger.Log($"[QuestManager] SendUserInfoBroadcast ERROR: {ex.Message}");
+            }
+        }
+
+        private async Task SendJobChangeNotification(int characterId)
+        {
+            try
+            {
+                var charRepo = new SqliteCharacterRepository(ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
+                var record = charRepo.GetById(characterId);
+                if (record == null) return;
+
+                _sender.Player.GrowType = record.GrowType;
+
+                var w = new Network.GamePacketWriter();
+                w.WriteByte(0);
+                w.WriteUInt16(1);
+                w.WriteUInt16((ushort)record.CharacterId);
+                w.WriteDstr(record.Name);
+                w.WriteBytes(UserInfoSubtype0Builder.BuildRemainingBytes(record));
+                await _sender.SendNotiAsync(0x0002, w.ToArray());
+
+                FileLogger.Log($"[QuestManager] JobChange NOTI 2 subtype0 sent: cid={characterId} growType=0x{record.GrowType:X2}");
+            }
+            catch (Exception ex)
+            {
+                FileLogger.Log($"[QuestManager] SendJobChangeNotification ERROR: {ex.Message}");
             }
         }
 

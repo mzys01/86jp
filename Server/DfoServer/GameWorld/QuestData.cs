@@ -9,6 +9,7 @@ namespace DfoServer.GameWorld
         public uint Exp;
         public uint Gold;
         public int ChainType;
+        public int GrowNumber;
         public List<QuestRewardItem> Items;
         public List<QuestRewardItem> ConsumeItems;
     }
@@ -214,10 +215,16 @@ namespace DfoServer.GameWorld
                     continue;
 
                 // check_possible: growType / jobChangeQuest
-                // value=10/20→bypass growType, other→checkGrowType
+                // jcq=1: 一转相关(转职任务+转职贺礼), 不过滤growType, 靠pre_required_quest控制顺序
+                // jcq=2: 二转(觉醒)任务, 需 growType 匹配 [grow type]
+                // jcq=10/20: 跳过 growType 检查
                 int jcq = qst.JobChangeQuestValue;
-                if (jcq == 1) continue;
-                if (qst.GrowType != -1 && jcq != 10 && jcq != 20 && growType >= 0)
+                if (jcq == 2)
+                {
+                    int firstGrow = growType & 0xF;
+                    if (qst.GrowType != -1 && qst.GrowType != firstGrow) continue;
+                }
+                else if (qst.GrowType != -1 && jcq != 1 && jcq != 10 && jcq != 20 && growType >= 0)
                 {
                     if (!MatchesGrowType(qst.GrowType, characterJob, growType)) continue;
                 }
@@ -373,7 +380,7 @@ namespace DfoServer.GameWorld
             if (baseIdx < 0 || baseIdx >= jobNames.Length) return false;
             bool isAt = IsAtVariant(characterJob);
             if (isAt)
-                return jobStr.Contains(atJobNames[baseIdx]) || jobStr.Contains(jobNames[baseIdx]);
+                return jobStr.Contains(atJobNames[baseIdx]);
             return jobStr.Contains(jobNames[baseIdx]);
         }
 
@@ -455,7 +462,15 @@ namespace DfoServer.GameWorld
 
                 var consumeItems = ParseItemPairs(qst.DependGiveItem);
 
-                return new QuestReward { Exp = exp, Gold = gold, ChainType = chainType, Items = items, ConsumeItems = consumeItems };
+                int growNumber = 0;
+                if (chainType == 1 || chainType == 2)
+                {
+                    var rewardValues = ParseIntList(qst.RewardIntData);
+                    if (rewardValues.Count > 0)
+                        growNumber = rewardValues[0];
+                }
+
+                return new QuestReward { Exp = exp, Gold = gold, ChainType = chainType, GrowNumber = growNumber, Items = items, ConsumeItems = consumeItems };
             }
             catch
             {
@@ -569,7 +584,7 @@ namespace DfoServer.GameWorld
             return (uint)(((f2 & 0x1FF) << 18) | ((f1 & 0x1FF) << 9) | (f0 & 0x1FF));
         }
 
-        private static List<int> ParseIntList(string data)
+        internal static List<int> ParseIntList(string data)
         {
             var result = new List<int>();
             if (string.IsNullOrWhiteSpace(data)) return result;
