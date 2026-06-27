@@ -340,46 +340,6 @@ ORDER BY slot_index;";
             using (var connection = _context.OpenConnection())
             using (var transaction = connection.BeginTransaction())
             {
-                if (CurrencyService.IsCubeFragmentSlot(slotIndex))
-                {
-                    var itemId = CurrencyService.GetCubeFragmentItemIdFromSlot(slotIndex);
-                    if (itemId <= 0)
-                        return false;
-
-                    if (!CurrencyService.SubCubeFragment(connection, transaction, _context.AccountId, itemId, deleteCount))
-                        return false;
-
-                    var cubeFragments = CurrencyService.LoadCubeFragments(connection, transaction, _context.AccountId);
-                    var remainingCount = 0;
-                    foreach (var (id, slot, count) in cubeFragments)
-                    {
-                        if (slot == slotIndex)
-                        {
-                            remainingCount = count;
-                            break;
-                        }
-                    }
-
-                    var cubeWallet = _db.LoadWallet(connection, transaction, _context.CharacterId);
-                    transaction.Commit();
-
-                    result = new InventoryMutationResult
-                    {
-                        ListType = listType,
-                        SlotIndex = slotIndex,
-                        ItemTemplateId = itemId,
-                        RemainingStackCount = remainingCount,
-                        InstanceValue = remainingCount,
-                        Durability = 0,
-                        UpdatedGold = cubeWallet.Gold,
-                        UpdatedSp = cubeWallet.Sp,
-                        UpdatedCoin = cubeWallet.Coin,
-                        RequestedCount = deleteCount,
-                        AppliedCount = deleteCount,
-                    };
-                    return true;
-                }
-
                 var item = _db.LoadItemRecord(connection, transaction, _context.CharacterId, dbListType, slotIndex);
                 if (item == null)
                     return false;
@@ -570,6 +530,8 @@ ORDER BY slot_index;";
         internal const int PetEquipmentSlotEnd = 188;
         internal const int PetConsumableSlotStart = 189;
         internal const int PetConsumableSlotEnd = 237;
+        internal const int AvatarEmblemSlotStart = 289;
+        internal const int AvatarEmblemSlotEnd = 344;
         public bool TryPickupRentalWeapon(
             SqliteConnection connection,
             SqliteTransaction transaction,
@@ -746,6 +708,7 @@ ORDER BY slot_index;";
                     {
                         FileLogger.Log($"  [MoveItem] MOVE(empty-src): dst uid={destination.ItemUid} tmpl=0x{destination.ItemTemplateId:X8} → ({dbSrcList},{request.SourceSlotIndex})");
                         _db.UpdateItemPosition(connection, transaction, destination.ItemUid, dbSrcList, request.SourceSlotIndex);
+                        MoveSortItemLock(connection, transaction, dbDstList, request.DestinationSlotIndex, dbSrcList, request.SourceSlotIndex);
                         _auditLogger.WriteAuditLog(connection, transaction, _context.CharacterId, "move_itemspace", destination, dbSrcList, request.SourceSlotIndex, request.MoveCount);
                         transaction.Commit();
                         result = CreateMoveResult(request, request.MoveCount);
@@ -767,7 +730,10 @@ ORDER BY slot_index;";
                     _db.UpdateStackCount(connection, transaction, destination.ItemUid, destination.StackCount + moveCount);
 
                     if (moveCount == source.StackCount)
+                    {
                         _db.DeleteItem(connection, transaction, source.ItemUid);
+                        DeleteSortItemLock(connection, transaction, dbSrcList, request.SourceSlotIndex);
+                    }
                     else
                         _db.UpdateStackCount(connection, transaction, source.ItemUid, source.StackCount - moveCount);
 
@@ -791,6 +757,7 @@ ORDER BY slot_index;";
                 {
                     FileLogger.Log($"  [MoveItem] MOVE: src uid={source.ItemUid} kind={source.ItemKind} tmpl=0x{source.ItemTemplateId:X8} → ({dbDstList},{request.DestinationSlotIndex})");
                     _db.UpdateItemPosition(connection, transaction, source.ItemUid, dbDstList, request.DestinationSlotIndex);
+                    MoveSortItemLock(connection, transaction, dbSrcList, request.SourceSlotIndex, dbDstList, request.DestinationSlotIndex);
                     _auditLogger.WriteAuditLog(connection, transaction, _context.CharacterId, "move_itemspace", source, dbDstList, request.DestinationSlotIndex, moveCount);
                     transaction.Commit();
                     result = CreateMoveResult(request, request.MoveCount);
@@ -802,6 +769,7 @@ ORDER BY slot_index;";
 
                 FileLogger.Log($"  [MoveItem] SWAP: src uid={source.ItemUid} kind={source.ItemKind} tmpl=0x{source.ItemTemplateId:X8} ↔ dst uid={destination.ItemUid} kind={destination.ItemKind} tmpl=0x{destination.ItemTemplateId:X8}");
                 _db.SwapItems(connection, transaction, source, destination);
+                SwapSortItemLocks(connection, transaction, source.ListType, source.SlotIndex, destination.ListType, destination.SlotIndex);
                 _auditLogger.WriteAuditLog(connection, transaction, _context.CharacterId, "move_itemspace", source, dbDstList, request.DestinationSlotIndex, moveCount);
                 transaction.Commit();
                 result = CreateMoveResult(request, request.MoveCount);
@@ -823,6 +791,7 @@ ORDER BY slot_index;";
             using (var connection = _context.OpenConnection())
             using (var transaction = connection.BeginTransaction())
             {
+                var lockedSlots = LoadSortItemLockSlots(connection, transaction, listType, start, end);
                 using (var cmd = connection.CreateCommand())
                 {
                     cmd.Transaction = transaction;
@@ -840,7 +809,11 @@ ORDER BY slot_index;";
                     using (var reader = cmd.ExecuteReader())
                     {
                         while (reader.Read())
-                            items.Add(reader.GetInt64(0));
+                        {
+                            var slot = Convert.ToInt16(reader.GetInt32(1), CultureInfo.InvariantCulture);
+                            if (!lockedSlots.Contains(slot))
+                                items.Add(reader.GetInt64(0));
+                        }
                     }
 
                     int tempSlot = -10000;
@@ -856,23 +829,295 @@ ORDER BY slot_index;";
                         }
                     }
 
-                    short newSlot = start;
-                    foreach (var uid in items)
+                    var targetSlots = new List<short>();
+                    for (short slot = start; slot <= end; slot++)
+                    {
+                        if (!lockedSlots.Contains(slot))
+                            targetSlots.Add(slot);
+                    }
+
+                    for (var i = 0; i < items.Count && i < targetSlots.Count; i++)
                     {
                         using (var upd = connection.CreateCommand())
                         {
                             upd.Transaction = transaction;
                             upd.CommandText = "UPDATE character_items SET slot_index = @slot WHERE item_uid = @uid";
-                            upd.Parameters.AddWithValue("@slot", (int)newSlot);
-                            upd.Parameters.AddWithValue("@uid", uid);
+                            upd.Parameters.AddWithValue("@slot", (int)targetSlots[i]);
+                            upd.Parameters.AddWithValue("@uid", items[i]);
                             upd.ExecuteNonQuery();
                         }
-                        newSlot++;
                     }
                 }
                 transaction.Commit();
                 return true;
             }
+        }
+
+        public bool TryToggleSortItemLock(InventoryListType listType, short slotIndex, out SortItemLockEntry entry)
+        {
+            entry = null;
+            if (!IsSupportedSortListType(listType))
+                return false;
+
+            var dbListType = MapToDbListType(listType);
+            using (var connection = _context.OpenConnection())
+            using (var transaction = connection.BeginTransaction())
+            {
+                var item = _db.LoadItemRecord(connection, transaction, _context.CharacterId, dbListType, slotIndex);
+                if (item == null)
+                    return false;
+                if (!CanApplySortItemLock(dbListType, slotIndex))
+                {
+                    DeleteSortItemLock(connection, transaction, dbListType, slotIndex);
+                    transaction.Commit();
+                    return false;
+                }
+                if (LoadSortItemLock(connection, transaction, dbListType, slotIndex).HasValue)
+                {
+                    DeleteSortItemLock(connection, transaction, dbListType, slotIndex);
+                    transaction.Commit();
+                    entry = new SortItemLockEntry { ListType = dbListType, SlotIndex = slotIndex, State = 0 };
+                    return true;
+                }
+
+                UpsertSortItemLock(connection, transaction, dbListType, slotIndex, 1);
+                transaction.Commit();
+                entry = new SortItemLockEntry { ListType = dbListType, SlotIndex = slotIndex, State = 1 };
+                return true;
+            }
+        }
+
+        public bool TryUnlockSortItemLock(InventoryListType listType, short slotIndex)
+        {
+            if (!IsSupportedSortListType(listType))
+                return false;
+
+            var dbListType = MapToDbListType(listType);
+            using (var connection = _context.OpenConnection())
+            using (var transaction = connection.BeginTransaction())
+            {
+                var item = _db.LoadItemRecord(connection, transaction, _context.CharacterId, dbListType, slotIndex);
+                if (item != null && !CanApplySortItemLock(dbListType, slotIndex))
+                {
+                    DeleteSortItemLock(connection, transaction, dbListType, slotIndex);
+                    transaction.Commit();
+                    return false;
+                }
+
+                DeleteSortItemLock(connection, transaction, dbListType, slotIndex);
+                transaction.Commit();
+                return true;
+            }
+        }
+
+        public IReadOnlyList<SortItemLockEntry> LoadSortItemLocks()
+        {
+            using (var connection = _context.OpenConnection())
+            {
+                var entries = new List<SortItemLockEntry>();
+                using (var cmd = connection.CreateCommand())
+                {
+                    cmd.CommandText = @"
+SELECT list_type, slot_index, state
+FROM character_sort_item_locks
+WHERE character_id = @cid
+ORDER BY sort_order;";
+                    cmd.Parameters.AddWithValue("@cid", _context.CharacterId);
+                    using (var reader = cmd.ExecuteReader())
+                    {
+                        while (reader.Read())
+                        {
+                            var listType = (InventoryListType)reader.GetInt32(0);
+                            var slotIndex = Convert.ToInt16(reader.GetInt32(1), CultureInfo.InvariantCulture);
+                            if (!CanApplySortItemLock(listType, slotIndex))
+                                continue;
+
+                            entries.Add(new SortItemLockEntry
+                            {
+                                ListType = listType,
+                                SlotIndex = slotIndex,
+                                State = Convert.ToByte(reader.GetInt32(2), CultureInfo.InvariantCulture),
+                            });
+                        }
+                    }
+                }
+                return entries;
+            }
+        }
+
+        public IReadOnlyList<SortItemLockEntry> LoadSortItemLocks(InventoryListType listType)
+        {
+            var dbListType = MapToDbListType(listType);
+            using (var connection = _context.OpenConnection())
+            {
+                var entries = new List<SortItemLockEntry>();
+                using (var cmd = connection.CreateCommand())
+                {
+                    cmd.CommandText = @"
+SELECT list_type, slot_index, state
+FROM character_sort_item_locks
+WHERE character_id = @cid AND list_type = @lt
+ORDER BY sort_order;";
+                    cmd.Parameters.AddWithValue("@cid", _context.CharacterId);
+                    cmd.Parameters.AddWithValue("@lt", (int)dbListType);
+                    using (var reader = cmd.ExecuteReader())
+                    {
+                        while (reader.Read())
+                        {
+                            var lockListType = (InventoryListType)reader.GetInt32(0);
+                            var slotIndex = Convert.ToInt16(reader.GetInt32(1), CultureInfo.InvariantCulture);
+                            if (!CanApplySortItemLock(lockListType, slotIndex))
+                                continue;
+
+                            entries.Add(new SortItemLockEntry
+                            {
+                                ListType = lockListType,
+                                SlotIndex = slotIndex,
+                                State = Convert.ToByte(reader.GetInt32(2), CultureInfo.InvariantCulture),
+                            });
+                        }
+                    }
+                }
+                return entries;
+            }
+        }
+
+        public CommonInventoryItem LoadCommonItemForRefresh(InventoryListType listType, short slotIndex)
+        {
+            var dbListType = MapToDbListType(listType);
+            using (var connection = _context.OpenConnection())
+            using (var transaction = connection.BeginTransaction())
+                return _db.LoadCommonItem(connection, transaction, _context.CharacterId, dbListType, slotIndex);
+        }
+
+        private void UpsertSortItemLock(SqliteConnection connection, SqliteTransaction transaction, InventoryListType listType, short slotIndex, byte state)
+        {
+            using (var cmd = connection.CreateCommand())
+            {
+                cmd.Transaction = transaction;
+                cmd.CommandText = @"
+INSERT INTO character_sort_item_locks (character_id, sort_order, list_type, slot_index, state)
+VALUES (@cid, COALESCE((SELECT MAX(sort_order) + 1 FROM character_sort_item_locks WHERE character_id = @cid), 0), @lt, @slot, @state)
+ON CONFLICT(character_id, list_type, slot_index)
+DO UPDATE SET state = excluded.state;";
+                cmd.Parameters.AddWithValue("@cid", _context.CharacterId);
+                cmd.Parameters.AddWithValue("@lt", (int)listType);
+                cmd.Parameters.AddWithValue("@slot", (int)slotIndex);
+                cmd.Parameters.AddWithValue("@state", (int)state);
+                cmd.ExecuteNonQuery();
+            }
+        }
+
+        private void DeleteSortItemLock(SqliteConnection connection, SqliteTransaction transaction, InventoryListType listType, short slotIndex)
+        {
+            using (var cmd = connection.CreateCommand())
+            {
+                cmd.Transaction = transaction;
+                cmd.CommandText = @"
+DELETE FROM character_sort_item_locks
+WHERE character_id = @cid AND list_type = @lt AND slot_index = @slot;";
+                cmd.Parameters.AddWithValue("@cid", _context.CharacterId);
+                cmd.Parameters.AddWithValue("@lt", (int)listType);
+                cmd.Parameters.AddWithValue("@slot", (int)slotIndex);
+                cmd.ExecuteNonQuery();
+            }
+        }
+
+        private void MoveSortItemLock(SqliteConnection connection, SqliteTransaction transaction, InventoryListType fromListType, short fromSlotIndex, InventoryListType toListType, short toSlotIndex)
+        {
+            if (LoadSortItemLock(connection, transaction, toListType, toSlotIndex).HasValue)
+                DeleteSortItemLock(connection, transaction, toListType, toSlotIndex);
+
+            using (var cmd = connection.CreateCommand())
+            {
+                cmd.Transaction = transaction;
+                cmd.CommandText = @"
+UPDATE character_sort_item_locks
+SET list_type = @toLt, slot_index = @toSlot
+WHERE character_id = @cid AND list_type = @fromLt AND slot_index = @fromSlot;";
+                cmd.Parameters.AddWithValue("@cid", _context.CharacterId);
+                cmd.Parameters.AddWithValue("@fromLt", (int)fromListType);
+                cmd.Parameters.AddWithValue("@fromSlot", (int)fromSlotIndex);
+                cmd.Parameters.AddWithValue("@toLt", (int)toListType);
+                cmd.Parameters.AddWithValue("@toSlot", (int)toSlotIndex);
+                cmd.ExecuteNonQuery();
+            }
+        }
+
+        private void SwapSortItemLocks(SqliteConnection connection, SqliteTransaction transaction, InventoryListType firstListType, short firstSlotIndex, InventoryListType secondListType, short secondSlotIndex)
+        {
+            var first = LoadSortItemLock(connection, transaction, firstListType, firstSlotIndex);
+            var second = LoadSortItemLock(connection, transaction, secondListType, secondSlotIndex);
+            DeleteSortItemLock(connection, transaction, firstListType, firstSlotIndex);
+            DeleteSortItemLock(connection, transaction, secondListType, secondSlotIndex);
+
+            if (first.HasValue)
+                UpsertSortItemLock(connection, transaction, secondListType, secondSlotIndex, first.Value);
+            if (second.HasValue)
+                UpsertSortItemLock(connection, transaction, firstListType, firstSlotIndex, second.Value);
+        }
+
+        private byte? LoadSortItemLock(SqliteConnection connection, SqliteTransaction transaction, InventoryListType listType, short slotIndex)
+        {
+            using (var cmd = connection.CreateCommand())
+            {
+                cmd.Transaction = transaction;
+                cmd.CommandText = @"
+SELECT state
+FROM character_sort_item_locks
+WHERE character_id = @cid AND list_type = @lt AND slot_index = @slot
+LIMIT 1;";
+                cmd.Parameters.AddWithValue("@cid", _context.CharacterId);
+                cmd.Parameters.AddWithValue("@lt", (int)listType);
+                cmd.Parameters.AddWithValue("@slot", (int)slotIndex);
+                var value = cmd.ExecuteScalar();
+                if (value == null || value == DBNull.Value)
+                    return null;
+                return Convert.ToByte(value, CultureInfo.InvariantCulture);
+            }
+        }
+
+        private HashSet<short> LoadSortItemLockSlots(SqliteConnection connection, SqliteTransaction transaction, InventoryListType listType, short start, short end)
+        {
+            var slots = new HashSet<short>();
+            using (var cmd = connection.CreateCommand())
+            {
+                cmd.Transaction = transaction;
+                cmd.CommandText = @"
+SELECT slot_index
+FROM character_sort_item_locks
+WHERE character_id = @cid AND list_type = @lt
+  AND slot_index >= @start AND slot_index <= @end;";
+                cmd.Parameters.AddWithValue("@cid", _context.CharacterId);
+                cmd.Parameters.AddWithValue("@lt", (int)listType);
+                cmd.Parameters.AddWithValue("@start", (int)start);
+                cmd.Parameters.AddWithValue("@end", (int)end);
+                using (var reader = cmd.ExecuteReader())
+                {
+                    while (reader.Read())
+                    {
+                        var slot = Convert.ToInt16(reader.GetInt32(0), CultureInfo.InvariantCulture);
+                        if (CanApplySortItemLock(listType, slot))
+                            slots.Add(slot);
+                    }
+                }
+            }
+            return slots;
+        }
+
+        private static bool CanApplySortItemLock(InventoryListType listType, short slotIndex)
+        {
+            if (listType == InventoryListType.Main
+                && slotIndex >= AvatarEmblemSlotStart
+                && slotIndex <= AvatarEmblemSlotEnd)
+                return false;
+
+            if (listType == InventoryListType.Pet
+                && slotIndex >= PetInventorySlotStart
+                && slotIndex <= PetInventorySlotEnd)
+                return false;
+
+            return true;
         }
 
         /// <summary>

@@ -56,6 +56,16 @@ namespace DfoServer.Game.Inventory
 
         bool TrySortItems(int characterId, InventoryListType listType, byte category);
 
+        bool TryToggleSortItemLock(InventoryListType listType, short slotIndex, out SortItemLockEntry entry);
+
+        bool TryUnlockSortItemLock(InventoryListType listType, short slotIndex);
+
+        IReadOnlyList<SortItemLockEntry> LoadSortItemLocks();
+
+        IReadOnlyList<SortItemLockEntry> LoadSortItemLocks(InventoryListType listType);
+
+        CommonInventoryItem LoadCommonItemForRefresh(InventoryListType listType, short slotIndex);
+
         void SaveEquipListBlob(byte[] blob);
 
         void SeedNewCharacterEquipment((short slot, int itemId)[] equipment);

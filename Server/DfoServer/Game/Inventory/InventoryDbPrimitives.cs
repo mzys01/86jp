@@ -458,7 +458,18 @@ WHERE item_uid = @itemUid;";
             using (var command = connection.CreateCommand())
             {
                 command.Transaction = transaction;
-                command.CommandText = "DELETE FROM character_items WHERE item_uid = @itemUid;";
+                command.CommandText = @"
+DELETE FROM character_sort_item_locks
+WHERE EXISTS (
+    SELECT 1
+    FROM character_items
+    WHERE item_uid = @itemUid
+      AND character_id = character_sort_item_locks.character_id
+      AND list_type = character_sort_item_locks.list_type
+      AND slot_index = character_sort_item_locks.slot_index
+);
+
+DELETE FROM character_items WHERE item_uid = @itemUid;";
                 command.Parameters.AddWithValue("@itemUid", itemUid);
                 command.ExecuteNonQuery();
             }
