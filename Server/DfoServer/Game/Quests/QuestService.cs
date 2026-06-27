@@ -282,7 +282,8 @@ namespace DfoServer.Game.Quests
 
             int playerLevel = GetCharacterLevel(connStr, characterId);
             int playerJob = GetCharacterJob(connStr, characterId);
-            var reward = GameWorld.QuestData.GetRewardExp(questId, rewardSelectIdx, playerLevel, playerJob);
+            int playerGrowType = GetCharacterGrowType(connStr, characterId);
+            var reward = GameWorld.QuestData.GetRewardExp(questId, rewardSelectIdx, playerLevel, playerJob, playerGrowType);
             var consumedEntries = new List<ConsumedItemEntry>();
             var insertedEntries = new List<InsertedItemEntry>();
 
@@ -504,6 +505,20 @@ namespace DfoServer.Game.Quests
                     cmd.Parameters.AddWithValue("@cid", characterId);
                     var result = cmd.ExecuteScalar();
                     return (result != null) ? Convert.ToInt32(result) : -1;
+                }
+            }
+        }
+
+        private static int GetCharacterGrowType(string connStr, int characterId)
+        {
+            using (var conn = new SqliteConnection(connStr))
+            {
+                conn.Open();
+                using (var cmd = new SqliteCommand("SELECT grow_type FROM characters WHERE character_id=@cid", conn))
+                {
+                    cmd.Parameters.AddWithValue("@cid", characterId);
+                    var result = cmd.ExecuteScalar();
+                    return (result != null) ? Convert.ToInt32(result) : 0;
                 }
             }
         }

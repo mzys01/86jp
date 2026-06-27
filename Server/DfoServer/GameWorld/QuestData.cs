@@ -413,7 +413,7 @@ namespace DfoServer.GameWorld
         }
 
 
-        public static QuestReward GetRewardExp(int questId, int rewardSelectIdx = -1, int playerLevel = 1, int playerJob = -1)
+        public static QuestReward GetRewardExp(int questId, int rewardSelectIdx = -1, int playerLevel = 1, int playerJob = -1, int playerGrowType = -1)
         {
             var empty = new QuestReward { Exp = 0, Gold = 0, ChainType = 0, Items = new List<QuestRewardItem>(), ConsumeItems = new List<QuestRewardItem>() };
             var qst = GetQuestFile(questId);
@@ -438,7 +438,7 @@ namespace DfoServer.GameWorld
                 uint gold = 0;
                 if (chainType == 0)
                 {
-                    var fixedRewards = ParseItemPairs(qst.RewardIntData, playerJob);
+                    var fixedRewards = ParseItemPairs(qst.RewardIntData, playerJob, playerGrowType);
                     foreach (var fr in fixedRewards)
                     {
                         if (fr.ItemId == 0)
@@ -454,7 +454,7 @@ namespace DfoServer.GameWorld
 
                     if (rewardSelectIdx >= 0)
                     {
-                        var selectable = ParseItemPairs(qst.RewardSelectionIntData, playerJob);
+                        var selectable = ParseItemPairs(qst.RewardSelectionIntData, playerJob, playerGrowType);
                         if (rewardSelectIdx < selectable.Count)
                             items.Add(selectable[rewardSelectIdx]);
                     }
@@ -492,7 +492,7 @@ namespace DfoServer.GameWorld
             }
         }
 
-        private static List<QuestRewardItem> ParseItemPairs(string data, int playerJob = -1)
+        private static List<QuestRewardItem> ParseItemPairs(string data, int playerJob = -1, int playerGrowType = -1)
         {
             var result = new List<QuestRewardItem>();
             if (string.IsNullOrWhiteSpace(data)) return result;
@@ -505,18 +505,19 @@ namespace DfoServer.GameWorld
                 if (!int.TryParse(tokens[i], out itemId)) { i++; continue; }
                 i++;
 
-                // check for `[job]` marker
                 if (i < tokens.Length && tokens[i].IndexOf("[job]", StringComparison.OrdinalIgnoreCase) >= 0)
                 {
-                    i++; // skip `[job]`
+                    i++;
                     int jobId = -1;
-                    if (i < tokens.Length) { int.TryParse(tokens[i], out jobId); i++; }
-                    // skip -1 separator
-                    if (i < tokens.Length) { int sep; if (int.TryParse(tokens[i], out sep) && sep == -1) i++; }
+                    int growType = -1;
                     int count = 1;
+                    if (i < tokens.Length) { int.TryParse(tokens[i], out jobId); i++; }
+                    if (i < tokens.Length) { int.TryParse(tokens[i], out growType); i++; }
                     if (i < tokens.Length) { int.TryParse(tokens[i], out count); i++; }
 
-                    if (itemId > 0 && (playerJob < 0 || jobId == playerJob))
+                    bool jobMatch = playerJob < 0 || jobId == playerJob;
+                    bool growMatch = playerGrowType < 0 || growType == -1 || growType == (playerGrowType & 0xF);
+                    if (itemId > 0 && jobMatch && growMatch)
                         result.Add(new QuestRewardItem { ItemId = itemId, Count = count });
                 }
                 else
