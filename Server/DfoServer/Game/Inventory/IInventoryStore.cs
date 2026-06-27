@@ -47,6 +47,11 @@ namespace DfoServer.Game.Inventory
 
         bool TryEnchantByBead(EnchantByBeadCommand command, out EnchantByBeadResult result);
 
+        bool TryCompoundAvatar(short slot1, short slot2, short consumeSlot,
+            Func<int, int, int, List<int>> resolveNewItemIds, byte newOption,
+            out List<int> newSlotsOut, out int oldItemId1, out int oldItemId2, out List<int> newItemIdsOut,
+            out int consumedItemTemplateId, out int consumedItemRemainingCount);
+
         bool TryMoveItem(InventoryMoveRequest request, out InventoryMoveResult result);
 
         bool TrySortItems(int characterId, InventoryListType listType, byte category);

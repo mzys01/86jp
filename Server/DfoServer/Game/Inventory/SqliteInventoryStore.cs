@@ -420,6 +420,90 @@ ORDER BY slot_index;";
             }
         }
 
+        // 合并装扮(时装合成): 扣掉 slot1/slot2 两件旧时装 + 1 个消耗品(合成器), 在时装栏第一个
+        // 空位插入新时装。新时装itemId由 resolveNewItemId(oldItemId1, oldItemId2, consumeMaterialId)
+        // 回调计算(在事务内、读到三个真实item之后才调用, 保证概率判定用的是事务内的真实数据)。
+        // 返回新时装所在 slot (newSlotOut)。一个事务内完成, 失败回滚。
+        public bool TryCompoundAvatar(short slot1, short slot2, short consumeSlot,
+                Func<int, int, int, List<int>> resolveNewItemIds, byte newOption,
+                out List<int> newSlotsOut, out int oldItemId1, out int oldItemId2, out List<int> newItemIdsOut,
+                out int consumedItemTemplateId, out int consumedItemRemainingCount)
+        {
+            newSlotsOut = new List<int>();
+            oldItemId1 = 0;
+            oldItemId2 = 0;
+            newItemIdsOut = new List<int>();
+            consumedItemTemplateId = 0;
+            consumedItemRemainingCount = 0;
+
+            using (var connection = _context.OpenConnection())
+            using (var transaction = connection.BeginTransaction())
+            {
+                var item1 = _db.LoadItemRecord(connection, transaction, _context.CharacterId, InventoryListType.Avatar, slot1);
+                var item2 = _db.LoadItemRecord(connection, transaction, _context.CharacterId, InventoryListType.Avatar, slot2);
+                if (item1 == null || item2 == null)
+                {
+                    FileLogger.Log($"  [CompoundAvatar] REJECT: missing avatar item at slot1={slot1}(found={item1!=null}) slot2={slot2}(found={item2!=null})");
+                    return false;
+                }
+
+                var consumeItem = _db.LoadItemRecord(connection, transaction, _context.CharacterId, InventoryListType.Main, consumeSlot);
+                if (consumeItem == null || consumeItem.StackCount < 1)
+                {
+                    FileLogger.Log($"  [CompoundAvatar] REJECT: missing consumable at slot={consumeSlot}");
+                    return false;
+                }
+
+                oldItemId1 = item1.ItemTemplateId;
+                oldItemId2 = item2.ItemTemplateId;
+                var newItemIds = resolveNewItemIds(oldItemId1, oldItemId2, consumeItem.ItemTemplateId);
+                newItemIdsOut = newItemIds;
+
+                // 台服做法(逆向 CInventory::AddAvatarItem 得到, 0x8509b9e): 删掉slot1/slot2两个槛
+                // (reset清空, 不移动其他物品、不紧凑重排), 然后从槽位0开始线性扫描第一个itemId=0的
+                // 空槛插入新时装(台服硬编码上限104=105格, 对应台服固定大小时装栏)。
+                // 86JP时装栏格数公式(实测确认): 基础105格(固定) + list_param16拓展值(0~105, 每用1张
+                // "装扮栏拓展券"+7格) = 总格数(105~210)。character_container_state.list_param16
+                // 就是这个拓展值, 不是"已解锁格数"本身, 上限要用 105+该值 才对。
+                _db.DeleteItem(connection, transaction, item1.ItemUid);
+                _db.DeleteItem(connection, transaction, item2.ItemUid);
+
+                consumedItemTemplateId = consumeItem.ItemTemplateId;
+                if (consumeItem.StackCount > 1)
+                {
+                    consumedItemRemainingCount = consumeItem.StackCount - 1;
+                    _db.UpdateStackCount(connection, transaction, consumeItem.ItemUid, consumedItemRemainingCount);
+                }
+                else
+                {
+                    consumedItemRemainingCount = 0;
+                    _db.DeleteItem(connection, transaction, consumeItem.ItemUid);
+                }
+
+                var avatarExpansion = GetListParam(_equipStore.LoadContainerState(connection, transaction, _context.CharacterId, _context.AccountId), InventoryListType.Avatar);
+                var avatarCapacity = 105 + avatarExpansion;
+
+                foreach (var newItemId in newItemIds)
+                {
+                    var newSlot = _db.FindEmptySlot(connection, transaction, _context.CharacterId, InventoryListType.Avatar, 0, avatarCapacity - 1);
+                    if (newSlot < 0)
+                    {
+                        FileLogger.Log($"  [CompoundAvatar] REJECT: no empty avatar slot (capacity={avatarCapacity})");
+                        return false;
+                    }
+
+                    _db.InsertAvatarItem(connection, transaction, _context.CharacterId, CreateDefaultAvatarItem((short)newSlot, newItemId, newOption));
+                    newSlotsOut.Add(newSlot);
+                }
+
+                transaction.Commit();
+                FileLogger.Log($"  [CompoundAvatar] OK: deleted slot{slot1}(item {oldItemId1}) + slot{slot2}(item {oldItemId2}) + " +
+                               $"1x slot{consumeSlot}(template {consumedItemTemplateId}, remain {consumedItemRemainingCount}), " +
+                               $"added items [{string.Join(",", newItemIds)}] at slots [{string.Join(",", newSlotsOut)}]");
+                return true;
+            }
+        }
+
         public bool TryBuyItem(int itemTemplateId, int buyCount, out InventoryMutationResult result)
         {
             using (var connection = _context.OpenConnection())
