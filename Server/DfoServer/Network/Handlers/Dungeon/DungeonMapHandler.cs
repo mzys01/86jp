@@ -65,7 +65,11 @@ namespace DfoServer.Network.Handlers.Dungeon
             }
             else
             {
-                session.Player.CurRoomMonsters = maze.Monsters;
+                var monsterList = new System.Collections.Generic.List<DungeonData.MonsterSumInfo>(maze.Monsters);
+                int champCount = DungeonData.GetChampionCount(session.Player.CurDungeon, session.Player.CurDungeonDifficulty, session.Player.CurMazeIndex, DungeonSharedServices.SeedGen);
+                DungeonData.PromoteChampions(monsterList, champCount, DungeonSharedServices.SeedGen);
+                maze.Monsters = monsterList;
+                session.Player.CurRoomMonsters = monsterList;
 
                 var startSequence = session.Player.CurMonsterCnt;
                 session.Player.CurRoomStartSequence = (ushort)(startSequence + 1);

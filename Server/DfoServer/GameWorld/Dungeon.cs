@@ -87,6 +87,63 @@ namespace DfoServer.GameWorld
             catch { return 0; }
         }
 
+        public static int GetChampionCount(int dungeonId, int difficulty, int mazeIndex, Random rng)
+        {
+            try
+            {
+                var dgnlst = LoadLstFile(Path.Combine("dungeon", "dungeon.lst"));
+                var dgnFilePath = ResolveFilePath(dgnlst, dungeonId, "地下城");
+                var dngFile = DungeonFile.Parse(PvfArchiveAccessor.ReadText(Path.Combine("dungeon", dgnFilePath)));
+                if (dngFile.Champion == null || dngFile.Champion.Length == 0)
+                    return 0;
+
+                int diffIdx = difficulty;
+                if (diffIdx < 0) diffIdx = 0;
+                if (diffIdx >= dngFile.Champion.Length) diffIdx = dngFile.Champion.Length - 1;
+                int probBase = dngFile.Champion[diffIdx];
+
+                int adjusted = probBase;
+                switch (difficulty)
+                {
+                    case 1: adjusted = probBase * 150 / 100; break;
+                    case 2: adjusted = probBase * 250 / 100; break;
+                    case 3: adjusted = probBase * 500 / 100; break;
+                }
+
+                int mazeW = 4, mazeH = 5;
+                if (dngFile.Mazes != null && mazeIndex >= 0 && mazeIndex < dngFile.Mazes.Count)
+                {
+                    var m = dngFile.Mazes[mazeIndex];
+                    if (m.Width > 0) mazeW = m.Width;
+                    if (m.Height > 0) mazeH = m.Height;
+                }
+
+                int area = mazeW * mazeH;
+                return 100 * adjusted / area > rng.Next(100) ? 1 : 0;
+            }
+            catch { return 0; }
+        }
+
+        public static void PromoteChampions(List<MonsterSumInfo> monsters, int count, Random rng)
+        {
+            if (count <= 0) return;
+
+            var normalIndices = new List<int>();
+            for (int i = 0; i < monsters.Count; i++)
+                if (monsters[i].Type == 0) normalIndices.Add(i);
+
+            for (int i = 0; i < count && normalIndices.Count > 0; i++)
+            {
+                int pick = rng.Next(normalIndices.Count);
+                int idx = normalIndices[pick];
+                normalIndices.RemoveAt(pick);
+
+                var m = monsters[idx];
+                m.Type = 1;
+                monsters[idx] = m;
+            }
+        }
+
         public static float GetExperienceWeight(int dungeonId)
         {
             try
