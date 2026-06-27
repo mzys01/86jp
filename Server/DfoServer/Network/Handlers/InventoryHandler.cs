@@ -128,11 +128,13 @@ namespace DfoServer.Network.Handlers
                 var arrayCount = body[1];
                 var offset = 2;
 
+                // Entry (12B): opType(u16) + slotIndex(u16) + itemId(i32) + deleteCount(i32)
                 for (int i = 0; i < arrayCount && offset + 12 <= body.Length; i++)
                 {
-                    var deleteCount = BitConverter.ToInt16(body, offset);
+                    var opType = BitConverter.ToInt16(body, offset);
                     var slotIndex = BitConverter.ToInt16(body, offset + 2);
-                    var clientInstanceValue = BitConverter.ToInt32(body, offset + 8);
+                    var itemId = BitConverter.ToInt32(body, offset + 4);
+                    var deleteCount = (short)BitConverter.ToInt32(body, offset + 8);
                     offset += 12;
 
                     if (!_sqliteSelectCharacterDataSource.TryDeleteItem(cid, aid, listType, slotIndex, deleteCount, out var result))
@@ -143,11 +145,9 @@ namespace DfoServer.Network.Handlers
                         continue;
                     }
 
-                    
-                    result.RemainingStackCount = clientInstanceValue;
                     result.AppliedCount = deleteCount;
                     await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0012, DeleteItemAckBuilder.Build(result)));
-                    FileLogger.Log($"[{ProtocolName}] DELETE_ITEM(ext): slot={slotIndex} applied={deleteCount} remaining={clientInstanceValue}");
+                    FileLogger.Log($"[{ProtocolName}] DELETE_ITEM(ext): slot={slotIndex} item=0x{itemId:X8} applied={deleteCount} remaining={result.RemainingStackCount}");
                 }
                 return;
             }
