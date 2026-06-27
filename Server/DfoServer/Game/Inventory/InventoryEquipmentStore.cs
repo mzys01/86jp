@@ -242,9 +242,8 @@ ORDER BY slot;";
                   Array.Clear(removed.Raw, 12, 4);
                 entries.Remove(removed);
                 SaveEquipEntriesTx(connection, transaction, characterId, entries);
-                InsertUnequippedEntry(connection, transaction, characterId, removed.ItemId, removed.Raw);
                 InsertEquipToContainer(connection, transaction, characterId, dbSrcList, request.SourceSlotIndex, removed.ItemId, removed.Raw, removed.ExpireTime);
-                FileLogger.Log($"  [EquipMove] UNEQUIP: removed equip slot {equipSlot} itemId=0x{removed.ItemId:X8}, cached + {dbSrcList} slot {request.SourceSlotIndex}");
+                FileLogger.Log($"  [EquipMove] UNEQUIP: removed equip slot {equipSlot} itemId=0x{removed.ItemId:X8} -> {dbSrcList} slot {request.SourceSlotIndex}");
                 return EquipOutcome.Unequipped;
             }
             else
@@ -258,39 +257,13 @@ ORDER BY slot;";
                 }
 
                 byte[] entryRaw;
-                var cachedRaw = LoadUnequippedEntry(connection, transaction, characterId, wantId);
-                if (cachedRaw != null)
+                var fields = LoadDisplayFieldsFromCharacterItem(connection, transaction, characterId, dbSrcList, request.SourceSlotIndex);
+                if (fields == null)
                 {
-                    entryRaw = MakeEquipListCodec.SetSlotByte(cachedRaw, equipSlot);
-                    var fields = LoadDisplayFieldsFromCharacterItem(connection, transaction, characterId, dbSrcList, request.SourceSlotIndex);
-                    if (fields != null)
-                    {
-                        // unequipped_entries 可能是附魔前的旧 raw；穿戴前用当前背包记录覆盖动态附魔/增幅字段。
-                        ApplyEquipmentPrefixFields(entryRaw, fields.Value);
-                    }
+                    FileLogger.Log($"  [EquipMove] EQUIP: slot {equipSlot} want 0x{wantId:X8} — no DB record (no-op)");
+                    return EquipOutcome.NoOp;
                 }
-                else if (equipSlot == 12)
-                {
-                    var template = FindEntryTemplate(connection, transaction, characterId, entries, equipSlot);
-                    if (template == null)
-                    {
-                        FileLogger.Log($"  [EquipMove] EQUIP: slot {equipSlot} want 0x{wantId:X8} — 无缓存且无同槽模板 (no-op)");
-                        return EquipOutcome.NoOp;
-                    }
-                    entryRaw = MakeEquipListCodec.BuildEntryFromTemplate(template, equipSlot, wantId);
-                    FileLogger.Log($"  [EquipMove] EQUIP: 称号 slot12 0x{wantId:X8} 用模板构造 entry ({entryRaw.Length}B)");
-                }
-                else
-                {
-                    var fields = LoadDisplayFieldsFromCharacterItem(connection, transaction, characterId, dbSrcList, request.SourceSlotIndex);
-                    if (fields == null)
-                    {
-                        FileLogger.Log($"  [EquipMove] EQUIP: slot {equipSlot} want 0x{wantId:X8} — 无缓存且无DB记录 (no-op)");
-                        return EquipOutcome.NoOp;
-                    }
-                    entryRaw = MakeEquipListCodec.BuildEntryFromDisplayFields(equipSlot, wantId, fields.Value);
-                    FileLogger.Log($"  [EquipMove] EQUIP: slot {equipSlot} 0x{wantId:X8} 从DB字段构造 entry ({entryRaw.Length}B)");
-                    }
+                entryRaw = MakeEquipListCodec.BuildEntryFromDisplayFields(equipSlot, wantId, fields.Value);
 
                     // 克隆装扮：计算并注入 raw[12..15] 克隆目标物品ID
                     if (ItemMetadataResolver.IsCloneAvatarItem(wantId))
@@ -306,7 +279,6 @@ ORDER BY slot;";
                 if (existing != null)
                 {
                     entries.Remove(existing);
-                    InsertUnequippedEntry(connection, transaction, characterId, existing.ItemId, existing.Raw);
                     InsertEquipToContainer(connection, transaction, characterId, dbSrcList, request.SourceSlotIndex, existing.ItemId, existing.Raw, existing.ExpireTime);
                     FileLogger.Log($"  [EquipMove] REPLACE: slot {equipSlot} old 0x{existing.ItemId:X8} -> {dbSrcList} slot {request.SourceSlotIndex}");
                 }
@@ -321,8 +293,7 @@ ORDER BY slot;";
                 int insertAt = entries.FindIndex(e => e.Slot > equipSlot);
                 if (insertAt < 0) entries.Add(newEntry); else entries.Insert(insertAt, newEntry);
                 SaveEquipEntriesTx(connection, transaction, characterId, entries);
-                DeleteUnequippedEntry(connection, transaction, characterId, wantId);
-                FileLogger.Log($"  [EquipMove] EQUIP: slot {equipSlot} itemId=0x{wantId:X8} ({(cachedRaw != null ? "cache" : "template")})");
+                FileLogger.Log($"  [EquipMove] EQUIP: slot {equipSlot} itemId=0x{wantId:X8}");
                 return EquipOutcome.Equipped;
             }
         }
@@ -341,8 +312,7 @@ ORDER BY slot;";
               Array.Clear(removed.Raw, 12, 4);
             entries.Remove(removed);
             SaveEquipEntriesTx(connection, transaction, characterId, entries);
-            InsertUnequippedEntry(connection, transaction, characterId, removed.ItemId, removed.Raw);
-            FileLogger.Log($"  [EquipMove] UNEQUIP(src): removed slot {equipSlot} itemId=0x{removed.ItemId:X8}, cached entry");
+            FileLogger.Log($"  [EquipMove] UNEQUIP(src): removed slot {equipSlot} itemId=0x{removed.ItemId:X8}");
             return true;
         }
 
@@ -493,43 +463,6 @@ WHERE owner_scope = 'account' AND owner_id = @accountId AND list_type = @listTyp
             }
         }
 
-        private void InsertUnequippedEntry(SqliteConnection connection, SqliteTransaction transaction, int characterId, int itemTemplateId, byte[] rawEntry)
-        {
-            using (var cmd = connection.CreateCommand())
-            {
-                cmd.Transaction = transaction;
-                cmd.CommandText = "INSERT OR REPLACE INTO unequipped_entries (character_id, item_template_id, raw_entry) VALUES (@cid, @tid, @raw)";
-                cmd.Parameters.AddWithValue("@cid", characterId);
-                cmd.Parameters.AddWithValue("@tid", itemTemplateId);
-                cmd.Parameters.AddWithValue("@raw", rawEntry);
-                cmd.ExecuteNonQuery();
-            }
-        }
-
-        private byte[] LoadUnequippedEntry(SqliteConnection connection, SqliteTransaction transaction, int characterId, int itemTemplateId)
-        {
-            using (var cmd = connection.CreateCommand())
-            {
-                cmd.Transaction = transaction;
-                cmd.CommandText = "SELECT raw_entry FROM unequipped_entries WHERE character_id = @cid AND item_template_id = @tid";
-                cmd.Parameters.AddWithValue("@cid", characterId);
-                cmd.Parameters.AddWithValue("@tid", itemTemplateId);
-                return cmd.ExecuteScalar() as byte[];
-            }
-        }
-
-        private void DeleteUnequippedEntry(SqliteConnection connection, SqliteTransaction transaction, int characterId, int itemTemplateId)
-        {
-            using (var cmd = connection.CreateCommand())
-            {
-                cmd.Transaction = transaction;
-                cmd.CommandText = "DELETE FROM unequipped_entries WHERE character_id = @cid AND item_template_id = @tid";
-                cmd.Parameters.AddWithValue("@cid", characterId);
-                cmd.Parameters.AddWithValue("@tid", itemTemplateId);
-                cmd.ExecuteNonQuery();
-            }
-        }
-
         private MakeEquipListCodec.DisplayFields? LoadDisplayFieldsFromCharacterItem(
             SqliteConnection connection, SqliteTransaction transaction, int characterId, InventoryListType listType, short slotIndex)
         {
@@ -609,17 +542,6 @@ WHERE owner_scope = 'account' AND owner_id = @accountId AND list_type = @listTyp
             }
         }
 
-        private static void ApplyEquipmentPrefixFields(byte[] raw, MakeEquipListCodec.DisplayFields fields)
-        {
-            if (raw == null || raw.Length < 24)
-                return;
-
-            BitConverter.GetBytes(fields.Enchant).CopyTo(raw, 16);
-            raw[20] = fields.EnchantUpgradeCount;
-            raw[21] = fields.AmplifyType;
-            BitConverter.GetBytes(fields.AmplifyValue).CopyTo(raw, 22);
-        }
-
         private void InsertEquipToContainer(SqliteConnection connection, SqliteTransaction transaction, int characterId, InventoryListType listType, short slot, int itemId, byte[] entryRaw, int entryExpireTime)
         {
             if (listType == InventoryListType.Pet)
@@ -693,33 +615,6 @@ WHERE owner_scope = 'account' AND owner_id = @accountId AND list_type = @listTyp
                 return false;
 
             return true;
-        }
-
-        private byte[] FindEntryTemplate(SqliteConnection connection, SqliteTransaction transaction, int characterId, List<MakeEquipListCodec.Entry> entries, int slot)
-        {
-            var existing = entries.Find(e => e.Slot == slot);
-            if (existing != null) return existing.Raw;
-            return LoadCachedEntryBySlot(connection, transaction, characterId, slot);
-        }
-
-        private byte[] LoadCachedEntryBySlot(SqliteConnection connection, SqliteTransaction transaction, int characterId, int slot)
-        {
-            using (var cmd = connection.CreateCommand())
-            {
-                cmd.Transaction = transaction;
-                cmd.CommandText = "SELECT raw_entry FROM unequipped_entries WHERE character_id = @cid";
-                cmd.Parameters.AddWithValue("@cid", characterId);
-                using (var reader = cmd.ExecuteReader())
-                {
-                    while (reader.Read())
-                    {
-                        var raw = reader[0] as byte[];
-                        if (raw != null && raw.Length > 0 && raw[0] == (byte)slot)
-                            return raw;
-                    }
-                }
-            }
-            return null;
         }
 
         private MakeEquipListCodec.Entry FindEquippedRentalBySeriesKey(

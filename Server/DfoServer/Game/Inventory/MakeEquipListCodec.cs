@@ -302,16 +302,6 @@ namespace DfoServer.Game.Inventory
         
         
         
-        public static byte[] BuildEntryFromTemplate(byte[] templateRaw, int slot, int newItemId)
-        {
-            var copy = new byte[templateRaw.Length];
-            Buffer.BlockCopy(templateRaw, 0, copy, 0, templateRaw.Length);
-            copy[0] = (byte)slot;
-            BitConverter.GetBytes(newItemId).CopyTo(copy, 1); 
-            return copy;
-        }
-
-        
         public static void UpsertEntry(ParsedEquipList parsed, Entry entry)
         {
             int idx = parsed.Entries.FindIndex(e => e.Slot == entry.Slot);
