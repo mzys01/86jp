@@ -522,8 +522,14 @@ ORDER BY slot_index;";
 
         // 宠物栏(list 7)"宠物"本体分页槽段(category 5): slot 0..139 共 140 格(实测计数)。
         // 其后 宠物装备=140..188(cat6)、宠物耗品=189..237(cat7)。新购宠物从本页首格开始填。
+        // Client pet inventory pages share list 7 but use separate slot ranges:
+        // category 5 = pets, category 6 = pet equipment, category 7 = pet consumables.
         internal const int PetInventorySlotStart = 0;
         internal const int PetInventorySlotEnd = 139;
+        internal const int PetEquipmentSlotStart = 140;
+        internal const int PetEquipmentSlotEnd = 188;
+        internal const int PetConsumableSlotStart = 189;
+        internal const int PetConsumableSlotEnd = 237;
         public bool TryPickupRentalWeapon(
             SqliteConnection connection,
             SqliteTransaction transaction,
@@ -1061,6 +1067,29 @@ ORDER BY slot_index;";
                 FileLogger.Log($"  [CeraShopBuy] IsCreatureItem(0x{itemTemplateId:X8}) 判定失败, 视为非宠物: {ex.Message}");
                 return false;
             }
+        }
+
+        internal static bool IsPetInventoryEquipment(int itemTemplateId)
+        {
+            try
+            {
+                return CreatureExtraResolver.IsPetInventoryEquipment(itemTemplateId);
+            }
+            catch (Exception ex)
+            {
+                FileLogger.Log($"  [Inventory] IsPetInventoryEquipment(0x{itemTemplateId:X8}) failed, treating as non-pet: {ex.Message}");
+                return false;
+            }
+        }
+
+        internal static bool IsPetConsumableItem(ItemMetadata metadata)
+        {
+            if (metadata == null || !metadata.IsStackable || string.IsNullOrWhiteSpace(metadata.StackableType))
+                return false;
+
+            var stackableType = metadata.StackableType.Replace("`", "").Trim();
+            return stackableType.StartsWith("[creature]", StringComparison.OrdinalIgnoreCase)
+                || stackableType.StartsWith("[feed]", StringComparison.OrdinalIgnoreCase);
         }
 
         internal static ItemRecord ReadItemRecord(SqliteDataReader reader)
