@@ -293,6 +293,36 @@ namespace DfoServer.Game.SelectCharacter
                 return _inventoryStore.TrySortItems(characterId, listType, category);
         }
 
+        public bool TryToggleSortItemLock(int characterId, int accountId, InventoryListType listType, short slotIndex, out SortItemLockEntry entry)
+        {
+            using (_inventoryStore.BeginScope(characterId, accountId))
+                return _inventoryStore.TryToggleSortItemLock(listType, slotIndex, out entry);
+        }
+
+        public bool TryUnlockSortItemLock(int characterId, int accountId, InventoryListType listType, short slotIndex)
+        {
+            using (_inventoryStore.BeginScope(characterId, accountId))
+                return _inventoryStore.TryUnlockSortItemLock(listType, slotIndex);
+        }
+
+        public IReadOnlyList<SortItemLockEntry> LoadSortItemLocks(int characterId, int accountId)
+        {
+            using (_inventoryStore.BeginScope(characterId, accountId))
+                return _inventoryStore.LoadSortItemLocks();
+        }
+
+        public IReadOnlyList<SortItemLockEntry> LoadSortItemLocks(int characterId, int accountId, InventoryListType listType)
+        {
+            using (_inventoryStore.BeginScope(characterId, accountId))
+                return _inventoryStore.LoadSortItemLocks(listType);
+        }
+
+        public CommonInventoryItem LoadCommonItemForRefresh(int characterId, int accountId, InventoryListType listType, short slotIndex)
+        {
+            using (_inventoryStore.BeginScope(characterId, accountId))
+                return _inventoryStore.LoadCommonItemForRefresh(listType, slotIndex);
+        }
+
         public byte[] LoadCharacterInitBody(int characterId, ushort notiType, int occurrenceIndex = 0)
             => LoadInitBody(characterId, notiType, occurrenceIndex);
 
