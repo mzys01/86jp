@@ -42,14 +42,28 @@ namespace PvfLib
         public int Flags { get; set; }
     }
 
+    public enum ApcFaction
+    {
+        Character = 0,
+        Monster = 100,
+        Neutral = 200,
+    }
+
+    public enum ApcAIType
+    {
+        Normal = 5,
+        Champion = 6,
+        Boss = 8,
+    }
+
     public class AICharacterInfo
     {
         public int Code { get; set; }
         public int X { get; set; }
         public int Y { get; set; }
         public int Direction { get; set; }
-        public int Faction { get; set; }
-        public int AIType { get; set; }
+        public ApcFaction Faction { get; set; }
+        public ApcAIType AIType { get; set; }
     }
 
     /// <summary>
@@ -227,21 +241,20 @@ namespace PvfLib
                 if (i + 2 < values.Length) { int v; if (int.TryParse(values[i + 2], out v)) entry.Y = v; }
                 if (i + 3 < values.Length) { int v; if (int.TryParse(values[i + 3], out v)) entry.Direction = v; }
                 i += 4;
-                // faction: [character]=0, [monster]=100, [neutral]=200
                 if (i < values.Length)
                 {
                     var f = StripBacktick(values[i]).ToLowerInvariant();
-                    if (f == "[character]") entry.Faction = 0;
-                    else if (f == "[monster]") entry.Faction = 100;
-                    else if (f == "[neutral]") entry.Faction = 200;
+                    if (f == "[character]") entry.Faction = ApcFaction.Character;
+                    else if (f == "[monster]") entry.Faction = ApcFaction.Monster;
+                    else if (f == "[neutral]") entry.Faction = ApcFaction.Neutral;
                     i++;
                 }
-                // aiType: [normal]=5, [champion]=6
                 if (i < values.Length)
                 {
                     var a = StripBacktick(values[i]).ToLowerInvariant();
-                    if (a == "[normal]") entry.AIType = 5;
-                    else if (a == "[champion]") entry.AIType = 6;
+                    if (a == "[normal]") entry.AIType = ApcAIType.Normal;
+                    else if (a == "[champion]") entry.AIType = ApcAIType.Champion;
+                    else if (a == "[boss]") entry.AIType = ApcAIType.Boss;
                     i++;
                 }
                 // trailing field1, field2

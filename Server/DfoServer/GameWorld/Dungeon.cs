@@ -225,6 +225,17 @@ namespace DfoServer.GameWorld
                         IsBlocking = true,
                     });
                 }
+                foreach (var apc in mapFileO.AICharacters)
+                {
+                    byte apcLevel = GetAICharacterLevel(apc.Code);
+                    listO.Add(new MonsterSumInfo
+                    {
+                        Code = apc.Code,
+                        Type = (byte)apc.AIType,
+                        Level = apcLevel,
+                        IsBlocking = false,
+                    });
+                }
                 return new MazeSumInfo { Monsters = listO, X = x, Y = y, Index = overrideMapId };
             }
 
