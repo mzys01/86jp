@@ -69,6 +69,7 @@ namespace DfoServer.Network
             RegisterLoginHandlers(_cmdDispatch);
             RegisterCharacterHandlers(_cmdDispatch);
             RegisterInventoryHandlers(_cmdDispatch);
+            RegisterSortItemLockHandlers(_cmdDispatch);
             RegisterDungeonHandlers(_cmdDispatch);
             RegisterSkillHandlers(_cmdDispatch);
             RegisterTownHandlers(_cmdDispatch);
@@ -141,6 +142,7 @@ namespace DfoServer.Network
                     var gsConnStr = SqliteDatabaseBootstrap.Initialize(
                         ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
                     s.GameSession = new Game.Session.GameSession(s, gsConnStr, _assetService);
+                    await _inventoryHandler.SendAllSortItemLockRefresh(s);
                 }
             };
             d[0x0005] = _characterSelectHandler.Handle_ENUM_CMDPACKET_CREATE_CHARACTER;
@@ -166,6 +168,12 @@ namespace DfoServer.Network
             d[0x0218] = _inventoryHandler.Handle_USE_BOOSTER_ITEM;
             d[0x0239] = _inventoryHandler.Handle_SET_CLONE_TITLE;                  //569
             d[0x0063] = _inventoryHandler.Handle_COMPOUND_AVATAR;                  //99 合并装扮(时装合成)
+        }
+
+        private void RegisterSortItemLockHandlers(Dictionary<ushort, Func<EnhancedClientSession, GamePacketHeader, byte[], Task>> d)
+        {
+            d[0x02CA] = _inventoryHandler.Handle_ENUM_CMDPACKET_TOGGLE_SORT_ITEM_LOCK;
+            d[0x02CB] = _inventoryHandler.Handle_ENUM_CMDPACKET_UNLOCK_SORT_ITEM_LOCK;
         }
 
         private void RegisterDungeonHandlers(Dictionary<ushort, Func<EnhancedClientSession, GamePacketHeader, byte[], Task>> d)

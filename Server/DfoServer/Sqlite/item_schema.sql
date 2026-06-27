@@ -610,6 +610,17 @@ CREATE TABLE IF NOT EXISTS character_abuse_values (
     FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS character_sort_item_locks (
+    character_id INTEGER NOT NULL,
+    sort_order INTEGER NOT NULL,
+    list_type INTEGER NOT NULL,
+    slot_index INTEGER NOT NULL,
+    state INTEGER NOT NULL,
+    PRIMARY KEY (character_id, sort_order),
+    UNIQUE(character_id, list_type, slot_index),
+    FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS account_settings (
     account_id INTEGER PRIMARY KEY,
     main_game_option BLOB,

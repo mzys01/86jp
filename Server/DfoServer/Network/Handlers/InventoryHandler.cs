@@ -79,6 +79,9 @@ namespace DfoServer.Network.Handlers
 
             FileLogger.Log($"[{ProtocolName}] MOVE_ITEMSPACE: OK src=({result.SourceListType},{result.SourceSlotIndex}) dst=({result.DestinationListType},{result.DestinationSlotIndex}) moveVal={result.MoveValue32}");
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0013, MoveItemSpaceAckBuilder.Build(result)));
+            await SendSortItemLockRefresh(session, request.SourceListType);
+            if (MapToSortLockListType(request.SourceListType) != MapToSortLockListType(request.DestinationListType))
+                await SendSortItemLockRefresh(session, request.DestinationListType);
 
             
             if (result.Mutated && (request.SourceListType == InventoryListType.Equipment || request.DestinationListType == InventoryListType.Equipment))
@@ -105,6 +108,7 @@ namespace DfoServer.Network.Handlers
 
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0014, SortItemAckBuilder.Build(listType)));
                 await SendItemListRefresh(session, listType);
+                await SendSortItemLockRefresh(session, listType);
                 FileLogger.Log($"[{ProtocolName}] SORT: ack + ITEM_LIST sent, done");
             }
             catch (Exception ex)
@@ -112,6 +116,55 @@ namespace DfoServer.Network.Handlers
                 FileLogger.Log($"[{ProtocolName}] SORT EXCEPTION: {ex}");
                 throw;
             }
+        }
+
+        public async Task Handle_ENUM_CMDPACKET_TOGGLE_SORT_ITEM_LOCK(EnhancedClientSession session, GamePacketHeader header, byte[] body)
+        {
+            if (body == null || body.Length < 3)
+                return;
+
+            var listType = (InventoryListType)body[0];
+            var slotIndex = BitConverter.ToInt16(body, 1);
+            var (cid, aid) = ResolveOwner(session);
+
+            if (!_sqliteSelectCharacterDataSource.TryToggleSortItemLock(cid, aid, listType, slotIndex, out var entry))
+                return;
+
+            if (entry.State == 0)
+            {
+                await SendSortItemUnlockAckAndRefresh(session, listType, slotIndex);
+                return;
+            }
+
+            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x02CA, SortItemLockBuilder.BuildLock(entry)));
+        }
+
+        public async Task Handle_ENUM_CMDPACKET_UNLOCK_SORT_ITEM_LOCK(EnhancedClientSession session, GamePacketHeader header, byte[] body)
+        {
+            if (body == null || body.Length < 3)
+                return;
+
+            var listType = (InventoryListType)body[0];
+            var slotIndex = BitConverter.ToInt16(body, 1);
+            var (cid, aid) = ResolveOwner(session);
+
+            if (!_sqliteSelectCharacterDataSource.TryUnlockSortItemLock(cid, aid, listType, slotIndex))
+                return;
+
+            await SendSortItemUnlockAckAndRefresh(session, listType, slotIndex);
+        }
+
+        private async Task SendSortItemUnlockAckAndRefresh(EnhancedClientSession session, InventoryListType listType, short slotIndex)
+        {
+            var notiListType = MapToSortLockListType(listType);
+            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x02CB, SortItemLockBuilder.BuildUnlock(notiListType, slotIndex)));
+
+            if (RequiresMainListRefreshForSortItemUnlock(notiListType))
+                await SendItemListRefresh(session, InventoryListType.Main);
+            else
+                await SendSortItemLockSlotRefresh(session, notiListType, slotIndex);
+
+            await SendSortItemLockRefresh(session, notiListType);
         }
 
         public async Task Handle_ENUM_CMDPACKET_DELETE_ITEM(EnhancedClientSession session, GamePacketHeader header, byte[] body)
@@ -764,6 +817,57 @@ namespace DfoServer.Network.Handlers
                 var itemBody = ItemListPacketBuilder.BuildBody(snapshot, listType);
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000D, itemBody));
             }
+        }
+
+        public async Task SendSortItemLockSlotRefresh(EnhancedClientSession session, InventoryListType listType, short slotIndex)
+        {
+            if (!IsCommonItemUpdateListType(listType))
+                return;
+
+            var (cid, aid) = ResolveOwner(session);
+            var item = _sqliteSelectCharacterDataSource.LoadCommonItemForRefresh(cid, aid, listType, slotIndex);
+            if (item == null)
+                item = new CommonInventoryItem { SlotIndex = slotIndex };
+
+            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
+                0x00,
+                0x000E,
+                ItemListUpdateBuilder.BuildCommonUpdates(new[] { item })));
+        }
+
+        public async Task SendSortItemLockRefresh(EnhancedClientSession session, InventoryListType listType)
+        {
+            var (cid, aid) = ResolveOwner(session);
+            var refreshListType = MapToSortLockListType(listType);
+            var locks = _sqliteSelectCharacterDataSource.LoadSortItemLocks(cid, aid, refreshListType);
+            foreach (var entry in locks)
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x02CA, SortItemLockBuilder.BuildLock(entry)));
+        }
+
+        public async Task SendAllSortItemLockRefresh(EnhancedClientSession session)
+        {
+            var (cid, aid) = ResolveOwner(session);
+            var locks = _sqliteSelectCharacterDataSource.LoadSortItemLocks(cid, aid);
+            foreach (var entry in locks)
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x02CA, SortItemLockBuilder.BuildLock(entry)));
+        }
+
+        private static InventoryListType MapToSortLockListType(InventoryListType listType)
+        {
+            return MapToNotiListType(listType);
+        }
+
+        private static bool IsCommonItemUpdateListType(InventoryListType listType)
+        {
+            return listType == InventoryListType.Main
+                || listType == InventoryListType.PersonalCargo
+                || listType == InventoryListType.AccountCargo
+                || listType == InventoryListType.Pet;
+        }
+
+        private static bool RequiresMainListRefreshForSortItemUnlock(InventoryListType listType)
+        {
+            return listType == InventoryListType.PersonalCargo;
         }
 
         private static InventoryListType MapToNotiListType(InventoryListType moveListType)
