@@ -374,6 +374,86 @@ namespace DfoServer.Network.Handlers
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, header.type, new byte[] { 0x00 }));
         }
 
+        public async Task Handle_OPEN_MAGIC_BOX(EnhancedClientSession session, GamePacketHeader header, byte[] body)
+        {
+            var elapsed = Stopwatch.StartNew();
+            FileLogger.Log($"[{ProtocolName}] OPEN_MAGIC_BOX raw({body?.Length ?? 0}B): {(body != null ? BitConverter.ToString(body) : "null")}");
+
+            if (!MagicBoxOpenRequest.TryParse(body, out var request) || request.ListType != InventoryListType.Main)
+            {
+                FileLogger.Log($"[{ProtocolName}] OPEN_MAGIC_BOX: parse/list failed");
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, header.type, new byte[] { 0x00 }));
+                return;
+            }
+
+            var materialSlotIndex = request.MaterialSlotIndex >= 0
+                ? (short?)request.MaterialSlotIndex
+                : null;
+            var expectedMaterialItemTemplateId = request.MaterialItemTemplateId > 0
+                ? request.MaterialItemTemplateId
+                : 0;
+
+            var (cid, aid) = ResolveOwner(session);
+            if (!_sqliteSelectCharacterDataSource.TryUseBoosterItem(
+                    cid,
+                    aid,
+                    request.SlotIndex,
+                    Array.Empty<int>(),
+                    request.UseCount,
+                    request.ItemTemplateId,
+                    materialSlotIndex,
+                    expectedMaterialItemTemplateId,
+                    out var result))
+            {
+                FileLogger.Log($"[{ProtocolName}] OPEN_MAGIC_BOX: failed cid={cid} aid={aid} slot={request.SlotIndex} item=0x{request.ItemTemplateId:X8} material=0x{request.MaterialItemTemplateId:X8}@{request.MaterialSlotIndex} requested={request.UseCount} elapsed={elapsed.ElapsedMilliseconds}ms");
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, header.type, new byte[] { 0x00 }));
+                return;
+            }
+
+            await SendBoosterUseResult(session, header.type, result);
+            FileLogger.Log($"[{ProtocolName}] OPEN_MAGIC_BOX: source=0x{result.SourceItemTemplateId:X8} slot={result.SourceSlotIndex} requested={request.UseCount} applied={result.ConsumedSourceCount} remaining={result.SourceRemainingStackCount} material=0x{result.ConsumedMaterialItemTemplateId:X8}x{result.ConsumedMaterialCount}@{result.ConsumedMaterialSlotIndex} materialRemaining={result.ConsumedMaterialRemainingStackCount} rewards={string.Join(",", result.Rewards.Select(r => $"{r.ListType}:0x{r.ItemTemplateId:X8}x{r.GrantedCount}@{r.SlotIndex}"))} elapsed={elapsed.ElapsedMilliseconds}ms");
+        }
+
+        public async Task Handle_OPEN_MAGIC_BOX_SINGLE(EnhancedClientSession session, GamePacketHeader header, byte[] body)
+        {
+            var elapsed = Stopwatch.StartNew();
+            FileLogger.Log($"[{ProtocolName}] OPEN_MAGIC_BOX_SINGLE raw({body?.Length ?? 0}B): {(body != null ? BitConverter.ToString(body) : "null")}");
+
+            if (!MagicBoxOpenRequest.TryParseSingle(body, out var request) || request.ListType != InventoryListType.Main)
+            {
+                FileLogger.Log($"[{ProtocolName}] OPEN_MAGIC_BOX_SINGLE: parse/list failed");
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, header.type, new byte[] { 0x00 }));
+                return;
+            }
+
+            var materialSlotIndex = request.MaterialSlotIndex >= 0
+                ? (short?)request.MaterialSlotIndex
+                : null;
+            var expectedMaterialItemTemplateId = request.MaterialItemTemplateId > 0
+                ? request.MaterialItemTemplateId
+                : 0;
+
+            var (cid, aid) = ResolveOwner(session);
+            if (!_sqliteSelectCharacterDataSource.TryUseBoosterItem(
+                    cid,
+                    aid,
+                    request.SlotIndex,
+                    Array.Empty<int>(),
+                    request.UseCount,
+                    request.ItemTemplateId,
+                    materialSlotIndex,
+                    expectedMaterialItemTemplateId,
+                    out var result))
+            {
+                FileLogger.Log($"[{ProtocolName}] OPEN_MAGIC_BOX_SINGLE: failed cid={cid} aid={aid} slot={request.SlotIndex} materialSlot={(materialSlotIndex.HasValue ? materialSlotIndex.Value.ToString() : "auto")} requested={request.UseCount} elapsed={elapsed.ElapsedMilliseconds}ms");
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, header.type, new byte[] { 0x00 }));
+                return;
+            }
+
+            await SendBoosterUseResult(session, header.type, result);
+            FileLogger.Log($"[{ProtocolName}] OPEN_MAGIC_BOX_SINGLE: source=0x{result.SourceItemTemplateId:X8} slot={result.SourceSlotIndex} requested={request.UseCount} applied={result.ConsumedSourceCount} remaining={result.SourceRemainingStackCount} material=0x{result.ConsumedMaterialItemTemplateId:X8}x{result.ConsumedMaterialCount}@{result.ConsumedMaterialSlotIndex} materialRemaining={result.ConsumedMaterialRemainingStackCount} rewards={string.Join(",", result.Rewards.Select(r => $"{r.ListType}:0x{r.ItemTemplateId:X8}x{r.GrantedCount}@{r.SlotIndex}"))} elapsed={elapsed.ElapsedMilliseconds}ms");
+        }
+
         private async Task<bool> TryHandleBoosterOpen(EnhancedClientSession session, GamePacketHeader header, byte[] body)
         {
             var elapsed = Stopwatch.StartNew();
@@ -445,6 +525,14 @@ namespace DfoServer.Network.Handlers
                         SelectablePackageAckBuilder.BuildSuccess(result.SourceSlotIndex, grantedItems)));
                 }
             }
+            else if (!ShouldSendSourceAckForBoosterResponse(responseType))
+            {
+                if (grantedItems.Count > 0)
+                {
+                    await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x00A0,
+                        SelectablePackageAckBuilder.BuildSuccess(result.SourceSlotIndex, grantedItems)));
+                }
+            }
             else
             {
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, responseType, CommonPacketBodyBuilder.BuildSuccessAck()));
@@ -470,6 +558,11 @@ namespace DfoServer.Network.Handlers
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000E, avatarUpdateBody));
         }
 
+        internal static bool ShouldSendSourceAckForBoosterResponse(ushort responseType)
+        {
+            return responseType != 0x00D0 && responseType != 0x03F3;
+        }
+
         private static byte[] BuildBoosterMainItemUpdates(CharacterItemListSnapshot snapshot, BoosterUseResult result)
         {
             if (snapshot == null || result == null)
@@ -483,6 +576,8 @@ namespace DfoServer.Network.Handlers
             }
 
             slots.Add(result.SourceSlotIndex);
+            if (result.ConsumedMaterialItemTemplateId > 0)
+                slots.Add(result.ConsumedMaterialSlotIndex);
 
             var updates = new List<CommonInventoryItem>();
             foreach (var slot in slots)
@@ -496,6 +591,8 @@ namespace DfoServer.Network.Handlers
 
                 if (slot == result.SourceSlotIndex)
                     updates.Add(CreateConsumedSourceItem(result));
+                else if (slot == result.ConsumedMaterialSlotIndex && result.ConsumedMaterialItemTemplateId > 0)
+                    updates.Add(CreateConsumedSourceItem(result.ConsumedMaterialSlotIndex, result.ConsumedMaterialItemTemplateId));
             }
 
             if (updates.Count == 0)

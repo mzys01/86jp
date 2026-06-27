@@ -26,6 +26,8 @@ namespace DfoServer.Network.Builders.CeraShop
             //   [22..23] U16  count    "额外追加项"数量; 单个普通商品填 0(主商品已由 sub_74F670 显示)
             //   [24..]   每项 U32 + U32 (额外项, 单商品不需要)
             // 注: 之前填 count=1 + var_828=1, 客户端把 1 当 itemId 多显示了"复活币", 故置 0。
+            // 自动拆出的实际物品由 CeraShopHandler 汇总到 NOTI 0x000E；不要放入这里，
+            // 否则客户端会走商城购买职业校验分支，弹出"购买其他职业的物品"警告。
             var writer = new GamePacketWriter();
 
             writer.WriteByte(1);            // [0]      result flag = 成功

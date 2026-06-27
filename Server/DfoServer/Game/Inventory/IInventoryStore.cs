@@ -29,6 +29,10 @@ namespace DfoServer.Game.Inventory
 
         bool TryUseBoosterItem(short? slotIndex, IReadOnlyList<int> selectedItemTemplateIds, out BoosterUseResult result);
 
+        bool TryUseBoosterItem(short? slotIndex, IReadOnlyList<int> selectedItemTemplateIds, int useCount, int expectedItemTemplateId, out BoosterUseResult result);
+
+        bool TryUseBoosterItem(short? slotIndex, IReadOnlyList<int> selectedItemTemplateIds, int useCount, int expectedItemTemplateId, short? materialSlotIndex, int expectedMaterialItemTemplateId, out BoosterUseResult result);
+
         bool TryOpenPackage0207(short slotIndex, IReadOnlyList<int> selectedItemTemplateIds, out BoosterUseResult result);
 
         bool TryBuyItem(int itemTemplateId, int buyCount, out InventoryMutationResult result);

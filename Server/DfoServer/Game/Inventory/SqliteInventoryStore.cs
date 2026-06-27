@@ -116,6 +116,16 @@ namespace DfoServer.Game.Inventory
 
         public int SourceInstanceValue { get; set; }
 
+        public int ConsumedSourceCount { get; set; } = 1;
+
+        public int ConsumedMaterialItemTemplateId { get; set; }
+
+        public int ConsumedMaterialCount { get; set; }
+
+        public short ConsumedMaterialSlotIndex { get; set; }
+
+        public int ConsumedMaterialRemainingStackCount { get; set; }
+
         public List<BoosterRewardResult> Rewards { get; } = new List<BoosterRewardResult>();
     }
 
@@ -404,6 +414,28 @@ ORDER BY slot_index;";
             using (var transaction = connection.BeginTransaction())
             {
                 var ok = _packageStore.TryUseBoosterItem(connection, transaction, _context.CharacterId, _context.AccountId, slotIndex, selectedItemTemplateIds, out result);
+                if (ok) transaction.Commit();
+                return ok;
+            }
+        }
+
+        public bool TryUseBoosterItem(short? slotIndex, IReadOnlyList<int> selectedItemTemplateIds, int useCount, int expectedItemTemplateId, out BoosterUseResult result)
+        {
+            using (var connection = _context.OpenConnection())
+            using (var transaction = connection.BeginTransaction())
+            {
+                var ok = _packageStore.TryUseBoosterItem(connection, transaction, _context.CharacterId, _context.AccountId, slotIndex, selectedItemTemplateIds, useCount, expectedItemTemplateId, out result);
+                if (ok) transaction.Commit();
+                return ok;
+            }
+        }
+
+        public bool TryUseBoosterItem(short? slotIndex, IReadOnlyList<int> selectedItemTemplateIds, int useCount, int expectedItemTemplateId, short? materialSlotIndex, int expectedMaterialItemTemplateId, out BoosterUseResult result)
+        {
+            using (var connection = _context.OpenConnection())
+            using (var transaction = connection.BeginTransaction())
+            {
+                var ok = _packageStore.TryUseBoosterItem(connection, transaction, _context.CharacterId, _context.AccountId, slotIndex, selectedItemTemplateIds, useCount, expectedItemTemplateId, materialSlotIndex, expectedMaterialItemTemplateId, out result);
                 if (ok) transaction.Commit();
                 return ok;
             }

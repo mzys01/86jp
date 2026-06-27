@@ -574,25 +574,6 @@ WHERE character_id = @characterId AND list_type = @listType;";
 
             var effectiveCount = Math.Max(1, stackCount);
             var isAvatarReward = InventoryPackageStore.IsAvatarReward(metadata);
-            if (metadata.IsStackable && !isAvatarReward)
-            {
-                var existing = FindItemByTemplateId(connection, transaction, characterId, InventoryListType.Main, itemTemplateId);
-                if (existing != null && (metadata.StackLimit <= 0 || existing.StackCount + effectiveCount <= metadata.StackLimit))
-                {
-                    var newStackCount = existing.StackCount + effectiveCount;
-                    UpdateStackCount(connection, transaction, existing.ItemUid, newStackCount);
-                    result = new BoosterRewardResult
-                    {
-                        ListType = InventoryListType.Main,
-                        SlotIndex = existing.SlotIndex,
-                        ItemTemplateId = itemTemplateId,
-                        StackCount = newStackCount,
-                        GrantedCount = effectiveCount,
-                    };
-                    return true;
-                }
-            }
-
             int slotStart;
             int slotEnd;
             var insertListType = InventoryListType.Main;
@@ -622,6 +603,25 @@ WHERE character_id = @characterId AND list_type = @listType;";
             else
             {
                 metadata.GetSlotRange(out slotStart, out slotEnd);
+            }
+
+            if (metadata.IsStackable && !isAvatarReward)
+            {
+                var existing = FindItemByTemplateIdInRange(connection, transaction, characterId, insertListType, itemTemplateId, slotStart, slotEnd);
+                if (existing != null && (metadata.StackLimit <= 0 || existing.StackCount + effectiveCount <= metadata.StackLimit))
+                {
+                    var newStackCount = existing.StackCount + effectiveCount;
+                    UpdateStackCount(connection, transaction, existing.ItemUid, newStackCount);
+                    result = new BoosterRewardResult
+                    {
+                        ListType = insertListType,
+                        SlotIndex = existing.SlotIndex,
+                        ItemTemplateId = itemTemplateId,
+                        StackCount = newStackCount,
+                        GrantedCount = effectiveCount,
+                    };
+                    return true;
+                }
             }
 
             var targetSlot = FindEmptySlot(connection, transaction, characterId, insertListType, slotStart, slotEnd);

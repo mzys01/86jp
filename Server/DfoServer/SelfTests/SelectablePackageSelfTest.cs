@@ -1,6 +1,9 @@
 using DfoServer.Game.Inventory;
 using DfoServer.Infrastructure;
 using DfoServer.Network.Builders;
+using DfoServer.Network.Builders.CeraShop;
+using DfoServer.Network.Handlers;
+using DfoServer.Network.Parsers.Inventory;
 using Microsoft.Data.Sqlite;
 using System;
 using System.Globalization;
@@ -17,6 +20,11 @@ namespace DfoServer.SelfTests
         private const short AvatarPackageSlot = 68;
         private const short CrossJobAuraPackageSlot = 69;
         private const short SpecialBoosterPackageSlot = 70;
+        private const short MagicHammerBundleSlot = 71;
+        private const short WrongMagicHammerSlot = 80;
+        private const short MagicBoxSlot = 106;
+        private const short MagicHammerSlot = 173;
+        private const short RelocatedSeriaLuckSlot = 112;
         // These are PVF sample IDs used only to exercise generic package paths.
         // Production logic resolves package/reward data from PVF, not from these constants.
         private const int SampleTitleSelectablePackageId = 10007993;
@@ -24,6 +32,14 @@ namespace DfoServer.SelfTests
         private const int SampleAuraSelectablePackageId = 10008357;
         private const int SampleSpecialKindBoosterPackageId = 10007997;
         private const int SampleSpecialKindBoosterRewardId = 400360011;
+        private const int SampleMagicHammerBundleProductId = 102930;
+        private const int SampleMagicHammerBundleId = 10007477;
+        private const int MagicBoxItemTemplateId = 10007368;
+        private const int MagicHammerItemTemplateId = 10007367;
+        private const int InstantTeleportPotionItemTemplateId = 2600014;
+        private const int SeriaLuckItemTemplateId = 2682272;
+        private const int MagicBoxBatchCount = 100;
+        private const int SeriaLuckBatchCount = 10;
         private const int SampleSelectedTitleRewardId = 400330051;
         private const int SampleCrossJobAuraRewardId = 112590011;
         private const int InvalidRewardItemTemplateId = 1;
@@ -96,6 +112,33 @@ namespace DfoServer.SelfTests
             0xD6, 0x30, 0x1C, 0x06, 0x01,
             0xE5, 0x7D, 0x1C, 0x06, 0x04,
             0xBB, 0xA5, 0x1C, 0x06, 0x02,
+        };
+
+        private static readonly byte[] CapturedMagicBoxOpenRequestBody =
+        {
+            0x00,
+            0x6A, 0x00,
+            0x48, 0xB3, 0x98, 0x00,
+            0xAD, 0x00,
+            0x47, 0xB3, 0x98, 0x00,
+            0x64, 0x00,
+        };
+
+        private static readonly byte[] CapturedSeriaLuckOpenRequestBody =
+        {
+            0x04,
+            0x56, 0x00,
+            0xA0, 0xED, 0x28, 0x00,
+            0xFF, 0xFF,
+            0xFF, 0xFF, 0xFF, 0xFF,
+            0x0A, 0x00,
+        };
+
+        private static readonly byte[] CapturedSeriaLuckSingleOpenRequestBody =
+        {
+            0x04,
+            0x5C, 0x00,
+            0xFF, 0xFF,
         };
 
         private static readonly int[] CapturedContextAvatarItemTemplateIds =
@@ -291,6 +334,219 @@ namespace DfoServer.SelfTests
                 Check("special booster reward exists", snapshot.MainItems.Find(x => x.ItemTemplateId == SampleSpecialKindBoosterRewardId) != null);
             }
 
+            Check("parse captured 0x03F3 magic-box request", MagicBoxOpenRequest.TryParse(CapturedMagicBoxOpenRequestBody, out var magicBoxRequest));
+            if (magicBoxRequest != null)
+            {
+                Check($"magic-box request slot={magicBoxRequest.SlotIndex}", magicBoxRequest.SlotIndex == MagicBoxSlot);
+                Check($"magic-box request item={magicBoxRequest.ItemTemplateId}", magicBoxRequest.ItemTemplateId == MagicBoxItemTemplateId);
+                Check($"magic-box request material slot={magicBoxRequest.MaterialSlotIndex}", magicBoxRequest.MaterialSlotIndex == MagicHammerSlot);
+                Check($"magic-box request material item={magicBoxRequest.MaterialItemTemplateId}", magicBoxRequest.MaterialItemTemplateId == MagicHammerItemTemplateId);
+                Check($"magic-box request count={magicBoxRequest.UseCount}", magicBoxRequest.UseCount == MagicBoxBatchCount);
+
+                Check("parse captured 0x03F3 Seria luck request", MagicBoxOpenRequest.TryParse(CapturedSeriaLuckOpenRequestBody, out var seriaLuckRequest));
+                if (seriaLuckRequest != null)
+                {
+                    Check($"Seria luck request item={seriaLuckRequest.ItemTemplateId}", seriaLuckRequest.ItemTemplateId == SeriaLuckItemTemplateId);
+                    Check($"Seria luck request material slot={seriaLuckRequest.MaterialSlotIndex}", seriaLuckRequest.MaterialSlotIndex == -1);
+                    Check($"Seria luck request count={seriaLuckRequest.UseCount}", seriaLuckRequest.UseCount == SeriaLuckBatchCount);
+                }
+
+                Check("parse captured 0x00D0 Seria luck single-open request", MagicBoxOpenRequest.TryParseSingle(CapturedSeriaLuckSingleOpenRequestBody, out var seriaLuckSingleRequest));
+                if (seriaLuckSingleRequest != null)
+                {
+                    Check($"Seria luck single request item={seriaLuckSingleRequest.ItemTemplateId}", seriaLuckSingleRequest.ItemTemplateId == 0);
+                    Check($"Seria luck single request count={seriaLuckSingleRequest.UseCount}", seriaLuckSingleRequest.UseCount == 1);
+                }
+
+                Check("0x03F3 magic-box success uses 0x00A0 popup without source ACK", !InventoryHandler.ShouldSendSourceAckForBoosterResponse(0x03F3));
+                Check("0x00D0 magic-box single success uses 0x00A0 popup without source ACK", !InventoryHandler.ShouldSendSourceAckForBoosterResponse(0x00D0));
+                Check("0x0218 generic booster still keeps source ACK", InventoryHandler.ShouldSendSourceAckForBoosterResponse(0x0218));
+
+                BoosterUseResult hammerBundleResult = null;
+                using (store.BeginScope(CharacterId, AccountId))
+                {
+                    Check("open consumable magic-hammer bundle succeeds",
+                        store.TryUseBoosterItem(
+                            MagicHammerBundleSlot,
+                            Array.Empty<int>(),
+                            1,
+                            SampleMagicHammerBundleId,
+                            out hammerBundleResult));
+                }
+
+                short materialHammerSlot = -1;
+                short bundleMagicBoxSlot = -1;
+                if (hammerBundleResult != null)
+                {
+                    var materialReward = hammerBundleResult.Rewards.Find(x => x.ItemTemplateId == MagicHammerItemTemplateId);
+                    var boxReward = hammerBundleResult.Rewards.Find(x => x.ItemTemplateId == MagicBoxItemTemplateId);
+                    Check("magic-hammer bundle grants material hammer", materialReward?.GrantedCount == MagicBoxBatchCount);
+                    Check("magic-hammer bundle grants chicken box", boxReward?.GrantedCount == MagicBoxBatchCount);
+                }
+
+                using (store.BeginScope(CharacterId, AccountId))
+                {
+                    var snapshot = store.LoadCharacterItemListSnapshot();
+                    Check("snapshot no consumable magic-hammer bundle in source slot", snapshot.MainItems.Find(x => x.SlotIndex == MagicHammerBundleSlot) == null);
+                    Check($"wrong-tab magic hammer remains {WrongMagicHammerSlot}", snapshot.MainItems.Find(x => x.SlotIndex == WrongMagicHammerSlot)?.CountOrInstanceValue == 1);
+                    var materialHammer = snapshot.MainItems.Find(x => x.ItemTemplateId == MagicHammerItemTemplateId && x.SlotIndex >= 121 && x.SlotIndex <= 176);
+                    var bundleBox = snapshot.MainItems.Find(x => x.ItemTemplateId == MagicBoxItemTemplateId && x.SlotIndex >= 65 && x.SlotIndex <= 120);
+                    Check("consumable magic-hammer reward enters material tab", materialHammer != null);
+                    Check("consumable magic-hammer reward grants chicken box", bundleBox != null);
+                    if (materialHammer != null)
+                    {
+                        materialHammerSlot = materialHammer.SlotIndex;
+                        Check($"material-tab magic hammer count", materialHammer.CountOrInstanceValue == MagicBoxBatchCount);
+                    }
+
+                    if (bundleBox != null)
+                    {
+                        bundleMagicBoxSlot = bundleBox.SlotIndex;
+                        Check($"chicken box count", bundleBox.CountOrInstanceValue == MagicBoxBatchCount);
+                    }
+                }
+
+                var requestMaterialSlot = materialHammerSlot >= 0 ? materialHammerSlot : magicBoxRequest.MaterialSlotIndex;
+                var requestMagicBoxSlot = bundleMagicBoxSlot >= 0 ? bundleMagicBoxSlot : magicBoxRequest.SlotIndex;
+                BoosterUseResult magicBoxResult = null;
+                using (store.BeginScope(CharacterId, AccountId))
+                {
+                    Check("open magic-box batch with hammer material succeeds",
+                        store.TryUseBoosterItem(
+                            requestMagicBoxSlot,
+                            Array.Empty<int>(),
+                            magicBoxRequest.UseCount,
+                            magicBoxRequest.ItemTemplateId,
+                            requestMaterialSlot,
+                            magicBoxRequest.MaterialItemTemplateId,
+                            out magicBoxResult));
+                }
+
+                if (magicBoxResult != null)
+                {
+                    Check($"magic-box consumed source count={magicBoxResult.ConsumedSourceCount}", magicBoxResult.ConsumedSourceCount == MagicBoxBatchCount);
+                    Check($"magic-box consumed material item={magicBoxResult.ConsumedMaterialItemTemplateId}", magicBoxResult.ConsumedMaterialItemTemplateId == MagicHammerItemTemplateId);
+                    Check($"magic-box consumed material count={magicBoxResult.ConsumedMaterialCount}", magicBoxResult.ConsumedMaterialCount == MagicBoxBatchCount);
+                    Check("magic-box grants at least one reward", magicBoxResult.Rewards.Count > 0);
+                    Check($"magic-box grants instant teleport potions", magicBoxResult.Rewards.Find(x => x.ItemTemplateId == InstantTeleportPotionItemTemplateId)?.GrantedCount == MagicBoxBatchCount * 2);
+                    Check($"magic-box grants Seria luck boxes", magicBoxResult.Rewards.Find(x => x.ItemTemplateId == SeriaLuckItemTemplateId)?.GrantedCount == MagicBoxBatchCount);
+                }
+
+                short seriaLuckSlot = -1;
+                using (store.BeginScope(CharacterId, AccountId))
+                {
+                    var snapshot = store.LoadCharacterItemListSnapshot();
+                    Check("snapshot magic-box stack consumed", snapshot.MainItems.Find(x => x.SlotIndex == requestMagicBoxSlot)?.ItemTemplateId != MagicBoxItemTemplateId);
+                    Check("snapshot material-tab magic hammer consumed", snapshot.MainItems.Find(x => x.SlotIndex == requestMaterialSlot) == null);
+                    Check($"wrong-tab magic hammer still ignored", snapshot.MainItems.Find(x => x.SlotIndex == WrongMagicHammerSlot)?.CountOrInstanceValue == 1);
+                    Check($"snapshot instant teleport potion count", snapshot.MainItems.Find(x => x.ItemTemplateId == InstantTeleportPotionItemTemplateId)?.CountOrInstanceValue == MagicBoxBatchCount * 2);
+                    var seriaLuckItem = snapshot.MainItems.Find(x => x.ItemTemplateId == SeriaLuckItemTemplateId);
+                    Check($"snapshot Seria luck count", seriaLuckItem?.CountOrInstanceValue == MagicBoxBatchCount);
+                    if (seriaLuckItem != null)
+                        seriaLuckSlot = seriaLuckItem.SlotIndex;
+                }
+
+                if (seriaLuckRequest != null && seriaLuckSlot >= 0)
+                {
+                    var staleSeriaLuckSlot = seriaLuckSlot;
+                    RelocateItemSlot(tempDb, staleSeriaLuckSlot, RelocatedSeriaLuckSlot);
+                    seriaLuckSlot = RelocatedSeriaLuckSlot;
+
+                    BoosterUseResult seriaLuckResult = null;
+                    using (store.BeginScope(CharacterId, AccountId))
+                    {
+                        Check("open Seria luck batch without material succeeds after stale source slot",
+                            store.TryUseBoosterItem(
+                                staleSeriaLuckSlot,
+                                Array.Empty<int>(),
+                                seriaLuckRequest.UseCount,
+                                seriaLuckRequest.ItemTemplateId,
+                                seriaLuckRequest.MaterialSlotIndex,
+                                seriaLuckRequest.MaterialItemTemplateId,
+                                out seriaLuckResult));
+                    }
+
+                    if (seriaLuckResult != null)
+                    {
+                        Check("Seria luck grants at least one reward", seriaLuckResult.Rewards.Count > 0);
+                        Check($"Seria luck stale source request uses actual slot {RelocatedSeriaLuckSlot}", seriaLuckResult.SourceSlotIndex == RelocatedSeriaLuckSlot);
+                    }
+
+                    using (store.BeginScope(CharacterId, AccountId))
+                    {
+                        var snapshot = store.LoadCharacterItemListSnapshot();
+                        Check($"snapshot Seria luck remaining count", snapshot.MainItems.Find(x => x.SlotIndex == seriaLuckSlot)?.CountOrInstanceValue == MagicBoxBatchCount - SeriaLuckBatchCount);
+                    }
+
+                    if (seriaLuckSingleRequest != null)
+                    {
+                        BoosterUseResult seriaLuckSingleResult = null;
+                        using (store.BeginScope(CharacterId, AccountId))
+                        {
+                            Check("open Seria luck single without material succeeds",
+                                store.TryUseBoosterItem(
+                                    seriaLuckSlot,
+                                    Array.Empty<int>(),
+                                    seriaLuckSingleRequest.UseCount,
+                                    seriaLuckSingleRequest.ItemTemplateId,
+                                    seriaLuckSingleRequest.MaterialSlotIndex,
+                                    seriaLuckSingleRequest.MaterialItemTemplateId,
+                                    out seriaLuckSingleResult));
+                        }
+
+                        if (seriaLuckSingleResult != null)
+                        {
+                            Check("Seria luck single grants at least one reward", seriaLuckSingleResult.Rewards.Count > 0);
+                        }
+
+                        using (store.BeginScope(CharacterId, AccountId))
+                        {
+                            var snapshot = store.LoadCharacterItemListSnapshot();
+                            Check($"snapshot Seria luck remaining after single count", snapshot.MainItems.Find(x => x.SlotIndex == seriaLuckSlot)?.CountOrInstanceValue == MagicBoxBatchCount - SeriaLuckBatchCount - 1);
+                        }
+                    }
+                }
+
+                using (store.BeginScope(CharacterId, AccountId))
+                {
+                    Check("magic-box batch rejects insufficient hammer material",
+                        !store.TryUseBoosterItem(
+                            requestMagicBoxSlot,
+                            Array.Empty<int>(),
+                            magicBoxRequest.UseCount,
+                            magicBoxRequest.ItemTemplateId,
+                            requestMaterialSlot,
+                            magicBoxRequest.MaterialItemTemplateId,
+                            out _));
+                    Check("magic-box batch rejects wrong-tab hammer without material slot",
+                        !store.TryUseBoosterItem(
+                            requestMagicBoxSlot,
+                            Array.Empty<int>(),
+                            magicBoxRequest.UseCount,
+                            magicBoxRequest.ItemTemplateId,
+                            out _));
+                }
+
+                using (store.BeginScope(CharacterId, AccountId))
+                {
+                    var snapshot = store.LoadCharacterItemListSnapshot();
+                    Check($"wrong-tab magic hammer remains after insufficient hammer", snapshot.MainItems.Find(x => x.SlotIndex == WrongMagicHammerSlot)?.CountOrInstanceValue == 1);
+                }
+            }
+
+            using (store.BeginScope(CharacterId, AccountId))
+            {
+                Check("cera-shop magic-hammer bundle purchase succeeds",
+                    store.TryBuyCeraShopItem(SampleMagicHammerBundleProductId, 1, out var ceraShopBundleResult));
+                if (ceraShopBundleResult != null)
+                {
+                    var ceraAckBody = CeraShopPurchaseAckBuilder.BuildSuccess(SampleMagicHammerBundleProductId, ceraShopBundleResult);
+                    Check("cera-shop purchase result has magic-hammer reward", ceraShopBundleResult.ItemTemplateId == MagicHammerItemTemplateId);
+                    Check("cera-shop purchase result has chicken-box extra reward", ceraShopBundleResult.ExtraResults.Exists(x => x.ItemTemplateId == MagicBoxItemTemplateId));
+                    Check("cera-shop purchase ACK keeps mall extra item count zero", ceraAckBody.Length == 24 && BitConverter.ToUInt16(ceraAckBody, 22) == 0);
+                }
+            }
+
             using (var connection = new SqliteConnection(SqliteDatabaseBootstrap.BuildConnectionString(tempDb)))
             {
                 connection.Open();
@@ -355,6 +611,10 @@ namespace DfoServer.SelfTests
 INSERT OR IGNORE INTO accounts (account_id, m_id, password_hash)
 VALUES (@accountId, 'selectable-package-selftest', '');
 
+UPDATE accounts
+SET cera = 100000000
+WHERE account_id = @accountId;
+
 INSERT OR IGNORE INTO characters (character_id, account_id, name)
 VALUES (@characterId, @accountId, 'selectable-package-selftest');
 
@@ -375,7 +635,11 @@ VALUES
                     ('character', @characterId, @characterId, 0, @crossJobAuraPackageSlot, @auraTemplateId, 'special',
                      1, 1, 0, 0, 0, @expireTime, 0, 0, '{}'),
                     ('character', @characterId, @characterId, 0, @specialBoosterPackageSlot, @specialBoosterTemplateId, 'special',
-                     1, 1, 0, 0, 0, @expireTime, 0, 0, '{}');";
+                      1, 1, 0, 0, 0, @expireTime, 0, 0, '{}'),
+                    ('character', @characterId, @characterId, 0, @magicHammerBundleSlot, @magicHammerBundleTemplateId, 'stackable',
+                     1, 1, 0, 0, 0, 0, 0, 0, '{}'),
+                    ('character', @characterId, @characterId, 0, @wrongMagicHammerSlot, @magicHammerTemplateId, 'stackable',
+                     1, 1, 0, 0, 0, 0, 0, 0, '{}');";
                     command.Parameters.AddWithValue("@accountId", AccountId);
                     command.Parameters.AddWithValue("@characterId", CharacterId);
                     command.Parameters.AddWithValue("@packageSlot", PackageSlot);
@@ -383,10 +647,14 @@ VALUES
                     command.Parameters.AddWithValue("@avatarPackageSlot", AvatarPackageSlot);
                     command.Parameters.AddWithValue("@crossJobAuraPackageSlot", CrossJobAuraPackageSlot);
                     command.Parameters.AddWithValue("@specialBoosterPackageSlot", SpecialBoosterPackageSlot);
+                    command.Parameters.AddWithValue("@magicHammerBundleSlot", MagicHammerBundleSlot);
+                    command.Parameters.AddWithValue("@wrongMagicHammerSlot", WrongMagicHammerSlot);
                     command.Parameters.AddWithValue("@templateId", SampleTitleSelectablePackageId);
                     command.Parameters.AddWithValue("@avatarTemplateId", SampleAvatarSelectablePackageId);
                     command.Parameters.AddWithValue("@auraTemplateId", SampleAuraSelectablePackageId);
                     command.Parameters.AddWithValue("@specialBoosterTemplateId", SampleSpecialKindBoosterPackageId);
+                    command.Parameters.AddWithValue("@magicHammerBundleTemplateId", SampleMagicHammerBundleId);
+                    command.Parameters.AddWithValue("@magicHammerTemplateId", MagicHammerItemTemplateId);
                     command.Parameters.AddWithValue("@expireTime", ToUnixLocal("2027-08-13 06:00:00"));
                     command.ExecuteNonQuery();
                 }
@@ -436,6 +704,25 @@ WHERE character_id=@characterId AND list_type=0 AND slot_index=@slotIndex;";
                 command.Parameters.AddWithValue("@slotIndex", slotIndex);
                 var value = command.ExecuteScalar();
                 return value == null || value == DBNull.Value ? -1 : Convert.ToInt32(value, CultureInfo.InvariantCulture);
+            }
+        }
+
+        private static void RelocateItemSlot(string databasePath, short fromSlot, short toSlot)
+        {
+            using (var connection = new SqliteConnection(SqliteDatabaseBootstrap.BuildConnectionString(databasePath)))
+            {
+                connection.Open();
+                using (var command = connection.CreateCommand())
+                {
+                    command.CommandText = @"
+UPDATE character_items
+SET slot_index=@toSlot
+WHERE character_id=@characterId AND list_type=0 AND slot_index=@fromSlot;";
+                    command.Parameters.AddWithValue("@characterId", CharacterId);
+                    command.Parameters.AddWithValue("@fromSlot", fromSlot);
+                    command.Parameters.AddWithValue("@toSlot", toSlot);
+                    command.ExecuteNonQuery();
+                }
             }
         }
 
