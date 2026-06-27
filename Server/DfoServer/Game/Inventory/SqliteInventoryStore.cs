@@ -346,19 +346,15 @@ ORDER BY slot_index;";
                     if (itemId <= 0)
                         return false;
 
-                    if (!CurrencyService.SubCubeFragment(connection, transaction, _context.AccountId, itemId, deleteCount))
+                    var cubes = CurrencyService.LoadCubeFragments(connection, transaction, _context.AccountId);
+                    var currentCount = 0;
+                    foreach (var (id, slot, count) in cubes)
+                        if (id == itemId) { currentCount = count; break; }
+                    if (currentCount < deleteCount)
                         return false;
 
-                    var cubeFragments = CurrencyService.LoadCubeFragments(connection, transaction, _context.AccountId);
-                    var remainingCount = 0;
-                    foreach (var (id, slot, count) in cubeFragments)
-                    {
-                        if (slot == slotIndex)
-                        {
-                            remainingCount = count;
-                            break;
-                        }
-                    }
+                    CurrencyService.AddCubeFragment(connection, transaction, _context.AccountId, itemId, -deleteCount);
+                    var remainingCount = currentCount - deleteCount;
 
                     var cubeWallet = _db.LoadWallet(connection, transaction, _context.CharacterId);
                     transaction.Commit();

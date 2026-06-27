@@ -92,30 +92,7 @@ namespace DfoServer.Game.Inventory
             }
         }
 
-        /// <summary>
-        /// 从账号扣除指定晶块。
-        /// </summary>
-        public static bool SubCubeFragment(SqliteConnection conn, SqliteTransaction tx, int accountId, int itemId, int count)
-        {
-            if (!CubeFragmentMap.TryGetValue(itemId, out var entry))
-                return false;
 
-            using (var cmd = conn.CreateCommand())
-            {
-                cmd.Transaction = tx;
-                cmd.CommandText = $"SELECT {entry.ColumnName} FROM accounts WHERE account_id = @aid;";
-                cmd.Parameters.AddWithValue("@aid", accountId);
-                var result = cmd.ExecuteScalar();
-                var currentCount = result != null && result != DBNull.Value ? Convert.ToInt32(result) : 0;
-                if (currentCount < count)
-                    return false;
-
-                cmd.CommandText = $"UPDATE accounts SET {entry.ColumnName} = {entry.ColumnName} - @count WHERE account_id = @aid;";
-                cmd.Parameters.AddWithValue("@count", count);
-                cmd.ExecuteNonQuery();
-                return true;
-            }
-        }
 
         /// <summary>
         /// 启动时迁移: 把 character_items slot 354-359 的旧晶块数量归集到 accounts 表, 然后删除旧行。
