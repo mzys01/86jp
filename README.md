@@ -65,7 +65,7 @@ start-server.bat      # Windows
 
 ## 构建
 
-需要 .NET 10 SDK（提供 `dotnet` CLI）。NuGet 依赖自动下载，无需额外配置。
+需要 [.NET 10 SDK](https://dotnet.microsoft.com/zh-cn/download/dotnet/10.0)（提供 `dotnet` CLI）。NuGet 依赖自动下载，无需额外配置。
 
 ```bash
 dotnet build Server/DfoServer.sln -c Debug
