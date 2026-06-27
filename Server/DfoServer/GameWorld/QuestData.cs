@@ -528,8 +528,8 @@ namespace DfoServer.GameWorld
 
             if (typeCode == 1)
             {
-                if (typeStr == "[hunt monster]" || typeStr == "[hunt enemy]")
-                    return ComputeTriggerFromIntData(qst.IntData, 6);
+                if (typeStr == "[hunt monster]")
+                    return ComputeTriggerFromIntData(qst.IntData, 1);
 
                 if (qst.SubType == 6)
                 {
@@ -548,7 +548,7 @@ namespace DfoServer.GameWorld
             if (values.Count == 0)
                 return 1;
 
-            int stride = (typeCode == 6) ? 4 : 3;
+            int stride = (typeCode == 6) ? 5 : 4;
             int countOffset = stride - 1;
 
             var channels = new List<int>();
