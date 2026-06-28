@@ -87,12 +87,18 @@ namespace DfoServer.Game.SelectCharacter
             {
                 using (var assetScope = _assetService.OpenScope(characterId, accountId))
                 {
-                    initSnapshot.LuckyStar = _assetService.LoadWallet(assetScope).LuckyStar;
+                    var wallet = _assetService.LoadWallet(assetScope);
+                    ApplyWallet(initSnapshot, wallet);
                 }
             }
             else
             {
-                initSnapshot.LuckyStar = CurrencyService.LoadLuckyStar(_connectionString, accountId);
+                using (var conn = new SqliteConnection(_connectionString))
+                {
+                    conn.Open();
+                    var wallet = CurrencyService.LoadWallet(conn, null, characterId);
+                    ApplyWallet(initSnapshot, wallet);
+                }
             }
 
             var acctSettings = _accountSettingsRepository.Load(accountId);
@@ -204,6 +210,17 @@ namespace DfoServer.Game.SelectCharacter
                 Type = 0x0312,
                 OccurrenceIndex = 0,
             });
+        }
+
+        private static void ApplyWallet(SelectCharacterInitializationSnapshot initSnapshot, WalletSnapshot wallet)
+        {
+            if (initSnapshot == null || wallet == null)
+                return;
+
+            initSnapshot.AckCera = wallet.Cera;
+            initSnapshot.AckTokenCera = wallet.TokenCera;
+            initSnapshot.AckHappyTokenCera = wallet.HappyTokenCera;
+            initSnapshot.LuckyStar = wallet.LuckyStar;
         }
 
         public CharacterItemListSnapshot LoadItemListSnapshot(int characterId, int accountId)
