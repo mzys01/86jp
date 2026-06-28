@@ -152,9 +152,38 @@ namespace DfoServer.GameWorld
 
         private static void ParseDungeons(string sectionName, string content, WorldMapArea area)
         {
+            var pendingInProgressRows = false;
             foreach (var line in EnumerateSectionLines(sectionName, content))
             {
                 var tokens = Tokenize(line);
+                if (tokens.Count == 0)
+                    continue;
+
+                // TimeGate.wdm 这类文件会把 [in progress] 独立成一行，下一行按“任务ID 副本ID”成对出现。
+                if (IsInProgressMarker(tokens, 0, out var markerTokenCount) && markerTokenCount == tokens.Count)
+                {
+                    pendingInProgressRows = true;
+                    continue;
+                }
+
+                if (IsInProgressMarker(tokens, 0, out markerTokenCount))
+                {
+                    tokens.RemoveRange(0, markerTokenCount);
+                    if (tokens.Count == 0)
+                        continue;
+
+                    ParseInProgressDungeonPairs(tokens, area);
+                    pendingInProgressRows = false;
+                    continue;
+                }
+
+                if (pendingInProgressRows)
+                {
+                    ParseInProgressDungeonPairs(tokens, area);
+                    pendingInProgressRows = false;
+                    continue;
+                }
+
                 for (var i = 0; i < tokens.Count;)
                 {
                     if (!int.TryParse(tokens[i], out var dungeonId))
@@ -165,18 +194,10 @@ namespace DfoServer.GameWorld
 
                     i++;
                     var inProgressOnly = false;
-                    if (i + 1 < tokens.Count
-                        && tokens[i].Equals("[in", StringComparison.OrdinalIgnoreCase)
-                        && tokens[i + 1].Equals("progress]", StringComparison.OrdinalIgnoreCase))
+                    if (IsInProgressMarker(tokens, i, out markerTokenCount))
                     {
                         inProgressOnly = true;
-                        i += 2;
-                    }
-                    else if (i < tokens.Count
-                        && tokens[i].Equals("[in progress]", StringComparison.OrdinalIgnoreCase))
-                    {
-                        inProgressOnly = true;
-                        i++;
+                        i += markerTokenCount;
                     }
 
                     if (i >= tokens.Count || !int.TryParse(tokens[i], out var questId))
@@ -192,6 +213,59 @@ namespace DfoServer.GameWorld
                     });
                 }
             }
+        }
+
+        private static void ParseInProgressDungeonPairs(List<string> tokens, WorldMapArea area)
+        {
+            for (var i = 0; i + 1 < tokens.Count;)
+            {
+                if (!int.TryParse(tokens[i], out var questId))
+                {
+                    i++;
+                    continue;
+                }
+
+                if (!int.TryParse(tokens[i + 1], out var dungeonId))
+                {
+                    i++;
+                    continue;
+                }
+
+                if (dungeonId > 0)
+                {
+                    area.Dungeons.Add(new WorldMapDungeonEntry
+                    {
+                        DungeonId = dungeonId,
+                        QuestId = questId,
+                        InProgressOnly = true,
+                    });
+                }
+
+                i += 2;
+            }
+        }
+
+        private static bool IsInProgressMarker(List<string> tokens, int index, out int tokenCount)
+        {
+            tokenCount = 0;
+            if (tokens == null || index < 0 || index >= tokens.Count)
+                return false;
+
+            if (tokens[index].Equals("[in progress]", StringComparison.OrdinalIgnoreCase))
+            {
+                tokenCount = 1;
+                return true;
+            }
+
+            if (index + 1 < tokens.Count
+                && tokens[index].Equals("[in", StringComparison.OrdinalIgnoreCase)
+                && tokens[index + 1].Equals("progress]", StringComparison.OrdinalIgnoreCase))
+            {
+                tokenCount = 2;
+                return true;
+            }
+
+            return false;
         }
 
         private static void ParseTicketPairs(string sectionName, string content, List<HellTicketItem> result)
