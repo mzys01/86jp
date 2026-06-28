@@ -122,6 +122,8 @@ namespace DfoServer.Game.SelectCharacter
         public int AckAccountRegTime { get; set; }
         public List<AckPremiumEntrySnapshot> AckPremiums { get; } = new List<AckPremiumEntrySnapshot>();
         public int AckCera { get; set; }
+        public int AckTokenCera { get; set; }
+        public int AckHappyTokenCera { get; set; }
         public AckQuestShopEntrySnapshot[] AckQuestShopEntries { get; set; }
         public byte[] AckQuestDisplayIds { get; set; }
         public byte AckCharSlotIndex { get; set; }

@@ -121,13 +121,13 @@ namespace DfoServer.Network.Builders
             var c = snapshot.CharacterRecord;
             if (c == null) { body = null; return false; }
 
-            int cera = (int)c.Coin;
+            var init = snapshot.InitializationSnapshot;
 
             var w = new GamePacketWriter();
-            w.WriteByte(1);           
-            w.WriteInt32(cera);       
-            w.WriteInt32(0);          
-            w.WriteInt32(0);          
+            w.WriteByte(1);
+            w.WriteInt32(init.AckCera);
+            w.WriteInt32(init.AckTokenCera);
+            w.WriteInt32(init.AckHappyTokenCera);
             body = w.ToArray();
             return true;
         }
