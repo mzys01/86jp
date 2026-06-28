@@ -43,6 +43,8 @@ namespace PvfLib
         public int[] BossMap { get; set; }                  // 多个参数
         public int[] HitCount { get; set; }
         public int SealDoorAppearRate { get; set; } = -1;
+        public int SealDoorMapIndex { get; set; } = -1;
+        public int[] SealDoorPos { get; set; }
         public int[] QuestConnection { get; set; }          // [flag, questId, value]
         public RidableObjectScript RidableScript { get; set; }
         public List<ClearConditionEntry> ClearConditions { get; set; } = new List<ClearConditionEntry>();
@@ -94,7 +96,7 @@ namespace PvfLib
         private static readonly HashSet<string> MazeTags = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
             "size", "greed", "map specification", "start map", "boss map",
-            "hit count", "seal door appear rate", "quest connection",
+            "hit count", "seal door appear rate", "seal door map index", "seal door pos", "quest connection",
             "randomized object creation", "clear condition"
         };
 
@@ -274,6 +276,12 @@ namespace PvfLib
                         break;
                     case "seal door appear rate":
                         maze.SealDoorAppearRate = ParseInt(data);
+                        break;
+                    case "seal door map index":
+                        maze.SealDoorMapIndex = ParseInt(data);
+                        break;
+                    case "seal door pos":
+                        maze.SealDoorPos = ParseIntArray(data);
                         break;
                     case "quest connection":
                         maze.QuestConnection = ParseIntArray(data);

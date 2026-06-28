@@ -391,6 +391,22 @@ namespace DfoServer.GameWorld
             if (maze?.MapSpecifications == null)
                 return new HellPartyRoomInfo();
 
+            if (maze.SealDoorMapIndex > 0
+                && maze.SealDoorPos != null
+                && maze.SealDoorPos.Length >= 2)
+            {
+                var sealX = maze.SealDoorPos[0];
+                var sealY = maze.SealDoorPos[1];
+                var normalMapId = FindNormalMapIdForRoom(maze, sealX, sealY);
+                if (normalMapId > 0)
+                {
+                    FileLogger.Log($"[Dungeon] HellParty seal door: dungeon={dungeonId} room=({sealX},{sealY}) hellMap={maze.SealDoorMapIndex} normalMap={normalMapId}");
+                    return BuildHellPartyRoomInfo(maze.SealDoorMapIndex, normalMapId, sealX, sealY, dungeonId, difficulty);
+                }
+
+                FileLogger.Log($"[Dungeon] HellParty seal door ignored: dungeon={dungeonId} room=({sealX},{sealY}) hellMap={maze.SealDoorMapIndex} normalMap missing");
+            }
+
             foreach (var spec in maze.MapSpecifications)
             {
                 var hellMapId = FindHellMapIdForRoom(dungeonId, spec.X, spec.Y, mazeIndex);
@@ -401,6 +417,18 @@ namespace DfoServer.GameWorld
             }
 
             return new HellPartyRoomInfo();
+        }
+
+        private static int FindNormalMapIdForRoom(MazeInfo maze, int x, int y)
+        {
+            if (maze?.MapSpecifications == null)
+                return -1;
+
+            foreach (var spec in maze.MapSpecifications)
+                if (spec.X == x && spec.Y == y && spec.Index > 0)
+                    return spec.Index;
+
+            return -1;
         }
 
         private static HellPartyRoomInfo BuildHellPartyRoomInfo(int mapId, int normalMapId, int x, int y, int dungeonId, byte difficulty)
