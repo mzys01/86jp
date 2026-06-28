@@ -3,6 +3,14 @@ using System.Collections.Generic;
 
 namespace DfoServer.Game.Dungeon
 {
+    public enum HellPartyPhase
+    {
+        None = 0,
+        WaitingStart = 1,
+        Started = 2,
+        Complete = 3,
+    }
+
     public struct RoomKey : IEquatable<RoomKey>
     {
         public int X;
@@ -41,6 +49,15 @@ namespace DfoServer.Game.Dungeon
         public HashSet<ushort> KilledSeqIds;
         public uint Seed;
         public DnfLcg Lcg;
+        public bool IsHellPartyRoom;
+        public bool HellPartyVeryDifficult;
+        public int HellPartyPillarObjectCode;
+        public int HellPartySpawnX;
+        public int HellPartySpawnY;
+        public List<GameWorld.Dungeon.HellPartyWaveInfo> HellPartyWaves;
+        public HellPartyPhase HellPartyPhase;
+        // 深渊小队剩余成员数。key 为 group index，value 为该 group 尚未收到死亡包的成员数。
+        public Dictionary<int, int> HellPartyGroupRemaining;
 
         public bool IsCleared => KilledSeqIds.Count >= MonsterCount && MonsterCount > 0;
     }

@@ -30,6 +30,8 @@ namespace DfoServer.Game.Inventory
 
         public int Grade { get; set; }
 
+        public int MinimumLevel { get; set; }
+
         public bool IsStackable => string.Equals(ItemKind, "stackable", StringComparison.Ordinal);
 
         public bool IsMaterialExchange => NeedMaterialId > 0 && NeedMaterialCount > 0;
@@ -113,6 +115,7 @@ namespace DfoServer.Game.Inventory
                     Durability = (ushort)durability,
                     StackLimit = 1,
                     Grade = equipment.Grade,
+                    MinimumLevel = equipment.MinimumLevel,
                 };
             }
 

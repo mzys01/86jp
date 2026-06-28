@@ -2,6 +2,7 @@ using DfoServer.Game.CharacterData;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Dungeon;
 using DfoServer.Game.Quests;
+using DfoServer.GameWorld;
 using DfoServer.Infrastructure;
 using DfoServer.Network.Builders;
 using System;
@@ -13,6 +14,8 @@ namespace DfoServer.Network.Handlers.Dungeon
 {
     internal sealed class DungeonEntryHandler
     {
+        private const int GorgeousChallengeGoldCost = 190000;
+
         private readonly DungeonSharedServices _svc;
         private readonly DungeonMapHandler _mapHandler;
 
@@ -82,6 +85,14 @@ namespace DfoServer.Network.Handlers.Dungeon
             session.Player.CurDungeonDifficulty = req.Difficulty;
             session.Player.CurDungeonFlag1 = req.Flag1;
             session.Player.CurDungeonFlag2 = req.Flag2;
+            session.Player.CurDungeonHellMode = req.HellPartyRequestFlag != 0 && DungeonData.IsHellDungeon(req.DungeonId);
+            session.Player.CurDungeonHellPartyMode = 0;
+            session.Player.CurDungeonVeryDifficultHell = false;
+            session.Player.CurDungeonHellGorgeousChallenge = false;
+            session.Player.CurDungeonHellMapId = -1;
+            session.Player.CurDungeonHellMapX = 0xFF;
+            session.Player.CurDungeonHellMapY = 0xFF;
+            session.Player.CurDungeonHellRoomInfo = null;
             session.Player.CurMonsterCnt = 0;
             session.Player.CurLayeredMapIndex = -1;
             session.Player.CurMoveMapU15 = 0;
@@ -95,6 +106,11 @@ namespace DfoServer.Network.Handlers.Dungeon
             session.Player.CurDungeonRidableObjects.Clear();
             session.Player.CurBossKilled = false;
             session.Player.CurBossCode = 0;
+
+            WarmUpDropConfigs(session.Player.CurDungeonHellMode);
+
+            if (req.HellPartyRequestFlag != 0)
+                FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] SELECT_DUNGEON: manual hell requested dungeon={req.DungeonId} enabled={session.Player.CurDungeonHellMode}");
 
             HashSet<int> activeQuestIds = null;
             try
@@ -112,6 +128,9 @@ namespace DfoServer.Network.Handlers.Dungeon
             session.Player.CurBossMapPos = bossPos;
             session.Player.CurDungeonRidableObjects = DungeonMapHandler.InitRidableObjects(selection.Maze);
             session.Player.CurClearCondition = new ClearConditionState(selection.Maze.ClearConditions);
+            if (session.Player.CurDungeonHellMode)
+                await PrepareManualHellPartyAsync(session, req, selection.Maze, selection.Index);
+
             if (session.Player.CurClearCondition.HasConditions)
                 FileLogger.Log($"[DungeonHandler] ClearCondition init: {selection.Maze.ClearConditions.Count} conditions, totalRequired={session.Player.CurClearCondition.TotalRequired}");
             else
@@ -121,12 +140,170 @@ namespace DfoServer.Network.Handlers.Dungeon
                 difficulty: req.Difficulty,
                 modeFlag: (byte)selection.Index,
                 bossX: bossPos != null ? (byte)bossPos[0] : (byte)0,
-                bossY: bossPos != null ? (byte)bossPos[1] : (byte)0)));
+                bossY: bossPos != null ? (byte)bossPos[1] : (byte)0,
+                hellPartyRoomX: session.Player.CurDungeonHellMode ? session.Player.CurDungeonHellMapX : (byte)0xFF,
+                hellPartyRoomY: session.Player.CurDungeonHellMode ? session.Player.CurDungeonHellMapY : (byte)0xFF,
+                dungeonMode: 0,
+                hellPartyEnabled: session.Player.CurDungeonHellMode ? (ushort)1 : (ushort)0,
+                value2: session.Player.CurDungeonHellMode ? (byte)0x0B : (byte)0)));
 
             await _mapHandler.SendStartMapAsync(session, 0xFF, 0xFF, overrideMapId: -1);
 
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0117, BitConverter.GetBytes(session.Player.CharacterId)));
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x019F, new byte[] { 0x00, 0x00 }));
+        }
+
+        internal Task HandleGorgeousChallengeToggle(EnhancedClientSession session, GamePacketHeader header, byte[] body)
+        {
+            if (session?.Player == null)
+                return Task.CompletedTask;
+
+            var enabled = ParseGorgeousChallengeEnabled(body);
+            session.Player.HellPartyGorgeousChallengeEnabled = enabled;
+            FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] GORGEOUS_CHALLENGE_TOGGLE: enabled={enabled} cmd=0x{header.cmd:X2} type=0x{header.type:X4} bodyLen={body?.Length ?? 0} body={(body != null ? BitConverter.ToString(body) : string.Empty)}");
+            return Task.CompletedTask;
+        }
+
+        private static byte ResolveHellPartyMode(byte requestFlag)
+        {
+            if (requestFlag == 1 || requestFlag == 2)
+                return requestFlag;
+
+            return HellPartyData.PickManualHellPartyMode(DungeonSharedServices.SeedGen);
+        }
+
+        private static bool ParseGorgeousChallengeEnabled(byte[] body)
+        {
+            if (body == null || body.Length <= 13)
+                return false;
+
+            // 86 客户端 0x03B6：body[12] 固定为 7，body[13] 为 0 表示勾选，1 表示取消勾选。
+            return body[13] == 0;
+        }
+
+        private async Task PrepareManualHellPartyAsync(
+            EnhancedClientSession session,
+            Network.Parsers.Dungeon.SelectDungeonRequest req,
+            PvfLib.MazeInfo maze,
+            int mazeIndex)
+        {
+            var area = WorldMap.GetAreaByDungeonId(req.DungeonId);
+            var dungeonMinLevel = DungeonData.GetDungeonMinimumRequiredLevel(req.DungeonId);
+            var hellPartyMode = ResolveHellPartyMode(req.HellPartyDifficultyFlag);
+            DungeonData.HellPartyRoomInfo hellRoom = null;
+            var gorgeousGoldBefore = 0;
+            var gorgeousGoldAfter = -1;
+            var gorgeousCanApply = false;
+
+            if (session.Player.HellPartyGorgeousChallengeEnabled)
+            {
+                var veryHardRoom = DungeonData.FindHellMapRoom(req.DungeonId, maze, mazeIndex, 1);
+                gorgeousGoldBefore = _svc.ReadGold(
+                    session.Player.CharacterId,
+                    session.Account?.AccountId ?? 1);
+                if (veryHardRoom.Found && gorgeousGoldBefore >= GorgeousChallengeGoldCost)
+                {
+                    hellPartyMode = 1;
+                    hellRoom = veryHardRoom;
+                    gorgeousCanApply = true;
+                }
+                else
+                {
+                    hellPartyMode = HellPartyData.PickManualHellPartyMode(DungeonSharedServices.SeedGen);
+                    if (!veryHardRoom.Found)
+                        FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] SELECT_DUNGEON: gorgeous challenge ignored, very hard hell room missing dungeon={req.DungeonId}");
+                    else
+                        FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] SELECT_DUNGEON: gorgeous challenge insufficient gold need={GorgeousChallengeGoldCost} have={gorgeousGoldBefore}, use weighted hell difficulty mode={hellPartyMode}");
+                }
+            }
+
+            if (hellRoom == null || !hellRoom.Found)
+                hellRoom = DungeonData.FindHellMapRoom(req.DungeonId, maze, mazeIndex, hellPartyMode);
+
+            if (hellRoom == null || !hellRoom.Found)
+            {
+                DisableCurrentHellParty(session);
+                FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] SELECT_DUNGEON: hell requested but no hell map found dungeon={req.DungeonId}");
+                return;
+            }
+
+            if (!_svc.TryConsumeHellPartyTicket(session, area, dungeonMinLevel, out var ticketResult))
+            {
+                DisableCurrentHellParty(session);
+                FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] SELECT_DUNGEON: hell ticket check failed dungeon={req.DungeonId} area={area?.AreaId ?? -1} minLevel={dungeonMinLevel} reason={ticketResult.Reason}");
+                return;
+            }
+
+            var gorgeousApplied = false;
+            if (gorgeousCanApply)
+            {
+                if (_svc.TrySpendGold(session.Player.CharacterId, session.Account?.AccountId ?? 1, GorgeousChallengeGoldCost, out gorgeousGoldBefore, out gorgeousGoldAfter))
+                {
+                    gorgeousApplied = true;
+                    session.Player.CurDungeonHellGorgeousChallenge = true;
+                }
+                else
+                {
+                    FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] SELECT_DUNGEON: gorgeous challenge spend failed after ticket, keep selected hell mode need={GorgeousChallengeGoldCost} have={gorgeousGoldBefore}");
+                }
+            }
+
+            session.Player.CurDungeonHellPartyMode = hellPartyMode;
+            session.Player.CurDungeonVeryDifficultHell = session.Player.CurDungeonHellPartyMode == 1;
+            session.Player.CurDungeonHellMapId = hellRoom.MapId;
+            session.Player.CurDungeonHellMapX = (byte)hellRoom.X;
+            session.Player.CurDungeonHellMapY = (byte)hellRoom.Y;
+            session.Player.CurDungeonHellRoomInfo = hellRoom;
+
+            FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] SELECT_DUNGEON: hell room=({hellRoom.X},{hellRoom.Y}) map={hellRoom.MapId} normalMap={hellRoom.NormalMapId} waves={hellRoom.Waves.Count} requestFlag={req.HellPartyRequestFlag} difficultyFlag={req.HellPartyDifficultyFlag} mode={session.Player.CurDungeonHellPartyMode} veryDifficult={session.Player.CurDungeonVeryDifficultHell} area={area?.AreaId ?? -1} minLevel={dungeonMinLevel} ticket={(ticketResult.IsFreePass ? "freepass" : "normal")} updates={ticketResult.Updates.Count}");
+
+            await SendHellPartyTicketUpdates(session, ticketResult);
+            if (gorgeousApplied && gorgeousGoldAfter >= 0)
+            {
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000E,
+                    TeleportPacketBuilder.BuildItemListUpdate(0, 0, gorgeousGoldAfter)));
+                FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] SELECT_DUNGEON: gorgeous challenge applied cost={GorgeousChallengeGoldCost} gold={gorgeousGoldBefore}->{gorgeousGoldAfter}");
+            }
+        }
+
+        private static async Task SendHellPartyTicketUpdates(
+            EnhancedClientSession session,
+            HellPartyTicketConsumeResult ticketResult)
+        {
+            foreach (var update in ticketResult.Updates)
+            {
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000E,
+                    TeleportPacketBuilder.BuildItemListUpdate(update.SlotIndex, update.ItemId, update.RemainingCount)));
+                FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] SELECT_DUNGEON: hell ticket consumed item={update.ItemId} count={update.Count} slot={update.SlotIndex} remain={update.RemainingCount}");
+            }
+        }
+
+        private static void DisableCurrentHellParty(EnhancedClientSession session)
+        {
+            session.Player.CurDungeonHellMode = false;
+            session.Player.CurDungeonHellPartyMode = 0;
+            session.Player.CurDungeonVeryDifficultHell = false;
+            session.Player.CurDungeonHellGorgeousChallenge = false;
+            session.Player.CurDungeonHellMapId = -1;
+            session.Player.CurDungeonHellMapX = 0xFF;
+            session.Player.CurDungeonHellMapY = 0xFF;
+            session.Player.CurDungeonHellRoomInfo = null;
+        }
+
+        private static void WarmUpDropConfigs(bool includeHellParty)
+        {
+            _ = Task.Run(() =>
+            {
+                try
+                {
+                    if (includeHellParty)
+                        HellMonsterDropConfig.WarmUp();
+                }
+                catch (Exception ex)
+                {
+                    FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] DROP_CONFIG_WARMUP ERROR: {ex.Message}");
+                }
+            });
         }
     }
 }

@@ -34,8 +34,14 @@ namespace DfoServer.Network.Handlers
         public Task Handle_ENUM_CMDPACKET_SELECT_DUNGEON(EnhancedClientSession session, GamePacketHeader header, byte[] body)
             => _entry.HandleSelectDungeon(session, header, body);
 
+        public Task Handle_ENUM_CMDPACKET_GORGEOUS_CHALLENGE_TOGGLE(EnhancedClientSession session, GamePacketHeader header, byte[] body)
+            => _entry.HandleGorgeousChallengeToggle(session, header, body);
+
         public Task Handle_ENUM_CMDPACKET_MOVE_MAP(EnhancedClientSession session, GamePacketHeader header, byte[] body)
             => _map.HandleMoveMap(session, header, body);
+
+        public Task Handle_ENUM_CMDPACKET_HELLPARTY_START(EnhancedClientSession session, GamePacketHeader header, byte[] body)
+            => _map.HandleHellPartyStart(session, header, body);
 
         public Task Handle_ENUM_CMDPACKET_DIE_MONSTER(EnhancedClientSession session, GamePacketHeader header, byte[] body)
             => _combat.HandleDieMonster(session, header, body);

@@ -15,11 +15,11 @@ namespace DfoServer.Network.Builders
             byte modeFlag = 0,
             byte bossX = 0,
             byte bossY = 0,
-            byte hellPartyFlag0 = 0xFF,
-            byte hellPartyFlag1 = 0xFF,
+            byte hellPartyRoomX = 0xFF,
+            byte hellPartyRoomY = 0xFF,
             byte dungeonMode = 0,
             IReadOnlyList<IReadOnlyList<(byte, byte)>> extraPairGroups = null,
-            ushort value0 = 0x0000,
+            ushort hellPartyEnabled = 0x0000,
             ushort value1 = 0x000C,
             byte value2 = 0,
             byte flagA = 0,
@@ -39,8 +39,8 @@ namespace DfoServer.Network.Builders
             writer.WriteByte(modeFlag);
             writer.WriteByte(bossX);
             writer.WriteByte(bossY);
-            writer.WriteByte(hellPartyFlag0);
-            writer.WriteByte(hellPartyFlag1);
+            writer.WriteByte(hellPartyRoomX);
+            writer.WriteByte(hellPartyRoomY);
             writer.WriteByte(dungeonMode);
 
             var groupCount = extraPairGroups == null ? 0 : extraPairGroups.Count;
@@ -57,7 +57,7 @@ namespace DfoServer.Network.Builders
                 }
             }
 
-            writer.WriteUInt16(value0);
+            writer.WriteUInt16(hellPartyEnabled);
             writer.WriteUInt16(value1);
             writer.WriteByte(value2);
             writer.WriteByte(flagA);
@@ -72,17 +72,34 @@ namespace DfoServer.Network.Builders
             return writer.ToArray();
         }
 
+        // NOTI 678 (0x02A6) ENUM_NOTIPACKET_HELL_PARTY_MONSTER_INFO
+        // 86 客户端读取：int32 count + 重复的 int32 actorIdOrKey、int32 level。
+        // 当前按怪物/APC code + 对象等级发送；该包不覆盖 START_MAP 隐藏行等级。
+        public static byte[] BuildHellPartyMonsterInfo(IReadOnlyList<KeyValuePair<int, int>> actorLevels)
+        {
+            var writer = new GamePacketWriter();
+            var count = actorLevels?.Count ?? 0;
+            writer.WriteInt32(count);
+            for (var i = 0; i < count; i++)
+            {
+                writer.WriteInt32(actorLevels[i].Key);
+                writer.WriteInt32(actorLevels[i].Value);
+            }
+
+            return writer.ToArray();
+        }
+
         // NOTI 29 (0x001D) START_MAP
         public static byte[] BuildStartMap(
             Dungeon.MazeSumInfo maze,
             ushort firstMonsterSequence,
             int randomSeed = 0,
-            byte fogOrModeFlag = 0,
-            byte abyssGuardianType = 0,
-            byte reserved0 = 0,
-            uint stateValue0 = 1,
-            byte stateValue1 = 1,
-            byte fogFlag = 0,
+            byte layeredRoomFlag = 0,
+            byte hellPartyMode = 0,
+            byte unknownAfterHellPartyMode = 0,
+            uint roomStateValue = 1,
+            byte roomStateFlag = 1,
+            byte hellPartyFogFlag = 0,
             byte partyMemberIndex = 0xFF,
             IReadOnlyList<Game.Dungeon.PassiveObjectDropEntry> extraEntries = null,
             IReadOnlyList<Game.Dungeon.RidableObjectSpawnEntry> ridableEntries = null)
@@ -91,12 +108,12 @@ namespace DfoServer.Network.Builders
 
             writer.WriteByte((byte)maze.X);
             writer.WriteByte((byte)maze.Y);
-            writer.WriteByte(fogOrModeFlag);
+            writer.WriteByte(layeredRoomFlag);
             writer.WriteInt32(randomSeed);
-            writer.WriteByte(abyssGuardianType);
-            writer.WriteByte(reserved0);
-            writer.WriteInt32(unchecked((int)stateValue0));
-            writer.WriteByte(stateValue1);
+            writer.WriteByte(hellPartyMode);
+            writer.WriteByte(unknownAfterHellPartyMode);
+            writer.WriteInt32(unchecked((int)roomStateValue));
+            writer.WriteByte(roomStateFlag);
 
             writer.WriteUInt16((ushort)maze.Index);
             writer.WriteByte((byte)maze.Monsters.Count);
@@ -107,19 +124,22 @@ namespace DfoServer.Network.Builders
             {
                 var monster = maze.Monsters[i];
                 bool isApc = monster.Type >= 5;
+                var packetIndex = monster.PacketIndex.HasValue
+                    ? monster.PacketIndex.Value
+                    : (isApc ? apcIndex++ : normalIndex++);
 
-                writer.WriteUInt16(0x0000);
-                writer.WriteInt32(isApc ? apcIndex++ : normalIndex++);
+                writer.WriteUInt16(monster.TemplateOrder);
+                writer.WriteInt32(packetIndex);
                 writer.WriteUInt16((ushort)(firstMonsterSequence + i + 1));
                 writer.WriteInt32(monster.Code);
                 writer.WriteByte(monster.Level);
                 writer.WriteByte(monster.Type);
-                writer.WriteByte(0x00);
-                writer.WriteByte(0x00);
-                writer.WriteInt32(0x00000000);
+                writer.WriteByte(monster.Flag0);
+                writer.WriteByte(monster.Flag1);
+                writer.WriteInt32(monster.ExtraState);
             }
 
-            // extra entries: passive object pre-generated drops (19B each)
+            // 预生成建筑掉落，每项 19 字节。
             var extraCount = extraEntries?.Count ?? 0;
             writer.WriteByte((byte)extraCount);
             for (int i = 0; i < extraCount; i++)
@@ -136,9 +156,9 @@ namespace DfoServer.Network.Builders
                 writer.WriteByte(0);                 // +18 extended
             }
 
-            writer.WriteByte(fogFlag);
+            writer.WriteByte(hellPartyFogFlag);
 
-            // ridable object spawn entries
+            // 可骑乘对象生成列表。
             var ridableForThisRoom = new System.Collections.Generic.List<Game.Dungeon.RidableObjectSpawnEntry>();
             if (ridableEntries != null)
                 foreach (var r in ridableEntries)
@@ -146,8 +166,8 @@ namespace DfoServer.Network.Builders
 
             if (ridableForThisRoom.Count > 0)
             {
-                writer.WriteByte(1);                                     // groupCount = 1
-                writer.WriteByte((byte)ridableForThisRoom.Count);        // objectsInGroup
+                writer.WriteByte(1);                                     // 分组数量
+                writer.WriteByte((byte)ridableForThisRoom.Count);        // 本组对象数量
                 foreach (var r in ridableForThisRoom)
                 {
                     writer.WriteInt32(r.PosX);
@@ -159,7 +179,7 @@ namespace DfoServer.Network.Builders
             }
             else
             {
-                writer.WriteByte(0);                                     // groupCount = 0
+                writer.WriteByte(0);                                     // 无可骑乘对象分组
             }
 
             writer.WriteByte(partyMemberIndex);
@@ -172,18 +192,18 @@ namespace DfoServer.Network.Builders
             var writer = new GamePacketWriter();
             writer.WriteByte((byte)maze.X);
             writer.WriteByte((byte)maze.Y);
-            writer.WriteByte(0);                      // fogOrModeFlag
+            writer.WriteByte(0);                      // 分层房间标记
             writer.WriteInt32(unchecked((int)seed));
-            writer.WriteByte(0);                      // abyssGuardianType
-            writer.WriteByte(0);                      // reserved0
-            writer.WriteInt32(1);                     // stateValue0
-            writer.WriteByte(0);                      // stateValue1 = 0 (revisit)
-            writer.WriteByte(0x00);                   // fogFlag
-            writer.WriteByte(0xFF);                   // partyMemberIndex
+            writer.WriteByte(0);                      // 深渊模式
+            writer.WriteByte(0);                      // 深渊模式后续未知字节
+            writer.WriteInt32(1);                     // 房间状态值
+            writer.WriteByte(0);                      // 房间状态标记，重访为 0
+            writer.WriteByte(0x00);                   // 深渊雾/小地图标记
+            writer.WriteByte(0xFF);                   // 队员索引
             return writer.ToArray();
         }
 
-        // bodyLen = 3 + dropCount × 39 + 4
+        // 包体长度 = 3 + dropCount * 39 + 4
         public static byte[] BuildMonsterDie(ushort monsterSeqId, IReadOnlyList<DropInfo> drops, ushort ownerActorId)
         {
             var w = new GamePacketWriter();
@@ -212,7 +232,7 @@ namespace DfoServer.Network.Builders
                 w.WriteUInt16(ownerActorId);    // +37 ownerActorId
             }
 
-            // trailer 4B
+            // 末尾固定 4 字节
             w.WriteByte(0x00);
             w.WriteByte(0x00);
             w.WriteByte(0xFF);

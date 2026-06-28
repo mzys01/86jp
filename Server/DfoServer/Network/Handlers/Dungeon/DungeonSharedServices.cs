@@ -35,6 +35,14 @@ namespace DfoServer.Network.Handlers.Dungeon
             session.Player.CurDungeonDifficulty = 0;
             session.Player.CurDungeonFlag1 = 0;
             session.Player.CurDungeonFlag2 = 0;
+            session.Player.CurDungeonHellMode = false;
+            session.Player.CurDungeonHellPartyMode = 0;
+            session.Player.CurDungeonVeryDifficultHell = false;
+            session.Player.CurDungeonHellGorgeousChallenge = false;
+            session.Player.CurDungeonHellMapId = -1;
+            session.Player.CurDungeonHellMapX = 0xFF;
+            session.Player.CurDungeonHellMapY = 0xFF;
+            session.Player.CurDungeonHellRoomInfo = null;
             session.Player.CurMazeIndex = -1;
             session.Player.CurLayeredMapIndex = -1;
             session.Player.CurMap = 0;
@@ -103,6 +111,180 @@ namespace DfoServer.Network.Handlers.Dungeon
                 }
             }
             catch { return 0; }
+        }
+
+        internal bool TrySpendGold(int characterId, int accountId, int goldCost, out int currentGold, out int updatedGold)
+        {
+            currentGold = 0;
+            updatedGold = 0;
+            if (characterId <= 0 || goldCost <= 0)
+                return false;
+
+            try
+            {
+                using (var scope = _assetService.OpenScope(characterId, accountId))
+                {
+                    var wallet = _assetService.LoadWallet(scope);
+                    currentGold = wallet.Gold;
+                    updatedGold = wallet.Gold;
+                    if (wallet.Gold < goldCost)
+                        return false;
+
+                    updatedGold = wallet.Gold - goldCost;
+                    _assetService.AddGold(scope, -goldCost);
+                    scope.Commit();
+                    return true;
+                }
+            }
+            catch (Exception ex)
+            {
+                FileLogger.Log($"[DungeonHandler] TrySpendGold ERROR: {ex.Message}");
+                return false;
+            }
+        }
+
+        internal bool TryConsumeHellPartyTicket(
+            EnhancedClientSession session,
+            WorldMapArea area,
+            int dungeonMinLevel,
+            out HellPartyTicketConsumeResult result)
+        {
+            result = new HellPartyTicketConsumeResult();
+            var characterId = session.Player?.CharacterId ?? 0;
+            var accountId = session.Account?.AccountId ?? 1;
+            if (characterId <= 0)
+            {
+                result.Reason = "invalid character";
+                return false;
+            }
+
+            if (area == null)
+            {
+                result.Reason = "worldmap area missing";
+                return false;
+            }
+
+            if (!area.HellDungeon)
+            {
+                result.Reason = "area is not hell dungeon";
+                return false;
+            }
+
+            if (!CheckHellQuestRequirement(characterId, area, out var missingQuestId))
+            {
+                result.Reason = $"hell quest not cleared quest={missingQuestId}";
+                return false;
+            }
+
+            try
+            {
+                using (var scope = _assetService.OpenScope(characterId, accountId))
+                {
+                    foreach (var ticket in area.HellFreePassItems)
+                    {
+                        if (ticket.ItemId <= 0 || ticket.Count <= 0)
+                            continue;
+
+                        if (_assetService.CountItem(scope, ticket.ItemId) < ticket.Count)
+                            continue;
+
+                        if (_assetService.TryRemoveItem(scope, ticket.ItemId, ticket.Count, out var slot, out var remaining))
+                        {
+                            scope.Commit();
+                            result.Success = true;
+                            result.IsFreePass = true;
+                            result.Updates.Add(new HellPartyTicketItemUpdate
+                            {
+                                ItemId = ticket.ItemId,
+                                Count = ticket.Count,
+                                SlotIndex = slot,
+                                RemainingCount = remaining,
+                            });
+                            return true;
+                        }
+                    }
+
+                    var normalNeedCount = WorldMap.GetHellNormalTicketNeedCount(dungeonMinLevel);
+                    if (normalNeedCount <= 0)
+                    {
+                        result.Reason = $"dungeon min level too low minLevel={dungeonMinLevel}";
+                        return false;
+                    }
+
+                    var normalTicketItemIds = area.HellNormalTicketItemIds;
+                    if (normalTicketItemIds.Count == 0)
+                    {
+                        result.Reason = "normal ticket item missing";
+                        return false;
+                    }
+
+                    var selectedNormalTicketItemId = 0;
+                    foreach (var itemId in normalTicketItemIds)
+                    {
+                        if (itemId > 0 && _assetService.CountItem(scope, itemId) >= normalNeedCount)
+                        {
+                            selectedNormalTicketItemId = itemId;
+                            break;
+                        }
+                    }
+
+                    if (selectedNormalTicketItemId <= 0)
+                    {
+                        result.Reason = $"ticket missing normalNeed={normalNeedCount}";
+                        return false;
+                    }
+
+                    if (_assetService.TryRemoveItem(scope, selectedNormalTicketItemId, normalNeedCount, out var normalSlot, out var normalRemaining))
+                    {
+                        result.Success = true;
+                        result.IsFreePass = false;
+                        result.Updates.Add(new HellPartyTicketItemUpdate
+                        {
+                            ItemId = selectedNormalTicketItemId,
+                            Count = normalNeedCount,
+                            SlotIndex = normalSlot,
+                            RemainingCount = normalRemaining,
+                        });
+                    }
+                    else
+                    {
+                        result.Reason = $"ticket delete failed item={selectedNormalTicketItemId} normalNeed={normalNeedCount}";
+                        return false;
+                    }
+
+                    scope.Commit();
+                    return result.Updates.Count > 0;
+                }
+            }
+            catch (Exception ex)
+            {
+                result.Reason = ex.Message;
+                FileLogger.Log($"[DungeonHandler] TryConsumeHellPartyTicket ERROR: {ex.Message}");
+                return false;
+            }
+        }
+
+        private static bool CheckHellQuestRequirement(int characterId, WorldMapArea area, out int missingQuestId)
+        {
+            missingQuestId = 0;
+            if (area.HellQuestIds.Count == 0)
+                return true;
+
+            var connStr = SqliteDatabaseBootstrap.Initialize(
+                ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
+            foreach (var questId in area.HellQuestIds)
+            {
+                if (questId <= 0)
+                    continue;
+
+                if (questId > ushort.MaxValue || !QuestService.IsQuestCleared(connStr, characterId, (ushort)questId))
+                {
+                    missingQuestId = questId;
+                    return false;
+                }
+            }
+
+            return true;
         }
 
         internal async Task UpdateDungeonPermission(EnhancedClientSession session, int dungeonId, int difficulty)
@@ -319,5 +501,21 @@ namespace DfoServer.Network.Handlers.Dungeon
                 FileLogger.Log($"[{ProtocolLogName}] QUEST_DROP: monster={monsterCode} -> item={candidate.ItemId} x{dropCount} slot={slot} (held={currentHeld}->{currentHeld + dropCount})");
             }
         }
+    }
+
+    internal sealed class HellPartyTicketConsumeResult
+    {
+        public bool Success { get; set; }
+        public bool IsFreePass { get; set; }
+        public string Reason { get; set; }
+        public List<HellPartyTicketItemUpdate> Updates { get; } = new List<HellPartyTicketItemUpdate>();
+    }
+
+    internal sealed class HellPartyTicketItemUpdate
+    {
+        public int ItemId { get; set; }
+        public int Count { get; set; }
+        public short SlotIndex { get; set; }
+        public int RemainingCount { get; set; }
     }
 }

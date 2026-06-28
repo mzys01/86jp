@@ -8,6 +8,8 @@ namespace DfoServer.Network.Parsers.Dungeon
         public byte Difficulty { get; }
         public byte Flag1 { get; }
         public byte Flag2 { get; }
+        public byte HellPartyRequestFlag => Flag1;
+        public byte HellPartyDifficultyFlag => Flag2;
 
         public SelectDungeonRequest(ushort dungeonId, byte difficulty, byte flag1, byte flag2)
         {

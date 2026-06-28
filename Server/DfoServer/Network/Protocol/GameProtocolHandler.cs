@@ -191,9 +191,11 @@ namespace DfoServer.Network
             d[0x002E] = _dungeonHandler.Handle_SET_PLAY_RESULT;                    //46
             d[0x0047] = _dungeonHandler.Handle_ENUM_CMDPACKET_SELECT_CARD;
             d[0x0048] = _dungeonHandler.Handle_ENUM_CMDPACKET_SELECT_CARD;
+            d[0x00EB] = _dungeonHandler.Handle_ENUM_CMDPACKET_HELLPARTY_START;     //235
             d[0x008F] = _dungeonHandler.Handle_ENUM_CMDPACKET_CHANGE_TUTORIAL_FLAG; //143
             d[0x00BF] = _dungeonHandler.Handle_ENUM_CMDPACKET_DUNGEON_EVENT_STORY_PAUSE; //191
             d[0x01E4] = _dungeonHandler.Handle_ENUM_CMDPACKET_TUTORIAL_LEVEL_UP;   //484
+            d[0x03B6] = _dungeonHandler.Handle_ENUM_CMDPACKET_GORGEOUS_CHALLENGE_TOGGLE;
         }
 
         private void RegisterSkillHandlers(Dictionary<ushort, Func<EnhancedClientSession, GamePacketHeader, byte[], Task>> d)
