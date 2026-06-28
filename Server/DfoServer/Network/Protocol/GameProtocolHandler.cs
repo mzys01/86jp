@@ -28,6 +28,7 @@ namespace DfoServer.Network
         private readonly RentalHandler _rentalHandler;
         private readonly MailboxHandler _mailboxHandler;
         private readonly CollectionBoxHandler _collectionBoxHandler;
+        private readonly MercenaryHandler _mercenaryHandler;
         private readonly ICharacterRepository _characterRepository;
         private readonly SqliteSelectCharacterDataSource _selectCharacterDataSource;
         private readonly SqliteAssetService _assetService;
@@ -69,6 +70,7 @@ namespace DfoServer.Network
             _mailboxHandler = new MailboxHandler();
             var collectBoxProgressRepository = new Game.Inventory.CollectBoxProgressRepository(databasePath, schemaFilePath);
             _collectionBoxHandler = new CollectionBoxHandler(sqliteSelectCharacterDataSource, collectBoxProgressRepository);
+            _mercenaryHandler = new MercenaryHandler(characterRepository);
 
             _cmdDispatch = new Dictionary<ushort, Func<EnhancedClientSession, GamePacketHeader, byte[], Task>>();
             RegisterLoginHandlers(_cmdDispatch);
@@ -86,6 +88,7 @@ namespace DfoServer.Network
             RegisterQuestHandlers(_cmdDispatch);
             RegisterMailboxHandlers(_cmdDispatch);
             RegisterCollectionBoxHandlers(_cmdDispatch);
+            RegisterMercenaryHandlers(_cmdDispatch);
             RegisterMiscHandlers(_cmdDispatch);
         }
 
@@ -297,9 +300,17 @@ namespace DfoServer.Network
 
         private void RegisterCollectionBoxHandlers(Dictionary<ushort, Func<EnhancedClientSession, GamePacketHeader, byte[], Task>> d)
         {
-            d[0x0388] = _collectionBoxHandler.HandleQueryCollectionBox;            //904 打开收集箱面板查询
-            d[0x0389] = _collectionBoxHandler.HandleInsertCollectBoxItem;          //905 收集箱槛位放入宝珠
-            d[0x038A] = _collectionBoxHandler.HandleRemoveCollectBoxItem;          //906 收集箱槛位取出宝珠
+            d[0x0388] = _collectionBoxHandler.HandleQueryCollectionBox;
+            d[0x0389] = _collectionBoxHandler.HandleInsertCollectBoxItem;
+            d[0x038A] = _collectionBoxHandler.HandleRemoveCollectBoxItem;
+        }
+
+        private void RegisterMercenaryHandlers(Dictionary<ushort, Func<EnhancedClientSession, GamePacketHeader, byte[], Task>> d)
+        {
+            // 只处理支援兵弹窗使用的角色信息子类型 5；普通角色信息仍走原有 0x0008。
+            d[0x0002] = _mercenaryHandler.HandleUserInfoSubtypeRequest;
+            d[0x01E5] = _mercenaryHandler.HandleMercenaryRequest;                  //485 支援兵技能列表
+            d[0x01E8] = _mercenaryHandler.HandleMercenaryRequest;                  //488 支援兵选择
         }
 
         private void RegisterMiscHandlers(Dictionary<ushort, Func<EnhancedClientSession, GamePacketHeader, byte[], Task>> d)

@@ -65,6 +65,12 @@ namespace DfoServer
                 return;
             }
 
+            if (Array.IndexOf(args, "--selftest-striker-skill") >= 0)
+            {
+                Environment.Exit(SelfTests.StrikerSkillSelfTest.Run());
+                return;
+            }
+
             GameNetworkConfig.Configure(args);
 
             PacketFileLogger.Initialize();
@@ -89,6 +95,7 @@ namespace DfoServer
             try
             {
                 GameWorld.PvfArchiveAccessor.ReadText("character/character.lst");
+                Game.Mercenary.StrikerSkillDataProvider.Warmup();
                 Console.WriteLine("OK");
             }
             catch (Exception ex)

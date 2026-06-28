@@ -70,7 +70,7 @@ namespace DfoServer.Network.Builders
             Register(new DbFieldBuilder(0x0036));   
             Register(new DbFieldBuilder(0x0077));   
             Register(new DbFieldBuilder(0x0111));   
-            Register(new DbFieldBuilder(0x019F));   
+            Register(new StrikerSupportTagCharacterBodyBuilder());
 
             
             

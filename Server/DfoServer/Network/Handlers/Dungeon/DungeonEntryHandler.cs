@@ -178,7 +178,14 @@ namespace DfoServer.Network.Handlers.Dungeon
             await _mapHandler.SendStartMapAsync(session, 0xFF, 0xFF, overrideMapId: -1);
 
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0117, BitConverter.GetBytes(session.Player.CharacterId)));
-            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x019F, new byte[] { 0x00, 0x00 }));
+            if (StrikerSupportTagCharacterPacketBuilder.TryBuildDungeonOwnerMappedSupportBody(session.Player.CharacterId, out var strikerBody))
+            {
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x019F, strikerBody));
+            }
+            else
+            {
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x019F, new byte[] { 0x00, 0x00 }));
+            }
         }
 
         internal Task HandleGorgeousChallengeToggle(EnhancedClientSession session, GamePacketHeader header, byte[] body)
