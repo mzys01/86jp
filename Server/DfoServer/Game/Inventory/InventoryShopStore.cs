@@ -133,27 +133,8 @@ namespace DfoServer.Game.Inventory
                 if (metadata.IsMaterialExchange)
                 {
                     var totalMaterialCost = metadata.NeedMaterialCount * buyCount;
-                    if (CurrencyService.IsCubeFragment(metadata.NeedMaterialId))
-                    {
-                        var cubes = CurrencyService.LoadCubeFragments(connection, transaction, accountId);
-                        var have = 0;
-                        foreach (var c in cubes)
-                            if (c.ItemId == metadata.NeedMaterialId) have = c.Count;
-                        if (have < totalMaterialCost)
-                            return false;
-                        CurrencyService.AddCubeFragment(connection, transaction, accountId, metadata.NeedMaterialId, -totalMaterialCost);
-                        materialNewCount = have - totalMaterialCost;
-                        materialSlotIndex = (short)CurrencyService.GetCubeFragmentSlot(metadata.NeedMaterialId);
-                    }
-                    else
-                    {
-                        var materialItem = _db.FindItemByTemplateId(connection, transaction, characterId, InventoryListType.Main, metadata.NeedMaterialId);
-                        if (materialItem == null || materialItem.StackCount < totalMaterialCost)
-                            return false;
-                        _db.UpdateStackCount(connection, transaction, materialItem.ItemUid, materialItem.StackCount - totalMaterialCost);
-                        materialNewCount = materialItem.StackCount - totalMaterialCost;
-                        materialSlotIndex = materialItem.SlotIndex;
-                    }
+                    if (!TryConsumeMaterial(connection, transaction, characterId, accountId, metadata.NeedMaterialId, totalMaterialCost, out materialNewCount, out materialSlotIndex))
+                        return false;
                 }
 
                 if (totalGoldCost > 0)
@@ -190,12 +171,10 @@ namespace DfoServer.Game.Inventory
                     return false;
                 }
 
-                var materialItem = _db.FindItemByTemplateId(connection, transaction, characterId, InventoryListType.Main, metadata.NeedMaterialId);
-                if (materialItem == null || materialItem.StackCount < totalMaterialCost)
-                {
-                    FileLogger.Log($"  [BuyItem] REJECT: need {totalMaterialCost}x item {metadata.NeedMaterialId}, have {materialItem?.StackCount ?? 0}");
+                int materialNewCount;
+                short materialSlotIndex;
+                if (!TryConsumeMaterial(connection, transaction, characterId, accountId, metadata.NeedMaterialId, totalMaterialCost, out materialNewCount, out materialSlotIndex))
                     return false;
-                }
 
                 short matTargetSlot;
                 var targetItem = isCreature || isPetArtifactEquipment
@@ -230,7 +209,6 @@ namespace DfoServer.Game.Inventory
                         FileLogger.Log($"  [BuyItem] REJECT: no empty slot for material exchange item {itemTemplateId}");
                         return false;
                     }
-                    _db.UpdateStackCount(connection, transaction, materialItem.ItemUid, materialItem.StackCount - totalMaterialCost);
                     _db.InsertCharacterItem(connection, transaction, characterId, targetListType, (short)emptySlot,
                         itemTemplateId, targetItemKind, isCreature || isPetArtifactEquipment ? 0 : buyCount, isPetEquipment ? 0 : buyCount,
                         targetListType == InventoryListType.Pet ? (ushort)0 : metadata.Durability, 0, 0, 0, 0,
@@ -240,14 +218,12 @@ namespace DfoServer.Game.Inventory
                 }
                 else
                 {
-                    _db.UpdateStackCount(connection, transaction, materialItem.ItemUid, materialItem.StackCount - totalMaterialCost);
                     if (isPetConsumable)
                         _db.UpdatePetStackCount(connection, transaction, targetItem.ItemUid, targetItem.StackCount + buyCount);
                     else
                         _db.UpdateStackCount(connection, transaction, targetItem.ItemUid, targetItem.StackCount + buyCount);
                     matTargetSlot = targetItem.SlotIndex;
                 }
-                var newMaterialCount = materialItem.StackCount - totalMaterialCost;
 
                 if (totalGoldCost > 0)
                     _db.UpdateWallet(connection, transaction, characterId, wallet.Gold - totalGoldCost, wallet.Coin);
@@ -268,8 +244,8 @@ namespace DfoServer.Game.Inventory
                     RequestedCount = (short)buyCount,
                     AppliedCount = (short)buyCount,
                     CostItemTemplateId = metadata.NeedMaterialId,
-                    CostItemNewStackCount = newMaterialCount,
-                    CostItemSlotIndex = materialItem.SlotIndex,
+                    CostItemNewStackCount = materialNewCount,
+                    CostItemSlotIndex = materialSlotIndex,
                 };
                 return true;
             }
@@ -738,6 +714,46 @@ namespace DfoServer.Game.Inventory
                 RequestedCount = (short)effectiveCount,
                 AppliedCount = (short)effectiveCount,
             };
+            return true;
+        }
+
+        /// <summary>
+        /// 检查并扣减材料。支持立方体碎片（accounts表）和普通背包物品。
+        /// </summary>
+        private bool TryConsumeMaterial(SqliteConnection connection, SqliteTransaction transaction,
+            int characterId, int accountId, int materialId, int cost,
+            out int newCount, out short slotIndex)
+        {
+            newCount = -1;
+            slotIndex = -1;
+
+            if (CurrencyService.IsCubeFragment(materialId))
+            {
+                var cubes = CurrencyService.LoadCubeFragments(connection, transaction, accountId);
+                var have = 0;
+                foreach (var c in cubes)
+                    if (c.ItemId == materialId) have = c.Count;
+                if (have < cost)
+                {
+                    FileLogger.Log($"  [BuyItem] REJECT: need {cost}x cube fragment {materialId}, have {have}");
+                    return false;
+                }
+                CurrencyService.AddCubeFragment(connection, transaction, accountId, materialId, -cost);
+                newCount = have - cost;
+                slotIndex = (short)CurrencyService.GetCubeFragmentSlot(materialId);
+            }
+            else
+            {
+                var materialItem = _db.FindItemByTemplateId(connection, transaction, characterId, InventoryListType.Main, materialId);
+                if (materialItem == null || materialItem.StackCount < cost)
+                {
+                    FileLogger.Log($"  [BuyItem] REJECT: need {cost}x item {materialId}, have {materialItem?.StackCount ?? 0}");
+                    return false;
+                }
+                _db.UpdateStackCount(connection, transaction, materialItem.ItemUid, materialItem.StackCount - cost);
+                newCount = materialItem.StackCount - cost;
+                slotIndex = materialItem.SlotIndex;
+            }
             return true;
         }
     }
