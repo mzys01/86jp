@@ -349,6 +349,9 @@ namespace DfoServer.Network.Handlers.Dungeon
                 session.Player.CurDungeonDrops.Remove(req.SrcSlot);
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0027,
                     DropItemBuilder.BuildPickupItem(req.SrcSlot, session.Player.UserId, (ushort)invSlot, 7)));
+                if (session.GameSession?.QuestManager != null && matchedDrop.TemplateId > 0)
+                    await session.GameSession.QuestManager.SyncMonsterRewardItemProgressAsync(
+                        new[] { (int)matchedDrop.TemplateId });
                 FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] GET_ITEM: item pickup srcSlot={req.SrcSlot} templateId={matchedDrop.TemplateId} invSlot={invSlot}");
             }
         }

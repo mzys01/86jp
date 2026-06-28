@@ -145,6 +145,20 @@ namespace DfoServer.Game.Quests
             await _sender.SendNotiAsync(0x023F, noti);
         }
 
+        public async Task SyncMonsterRewardItemProgressAsync(ICollection<int> itemFilter)
+        {
+            int cid = _sender.CharacterId;
+            if (cid <= 0) return;
+
+            bool matched = QuestService.SyncMonsterRewardItemProgress(
+                _connStr, cid, _assetService, _sender.AccountId, itemFilter);
+            if (!matched)
+                return;
+
+            var noti = BuildAcceptedQuestNoti(cid);
+            await _sender.SendNotiAsync(0x023F, noti);
+        }
+
         private async Task SendAcceptableQuestListAsync()
         {
             int cid = _sender.CharacterId;

@@ -469,7 +469,7 @@ namespace DfoServer.Network.Handlers.Dungeon
             catch { return; }
 
             var candidates = QuestDropProvider.CheckMonsterDrop(
-                activeQuestIds, session.Player.CurDungeon, monsterCode);
+                activeQuestIds, session.Player.CurDungeon, session.Player.CurDungeonDifficulty, monsterCode);
             if (candidates == null) return;
 
             var accountId = session.Account?.AccountId ?? 1;

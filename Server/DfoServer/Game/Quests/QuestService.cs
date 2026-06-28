@@ -241,6 +241,114 @@ namespace DfoServer.Game.Quests
             return w.ToArray();
         }
 
+        public static bool SyncMonsterRewardItemProgress(
+            string connStr,
+            int characterId,
+            IAssetService assetService,
+            int accountId,
+            ICollection<int> itemFilter)
+        {
+            var active = LoadActiveQuests(connStr, characterId);
+            if (active.Count == 0 || assetService == null)
+                return false;
+
+            var itemCountCache = new Dictionary<int, int>();
+            Func<int, int> getHeldCount = itemId =>
+            {
+                int count;
+                if (itemCountCache.TryGetValue(itemId, out count))
+                    return count;
+
+                try
+                {
+                    using (var scope = assetService.OpenScope(characterId, accountId))
+                        count = assetService.CountItem(scope, itemId);
+                }
+                catch
+                {
+                    count = 0;
+                }
+
+                itemCountCache[itemId] = count;
+                return count;
+            };
+
+            var changed = new List<ActiveQuest>();
+            bool matchedQuestItem = false;
+
+            foreach (var q in active)
+            {
+                var seekItems = GameWorld.QuestData.GetSeekingConsumeItems(q.QuestId);
+                if (seekItems.Count == 0)
+                    continue;
+
+                var relevantItems = new List<GameWorld.QuestRewardItem>();
+                bool matchesFilter = itemFilter == null || itemFilter.Count == 0;
+                foreach (var si in seekItems)
+                {
+                    if (si.ItemId <= 0 || si.Count <= 0)
+                        continue;
+
+                    relevantItems.Add(si);
+                    if (!matchesFilter && itemFilter.Contains(si.ItemId))
+                        matchesFilter = true;
+                }
+
+                if (relevantItems.Count == 0 || !matchesFilter)
+                    continue;
+
+                matchedQuestItem = true;
+                long missingHeld = 0;
+                foreach (var si in relevantItems)
+                {
+                    int required = Math.Max(1, si.Count);
+                    int held = Math.Max(0, getHeldCount(si.ItemId));
+
+                    missingHeld += Math.Max(0, required - held);
+                }
+
+                var persistTrigger = ToTriggerValue(missingHeld);
+
+                if (q.TriggerValue != persistTrigger)
+                {
+                    q.TriggerValue = persistTrigger;
+                    changed.Add(q);
+                }
+            }
+
+            if (changed.Count > 0)
+            {
+                using (var conn = new SqliteConnection(connStr))
+                {
+                    conn.Open();
+                    using (var tx = conn.BeginTransaction())
+                    {
+                        foreach (var q in changed)
+                        {
+                            using (var cmd = new SqliteCommand(
+                                "UPDATE character_active_quests SET trigger_value=@tv WHERE character_id=@cid AND slot=@s", conn, tx))
+                            {
+                                cmd.Parameters.AddWithValue("@tv", (long)q.TriggerValue);
+                                cmd.Parameters.AddWithValue("@cid", characterId);
+                                cmd.Parameters.AddWithValue("@s", q.Slot);
+                                cmd.ExecuteNonQuery();
+                            }
+                        }
+                        tx.Commit();
+                    }
+                }
+            }
+
+            return matchedQuestItem;
+        }
+
+        private static uint ToTriggerValue(long missingCount)
+        {
+            if (missingCount <= 0) return 0;
+            if (missingCount > uint.MaxValue) return uint.MaxValue;
+            return (uint)missingCount;
+        }
+
         private static uint DecrementTriggerChannel(uint trigger, byte triggerType)
         {
             if (triggerType == 0) return trigger > 0 ? trigger - 1 : 0;
