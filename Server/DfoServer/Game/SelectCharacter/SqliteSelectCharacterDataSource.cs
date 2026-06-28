@@ -287,6 +287,14 @@ namespace DfoServer.Game.SelectCharacter
                     out newSlots, out oldItemId1, out oldItemId2, out newItemIds, out consumedItemTemplateId, out consumedItemRemainingCount);
         }
 
+        public bool TryCompoundAvatarSet(int characterId, int accountId, short[] consumeSlots, int[] expectedItemIds, Func<int, int> resolveNewItemId, byte newOption,
+                short consumeStackableSlot, out int newSlot, out System.Collections.Generic.List<int> oldItemIds, out int newItemId,
+                out int consumedItemTemplateId, out int consumedItemRemainingCount)
+        {
+            using (_inventoryStore.BeginScope(characterId, accountId))
+                return _inventoryStore.TryCompoundAvatarSet(consumeSlots, expectedItemIds, resolveNewItemId, newOption, consumeStackableSlot, out newSlot, out oldItemIds, out newItemId, out consumedItemTemplateId, out consumedItemRemainingCount);
+        }
+
         public bool TrySortItems(int characterId, int accountId, InventoryListType listType, byte category)
         {
             using (_inventoryStore.BeginScope(characterId, accountId))
