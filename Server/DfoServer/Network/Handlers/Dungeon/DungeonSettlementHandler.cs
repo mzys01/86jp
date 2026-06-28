@@ -100,14 +100,7 @@ namespace DfoServer.Network.Handlers.Dungeon
                     }
 
                     // Free card item
-                    if (cards.Count > 1 && !cards[1].IsGold && cards[1].ItemId > 0)
-                    {
-                        short slot;
-                        if (_svc.TryPickupItemToInventory(session.Player.CharacterId, accountId, cards[1].ItemId, cards[1].StackCount, out slot))
-                            entries.Add(cards[1].IsEquipment
-                                ? DungeonSharedServices.BuildEquipEntry(slot, (uint)cards[1].ItemId)
-                                : DungeonSharedServices.BuildItemEntry(slot, (uint)cards[1].ItemId, (uint)cards[1].StackCount));
-                    }
+                    AddCardItemEntry(session, accountId, cards, 1, entries);
 
                     // Paid card gold
                     if (cards.Count > 4 && cards[4].IsGold && cards[4].GoldAmount > 0)
@@ -118,14 +111,7 @@ namespace DfoServer.Network.Handlers.Dungeon
                     }
 
                     // Paid card item
-                    if (cards.Count > 5 && !cards[5].IsGold && cards[5].ItemId > 0)
-                    {
-                        short slot;
-                        if (_svc.TryPickupItemToInventory(session.Player.CharacterId, accountId, cards[5].ItemId, cards[5].StackCount, out slot))
-                            entries.Add(cards[5].IsEquipment
-                                ? DungeonSharedServices.BuildEquipEntry(slot, (uint)cards[5].ItemId)
-                                : DungeonSharedServices.BuildItemEntry(slot, (uint)cards[5].ItemId, (uint)cards[5].StackCount));
-                    }
+                    AddCardItemEntry(session, accountId, cards, 5, entries);
 
                     // NOTI 14 UPDATE_ITEM_LIST
                     if (entries.Count > 0)
@@ -142,6 +128,22 @@ namespace DfoServer.Network.Handlers.Dungeon
                 }
                 session.Player.CurCardRewards = null;
             }
+        }
+
+        private void AddCardItemEntry(EnhancedClientSession session, int accountId,
+            List<ClearRewardGenerator.CardReward> cards, int cardIndex, List<byte[]> entries)
+        {
+            if (cards.Count <= cardIndex || cards[cardIndex].IsGold || cards[cardIndex].ItemId <= 0)
+                return;
+
+            var card = cards[cardIndex];
+            short slot;
+            if (!_svc.TryPickupItemToInventory(session.Player.CharacterId, accountId, card.ItemId, card.StackCount, out slot))
+                return;
+
+            entries.Add(card.IsEquipment
+                ? DungeonSharedServices.BuildEquipEntry(slot, (uint)card.ItemId, durability: card.Durability)
+                : DungeonSharedServices.BuildItemEntry(slot, (uint)card.ItemId, (uint)card.StackCount));
         }
 
         internal async Task HandleSetPlayResult(EnhancedClientSession session, GamePacketHeader header, byte[] body)

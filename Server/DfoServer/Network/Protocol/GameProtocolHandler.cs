@@ -26,6 +26,7 @@ namespace DfoServer.Network
         private readonly CeraShopHandler _ceraShopHandler;
         private readonly LuckyStarHandler _luckyStarHandler;
         private readonly RentalHandler _rentalHandler;
+        private readonly MailboxHandler _mailboxHandler;
         private readonly ICharacterRepository _characterRepository;
         private readonly SqliteSelectCharacterDataSource _selectCharacterDataSource;
         private readonly SqliteAssetService _assetService;
@@ -64,6 +65,7 @@ namespace DfoServer.Network
             _ceraShopHandler = new CeraShopHandler(sqliteSelectCharacterDataSource);
             _luckyStarHandler = new LuckyStarHandler(_assetService, sqliteSelectCharacterDataSource);
             _rentalHandler = new RentalHandler(_assetService, sqliteSelectCharacterDataSource);
+            _mailboxHandler = new MailboxHandler();
 
             _cmdDispatch = new Dictionary<ushort, Func<EnhancedClientSession, GamePacketHeader, byte[], Task>>();
             RegisterLoginHandlers(_cmdDispatch);
@@ -75,6 +77,7 @@ namespace DfoServer.Network
             RegisterTownHandlers(_cmdDispatch);
             RegisterSettingsHandlers(_cmdDispatch);
             RegisterQuestHandlers(_cmdDispatch);
+            RegisterMailboxHandlers(_cmdDispatch);
             RegisterMiscHandlers(_cmdDispatch);
         }
 
@@ -241,6 +244,11 @@ namespace DfoServer.Network
                 if (s.GameSession != null)
                     await s.GameSession.QuestManager.HandleFinishQuestAsync(h.type, b);
             };
+        }
+
+        private void RegisterMailboxHandlers(Dictionary<ushort, Func<EnhancedClientSession, GamePacketHeader, byte[], Task>> d)
+        {
+            d[0x0060] = _mailboxHandler.HandleOpenMailbox;
         }
 
         private void RegisterMiscHandlers(Dictionary<ushort, Func<EnhancedClientSession, GamePacketHeader, byte[], Task>> d)
