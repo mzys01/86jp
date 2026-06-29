@@ -191,8 +191,9 @@ namespace DfoServer.Network
             d[0x002B] = _dungeonHandler.Handle_ENUM_CMDPACKET_GET_ITEM;
             d[0x002D] = _dungeonHandler.Handle_ENUM_CMDPACKET_MOVE_MAP;
             d[0x002E] = _dungeonHandler.Handle_SET_PLAY_RESULT;                    //46
+            d[0x0045] = _dungeonHandler.Handle_CARD_START_REQUEST;
             d[0x0047] = _dungeonHandler.Handle_ENUM_CMDPACKET_SELECT_CARD;
-            d[0x0048] = _dungeonHandler.Handle_ENUM_CMDPACKET_SELECT_CARD;
+            d[0x0048] = _dungeonHandler.Handle_ENUM_CMDPACKET_EPLP_COMMAND;
             d[0x00EB] = _dungeonHandler.Handle_ENUM_CMDPACKET_HELLPARTY_START;     //235
             d[0x008F] = _dungeonHandler.Handle_ENUM_CMDPACKET_CHANGE_TUTORIAL_FLAG; //143
             d[0x00BF] = _dungeonHandler.Handle_ENUM_CMDPACKET_DUNGEON_EVENT_STORY_PAUSE; //191
