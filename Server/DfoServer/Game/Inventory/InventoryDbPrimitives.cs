@@ -362,23 +362,21 @@ VALUES (
             InsertCharacterItem(connection, transaction, characterId, InventoryListType.Pet, item.SlotIndex, item.CreatureItemId, "pet", 0, 0, 0, 0, 0, 0, 0, item.CreatureSerialOrHandle, InventoryItemCodec.SerializePet(item));
         }
 
-        internal void InsertAccountCargoItem(SqliteConnection connection, SqliteTransaction transaction, int characterId, int accountId, CommonInventoryItem item)
+        internal void InsertAccountCargoItem(SqliteConnection connection, SqliteTransaction transaction, int accountId, CommonInventoryItem item)
         {
             using (var command = connection.CreateCommand())
             {
                 command.Transaction = transaction;
                 command.CommandText = @"
-INSERT OR REPLACE INTO character_items (
-    owner_scope, owner_id, character_id, list_type, slot_index, item_template_id, item_kind,
+INSERT OR REPLACE INTO account_cargo_items (
+    account_id, slot_index, item_template_id, item_kind,
     stack_count, instance_value, durability, seal_flag, option_value, expire_time, marker_16,
-    pet_serial_or_handle, extra_json)
+    extra_json)
 VALUES (
-    'account', @ownerId, @characterId, @listType, @slotIndex, @templateId, @itemKind,
+    @accountId, @slotIndex, @templateId, @itemKind,
     @stackCount, @instanceValue, @durability, @sealFlag, @optionValue, @expireTime, @marker16,
-    0, @extraJson);";
-                command.Parameters.AddWithValue("@ownerId", accountId);
-                command.Parameters.AddWithValue("@characterId", characterId);
-                command.Parameters.AddWithValue("@listType", (int)InventoryListType.AccountCargo);
+    @extraJson);";
+                command.Parameters.AddWithValue("@accountId", accountId);
                 command.Parameters.AddWithValue("@slotIndex", item.SlotIndex);
                 command.Parameters.AddWithValue("@templateId", item.ItemTemplateId);
                 command.Parameters.AddWithValue("@itemKind", InventoryItemCodec.InferCommonItemKind(item));

@@ -96,8 +96,28 @@ CREATE TABLE IF NOT EXISTS account_cargo_state (
     account_id INTEGER PRIMARY KEY,
     selection_key INTEGER NOT NULL DEFAULT 0,
     value32 INTEGER NOT NULL DEFAULT 0,
-    item_count INTEGER NOT NULL DEFAULT 0, -- 此前只在 RunMigrations 的 ALTER 里, 空库全新 CREATE 不走迁移 → 选角查询崩(2026-06-11 修)
+    item_count INTEGER NOT NULL DEFAULT 0,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS account_cargo_items (
+    item_uid INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id INTEGER NOT NULL,
+    slot_index INTEGER NOT NULL,
+    item_template_id INTEGER NOT NULL,
+    item_kind TEXT NOT NULL DEFAULT 'unknown',
+    stack_count INTEGER NOT NULL DEFAULT 0,
+    instance_value INTEGER NOT NULL DEFAULT 0,
+    durability INTEGER NOT NULL DEFAULT 0,
+    seal_flag INTEGER NOT NULL DEFAULT 0,
+    option_value INTEGER NOT NULL DEFAULT 0,
+    expire_time INTEGER NOT NULL DEFAULT 0,
+    marker_16 INTEGER NOT NULL DEFAULT 0,
+    extra_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(account_id, slot_index),
+    FOREIGN KEY (account_id) REFERENCES accounts(account_id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS item_audit_log (

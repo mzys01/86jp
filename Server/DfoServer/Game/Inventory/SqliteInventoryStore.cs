@@ -328,13 +328,12 @@ ORDER BY list_type, slot_index;";
                 using (var acCmd = connection.CreateCommand())
                 {
                     acCmd.CommandText = @"
-SELECT list_type, slot_index, item_template_id, item_kind, stack_count, instance_value,
-       durability, seal_flag, option_value, expire_time, marker_16, pet_serial_or_handle, extra_json
-FROM character_items
-WHERE owner_scope = 'account' AND owner_id = @accountId AND list_type = @listType
+SELECT 12 AS list_type, slot_index, item_template_id, item_kind, stack_count, instance_value,
+       durability, seal_flag, option_value, expire_time, marker_16, 0 AS pet_serial_or_handle, extra_json
+FROM account_cargo_items
+WHERE account_id = @accountId
 ORDER BY slot_index;";
                     acCmd.Parameters.AddWithValue("@accountId", _context.AccountId);
-                    acCmd.Parameters.AddWithValue("@listType", (int)InventoryListType.AccountCargo);
                     using (var reader = acCmd.ExecuteReader())
                     {
                         while (reader.Read())
@@ -1768,7 +1767,7 @@ WHERE character_id = @cid AND list_type = @lt
                     _db.InsertPetItem(connection, transaction, _context.CharacterId, item);
 
                 foreach (var item in snapshot.AccountCargoItems)
-                    _db.InsertAccountCargoItem(connection, transaction, _context.CharacterId, _context.AccountId, item);
+                    _db.InsertAccountCargoItem(connection, transaction, _context.AccountId, item);
 
                 transaction.Commit();
             }

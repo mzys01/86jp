@@ -409,17 +409,13 @@ VALUES (@accountId, @selectionKey, @value32, @itemCount, CURRENT_TIMESTAMP);";
             }
         }
 
-        internal ushort CountAccountCargoItems(SqliteConnection connection, SqliteTransaction transaction, int characterId, int accountId)
+        internal ushort CountAccountCargoItems(SqliteConnection connection, SqliteTransaction transaction, int accountId)
         {
             using (var command = connection.CreateCommand())
             {
                 command.Transaction = transaction;
-                command.CommandText = @"
-SELECT COUNT(1)
-FROM character_items
-WHERE owner_scope = 'account' AND owner_id = @accountId AND list_type = @listType;";
+                command.CommandText = "SELECT COUNT(1) FROM account_cargo_items WHERE account_id = @accountId;";
                 command.Parameters.AddWithValue("@accountId", accountId);
-                command.Parameters.AddWithValue("@listType", (int)InventoryListType.AccountCargo);
                 return Convert.ToUInt16(Convert.ToInt32(command.ExecuteScalar(), CultureInfo.InvariantCulture), CultureInfo.InvariantCulture);
             }
         }
