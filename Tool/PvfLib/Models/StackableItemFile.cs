@@ -78,6 +78,9 @@ namespace PvfLib
 
         public int EnchantIndex { get; set; } = -1;
         public List<int> EnchantTable { get; set; } = new List<int>();
+        // [action type] `[xxx]` p1 p2 ...: ActionTypeName="[xxx]", ActionTypeParams=[p1,p2,...]
+        public string ActionTypeName { get; set; }
+        public List<int> ActionTypeParams { get; set; } = new List<int>();
         public string BoosterInfo { get; set; }
         public int BoosterCategoryNum { get; set; } = -1;
         public int BoosterSelectionNum { get; set; } = -1;
@@ -174,6 +177,7 @@ namespace PvfLib
                     
                     case "enchant index": stk.EnchantIndex = ParseInt(data); break;
                     case "enchant table": stk.EnchantTable = ParseEnchantTableIndexes(node, content); break;
+                    case "action type": ParseActionType(node, content, stk); break;
                     case "booster info": stk.BoosterInfo = data; break;
                     case "booster category num": stk.BoosterCategoryNum = ParseInt(data); break;
                     case "booster selection num": stk.BoosterSelectionNum = ParseInt(data); break;
@@ -407,6 +411,29 @@ namespace PvfLib
             }
 
             return result;
+        }
+
+        private static void ParseActionType(ScriptNode node, string content, StackableItemFile stk)
+        {
+            if (node == null || node.DataItems == null)
+                return;
+
+            foreach (var item in node.DataItems)
+            {
+                var raw = item.GetContent(content);
+                var nameMatch = Regex.Match(raw, "`([^`]*)`");
+                if (!nameMatch.Success)
+                    continue;
+
+                stk.ActionTypeName = nameMatch.Groups[1].Value.Trim();
+                var rest = raw.Substring(nameMatch.Index + nameMatch.Length);
+                foreach (var token in rest.Split(new[] { ' ', '\t', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
+                {
+                    if (int.TryParse(token, out var value))
+                        stk.ActionTypeParams.Add(value);
+                }
+                break;
+            }
         }
 
         private static List<int> ParseEnchantTableIndexes(ScriptNode node, string content)

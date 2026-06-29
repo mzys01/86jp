@@ -541,6 +541,93 @@ ORDER BY slot_index;";
             }
         }
 
+        // 8件高级装扮 -> 100%合成指定稀有装扮(克隆装扮合成器, 如"旷古天娇"系列)。
+        // 消耗品按请求body里携带的Main列表槛位号精确定位(实测两组不同槛位数据交叉验证得到该字段)。
+        // resolveNewItemId: 输入消耗品item_template_id, 由调用方(AbsoluteBindCubeService)按该合成器
+        // 的[action type]配置 + 角色职业查表校验/纠正客户端请求的目标itemId; 返回负数表示校验失败。
+        public bool TryCompoundAvatarSet(short[] consumeSlots, int[] expectedItemIds, Func<int, int> resolveNewItemId, byte newOption,
+                short consumeStackableSlot,
+                out int newSlot, out List<int> oldItemIds, out int newItemId, out int consumedItemTemplateId, out int consumedItemRemainingCount)
+        {
+            newSlot = -1;
+            oldItemIds = new List<int>();
+            newItemId = 0;
+            consumedItemTemplateId = 0;
+            consumedItemRemainingCount = 0;
+
+            using (var connection = _context.OpenConnection())
+            using (var transaction = connection.BeginTransaction())
+            {
+                var items = new ItemRecord[consumeSlots.Length];
+                for (int i = 0; i < consumeSlots.Length; i++)
+                {
+                    items[i] = _db.LoadItemRecord(connection, transaction, _context.CharacterId, InventoryListType.Avatar, consumeSlots[i]);
+                    if (items[i] == null)
+                    {
+                        FileLogger.Log($"  [CompoundAvatarSet] REJECT: missing avatar item at slot={consumeSlots[i]}");
+                        return false;
+                    }
+
+                    // 防改包: 比对客户端声称的 itemId 与 DB 实际物品, 不符则拒绝(防止改包删任意槽位物品)
+                    if (expectedItemIds != null && i < expectedItemIds.Length && expectedItemIds[i] != items[i].ItemTemplateId)
+                    {
+                        FileLogger.Log($"  [CompoundAvatarSet] REJECT: itemId mismatch at slot={consumeSlots[i]} expected=0x{expectedItemIds[i]:X8} actual=0x{items[i].ItemTemplateId:X8}");
+                        return false;
+                    }
+                }
+
+                var consumeItem = _db.LoadItemRecord(connection, transaction, _context.CharacterId, InventoryListType.Main, consumeStackableSlot);
+                if (consumeItem == null || consumeItem.StackCount < 1)
+                {
+                    FileLogger.Log($"  [CompoundAvatarSet] REJECT: missing consumable at slot={consumeStackableSlot}");
+                    return false;
+                }
+
+                newItemId = resolveNewItemId(consumeItem.ItemTemplateId);
+                if (newItemId < 0)
+                {
+                    FileLogger.Log($"  [CompoundAvatarSet] REJECT: resolveNewItemId rejected consumable template={consumeItem.ItemTemplateId}");
+                    return false;
+                }
+
+                foreach (var item in items)
+                {
+                    oldItemIds.Add(item.ItemTemplateId);
+                    _db.DeleteItem(connection, transaction, item.ItemUid);
+                }
+
+                consumedItemTemplateId = consumeItem.ItemTemplateId;
+                if (consumeItem.StackCount > 1)
+                {
+                    consumedItemRemainingCount = consumeItem.StackCount - 1;
+                    _db.UpdateStackCount(connection, transaction, consumeItem.ItemUid, consumedItemRemainingCount);
+                }
+                else
+                {
+                    consumedItemRemainingCount = 0;
+                    _db.DeleteItem(connection, transaction, consumeItem.ItemUid);
+                }
+
+                // 同 TryCompoundAvatar: 按台服 AddAvatarItem 算法从槽位0扫描第一个空槛位, 上限按
+                // 105(基础) + character_container_state.list_param16(拓展值, 0~105, 每张拓展券+7)。
+                var avatarExpansion = GetListParam(_equipStore.LoadContainerState(connection, transaction, _context.CharacterId, _context.AccountId), InventoryListType.Avatar);
+                var avatarCapacity = 105 + avatarExpansion;
+                var emptySlot = _db.FindEmptySlot(connection, transaction, _context.CharacterId, InventoryListType.Avatar, 0, avatarCapacity - 1);
+                if (emptySlot < 0)
+                {
+                    FileLogger.Log($"  [CompoundAvatarSet] REJECT: no empty avatar slot (capacity={avatarCapacity})");
+                    return false;
+                }
+
+                _db.InsertAvatarItem(connection, transaction, _context.CharacterId, CreateDefaultAvatarItem((short)emptySlot, newItemId, newOption));
+
+                transaction.Commit();
+                newSlot = emptySlot;
+                FileLogger.Log($"  [CompoundAvatarSet] OK: consumed {items.Length} avatar items + 1x slot {consumeStackableSlot}(template {consumeItem.ItemTemplateId}), added item {newItemId} at slot {newSlot}");
+                return true;
+            }
+        }
+
         public bool TryBuyItem(int itemTemplateId, int buyCount, out InventoryMutationResult result)
         {
             using (var connection = _context.OpenConnection())

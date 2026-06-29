@@ -52,6 +52,10 @@ namespace DfoServer.Game.Inventory
             out List<int> newSlotsOut, out int oldItemId1, out int oldItemId2, out List<int> newItemIdsOut,
             out int consumedItemTemplateId, out int consumedItemRemainingCount);
 
+        bool TryCompoundAvatarSet(short[] consumeSlots, int[] expectedItemIds, Func<int, int> resolveNewItemId, byte newOption,
+            short consumeStackableSlot,
+            out int newSlot, out List<int> oldItemIds, out int newItemId, out int consumedItemTemplateId, out int consumedItemRemainingCount);
+
         bool TryMoveItem(InventoryMoveRequest request, out InventoryMoveResult result);
 
         bool TrySortItems(int characterId, InventoryListType listType, byte category);

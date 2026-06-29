@@ -927,14 +927,19 @@ namespace DfoServer.Network.Handlers
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, header.type, w.ToArray()));
         }
 
-        // 合并装扮(时装合成) CMD 0x63(99)
-        // 请求 body 布局(22字节): off0 short consumeSlot, off2 short slot1, off8 short slot2,
-        // off14 int reqItemId(请求的目标时装), 其余字段未用到。
+
         public async Task Handle_COMPOUND_AVATAR(EnhancedClientSession session, GamePacketHeader header, byte[] body)
         {
-            FileLogger.Log($"[{ProtocolName}] COMPOUND_AVATAR raw body({body?.Length ?? 0}): {(body != null ? BitConverter.ToString(body) : "null")}");
+
             if (body == null || body.Length < 22)
+            {
+                var shortErr = new GamePacketWriter();
+                shortErr.WriteByte(0x00);          
+                shortErr.WriteByte(0x16);         
+                shortErr.WriteByte(0x00);          
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0063, shortErr.ToArray()));
                 return;
+            }
 
             short consumeSlot = BitConverter.ToInt16(body, 0);
             short slot1 = BitConverter.ToInt16(body, 2);
@@ -949,59 +954,134 @@ namespace DfoServer.Network.Handlers
                     (old1, old2, materialId) =>
                     {
                         var prob = CompoundAvatarProbabilityService.Resolve(job, old1, old2, materialId, reqItemId);
-                        if (!prob.Success)
-                            FileLogger.Log($"  [CompoundAvatar] probability resolve failed: {prob.FailReason}, falling back to requested item {reqItemId}");
                         return prob.Success ? prob.NewItemIds : new List<int> { reqItemId };
                     },
                     newOption,
                     out List<int> newSlots, out int oldItemId1, out int oldItemId2, out List<int> newItemIds,
                     out int consumedItemTemplateId, out int consumedItemRemainingCount))
             {
-                // 失败回包: 成功标志=0, 不删不加。客户端据此把放进去的2件时装还原。
                 var err = new GamePacketWriter();
-                err.WriteByte(0x00);
-                err.WriteByte(0x16); // errcode 22 (物品删除失败), 与台服一致
+                err.WriteByte(0x00);  
+                err.WriteByte(0x16);
+                err.WriteByte(0x00);  
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0063, err.ToArray()));
-                FileLogger.Log($"[{ProtocolName}] COMPOUND_AVATAR: FAILED slot1={slot1} slot2={slot2} consumeSlot={consumeSlot}");
                 return;
             }
 
             var w = new GamePacketWriter();
-            w.WriteByte(0x01);              // 成功标志
-            w.WriteByte(0x03);              // count = 2件被删时装 + 1个被扣消耗品
-            // 被删时装1
-            w.WriteByte(0x01);              // listType=1(时装)
-            w.WriteInt16(slot1);            // slot
-            w.WriteInt32(1);                // 固定1
-            // 被删时装2
+            w.WriteByte(0x01);           
+            w.WriteByte(0x03);            
+            w.WriteByte(0x01);           
+            w.WriteInt16(slot1);           
+            w.WriteInt32(1);              
             w.WriteByte(0x01);
             w.WriteInt16(slot2);
             w.WriteInt32(1);
-            // 被扣消耗品(合成器): 第三个字段是本次消耗数量, 客户端据此对槛位做增量扣减。
-            // 86JP合成器消耗规则恒为每次1个。
-            w.WriteByte(0x00);              // listType=0(消耗品/event item)
-            w.WriteInt16(consumeSlot);      // slot
-            w.WriteInt32(1);                // 本次消耗数量
-            // 新时装信息: 客户端固定读2组, 未命中稀有池时第2组填占位(slot=-1, itemId=0)。
+            w.WriteByte(0x00);            
+            w.WriteInt16(consumeSlot);     
+            w.WriteInt32(1);                
             for (int i = 0; i < 2; i++)
             {
                 bool hasItem = i < newItemIds.Count;
-                w.WriteInt16(hasItem ? (short)newSlots[i] : (short)-1); // 新时装真实slot(找到的空位), 占位=-1
-                w.WriteInt32(hasItem ? newItemIds[i] : 0);  // 新时装itemId, 占位=0
-                w.WriteInt32(0);                   // RemainDate(剩余期限天, 0=永久)
-                w.WriteInt16(newOption);           // option(附加属性index)
-                w.WriteInt32(30);                  // 镶嵌孔数据长度
-                w.WriteZeroBytes(30);              // JewelSocketData(暂全0)
-                w.WriteInt32(4);                   // 扩展信息长度
-                w.WriteZeroBytes(4);               // ExpansionInfo(暂全0)
+                w.WriteInt16(hasItem ? (short)newSlots[i] : (short)-1); 
+                w.WriteInt32(hasItem ? newItemIds[i] : 0);  
+                w.WriteInt32(0);                 
+                w.WriteInt16(newOption);          
+                w.WriteInt32(30);                 
+                w.WriteZeroBytes(30);            
+                w.WriteInt32(4);                  
+                w.WriteZeroBytes(4);               
             }
 
             var respBody = w.ToArray();
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0063, respBody));
-            FileLogger.Log($"[{ProtocolName}] COMPOUND_AVATAR: OK slot1={slot1}(item {oldItemId1}) slot2={slot2}(item {oldItemId2}) " +
-                           $"consumeSlot={consumeSlot}(template {consumedItemTemplateId}, remain {consumedItemRemainingCount}) -> " +
-                           $"newSlots=[{string.Join(",", newSlots)}] newItemIds=[{string.Join(",", newItemIds)}]");
-            FileLogger.Log($"[{ProtocolName}] COMPOUND_AVATAR resp body({respBody.Length}): {BitConverter.ToString(respBody)}");
+        }
+
+  
+        public async Task Handle_COMPOUND_AVATAR_SET(EnhancedClientSession session, GamePacketHeader header, byte[] body)
+        {
+            if (body == null || body.Length < 72)
+                return;
+
+            short consumeStackableSlot = body[13];
+            int requestedItemId = BitConverter.ToInt32(body, 16);
+            short option = BitConverter.ToInt16(body, 20);
+
+            var consumeSlots = new short[8];
+            var consumeSlotItemIds = new int[8];
+            int off = 24;
+            for (int i = 0; i < 8; i++)
+            {
+                consumeSlots[i] = BitConverter.ToInt16(body, off);
+                consumeSlotItemIds[i] = BitConverter.ToInt32(body, off + 2);
+                off += 6; // short slot + int itemTemplateId
+            }
+
+            // 防改包: 8件槽位不能重复
+            if (consumeSlots.Distinct().Count() != consumeSlots.Length)
+            {
+                var dupErr = new GamePacketWriter();
+                dupErr.WriteByte(0x00);
+                dupErr.WriteByte(0x16);
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x03EA, dupErr.ToArray()));
+                return;
+            }
+
+            var (cid, aid) = ResolveOwner(session);
+            var job = _characterRepository.GetById(cid)?.Job ?? 0;
+
+            int ResolveNewItemId(int consumeMaterialId)
+            {
+                var cube = AbsoluteBindCubeService.Resolve(consumeMaterialId, job);
+                if (!cube.Success)
+                {
+                    return -1;
+                }
+
+                foreach (var kv in cube.PartToItemId)
+                {
+                    if (kv.Value == requestedItemId)
+                        return requestedItemId;
+                }
+                return -1;
+            }
+
+            if (!_sqliteSelectCharacterDataSource.TryCompoundAvatarSet(cid, aid, consumeSlots, consumeSlotItemIds, ResolveNewItemId, (byte)option,
+                    consumeStackableSlot, out int newSlot, out var oldItemIds, out int newItemId, out int consumedTemplateId, out int consumedRemaining))
+            {
+                var err = new GamePacketWriter();
+                err.WriteByte(0x00);
+                err.WriteByte(0x16); // errcode 22 (物品删除失败), 与0x0063失败码一致
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x03EA, err.ToArray()));
+                return;
+            }
+
+            var w2 = new GamePacketWriter();
+            w2.WriteByte(0x01);                  
+            w2.WriteByte(0x01); w2.WriteByte(0x00); w2.WriteByte(0x03); w2.WriteByte(0x00); 
+            w2.WriteByte(0x01); w2.WriteByte(0x00); w2.WriteByte(0x00); w2.WriteByte(0x00); 
+            w2.WriteInt16((short)newSlot);     
+            w2.WriteInt32(newItemId);          
+            w2.WriteInt16((short)option);   
+            w2.WriteInt16(1);                  
+            for (int i = 0; i < 8; i++)        
+                w2.WriteInt16(consumeSlots[i]);
+            w2.WriteZeroBytes(24);
+
+            var respBody2 = w2.ToArray();
+            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x03EA, respBody2));
+
+            if (consumedTemplateId > 0)
+            {
+                var consumeItem = new CommonInventoryItem
+                {
+                    SlotIndex = consumeStackableSlot,
+                    ItemTemplateId = consumedRemaining > 0 ? consumedTemplateId : -1,  // remain>0 发真ID，remain==0 发-1
+                    CountOrInstanceValue = consumedRemaining,  
+                };
+                var consumeUpd = ItemListUpdateBuilder.BuildCommonUpdates(new List<CommonInventoryItem> { consumeItem });
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000E, consumeUpd));
+            }
         }
     }
 }
