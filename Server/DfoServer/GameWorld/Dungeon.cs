@@ -1065,6 +1065,54 @@ namespace DfoServer.GameWorld
 
             if (mapId == -1)
             {
+                // Fallback 1: 使用本迷宫第一个有效的地图规格
+                foreach (var item in defaultMaze.MapSpecifications)
+                {
+                    if (item.Index > 0)
+                    {
+                        mapId = item.MapCandidates != null && item.MapCandidates.Length > 0
+                            ? item.MapCandidates[_mazeRng.Next(item.MapCandidates.Length)]
+                            : item.Index;
+                        FileLogger.Log($"[Dungeon] GetDungeonMapMonsterSummaryInformation fallback to first map spec: dungeon={dungeonId} maze={mazeIndex} room=({x},{y}) -> map={mapId} specType={item.Type}");
+                        break;
+                    }
+                }
+            }
+
+            if (mapId == -1)
+            {
+                // Fallback 2: 在候选目录中找第一个可用地图（非任务变体）
+                if (maplst != null)
+                {
+                    foreach (var entry in maplst.Entries)
+                    {
+                        if (!InCandidateDir(entry.FilePath)) continue;
+                        var fileName = System.IO.Path.GetFileName(entry.FilePath);
+                        if (IsQuestVariantFile(fileName)) continue;
+                        mapId = entry.Id;
+                        FileLogger.Log($"[Dungeon] GetDungeonMapMonsterSummaryInformation fallback to first candidate map: dungeon={dungeonId} maze={mazeIndex} room=({x},{y}) -> map={mapId} file={entry.FilePath}");
+                        break;
+                    }
+                }
+            }
+
+            if (mapId == -1)
+            {
+                // Fallback 3: 任务地下城可能只有 quest variant 地图
+                if (maplst != null)
+                {
+                    foreach (var entry in maplst.Entries)
+                    {
+                        if (!InCandidateDir(entry.FilePath)) continue;
+                        mapId = entry.Id;
+                        FileLogger.Log($"[Dungeon] GetDungeonMapMonsterSummaryInformation fallback to quest-variant map: dungeon={dungeonId} maze={mazeIndex} room=({x},{y}) -> map={mapId} file={entry.FilePath}");
+                        break;
+                    }
+                }
+            }
+
+            if (mapId == -1)
+            {
                 FileLogger.Log($"[Dungeon] GetDungeonMapMonsterSummaryInformation WARNING: no map resolved for dungeon={dungeonId} maze={mazeIndex} room=({x},{y}) startRoom={isStartRoom} bossRoom={isBossRoom}");
                 return new MazeSumInfo { X = x, Y = y, Index = 0, Monsters = new List<MonsterSumInfo>() };
             }
