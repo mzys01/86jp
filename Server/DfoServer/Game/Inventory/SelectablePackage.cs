@@ -87,6 +87,8 @@ namespace DfoServer.Game.Inventory
 
         public int PackageItemTemplateId { get; set; }
 
+        public int SourceRemainingStackCount { get; set; }
+
         public int RewardItemTemplateId { get; set; }
 
         public int AddedMainItemCount { get; set; }
