@@ -318,10 +318,22 @@ namespace DfoServer.Game.SelectCharacter
                 return _inventoryStore.TryOpenEquipmentSocket(targetSlotIndex, targetItemTemplateId, materialSlotIndex, out result);
         }
 
+        public bool TrySetEquipmentEmblems(int characterId, int accountId, short targetSlotIndex, int targetItemTemplateId, IReadOnlyList<EquipmentEmblemApplyRequest> emblems, out EquipmentEmblemMutationResult result)
+        {
+            using (_inventoryStore.BeginScope(characterId, accountId))
+                return _inventoryStore.TrySetEquipmentEmblems(targetSlotIndex, targetItemTemplateId, emblems, out result);
+        }
+
         public bool TryOpenAvatarSocket(int characterId, int accountId, short targetSlotIndex, int targetItemTemplateId, short materialSlotIndex, out AvatarSocketMutationResult result)
         {
             using (_inventoryStore.BeginScope(characterId, accountId))
                 return _inventoryStore.TryOpenAvatarSocket(targetSlotIndex, targetItemTemplateId, materialSlotIndex, out result);
+        }
+
+        public bool TrySetAvatarEmblems(int characterId, int accountId, short targetSlotIndex, int targetItemTemplateId, IReadOnlyList<EquipmentEmblemApplyRequest> emblems, out AvatarEmblemMutationResult result)
+        {
+            using (_inventoryStore.BeginScope(characterId, accountId))
+                return _inventoryStore.TrySetAvatarEmblems(targetSlotIndex, targetItemTemplateId, emblems, out result);
         }
 
         public bool TrySortItems(int characterId, int accountId, InventoryListType listType, byte category)

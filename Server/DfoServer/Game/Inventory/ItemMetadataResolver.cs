@@ -188,6 +188,59 @@ namespace DfoServer.Game.Inventory
                 : null;
         }
 
+        public static byte ResolveEmblemSocketType(int itemTemplateId)
+        {
+            var stackableEntry = StackableList.Value.GetById(itemTemplateId);
+            if (stackableEntry == null)
+                return 0;
+
+            StackableItemFile stackable;
+            try
+            {
+                stackable = StackableItemFile.Parse(PvfArchiveAccessor.ReadText(Path.Combine("stackable", stackableEntry.FilePath)));
+            }
+            catch (Exception ex)
+            {
+                FileLogger.Log($"  [EmblemAttach] ResolveEmblemSocketType(0x{itemTemplateId:X8}) failed: {ex.Message}");
+                return 0;
+            }
+
+            var stackableType = stackable.StackableType != null
+                ? stackable.StackableType.Replace("`", "").Trim()
+                : string.Empty;
+            if (!stackableType.StartsWith("[avatar emblem]", StringComparison.OrdinalIgnoreCase))
+                return 0;
+
+            var text = string.Join(" ", new[]
+            {
+                stackableEntry.FilePath,
+                stackable.Name,
+                stackable.ItemCategory,
+                stackable.ItemGroupName,
+                stackable.AttachType,
+                stackable.StringData,
+                stackable.IntData,
+                stackable.Equipment,
+                string.Join(" ", stackable.StringDataItems ?? new List<string>()),
+            }).ToLowerInvariant();
+
+            byte socketType = 0;
+            if (text.Contains("red") || text.Contains("[red]"))
+                socketType |= 0x01;
+            if (text.Contains("yellow") || text.Contains("[yellow]"))
+                socketType |= 0x02;
+            if (text.Contains("green") || text.Contains("[green]"))
+                socketType |= 0x04;
+            if (text.Contains("blue") || text.Contains("[blue]"))
+                socketType |= 0x08;
+            if (text.Contains("platinum") || text.Contains("[platinum]"))
+                socketType |= 0x10;
+            if (text.Contains("multi") || text.Contains("all color") || text.Contains("rainbow") || text.Contains("colorful"))
+                socketType |= 0x0F;
+
+            return socketType;
+        }
+
         public static IReadOnlyList<byte> ResolveAvatarSocketTypes(int itemTemplateId)
         {
             var result = new List<byte>();
@@ -335,7 +388,7 @@ namespace DfoServer.Game.Inventory
                 return false;
             }
 
-            // 瀹濈彔鐩存帴澹版槑 target item id 鏃讹紝鍙湁鐧藉悕鍗曡澶囪兘琚檮榄斻€?
+            // 宝珠直接声明 target item id 时，只有白名单装备能被附魔。
             if (bead.TargetItemIds != null && bead.TargetItemIds.Count > 0 && !bead.TargetItemIds.Contains(targetItemTemplateId))
             {
                 rejectReason = "target item id is not allowed by bead target item id";
@@ -364,7 +417,7 @@ namespace DfoServer.Game.Inventory
 
             if (card != null)
             {
-                // monster card 鐨?string data: 绗竴涓槸鍥剧墖璧勬簮锛屽悗缁槸鍏佽闄勯瓟鐨?equipment type銆?
+                // monster card 的 string data: 第一个是图片资源，后续是允许附魔的 equipment type。
                 var allowedTypes = ExtractAllowedEquipmentTypes(card.StringDataItems);
                 if (allowedTypes.Count > 0 && !allowedTypes.Contains(targetEquipmentType))
                 {
@@ -447,7 +500,7 @@ namespace DfoServer.Game.Inventory
         }
 
         /// <summary>
-        /// 鍒ゆ柇鐗╁搧鏄惁涓哄厠闅嗚鎵€傚厠闅嗚鎵殑 PVF [item category] 娈靛€间负 "clear avatar"銆?
+        /// 判断物品是否为克隆装扮。克隆装扮的 PVF [item category] 段值为 "clear avatar"。
         /// </summary>
         public static bool IsCloneAvatarItem(int itemTemplateId)
         {

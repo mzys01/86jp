@@ -73,7 +73,7 @@ namespace DfoServer.Network.Handlers
             {
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0013,
                     MoveItemSpaceAckBuilder.BuildError(0x02, (byte)request.SourceListType, (byte)request.DestinationListType)));
-                FileLogger.Log($"[{ProtocolName}] MOVE_ITEMSPACE: ReverseError -> ERROR ACK (鎾ら攢鍙嶈浆鍖? 涓嶅崱浣?");
+                FileLogger.Log($"[{ProtocolName}] MOVE_ITEMSPACE: ReverseError -> ERROR ACK (撤销反转包, 不卡住)");
                 return;
             }
 
@@ -307,7 +307,7 @@ namespace DfoServer.Network.Handlers
                 return;
             }
 
-            // 鍘熺敓椤哄簭鏄厛鍙?NOTI 14 鍒锋柊鐩爣瑁呭鍜屽疂鐝狅紝鍐嶅彂 0x0110 鎴愬姛缁撴灉銆?
+            // 原生顺序是先发 NOTI 14 刷新目标装备和宝珠，再发 0x0110 成功结果。
             var updateBody = ItemListUpdateBuilder.BuildCommonUpdates(new[] { result.TargetItem, result.BeadItem });
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000E, updateBody));
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0110, EnchantByBeadAckBuilder.BuildSuccess(result)));
@@ -351,6 +351,38 @@ namespace DfoServer.Network.Handlers
                 FileLogger.Log($"[{ProtocolName}] EQUIP_SOCKET_OPEN: OK targetSlot={targetSlot} item=0x{targetItemId:X8} already-open repaired without consuming material");
         }
 
+        public async Task Handle_EQUIPMENT_EMBLEM_ATTACH(EnhancedClientSession session, GamePacketHeader header, byte[] body)
+        {
+            FileLogger.Log($"[{ProtocolName}] EQUIP_EMBLEM_ATTACH 0x031C raw({body?.Length ?? 0}B): {(body != null ? BitConverter.ToString(body) : "null")}");
+
+            if (!TryParseEmblemAttachBody(body, out var targetSlot, out var targetItemId, out var emblems))
+            {
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x031C, new byte[] { 0x00 }));
+                return;
+            }
+
+            var (cid, aid) = ResolveOwner(session);
+            if (!_sqliteSelectCharacterDataSource.TrySetEquipmentEmblems(cid, aid, targetSlot, targetItemId, emblems, out var result))
+            {
+                if (await TryHandleAvatarEmblemAttach(session, 0x031C, targetSlot, targetItemId, emblems, cid, aid))
+                    return;
+
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x031C, new byte[] { 0x00, 0x04 }));
+                return;
+            }
+
+            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x031C, BuildEmblemAttachAck(targetSlot, targetItemId, emblems.Count)));
+            if (!result.TargetEquipped && result.TargetItem != null)
+            {
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
+                    0x00,
+                    0x000E,
+                    ItemListUpdateBuilder.BuildCommonUpdates(new[] { result.TargetItem })));
+            }
+            await SendSortItemLockRefresh(session, InventoryListType.Main);
+            FileLogger.Log($"[{ProtocolName}] EQUIP_EMBLEM_ATTACH: OK targetSlot={targetSlot} item=0x{targetItemId:X8} emblems={emblems.Count}");
+        }
+
         public async Task Handle_AVATAR_SOCKET_OPEN(EnhancedClientSession session, GamePacketHeader header, byte[] body)
         {
             FileLogger.Log($"[{ProtocolName}] AVATAR_SOCKET_OPEN 0x00CE raw({body?.Length ?? 0}B): {(body != null ? BitConverter.ToString(body) : "null")}");
@@ -386,6 +418,38 @@ namespace DfoServer.Network.Handlers
                 FileLogger.Log($"[{ProtocolName}] AVATAR_SOCKET_OPEN: OK targetSlot={targetSlot} item=0x{targetItemId:X8} materialSlot={materialSlot} left={result.MaterialItem.RemainingStackCount}");
             else
                 FileLogger.Log($"[{ProtocolName}] AVATAR_SOCKET_OPEN: OK targetSlot={targetSlot} item=0x{targetItemId:X8} already-open repaired without consuming material");
+        }
+
+        public async Task Handle_AVATAR_EMBLEM_ATTACH(EnhancedClientSession session, GamePacketHeader header, byte[] body)
+        {
+            FileLogger.Log($"[{ProtocolName}] AVATAR_EMBLEM_ATTACH 0x{header.type:X4} raw({body?.Length ?? 0}B): {(body != null ? BitConverter.ToString(body) : "null")}");
+
+            if (!TryParseAvatarEmblemAttachBody(body, out var targetSlot, out var targetItemId, out var emblems))
+            {
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, header.type, new byte[] { 0x00 }));
+                return;
+            }
+
+            var (cid, aid) = ResolveOwner(session);
+            if (!await TryHandleAvatarEmblemAttach(session, header.type, targetSlot, targetItemId, emblems, cid, aid))
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, header.type, new byte[] { 0x00, 0x04 }));
+        }
+
+        private async Task<bool> TryHandleAvatarEmblemAttach(EnhancedClientSession session, ushort ackType, short targetSlot, int targetItemId, IReadOnlyList<EquipmentEmblemApplyRequest> emblems, int cid, int aid)
+        {
+            if (!_sqliteSelectCharacterDataSource.TrySetAvatarEmblems(cid, aid, targetSlot, targetItemId, emblems, out var result))
+                return false;
+
+            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, ackType, BuildEmblemAttachAck(targetSlot, targetItemId, emblems.Count)));
+            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
+                0x00,
+                0x000E,
+                ItemListUpdateBuilder.BuildAvatarUpdates(new[] { result.TargetItem })));
+
+            await SendSortItemLockRefresh(session, InventoryListType.Main);
+            await SendSortItemLockRefresh(session, InventoryListType.Avatar);
+            FileLogger.Log($"[{ProtocolName}] AVATAR_EMBLEM_ATTACH: OK targetSlot={targetSlot} item=0x{targetItemId:X8} emblems={emblems.Count} ack=0x{ackType:X4}");
+            return true;
         }
 
         public async Task Handle_ENUM_CMDPACKET_USE_STACKABLE(EnhancedClientSession session, GamePacketHeader header, byte[] body)
@@ -906,6 +970,78 @@ namespace DfoServer.Network.Handlers
             return true;
         }
 
+        private static bool TryParseEmblemAttachBody(byte[] body, out short targetSlot, out int targetItemId, out List<EquipmentEmblemApplyRequest> emblems)
+        {
+            targetSlot = 0;
+            targetItemId = 0;
+            emblems = null;
+            if (body == null || body.Length < 7)
+                return false;
+
+            targetSlot = BitConverter.ToInt16(body, 0);
+            targetItemId = BitConverter.ToInt32(body, 2);
+            var count = body[6];
+            var offset = 7;
+            emblems = new List<EquipmentEmblemApplyRequest>();
+            for (var index = 0; index < count; index++)
+            {
+                if (offset + 7 > body.Length)
+                    return false;
+
+                emblems.Add(new EquipmentEmblemApplyRequest
+                {
+                    EmblemSlot = BitConverter.ToInt16(body, offset),
+                    EmblemItemTemplateId = BitConverter.ToInt32(body, offset + 2),
+                    SocketIndex = body[offset + 6],
+                });
+                offset += 7;
+            }
+            return true;
+        }
+
+        private static bool TryParseAvatarEmblemAttachBody(byte[] body, out short targetSlot, out int targetItemId, out List<EquipmentEmblemApplyRequest> emblems)
+        {
+            targetSlot = 0;
+            targetItemId = 0;
+            emblems = null;
+            if (body == null)
+                return false;
+
+            if (body.Length >= 8 && body[0] == (byte)InventoryListType.Avatar)
+                return TryParseEmblemAttachBodyAt(body, 1, out targetSlot, out targetItemId, out emblems);
+
+            return TryParseEmblemAttachBody(body, out targetSlot, out targetItemId, out emblems);
+        }
+
+        private static bool TryParseEmblemAttachBodyAt(byte[] body, int startOffset, out short targetSlot, out int targetItemId, out List<EquipmentEmblemApplyRequest> emblems)
+        {
+            targetSlot = 0;
+            targetItemId = 0;
+            emblems = null;
+            if (body == null || startOffset < 0 || body.Length < startOffset + 7)
+                return false;
+
+            targetSlot = BitConverter.ToInt16(body, startOffset);
+            targetItemId = BitConverter.ToInt32(body, startOffset + 2);
+            var count = body[startOffset + 6];
+            var offset = startOffset + 7;
+            emblems = new List<EquipmentEmblemApplyRequest>();
+            for (var index = 0; index < count; index++)
+            {
+                if (offset + 7 > body.Length)
+                    return false;
+
+                emblems.Add(new EquipmentEmblemApplyRequest
+                {
+                    EmblemSlot = BitConverter.ToInt16(body, offset),
+                    EmblemItemTemplateId = BitConverter.ToInt32(body, offset + 2),
+                    SocketIndex = body[offset + 6],
+                });
+                offset += 7;
+            }
+            return true;
+        }
+
         private static byte[] BuildSocketOpenAck(short targetSlot, int targetItemId, short materialSlot)
         {
             var writer = new GamePacketWriter();
@@ -913,6 +1049,16 @@ namespace DfoServer.Network.Handlers
             writer.WriteInt16(targetSlot);
             writer.WriteInt32(targetItemId);
             writer.WriteInt16(materialSlot);
+            return writer.ToArray();
+        }
+
+        private static byte[] BuildEmblemAttachAck(short targetSlot, int targetItemId, int emblemCount)
+        {
+            var writer = new GamePacketWriter();
+            writer.WriteByte(0x01);
+            writer.WriteInt16(targetSlot);
+            writer.WriteInt32(targetItemId);
+            writer.WriteByte((byte)Math.Max(0, Math.Min(255, emblemCount)));
             return writer.ToArray();
         }
 
@@ -1135,7 +1281,7 @@ namespace DfoServer.Network.Handlers
                 off += 6; // short slot + int itemTemplateId
             }
 
-            // 闃叉敼鍖? 8浠舵Ы浣嶄笉鑳介噸澶?
+            // 防改包: 8件槽位不能重复
             if (consumeSlots.Distinct().Count() != consumeSlots.Length)
             {
                 var dupErr = new GamePacketWriter();
@@ -1169,7 +1315,7 @@ namespace DfoServer.Network.Handlers
             {
                 var err = new GamePacketWriter();
                 err.WriteByte(0x00);
-                err.WriteByte(0x16); // errcode 22 (鐗╁搧鍒犻櫎澶辫触), 涓?x0063澶辫触鐮佷竴鑷?
+                err.WriteByte(0x16); // errcode 22 (物品删除失败), 与0x0063失败码一致
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x03EA, err.ToArray()));
                 return;
             }
@@ -1194,7 +1340,7 @@ namespace DfoServer.Network.Handlers
                 var consumeItem = new CommonInventoryItem
                 {
                     SlotIndex = consumeStackableSlot,
-                    ItemTemplateId = consumedRemaining > 0 ? consumedTemplateId : -1,  // remain>0 鍙戠湡ID锛宺emain==0 鍙?1
+                    ItemTemplateId = consumedRemaining > 0 ? consumedTemplateId : -1,  // remain>0 发真ID，remain==0 发-1
                     CountOrInstanceValue = consumedRemaining,  
                 };
                 var consumeUpd = ItemListUpdateBuilder.BuildCommonUpdates(new List<CommonInventoryItem> { consumeItem });
