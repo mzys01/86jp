@@ -377,7 +377,7 @@ WHERE character_id = @cid AND list_type = 0 AND slot_index = @slot;";
             using (var cmd = connection.CreateCommand())
             {
                 cmd.Transaction = transaction;
-                cmd.CommandText = @"INSERT INTO character_items
+                cmd.CommandText = @"INSERT OR REPLACE INTO character_items
 (owner_scope, owner_id, character_id, list_type, slot_index, item_template_id, item_kind, stack_count, instance_value, durability, seal_flag, option_value, expire_time, marker_16)
 VALUES ('character', @cid, @cid, 0, @slot, 0, 'special', @val, @val, 0, 0, 0, 0, 0);";
                 cmd.Parameters.AddWithValue("@val", value);
