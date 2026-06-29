@@ -725,6 +725,8 @@ namespace DfoServer.GameWorld
                 };
             }
 
+            byte dungeonBasicLv = GetDungeonBasicLv(dungeonId);
+
             MazeInfo defaultMaze;
             if (mazeIndex >= 0)
             {
@@ -751,32 +753,46 @@ namespace DfoServer.GameWorld
                 var listO = new List<MonsterSumInfo>();
                 foreach (var item in mapFileO.Monsters)
                 {
-                    if (!item.MonsterId.HasValue)
+                    if (!item.MonsterId.HasValue || item.MonsterId.Value <= 0)
                     {
-                        FileLogger.Log($"[Dungeon] GetDungeonMapMonsterSummaryInformation: skip monster with null id in override map={overrideMapId} dungeon={dungeonId}");
+                        FileLogger.Log($"[Dungeon] GetDungeonMapMonsterSummaryInformation: skip monster with invalid id in override map={overrideMapId} dungeon={dungeonId}");
                         continue;
                     }
+                    var monsterType = (byte)item.Type;
+                    if (monsterType > 3)
+                    {
+                        FileLogger.Log($"[Dungeon] GetDungeonMapMonsterSummaryInformation: clamp monster type {monsterType} to 0 in override map={overrideMapId} dungeon={dungeonId}");
+                        monsterType = 0;
+                    }
+                    int rawMonsterLevel = item.Lv.GetValueOrDefault() != 0
+                        ? dungeonBasicLv + item.AutoLv.GetValueOrDefault()
+                        : item.AutoLv.GetValueOrDefault();
+                    byte monsterLevel = rawMonsterLevel > 0 ? (byte)Math.Min(rawMonsterLevel, 255) : dungeonBasicLv;
                     listO.Add(new MonsterSumInfo
                     {
                         Code = item.MonsterId.Value,
-                        Type = (byte)item.Type,
-                        Level = item.Lv.GetValueOrDefault() != 0
-                            ? (byte)(GetDungeonBasicLv(dungeonId) + item.AutoLv.GetValueOrDefault())
-                            : (byte)item.AutoLv.GetValueOrDefault(),
+                        Type = monsterType,
+                        Level = monsterLevel,
                         IsBlocking = true,
                     });
                 }
                 foreach (var apc in mapFileO.AICharacters)
                 {
-                    if (!TryGetAICharacterLevel(apc.Code, out var apcLevel))
+                    if (apc.Code <= 0 || !TryGetAICharacterLevel(apc.Code, out var apcLevel))
                     {
                         FileLogger.Log($"[Dungeon] GetDungeonMapMonsterSummaryInformation: skip APC code={apc.Code} not found in override map={overrideMapId} dungeon={dungeonId}");
                         continue;
                     }
+                    var apcType = (byte)apc.AIType;
+                    if (apcType < 5 || apcType > 8)
+                    {
+                        FileLogger.Log($"[Dungeon] GetDungeonMapMonsterSummaryInformation: clamp APC type {apcType} to 5 in override map={overrideMapId} dungeon={dungeonId}");
+                        apcType = 5;
+                    }
                     listO.Add(new MonsterSumInfo
                     {
                         Code = apc.Code,
-                        Type = (byte)apc.AIType,
+                        Type = apcType,
                         Level = apcLevel,
                         IsBlocking = false,
                     });
@@ -1061,18 +1077,26 @@ namespace DfoServer.GameWorld
             var list = new List<MonsterSumInfo>();
             foreach (var item in mapFile.Monsters)
             {
-                if (!item.MonsterId.HasValue)
+                if (!item.MonsterId.HasValue || item.MonsterId.Value <= 0)
                 {
-                    FileLogger.Log($"[Dungeon] GetDungeonMapMonsterSummaryInformation: skip monster with null id in map={mapId} dungeon={dungeonId} room=({x},{y})");
+                    FileLogger.Log($"[Dungeon] GetDungeonMapMonsterSummaryInformation: skip monster with invalid id in map={mapId} dungeon={dungeonId} room=({x},{y})");
                     continue;
                 }
+                var monsterType = (byte)item.Type;
+                if (monsterType > 3)
+                {
+                    FileLogger.Log($"[Dungeon] GetDungeonMapMonsterSummaryInformation: clamp monster type {monsterType} to 0 in map={mapId} dungeon={dungeonId} room=({x},{y})");
+                    monsterType = 0;
+                }
+                int rawMonsterLevel = item.Lv.GetValueOrDefault() != 0
+                    ? dungeonBasicLv + item.AutoLv.GetValueOrDefault()
+                    : item.AutoLv.GetValueOrDefault();
+                byte monsterLevel = rawMonsterLevel > 0 ? (byte)Math.Min(rawMonsterLevel, 255) : dungeonBasicLv;
                 var monster = new MonsterSumInfo
                 {
                     Code = item.MonsterId.Value,
-                    Type = (byte)item.Type,
-                    Level = item.Lv.GetValueOrDefault() != 0
-                        ? (byte)(GetDungeonBasicLv(dungeonId) + item.AutoLv.GetValueOrDefault())
-                        : (byte)item.AutoLv.GetValueOrDefault(),
+                    Type = monsterType,
+                    Level = monsterLevel,
                     IsBlocking = true,
                 };
                 list.Add(monster);
@@ -1081,15 +1105,21 @@ namespace DfoServer.GameWorld
             // APC
             foreach (var apc in mapFile.AICharacters)
             {
-                if (!TryGetAICharacterLevel(apc.Code, out var apcLevel))
+                if (apc.Code <= 0 || !TryGetAICharacterLevel(apc.Code, out var apcLevel))
                 {
                     FileLogger.Log($"[Dungeon] GetDungeonMapMonsterSummaryInformation: skip APC code={apc.Code} not found in map={mapId} dungeon={dungeonId} room=({x},{y})");
                     continue;
                 }
+                var apcType = (byte)apc.AIType;
+                if (apcType < 5 || apcType > 8)
+                {
+                    FileLogger.Log($"[Dungeon] GetDungeonMapMonsterSummaryInformation: clamp APC type {apcType} to 5 in map={mapId} dungeon={dungeonId} room=({x},{y})");
+                    apcType = 5;
+                }
                 list.Add(new MonsterSumInfo
                 {
                     Code = apc.Code,
-                    Type = (byte)apc.AIType,
+                    Type = apcType,
                     Level = apcLevel,
                     IsBlocking = false,
                 });
