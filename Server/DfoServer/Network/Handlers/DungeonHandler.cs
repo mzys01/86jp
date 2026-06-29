@@ -58,6 +58,12 @@ namespace DfoServer.Network.Handlers
         public Task Handle_ENUM_CMDPACKET_SELECT_CARD(EnhancedClientSession session, GamePacketHeader header, byte[] body)
             => _settlement.HandleSelectCard(session, header, body);
 
+        public Task Handle_ENUM_CMDPACKET_EPLP_COMMAND(EnhancedClientSession session, GamePacketHeader header, byte[] body)
+            => _settlement.HandleEplpCommand(session, header, body);
+
+        public Task Handle_CARD_START_REQUEST(EnhancedClientSession session, GamePacketHeader header, byte[] body)
+            => _settlement.HandleCardStartRequest(session, header, body);
+
         public Task Handle_SET_PLAY_RESULT(EnhancedClientSession session, GamePacketHeader header, byte[] body)
             => _settlement.HandleSetPlayResult(session, header, body);
 
