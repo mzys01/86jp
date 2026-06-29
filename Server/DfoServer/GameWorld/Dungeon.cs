@@ -751,6 +751,11 @@ namespace DfoServer.GameWorld
                 var listO = new List<MonsterSumInfo>();
                 foreach (var item in mapFileO.Monsters)
                 {
+                    if (!item.MonsterId.HasValue)
+                    {
+                        FileLogger.Log($"[Dungeon] GetDungeonMapMonsterSummaryInformation: skip monster with null id in override map={overrideMapId} dungeon={dungeonId}");
+                        continue;
+                    }
                     listO.Add(new MonsterSumInfo
                     {
                         Code = item.MonsterId.Value,
@@ -763,7 +768,11 @@ namespace DfoServer.GameWorld
                 }
                 foreach (var apc in mapFileO.AICharacters)
                 {
-                    byte apcLevel = GetAICharacterLevel(apc.Code);
+                    if (!TryGetAICharacterLevel(apc.Code, out var apcLevel))
+                    {
+                        FileLogger.Log($"[Dungeon] GetDungeonMapMonsterSummaryInformation: skip APC code={apc.Code} not found in override map={overrideMapId} dungeon={dungeonId}");
+                        continue;
+                    }
                     listO.Add(new MonsterSumInfo
                     {
                         Code = apc.Code,
@@ -1040,6 +1049,7 @@ namespace DfoServer.GameWorld
 
             if (mapId == -1)
             {
+                FileLogger.Log($"[Dungeon] GetDungeonMapMonsterSummaryInformation WARNING: no map resolved for dungeon={dungeonId} maze={mazeIndex} room=({x},{y}) startRoom={isStartRoom} bossRoom={isBossRoom}");
                 return new MazeSumInfo { X = x, Y = y, Index = 0, Monsters = new List<MonsterSumInfo>() };
             }
             if (maplst == null)
@@ -1051,6 +1061,11 @@ namespace DfoServer.GameWorld
             var list = new List<MonsterSumInfo>();
             foreach (var item in mapFile.Monsters)
             {
+                if (!item.MonsterId.HasValue)
+                {
+                    FileLogger.Log($"[Dungeon] GetDungeonMapMonsterSummaryInformation: skip monster with null id in map={mapId} dungeon={dungeonId} room=({x},{y})");
+                    continue;
+                }
                 var monster = new MonsterSumInfo
                 {
                     Code = item.MonsterId.Value,
@@ -1066,7 +1081,11 @@ namespace DfoServer.GameWorld
             // APC
             foreach (var apc in mapFile.AICharacters)
             {
-                byte apcLevel = GetAICharacterLevel(apc.Code);
+                if (!TryGetAICharacterLevel(apc.Code, out var apcLevel))
+                {
+                    FileLogger.Log($"[Dungeon] GetDungeonMapMonsterSummaryInformation: skip APC code={apc.Code} not found in map={mapId} dungeon={dungeonId} room=({x},{y})");
+                    continue;
+                }
                 list.Add(new MonsterSumInfo
                 {
                     Code = apc.Code,
