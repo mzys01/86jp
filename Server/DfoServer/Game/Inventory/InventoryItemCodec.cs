@@ -12,14 +12,11 @@ namespace DfoServer.Game.Inventory
     {
         internal static CommonInventoryItem ReadCommonItem(SqliteDataReader reader, string extraJson)
         {
-            var itemKind = reader.GetString(3);
-            var item = new CommonInventoryItem
+            return new CommonInventoryItem
             {
                 SlotIndex = Convert.ToInt16(reader.GetInt32(1), CultureInfo.InvariantCulture),
                 ItemTemplateId = reader.GetInt32(2),
-                CountOrInstanceValue = string.Equals(itemKind, "equipment", StringComparison.Ordinal)
-                    ? reader.GetInt32(5)
-                    : reader.GetInt32(4),
+                CountOrInstanceValue = reader.GetInt32(4),
                 Durability = Convert.ToUInt16(reader.GetInt32(6), CultureInfo.InvariantCulture),
                 SealFlag = Convert.ToByte(reader.GetInt32(7), CultureInfo.InvariantCulture),
                 ExpireTime = reader.GetInt32(9),
@@ -30,8 +27,6 @@ namespace DfoServer.Game.Inventory
                 TailData2F = ReadHexValue(extraJson, "tailData2F", 37),
                 JewelSocket = ReadHexValue(extraJson, "jewelSocket", 30),
             };
-            EnsureVisibleSocketCount(item);
-            return item;
         }
 
         internal static AvatarInventoryItem ReadAvatarItem(SqliteDataReader reader, string extraJson)
@@ -209,62 +204,6 @@ namespace DfoServer.Game.Inventory
                 buffer[index] = byte.Parse(hex.Substring(index * 2, 2), NumberStyles.HexNumber, CultureInfo.InvariantCulture);
 
             return buffer;
-        }
-
-        private static void EnsureVisibleSocketCount(CommonInventoryItem item)
-        {
-            if (item?.JewelSocket == null || item.TailData2F == null || item.TailData2F.Length == 0)
-                return;
-
-            NormalizeEquipmentSocketLayout(item);
-            var openCount = 0;
-            for (var i = 0; i < 2; i++)
-            {
-                var offset = i * 6;
-                if (offset < item.JewelSocket.Length && item.JewelSocket[offset] != 0)
-                    openCount++;
-            }
-
-            if (openCount > 0)
-            {
-                item.TailData2F[0] = (byte)Math.Max(item.TailData2F[0], Math.Min(openCount, 2));
-                for (var i = 0; i < openCount && i < 2; i++)
-                {
-                    var offset = 1 + i * 4;
-                    if (offset + 4 <= item.TailData2F.Length && BitConverter.ToInt32(item.TailData2F, offset) == 0)
-                        BitConverter.GetBytes(-1).CopyTo(item.TailData2F, offset);
-                }
-            }
-        }
-
-        private static void NormalizeEquipmentSocketLayout(CommonInventoryItem item)
-        {
-            for (var i = 0; i < 2; i++)
-            {
-                var offset = i * 6;
-                if (offset + 1 >= item.JewelSocket.Length)
-                    break;
-
-                if (item.JewelSocket[offset] == 0 && IsKnownJewelSocketType(item.JewelSocket[offset + 1]))
-                {
-                    item.JewelSocket[offset] = item.JewelSocket[offset + 1];
-                    item.JewelSocket[offset + 1] = 0;
-                }
-                else if (item.JewelSocket[offset] == 0x02 && IsKnownJewelSocketType(item.JewelSocket[offset + 1]))
-                {
-                    item.JewelSocket[offset] = item.JewelSocket[offset + 1];
-                    item.JewelSocket[offset + 1] = 0;
-                }
-            }
-        }
-
-        private static bool IsKnownJewelSocketType(byte socketType)
-        {
-            return socketType == 0x01
-                || socketType == 0x02
-                || socketType == 0x04
-                || socketType == 0x08
-                || socketType == 0x10;
         }
     }
 }
