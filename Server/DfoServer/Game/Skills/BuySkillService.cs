@@ -51,8 +51,8 @@ namespace DfoServer.Game.Skills
             var page = snapshot.Pages[pageIdx];
 
             var persistedPoints = repo.LoadSkillPointState(cid);
-            var points = SkillStateService.ResolvePointState(
-                snapshot, persistedPoints, (byte)job, level, bonusSp, bonusTp);
+            var points = ResolvePagePointState(
+                snapshot, persistedPoints, (byte)job, level, bonusSp, bonusTp, pageIdx);
             int remainSp = points.RemainingSp;
             int remainTp = points.RemainingTp;
 
@@ -176,11 +176,120 @@ namespace DfoServer.Game.Skills
 
             points.RemainingSp = Math.Max(0, Math.Min(remainSp, points.TotalSp));
             points.RemainingTp = Math.Max(0, Math.Min(remainTp, points.TotalTp));
-            SkillStateService.Persist(repo, cid, snapshot, points);
+            page.HeaderValue = ToUInt16(points.RemainingSp);
+            repo.SaveSkillProgress(cid, snapshot, BuildPersistedPointState(
+                snapshot, points, pageIdx, (byte)job, level, bonusSp, bonusTp));
 
             result.RemainSp = (ushort)points.RemainingSp;
             result.RemainTp = (ushort)points.RemainingTp;
             return result;
+        }
+
+        private static SkillPointState ResolvePagePointState(
+            SkillInfoSnapshot snapshot,
+            SkillPointState persisted,
+            byte job,
+            byte level,
+            int bonusSp,
+            int bonusTp,
+            int pageIdx)
+        {
+            var calculated = SkillPointCalculator.Calculate(job, level, bonusSp, bonusTp, snapshot, pageIdx);
+            var page = snapshot != null && pageIdx >= 0 && pageIdx < snapshot.Pages.Count
+                ? snapshot.Pages[pageIdx]
+                : null;
+            var pageRemainingSp = ResolvePageRemainingSp(page, calculated.RemainingSp);
+            var totalSp = Math.Max(calculated.TotalSp, pageRemainingSp);
+
+            var state = new SkillPointState
+            {
+                TotalSp = totalSp,
+                TotalTp = calculated.TotalTp,
+                SyncedLevel = level,
+                HasPersistedState = persisted != null && persisted.HasPersistedState
+            };
+
+            if (pageIdx == 0 && persisted != null && persisted.HasPersistedState && (page == null || page.HeaderValue == 0))
+            {
+                var gainedSp = calculated.TotalSp - persisted.TotalSp;
+                state.RemainingSp = Clamp(persisted.RemainingSp + gainedSp, 0, totalSp);
+            }
+            else
+            {
+                state.RemainingSp = Clamp(pageRemainingSp, 0, totalSp);
+            }
+
+            if (persisted != null && persisted.HasPersistedState)
+            {
+                var gainedTp = calculated.TotalTp - persisted.TotalTp;
+                state.RemainingTp = Clamp(persisted.RemainingTp + gainedTp, 0, calculated.TotalTp);
+            }
+            else
+            {
+                state.RemainingTp = ResolveRemainingTp(snapshot, calculated.RemainingTp);
+            }
+
+            return state;
+        }
+
+        private static SkillPointState BuildPersistedPointState(
+            SkillInfoSnapshot snapshot,
+            SkillPointState currentPagePoints,
+            int pageIdx,
+            byte job,
+            byte level,
+            int bonusSp,
+            int bonusTp)
+        {
+            var page0Calculated = SkillPointCalculator.Calculate(job, level, bonusSp, bonusTp, snapshot, 0);
+            var page0 = snapshot != null && snapshot.Pages.Count > 0 ? snapshot.Pages[0] : null;
+            var remainingSp = pageIdx == 0
+                ? currentPagePoints.RemainingSp
+                : ResolvePageRemainingSp(page0, page0Calculated.RemainingSp);
+            var totalSp = Math.Max(page0Calculated.TotalSp, remainingSp);
+
+            return new SkillPointState
+            {
+                TotalSp = totalSp,
+                RemainingSp = Clamp(remainingSp, 0, totalSp),
+                TotalTp = currentPagePoints.TotalTp,
+                RemainingTp = Clamp(currentPagePoints.RemainingTp, 0, currentPagePoints.TotalTp),
+                SyncedLevel = level,
+                HasPersistedState = true,
+            };
+        }
+
+        private static int ResolvePageRemainingSp(SkillInfoPageSnapshot page, int calculatedRemainingSp)
+        {
+            if (page == null)
+                return Math.Max(0, calculatedRemainingSp);
+            if (page.HeaderValue > 0 || calculatedRemainingSp == 0)
+                return page.HeaderValue;
+            return calculatedRemainingSp;
+        }
+
+        private static int ResolveRemainingTp(SkillInfoSnapshot snapshot, int calculatedRemainingTp)
+        {
+            if (snapshot != null && snapshot.HasTailValues)
+            {
+                if (snapshot.Tail1 > 0)
+                    return snapshot.Tail1;
+                if (snapshot.Tail0 > 0)
+                    return snapshot.Tail0;
+            }
+            return Math.Max(0, calculatedRemainingTp);
+        }
+
+        private static ushort ToUInt16(int value)
+        {
+            return (ushort)Clamp(value, 0, ushort.MaxValue);
+        }
+
+        private static int Clamp(int value, int min, int max)
+        {
+            if (value < min) return min;
+            if (value > max) return max;
+            return value;
         }
 
         private static int GetInitialLevel(byte job, int skillId)

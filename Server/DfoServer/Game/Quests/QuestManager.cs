@@ -8,7 +8,6 @@ using DfoServer.Game.Inventory;
 using DfoServer.Game.SelectCharacter;
 using DfoServer.Game.Session;
 using DfoServer.Game.Skills;
-using DfoServer.Game.SelectCharacter;
 using DfoServer.Infrastructure;
 using DfoServer.Network.Builders;
 
@@ -108,7 +107,11 @@ namespace DfoServer.Game.Quests
                     {
                         var synced = SkillStateService.LoadAndSync(
                             skillRepo, cid, rec.Job, player.Level, rec.BonusSp, rec.BonusTp, persist: player.Level > prevLevel);
-                        remainSp = (ushort)synced.Points.RemainingSp;
+                        var skillTreeIndex = player.Subtype0Tail?.SkillTreeIndex
+                            ?? new SqliteSubtype1Repository(ServerPaths.DatabasePath, ServerPaths.SchemaFilePath)
+                                .LoadSkillTreeIndex(cid)
+                            ?? 0;
+                        remainSp = SkillStateService.GetPageRemainingSp(synced.Skills, synced.Points, skillTreeIndex == 1 ? 1 : 0);
                         remainTp = (ushort)synced.Points.RemainingTp;
                     }
                 }

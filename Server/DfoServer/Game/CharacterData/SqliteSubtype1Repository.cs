@@ -69,7 +69,7 @@ namespace DfoServer.Game.CharacterData
                         snap.StatLevel = (byte)r.GetInt32(19);
                         snap.NameTagItemId = (uint)r.GetInt64(20);
                         snap.NameTagExpireTime = (uint)r.GetInt64(21);
-                        snap.SkillTreeIndex = (byte)r.GetInt32(22);
+                        snap.SkillTreeIndex = NormalizeSkillTreeIndex(r.GetInt32(22));
                         snap.EquippedCreatureLevel = (byte)r.GetInt32(23);
                         snap.EquipListTrailing = r.IsDBNull(24) ? 0u : (uint)r.GetInt64(24);
                         snap.ManageLevel = (byte)r.GetInt32(25);
@@ -190,6 +190,41 @@ namespace DfoServer.Game.CharacterData
             }
 
             return snap;
+        }
+
+        public int UpdateSkillTreeIndex(int characterId, byte skillTreeIndex)
+        {
+            skillTreeIndex = NormalizeSkillTreeIndex(skillTreeIndex);
+            using (var conn = Open())
+            using (var cmd = new SqliteCommand(@"
+INSERT INTO character_subtype1_fields(character_id, skill_tree_index)
+VALUES(@cid, @idx)
+ON CONFLICT(character_id) DO UPDATE SET skill_tree_index=@idx;", conn))
+            {
+                cmd.Parameters.AddWithValue("@cid", characterId);
+                cmd.Parameters.AddWithValue("@idx", (int)skillTreeIndex);
+                return cmd.ExecuteNonQuery();
+            }
+        }
+
+        public byte? LoadSkillTreeIndex(int characterId)
+        {
+            using (var conn = Open())
+            using (var cmd = new SqliteCommand(
+                "SELECT skill_tree_index FROM character_subtype1_fields WHERE character_id=@cid", conn))
+            {
+                cmd.Parameters.AddWithValue("@cid", characterId);
+                var value = cmd.ExecuteScalar();
+                if (value == null || value == DBNull.Value)
+                    return null;
+
+                return NormalizeSkillTreeIndex(Convert.ToInt32(value));
+            }
+        }
+
+        private static byte NormalizeSkillTreeIndex(int skillTreeIndex)
+        {
+            return skillTreeIndex <= 0 ? (byte)0 : (byte)1;
         }
 
         private SqliteConnection Open()

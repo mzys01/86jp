@@ -66,6 +66,27 @@ namespace DfoServer.Network.Handlers
 
                 if (record != null)
                 {
+                    try
+                    {
+                        var tail = new Game.CharacterData.SqliteSubtype0FieldsRepository(
+                            Infrastructure.ServerPaths.DatabasePath,
+                            Infrastructure.ServerPaths.SchemaFilePath).Load(record.CharacterId);
+                        var skillTreeIndex = new Game.CharacterData.SqliteSubtype1Repository(
+                            Infrastructure.ServerPaths.DatabasePath,
+                            Infrastructure.ServerPaths.SchemaFilePath).LoadSkillTreeIndex(record.CharacterId);
+                        if (skillTreeIndex.HasValue)
+                        {
+                            tail = tail ?? new UserInfoMinimumTailSnapshot();
+                            tail.SkillTreeIndex = skillTreeIndex.Value;
+                        }
+                        if (tail != null)
+                            record.Subtype0Tail = tail;
+                    }
+                    catch (Exception ex)
+                    {
+                        FileLogger.Log($"[{ProtocolName}] Select character subtype0 load failed: {ex.Message}");
+                    }
+
                     session.Player.HydrateFrom(record);
                     _characterRepository.UpdatePosition(
                         session.Player.CharacterId,
