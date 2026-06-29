@@ -1,4 +1,4 @@
-using DfoServer.Game.CharacterData;
+﻿using DfoServer.Game.CharacterData;
 using DfoServer.Game.Characters;
 using DfoServer.Game.ExpertJob;
 using DfoServer.Game.Inventory;
@@ -310,6 +310,18 @@ namespace DfoServer.Game.SelectCharacter
         {
             using (_inventoryStore.BeginScope(characterId, accountId))
                 return _inventoryStore.TryCompoundAvatarSet(consumeSlots, expectedItemIds, resolveNewItemId, newOption, consumeStackableSlot, out newSlot, out oldItemIds, out newItemId, out consumedItemTemplateId, out consumedItemRemainingCount);
+        }
+
+        public bool TryOpenEquipmentSocket(int characterId, int accountId, short targetSlotIndex, int targetItemTemplateId, short materialSlotIndex, out EquipmentSocketMutationResult result)
+        {
+            using (_inventoryStore.BeginScope(characterId, accountId))
+                return _inventoryStore.TryOpenEquipmentSocket(targetSlotIndex, targetItemTemplateId, materialSlotIndex, out result);
+        }
+
+        public bool TryOpenAvatarSocket(int characterId, int accountId, short targetSlotIndex, int targetItemTemplateId, short materialSlotIndex, out AvatarSocketMutationResult result)
+        {
+            using (_inventoryStore.BeginScope(characterId, accountId))
+                return _inventoryStore.TryOpenAvatarSocket(targetSlotIndex, targetItemTemplateId, materialSlotIndex, out result);
         }
 
         public bool TrySortItems(int characterId, int accountId, InventoryListType listType, byte category)

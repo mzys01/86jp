@@ -73,7 +73,7 @@ namespace DfoServer.Network.Handlers
             {
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0013,
                     MoveItemSpaceAckBuilder.BuildError(0x02, (byte)request.SourceListType, (byte)request.DestinationListType)));
-                FileLogger.Log($"[{ProtocolName}] MOVE_ITEMSPACE: ReverseError -> ERROR ACK (撤销反转包, 不卡住)");
+                FileLogger.Log($"[{ProtocolName}] MOVE_ITEMSPACE: ReverseError -> ERROR ACK (鎾ら攢鍙嶈浆鍖? 涓嶅崱浣?");
                 return;
             }
 
@@ -307,12 +307,85 @@ namespace DfoServer.Network.Handlers
                 return;
             }
 
-            // 原生顺序是先发 NOTI 14 刷新目标装备和宝珠，再发 0x0110 成功结果。
+            // 鍘熺敓椤哄簭鏄厛鍙?NOTI 14 鍒锋柊鐩爣瑁呭鍜屽疂鐝狅紝鍐嶅彂 0x0110 鎴愬姛缁撴灉銆?
             var updateBody = ItemListUpdateBuilder.BuildCommonUpdates(new[] { result.TargetItem, result.BeadItem });
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000E, updateBody));
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0110, EnchantByBeadAckBuilder.BuildSuccess(result)));
 
             FileLogger.Log($"[{ProtocolName}] ENCHANT_BY_BEAD: OK target=({request.TargetListType},{request.TargetSlotIndex}) enchantCard=0x{result.EnchantCardItemId:X8}");
+        }
+
+        public async Task Handle_EQUIPMENT_SOCKET_OPEN(EnhancedClientSession session, GamePacketHeader header, byte[] body)
+        {
+            FileLogger.Log($"[{ProtocolName}] EQUIP_SOCKET_OPEN 0x031D raw({body?.Length ?? 0}B): {(body != null ? BitConverter.ToString(body) : "null")}");
+
+            if (!TryParseSocketOpenBody(body, out var targetSlot, out var targetItemId, out var materialSlot))
+            {
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x031D, new byte[] { 0x00 }));
+                return;
+            }
+
+            var (cid, aid) = ResolveOwner(session);
+            if (!_sqliteSelectCharacterDataSource.TryOpenEquipmentSocket(cid, aid, targetSlot, targetItemId, materialSlot, out var result))
+            {
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x031D, new byte[] { 0x00, 0x04 }));
+                return;
+            }
+
+            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x031D, BuildSocketOpenAck(targetSlot, targetItemId, materialSlot)));
+            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
+                0x00,
+                0x000E,
+                ItemListUpdateBuilder.BuildCommonUpdates(new[] { result.TargetItem })));
+
+            if (result.MaterialConsumed && result.MaterialItem != null)
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
+                    0x00,
+                    0x000E,
+                    ItemListUpdateBuilder.BuildCompactCommonUpdates(new[] { result.MaterialItem })));
+
+            await SendSortItemLockRefresh(session, InventoryListType.Main);
+            if (result.MaterialConsumed && result.MaterialItem != null)
+                FileLogger.Log($"[{ProtocolName}] EQUIP_SOCKET_OPEN: OK targetSlot={targetSlot} item=0x{targetItemId:X8} materialSlot={materialSlot} left={result.MaterialItem.RemainingStackCount}");
+            else
+                FileLogger.Log($"[{ProtocolName}] EQUIP_SOCKET_OPEN: OK targetSlot={targetSlot} item=0x{targetItemId:X8} already-open repaired without consuming material");
+        }
+
+        public async Task Handle_AVATAR_SOCKET_OPEN(EnhancedClientSession session, GamePacketHeader header, byte[] body)
+        {
+            FileLogger.Log($"[{ProtocolName}] AVATAR_SOCKET_OPEN 0x00CE raw({body?.Length ?? 0}B): {(body != null ? BitConverter.ToString(body) : "null")}");
+
+            if (!TryParseSocketOpenBody(body, out var targetSlot, out var targetItemId, out var materialSlot))
+            {
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x00CE, new byte[] { 0x00 }));
+                return;
+            }
+
+            var (cid, aid) = ResolveOwner(session);
+            if (!_sqliteSelectCharacterDataSource.TryOpenAvatarSocket(cid, aid, targetSlot, targetItemId, materialSlot, out var result))
+            {
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x00CE, new byte[] { 0x00, 0x04 }));
+                return;
+            }
+
+            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x00CE, BuildSocketOpenAck(targetSlot, targetItemId, materialSlot)));
+
+            if (result.MaterialConsumed && result.MaterialItem != null)
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
+                    0x00,
+                    0x000E,
+                    ItemListUpdateBuilder.BuildCompactCommonUpdates(new[] { result.MaterialItem })));
+
+            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
+                0x00,
+                0x000E,
+                ItemListUpdateBuilder.BuildAvatarUpdates(new[] { result.TargetItem })));
+            await SendSortItemLockRefresh(session, InventoryListType.Avatar);
+
+            if (result.MaterialConsumed && result.MaterialItem != null)
+                FileLogger.Log($"[{ProtocolName}] AVATAR_SOCKET_OPEN: OK targetSlot={targetSlot} item=0x{targetItemId:X8} materialSlot={materialSlot} left={result.MaterialItem.RemainingStackCount}");
+            else
+                FileLogger.Log($"[{ProtocolName}] AVATAR_SOCKET_OPEN: OK targetSlot={targetSlot} item=0x{targetItemId:X8} already-open repaired without consuming material");
         }
 
         public async Task Handle_ENUM_CMDPACKET_USE_STACKABLE(EnhancedClientSession session, GamePacketHeader header, byte[] body)
@@ -819,6 +892,30 @@ namespace DfoServer.Network.Handlers
                 selected.Add(itemTemplateId);
         }
 
+        private static bool TryParseSocketOpenBody(byte[] body, out short targetSlot, out int targetItemId, out short materialSlot)
+        {
+            targetSlot = 0;
+            targetItemId = 0;
+            materialSlot = 0;
+            if (body == null || body.Length < 8)
+                return false;
+
+            targetSlot = BitConverter.ToInt16(body, 0);
+            targetItemId = BitConverter.ToInt32(body, 2);
+            materialSlot = BitConverter.ToInt16(body, 6);
+            return true;
+        }
+
+        private static byte[] BuildSocketOpenAck(short targetSlot, int targetItemId, short materialSlot)
+        {
+            var writer = new GamePacketWriter();
+            writer.WriteByte(0x01);
+            writer.WriteInt16(targetSlot);
+            writer.WriteInt32(targetItemId);
+            writer.WriteInt16(materialSlot);
+            return writer.ToArray();
+        }
+
         private async Task SendNoti2AppearanceUpdate(EnhancedClientSession session)
         {
             var (cid, aid) = ResolveOwner(session);
@@ -1038,7 +1135,7 @@ namespace DfoServer.Network.Handlers
                 off += 6; // short slot + int itemTemplateId
             }
 
-            // 防改包: 8件槽位不能重复
+            // 闃叉敼鍖? 8浠舵Ы浣嶄笉鑳介噸澶?
             if (consumeSlots.Distinct().Count() != consumeSlots.Length)
             {
                 var dupErr = new GamePacketWriter();
@@ -1072,7 +1169,7 @@ namespace DfoServer.Network.Handlers
             {
                 var err = new GamePacketWriter();
                 err.WriteByte(0x00);
-                err.WriteByte(0x16); // errcode 22 (物品删除失败), 与0x0063失败码一致
+                err.WriteByte(0x16); // errcode 22 (鐗╁搧鍒犻櫎澶辫触), 涓?x0063澶辫触鐮佷竴鑷?
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x03EA, err.ToArray()));
                 return;
             }
@@ -1097,7 +1194,7 @@ namespace DfoServer.Network.Handlers
                 var consumeItem = new CommonInventoryItem
                 {
                     SlotIndex = consumeStackableSlot,
-                    ItemTemplateId = consumedRemaining > 0 ? consumedTemplateId : -1,  // remain>0 发真ID，remain==0 发-1
+                    ItemTemplateId = consumedRemaining > 0 ? consumedTemplateId : -1,  // remain>0 鍙戠湡ID锛宺emain==0 鍙?1
                     CountOrInstanceValue = consumedRemaining,  
                 };
                 var consumeUpd = ItemListUpdateBuilder.BuildCommonUpdates(new List<CommonInventoryItem> { consumeItem });

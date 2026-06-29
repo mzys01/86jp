@@ -47,6 +47,10 @@ namespace DfoServer.Game.Inventory
 
         bool TryEnchantByBead(EnchantByBeadCommand command, out EnchantByBeadResult result);
 
+        bool TryOpenEquipmentSocket(short targetSlotIndex, int targetItemTemplateId, short materialSlotIndex, out EquipmentSocketMutationResult result);
+
+        bool TryOpenAvatarSocket(short targetSlotIndex, int targetItemTemplateId, short materialSlotIndex, out AvatarSocketMutationResult result);
+
         bool TryCompoundAvatar(short slot1, short slot2, short consumeSlot,
             Func<int, int, int, List<int>> resolveNewItemIds, byte newOption,
             out List<int> newSlotsOut, out int oldItemId1, out int oldItemId2, out List<int> newItemIdsOut,

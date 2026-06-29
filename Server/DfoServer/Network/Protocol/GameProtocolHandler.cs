@@ -72,6 +72,8 @@ namespace DfoServer.Network
             RegisterCharacterHandlers(_cmdDispatch);
             RegisterInventoryHandlers(_cmdDispatch);
             RegisterSortItemLockHandlers(_cmdDispatch);
+            RegisterEquipmentSocketHandlers(_cmdDispatch);
+            RegisterAvatarSocketHandlers(_cmdDispatch);
             RegisterDungeonHandlers(_cmdDispatch);
             RegisterSkillHandlers(_cmdDispatch);
             RegisterTownHandlers(_cmdDispatch);
@@ -124,7 +126,7 @@ namespace DfoServer.Network
                 if (_cmdDispatch.TryGetValue(header.type, out var handler))
                     await handler(session, header, body);
                 else
-                    FileLogger.Log($"[GameProtocol] Unhandled CMD type=0x{header.type:X4}");
+                    FileLogger.Log($"[GameProtocol] Unhandled CMD type=0x{header.type:X4} body({body?.Length ?? 0}B): {(body != null ? BitConverter.ToString(body) : "null")}");
             }
         }
 
@@ -179,6 +181,16 @@ namespace DfoServer.Network
         {
             d[0x02CA] = _inventoryHandler.Handle_ENUM_CMDPACKET_TOGGLE_SORT_ITEM_LOCK;
             d[0x02CB] = _inventoryHandler.Handle_ENUM_CMDPACKET_UNLOCK_SORT_ITEM_LOCK;
+        }
+
+        private void RegisterEquipmentSocketHandlers(Dictionary<ushort, Func<EnhancedClientSession, GamePacketHeader, byte[], Task>> d)
+        {
+            d[0x031D] = _inventoryHandler.Handle_EQUIPMENT_SOCKET_OPEN;
+        }
+
+        private void RegisterAvatarSocketHandlers(Dictionary<ushort, Func<EnhancedClientSession, GamePacketHeader, byte[], Task>> d)
+        {
+            d[0x00CE] = _inventoryHandler.Handle_AVATAR_SOCKET_OPEN;
         }
 
         private void RegisterDungeonHandlers(Dictionary<ushort, Func<EnhancedClientSession, GamePacketHeader, byte[], Task>> d)

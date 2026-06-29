@@ -81,7 +81,7 @@ namespace DfoServer.Game.Inventory
 
         public short AppliedCount { get; set; }
 
-        // 本次购买是否扣了金币(用于商城回包决定是否刷新主背包 slot0 金币显示)。
+        // 鏈璐拱鏄惁鎵ｄ簡閲戝竵(鐢ㄤ簬鍟嗗煄鍥炲寘鍐冲畾鏄惁鍒锋柊涓昏儗鍖?slot0 閲戝竵鏄剧ず)銆?
         public bool GoldSpent { get; set; }
 
         public int CostItemTemplateId { get; set; }
@@ -117,6 +117,24 @@ namespace DfoServer.Game.Inventory
         public int SourceInstanceValue { get; set; }
 
         public List<BoosterRewardResult> Rewards { get; } = new List<BoosterRewardResult>();
+    }
+
+    public sealed class EquipmentSocketMutationResult
+    {
+        public CommonInventoryItem TargetItem { get; set; }
+
+        public InventoryMutationResult MaterialItem { get; set; }
+
+        public bool MaterialConsumed { get; set; }
+    }
+
+    public sealed class AvatarSocketMutationResult
+    {
+        public AvatarInventoryItem TargetItem { get; set; }
+
+        public InventoryMutationResult MaterialItem { get; set; }
+
+        public bool MaterialConsumed { get; set; }
     }
 
     public sealed class SqliteInventoryStore : IInventoryStore
@@ -299,7 +317,7 @@ ORDER BY slot_index;";
                     }
                 }
 
-                // 读取账号级晶块, 合成虚拟 slot 条目添加到 MainItems
+                // 璇诲彇璐﹀彿绾ф櫠鍧? 鍚堟垚铏氭嫙 slot 鏉＄洰娣诲姞鍒?MainItems
                 var cubeFragments = CurrencyService.LoadCubeFragments(connection, null, _context.AccountId);
                 foreach (var (itemId, slot, count) in cubeFragments)
                 {
@@ -457,10 +475,10 @@ ORDER BY slot_index;";
             }
         }
 
-        // 合并装扮(时装合成): 扣掉 slot1/slot2 两件旧时装 + 1 个消耗品(合成器), 在时装栏第一个
-        // 空位插入新时装。新时装itemId由 resolveNewItemId(oldItemId1, oldItemId2, consumeMaterialId)
-        // 回调计算(在事务内、读到三个真实item之后才调用, 保证概率判定用的是事务内的真实数据)。
-        // 返回新时装所在 slot (newSlotOut)。一个事务内完成, 失败回滚。
+        // 鍚堝苟瑁呮壆(鏃惰鍚堟垚): 鎵ｆ帀 slot1/slot2 涓や欢鏃ф椂瑁?+ 1 涓秷鑰楀搧(鍚堟垚鍣?, 鍦ㄦ椂瑁呮爮绗竴涓?
+        // 绌轰綅鎻掑叆鏂版椂瑁呫€傛柊鏃惰itemId鐢?resolveNewItemId(oldItemId1, oldItemId2, consumeMaterialId)
+        // 鍥炶皟璁＄畻(鍦ㄤ簨鍔″唴銆佽鍒颁笁涓湡瀹瀒tem涔嬪悗鎵嶈皟鐢? 淇濊瘉姒傜巼鍒ゅ畾鐢ㄧ殑鏄簨鍔″唴鐨勭湡瀹炴暟鎹?銆?
+        // 杩斿洖鏂版椂瑁呮墍鍦?slot (newSlotOut)銆備竴涓簨鍔″唴瀹屾垚, 澶辫触鍥炴粴銆?
         public bool TryCompoundAvatar(short slot1, short slot2, short consumeSlot,
                 Func<int, int, int, List<int>> resolveNewItemIds, byte newOption,
                 out List<int> newSlotsOut, out int oldItemId1, out int oldItemId2, out List<int> newItemIdsOut,
@@ -496,12 +514,12 @@ ORDER BY slot_index;";
                 var newItemIds = resolveNewItemIds(oldItemId1, oldItemId2, consumeItem.ItemTemplateId);
                 newItemIdsOut = newItemIds;
 
-                // 台服做法(逆向 CInventory::AddAvatarItem 得到, 0x8509b9e): 删掉slot1/slot2两个槛
-                // (reset清空, 不移动其他物品、不紧凑重排), 然后从槽位0开始线性扫描第一个itemId=0的
-                // 空槛插入新时装(台服硬编码上限104=105格, 对应台服固定大小时装栏)。
-                // 86JP时装栏格数公式(实测确认): 基础105格(固定) + list_param16拓展值(0~105, 每用1张
-                // "装扮栏拓展券"+7格) = 总格数(105~210)。character_container_state.list_param16
-                // 就是这个拓展值, 不是"已解锁格数"本身, 上限要用 105+该值 才对。
+                // 鍙版湇鍋氭硶(閫嗗悜 CInventory::AddAvatarItem 寰楀埌, 0x8509b9e): 鍒犳帀slot1/slot2涓や釜妲?
+                // (reset娓呯┖, 涓嶇Щ鍔ㄥ叾浠栫墿鍝併€佷笉绱у噾閲嶆帓), 鐒跺悗浠庢Ы浣?寮€濮嬬嚎鎬ф壂鎻忕涓€涓猧temId=0鐨?
+                // 绌烘鎻掑叆鏂版椂瑁?鍙版湇纭紪鐮佷笂闄?04=105鏍? 瀵瑰簲鍙版湇鍥哄畾澶у皬鏃惰鏍?銆?
+                // 86JP鏃惰鏍忔牸鏁板叕寮?瀹炴祴纭): 鍩虹105鏍?鍥哄畾) + list_param16鎷撳睍鍊?0~105, 姣忕敤1寮?
+                // "瑁呮壆鏍忔嫇灞曞埜"+7鏍? = 鎬绘牸鏁?105~210)銆俢haracter_container_state.list_param16
+                // 灏辨槸杩欎釜鎷撳睍鍊? 涓嶆槸"宸茶В閿佹牸鏁?鏈韩, 涓婇檺瑕佺敤 105+璇ュ€?鎵嶅銆?
                 _db.DeleteItem(connection, transaction, item1.ItemUid);
                 _db.DeleteItem(connection, transaction, item2.ItemUid);
 
@@ -541,10 +559,10 @@ ORDER BY slot_index;";
             }
         }
 
-        // 8件高级装扮 -> 100%合成指定稀有装扮(克隆装扮合成器, 如"旷古天娇"系列)。
-        // 消耗品按请求body里携带的Main列表槛位号精确定位(实测两组不同槛位数据交叉验证得到该字段)。
-        // resolveNewItemId: 输入消耗品item_template_id, 由调用方(AbsoluteBindCubeService)按该合成器
-        // 的[action type]配置 + 角色职业查表校验/纠正客户端请求的目标itemId; 返回负数表示校验失败。
+        // 8浠堕珮绾ц鎵?-> 100%鍚堟垚鎸囧畾绋€鏈夎鎵?鍏嬮殕瑁呮壆鍚堟垚鍣? 濡?鏃峰彜澶╁▏"绯诲垪)銆?
+        // 娑堣€楀搧鎸夎姹俠ody閲屾惡甯︾殑Main鍒楄〃妲涗綅鍙风簿纭畾浣?瀹炴祴涓ょ粍涓嶅悓妲涗綅鏁版嵁浜ゅ弶楠岃瘉寰楀埌璇ュ瓧娈?銆?
+        // resolveNewItemId: 杈撳叆娑堣€楀搧item_template_id, 鐢辫皟鐢ㄦ柟(AbsoluteBindCubeService)鎸夎鍚堟垚鍣?
+        // 鐨刐action type]閰嶇疆 + 瑙掕壊鑱屼笟鏌ヨ〃鏍￠獙/绾犳瀹㈡埛绔姹傜殑鐩爣itemId; 杩斿洖璐熸暟琛ㄧず鏍￠獙澶辫触銆?
         public bool TryCompoundAvatarSet(short[] consumeSlots, int[] expectedItemIds, Func<int, int> resolveNewItemId, byte newOption,
                 short consumeStackableSlot,
                 out int newSlot, out List<int> oldItemIds, out int newItemId, out int consumedItemTemplateId, out int consumedItemRemainingCount)
@@ -568,7 +586,7 @@ ORDER BY slot_index;";
                         return false;
                     }
 
-                    // 防改包: 比对客户端声称的 itemId 与 DB 实际物品, 不符则拒绝(防止改包删任意槽位物品)
+                    // 闃叉敼鍖? 姣斿瀹㈡埛绔０绉扮殑 itemId 涓?DB 瀹為檯鐗╁搧, 涓嶇鍒欐嫆缁?闃叉鏀瑰寘鍒犱换鎰忔Ы浣嶇墿鍝?
                     if (expectedItemIds != null && i < expectedItemIds.Length && expectedItemIds[i] != items[i].ItemTemplateId)
                     {
                         FileLogger.Log($"  [CompoundAvatarSet] REJECT: itemId mismatch at slot={consumeSlots[i]} expected=0x{expectedItemIds[i]:X8} actual=0x{items[i].ItemTemplateId:X8}");
@@ -608,8 +626,8 @@ ORDER BY slot_index;";
                     _db.DeleteItem(connection, transaction, consumeItem.ItemUid);
                 }
 
-                // 同 TryCompoundAvatar: 按台服 AddAvatarItem 算法从槽位0扫描第一个空槛位, 上限按
-                // 105(基础) + character_container_state.list_param16(拓展值, 0~105, 每张拓展券+7)。
+                // 鍚?TryCompoundAvatar: 鎸夊彴鏈?AddAvatarItem 绠楁硶浠庢Ы浣?鎵弿绗竴涓┖妲涗綅, 涓婇檺鎸?
+                // 105(鍩虹) + character_container_state.list_param16(鎷撳睍鍊? 0~105, 姣忓紶鎷撳睍鍒?7)銆?
                 var avatarExpansion = GetListParam(_equipStore.LoadContainerState(connection, transaction, _context.CharacterId, _context.AccountId), InventoryListType.Avatar);
                 var avatarCapacity = 105 + avatarExpansion;
                 var emptySlot = _db.FindEmptySlot(connection, transaction, _context.CharacterId, InventoryListType.Avatar, 0, avatarCapacity - 1);
@@ -644,8 +662,8 @@ ORDER BY slot_index;";
         internal const int RentalBagSlotStart = 9;
         internal const int RentalBagSlotEnd = 64;
 
-        // 宠物栏(list 7)"宠物"本体分页槽段(category 5): slot 0..139 共 140 格(实测计数)。
-        // 其后 宠物装备=140..188(cat6)、宠物耗品=189..237(cat7)。新购宠物从本页首格开始填。
+        // 瀹犵墿鏍?list 7)"瀹犵墿"鏈綋鍒嗛〉妲芥(category 5): slot 0..139 鍏?140 鏍?瀹炴祴璁℃暟)銆?
+        // 鍏跺悗 瀹犵墿瑁呭=140..188(cat6)銆佸疇鐗╄€楀搧=189..237(cat7)銆傛柊璐疇鐗╀粠鏈〉棣栨牸寮€濮嬪～銆?
         // Client pet inventory pages share list 7 but use separate slot ranges:
         // category 5 = pets, category 6 = pet equipment, category 7 = pet consumables.
         internal const int PetInventorySlotStart = 0;
@@ -685,7 +703,7 @@ ORDER BY slot_index;";
         {
             assignedSlot = -1;
 
-            // 晶块走账号级存储, 不进 character_items
+            // 鏅跺潡璧拌处鍙风骇瀛樺偍, 涓嶈繘 character_items
             if (CurrencyService.IsCubeFragment(itemTemplateId))
             {
                 CurrencyService.AddCubeFragment(connection, transaction, accountId, itemTemplateId, stackCount);
@@ -777,6 +795,168 @@ ORDER BY slot_index;";
             }
         }
 
+        public bool TryOpenEquipmentSocket(short targetSlotIndex, int targetItemTemplateId, short materialSlotIndex, out EquipmentSocketMutationResult result)
+        {
+            result = null;
+            if (targetItemTemplateId <= 0)
+                return false;
+
+            using (var connection = _context.OpenConnection())
+            using (var transaction = connection.BeginTransaction())
+            {
+                var target = _db.LoadItemRecord(connection, transaction, _context.CharacterId, InventoryListType.Main, targetSlotIndex);
+                if (target == null || target.ItemKind != "equipment" || target.ItemTemplateId != targetItemTemplateId)
+                    return false;
+
+                var common = _db.LoadCommonItem(connection, transaction, _context.CharacterId, InventoryListType.Main, targetSlotIndex);
+                if (common == null)
+                    return false;
+
+                common.TailData2F = NormalizeBytes(common.TailData2F, 37);
+                common.JewelSocket = NormalizeBytes(common.JewelSocket, 30);
+                NormalizeEquipmentSocketLayout(common);
+                RepairJewelSocketTypes(common, targetItemTemplateId);
+                var currentOpenCount = CountOpenJewelSockets(common);
+                if (currentOpenCount > 0)
+                {
+                    EnsureVisibleSocketCount(common, currentOpenCount);
+                    _db.UpdateCommonExtraJson(connection, transaction, target.ItemUid, common);
+                    _auditLogger.WriteAuditLog(connection, transaction, _context.CharacterId, "repair_equipment_socket", target, target.ListType, target.SlotIndex, 0);
+                    transaction.Commit();
+
+                    result = new EquipmentSocketMutationResult
+                    {
+                        TargetItem = common,
+                        MaterialConsumed = false,
+                    };
+                    return true;
+                }
+
+                var material = _db.LoadItemRecord(connection, transaction, _context.CharacterId, InventoryListType.Main, materialSlotIndex);
+                if (material == null || material.StackCount <= 0)
+                    return false;
+
+                SetEquipmentSocketOpenFields(common);
+                _db.UpdateCommonExtraJson(connection, transaction, target.ItemUid, common);
+
+                var remaining = Math.Max(0, material.StackCount - 1);
+                if (remaining > 0)
+                    _db.UpdateStackCount(connection, transaction, material.ItemUid, remaining);
+                else
+                {
+                    _db.DeleteItem(connection, transaction, material.ItemUid);
+                    DeleteSortItemLock(connection, transaction, material.ListType, material.SlotIndex);
+                }
+
+                _auditLogger.WriteDeleteAuditLog(connection, transaction, _context.CharacterId, material, 1);
+                _auditLogger.WriteAuditLog(connection, transaction, _context.CharacterId, "open_equipment_socket", target, target.ListType, target.SlotIndex, 0);
+                transaction.Commit();
+
+                result = new EquipmentSocketMutationResult
+                {
+                    TargetItem = common,
+                    MaterialItem = new InventoryMutationResult
+                    {
+                        ListType = material.ListType,
+                        SlotIndex = material.SlotIndex,
+                        ItemTemplateId = material.ItemTemplateId,
+                        RemainingStackCount = remaining,
+                        InstanceValue = remaining,
+                        Durability = material.Durability,
+                        RequestedCount = 1,
+                        AppliedCount = 1,
+                    },
+                    MaterialConsumed = true,
+                };
+                return true;
+            }
+        }
+
+        public bool TryOpenAvatarSocket(short targetSlotIndex, int targetItemTemplateId, short materialSlotIndex, out AvatarSocketMutationResult result)
+        {
+            result = null;
+            if (targetItemTemplateId <= 0)
+                return false;
+
+            using (var connection = _context.OpenConnection())
+            using (var transaction = connection.BeginTransaction())
+            {
+                var target = _db.LoadItemRecord(connection, transaction, _context.CharacterId, InventoryListType.Avatar, targetSlotIndex);
+                if (target == null || target.ItemKind != "avatar" || target.ItemTemplateId != targetItemTemplateId)
+                    return false;
+
+                var avatar = _db.LoadAvatarItem(connection, transaction, _context.CharacterId, targetSlotIndex);
+                if (avatar == null)
+                    return false;
+
+                avatar.Reserved2 = NormalizeBytes(avatar.Reserved2, 30);
+                var expectedSocketTypes = ItemMetadataResolver.ResolveAvatarSocketTypes(targetItemTemplateId);
+                var currentOpenCount = CountOpenAvatarSockets(avatar);
+                if (currentOpenCount > 0)
+                {
+                    if (!AvatarSocketLayoutMatches(avatar.Reserved2, expectedSocketTypes))
+                    {
+                        avatar.Reserved2 = BuildAvatarSocketData(expectedSocketTypes);
+                        FileLogger.Log($"  [AvatarSocket] repaired socket layout item=0x{targetItemTemplateId:X8} count={Math.Min(5, expectedSocketTypes != null ? expectedSocketTypes.Count : 0)}");
+                    }
+
+                    _db.UpdateAvatarExtraJson(connection, transaction, target.ItemUid, avatar);
+                    _auditLogger.WriteAuditLog(connection, transaction, _context.CharacterId, "repair_avatar_socket", target, target.ListType, target.SlotIndex, 0);
+                    transaction.Commit();
+
+                    result = new AvatarSocketMutationResult
+                    {
+                        TargetItem = avatar,
+                        MaterialConsumed = false,
+                    };
+                    return true;
+                }
+
+                var material = _db.LoadItemRecord(connection, transaction, _context.CharacterId, InventoryListType.Main, materialSlotIndex);
+                if (material == null || material.StackCount <= 0)
+                    return false;
+
+                if (!TrySetAvatarSocketOpenFields(avatar, expectedSocketTypes))
+                {
+                    FileLogger.Log($"  [AvatarSocket] REJECT: avatar item=0x{targetItemTemplateId:X8} has no socket definition in [avatar type select]");
+                    return false;
+                }
+
+                _db.UpdateAvatarExtraJson(connection, transaction, target.ItemUid, avatar);
+
+                var remaining = Math.Max(0, material.StackCount - 1);
+                if (remaining > 0)
+                    _db.UpdateStackCount(connection, transaction, material.ItemUid, remaining);
+                else
+                {
+                    _db.DeleteItem(connection, transaction, material.ItemUid);
+                    DeleteSortItemLock(connection, transaction, material.ListType, material.SlotIndex);
+                }
+
+                _auditLogger.WriteDeleteAuditLog(connection, transaction, _context.CharacterId, material, 1);
+                _auditLogger.WriteAuditLog(connection, transaction, _context.CharacterId, "open_avatar_socket", target, target.ListType, target.SlotIndex, 0);
+                transaction.Commit();
+
+                result = new AvatarSocketMutationResult
+                {
+                    TargetItem = avatar,
+                    MaterialItem = new InventoryMutationResult
+                    {
+                        ListType = material.ListType,
+                        SlotIndex = material.SlotIndex,
+                        ItemTemplateId = material.ItemTemplateId,
+                        RemainingStackCount = remaining,
+                        InstanceValue = remaining,
+                        Durability = material.Durability,
+                        RequestedCount = 1,
+                        AppliedCount = 1,
+                    },
+                    MaterialConsumed = true,
+                };
+                return true;
+            }
+        }
+
         public bool TryMoveItem(InventoryMoveRequest request, out InventoryMoveResult result)
         {
             result = null;
@@ -830,7 +1010,7 @@ ORDER BY slot_index;";
                 {
                     if (destination != null)
                     {
-                        FileLogger.Log($"  [MoveItem] MOVE(empty-src): dst uid={destination.ItemUid} tmpl=0x{destination.ItemTemplateId:X8} → ({dbSrcList},{request.SourceSlotIndex})");
+                        FileLogger.Log($"  [MoveItem] MOVE(empty-src): dst uid={destination.ItemUid} tmpl=0x{destination.ItemTemplateId:X8} 鈫?({dbSrcList},{request.SourceSlotIndex})");
                         _db.UpdateItemPosition(connection, transaction, destination.ItemUid, dbSrcList, request.SourceSlotIndex);
                         MoveSortItemLock(connection, transaction, dbDstList, request.DestinationSlotIndex, dbSrcList, request.SourceSlotIndex);
                         _auditLogger.WriteAuditLog(connection, transaction, _context.CharacterId, "move_itemspace", destination, dbSrcList, request.SourceSlotIndex, request.MoveCount);
@@ -842,9 +1022,10 @@ ORDER BY slot_index;";
                     return false;
                 }
 
-                if (!CanMoveToListType(source.ItemKind, request.DestinationListType))
+                if (!CanMoveToListType(source.ItemKind, request.DestinationListType)
+                    || !CanMoveToMainSlotRange(source.ItemKind, dbDstList, request.DestinationSlotIndex))
                 {
-                    FileLogger.Log($"  [MoveItem] FAIL: CanMoveToListType({source.ItemKind}, {request.DestinationListType}) = false");
+                    FileLogger.Log($"  [MoveItem] FAIL: invalid destination kind={source.ItemKind} dst={request.DestinationListType}/{dbDstList} slot={request.DestinationSlotIndex}");
                     return false;
                 }
                 var moveCount = NormalizeMoveCount(source, request.MoveCount);
@@ -879,7 +1060,7 @@ ORDER BY slot_index;";
 
                 if (destination == null)
                 {
-                    FileLogger.Log($"  [MoveItem] MOVE: src uid={source.ItemUid} kind={source.ItemKind} tmpl=0x{source.ItemTemplateId:X8} → ({dbDstList},{request.DestinationSlotIndex})");
+                    FileLogger.Log($"  [MoveItem] MOVE: src uid={source.ItemUid} kind={source.ItemKind} tmpl=0x{source.ItemTemplateId:X8} 鈫?({dbDstList},{request.DestinationSlotIndex})");
                     _db.UpdateItemPosition(connection, transaction, source.ItemUid, dbDstList, request.DestinationSlotIndex);
                     MoveSortItemLock(connection, transaction, dbSrcList, request.SourceSlotIndex, dbDstList, request.DestinationSlotIndex);
                     _auditLogger.WriteAuditLog(connection, transaction, _context.CharacterId, "move_itemspace", source, dbDstList, request.DestinationSlotIndex, moveCount);
@@ -891,7 +1072,7 @@ ORDER BY slot_index;";
                 if (!CanSwap(source, destination))
                     return false;
 
-                FileLogger.Log($"  [MoveItem] SWAP: src uid={source.ItemUid} kind={source.ItemKind} tmpl=0x{source.ItemTemplateId:X8} ↔ dst uid={destination.ItemUid} kind={destination.ItemKind} tmpl=0x{destination.ItemTemplateId:X8}");
+                FileLogger.Log($"  [MoveItem] SWAP: src uid={source.ItemUid} kind={source.ItemKind} tmpl=0x{source.ItemTemplateId:X8} 鈫?dst uid={destination.ItemUid} kind={destination.ItemKind} tmpl=0x{destination.ItemTemplateId:X8}");
                 _db.SwapItems(connection, transaction, source, destination);
                 SwapSortItemLocks(connection, transaction, source.ListType, source.SlotIndex, destination.ListType, destination.SlotIndex);
                 _auditLogger.WriteAuditLog(connection, transaction, _context.CharacterId, "move_itemspace", source, dbDstList, request.DestinationSlotIndex, moveCount);
@@ -1262,9 +1443,9 @@ WHERE character_id = @cid AND list_type = @lt
                 case InventoryListType.Pet:
                     return new Dictionary<byte, (short, short)>
                     {
-                        { 5, (0, 139) },    // 宠物(本体), 共 140 格
-                        { 6, (140, 188) },  // 宠物装备
-                        { 7, (189, 237) },  // 宠物耗品
+                        { 5, (0, 139) },    // 瀹犵墿(鏈綋), 鍏?140 鏍?
+                        { 6, (140, 188) },  // 瀹犵墿瑁呭
+                        { 7, (189, 237) },  // 瀹犵墿鑰楀搧
                     };
                 case InventoryListType.Avatar:
                     return new Dictionary<byte, (short, short)>
@@ -1403,9 +1584,11 @@ WHERE character_id = @cid AND list_type = @lt
 
         internal static bool CanMoveToListType(string itemKind, InventoryListType destinationListType)
         {
+            if (destinationListType == InventoryListType.Equipment)
+                return itemKind == "equipment";
+
             if (destinationListType == InventoryListType.Main
                 || destinationListType == InventoryListType.Avatar
-                || destinationListType == InventoryListType.Equipment
                 || destinationListType == InventoryListType.PersonalCargo)
                 return true;
 
@@ -1413,6 +1596,17 @@ WHERE character_id = @cid AND list_type = @lt
                 return true;
 
             return false;
+        }
+
+        private static bool CanMoveToMainSlotRange(string itemKind, InventoryListType destinationListType, short destinationSlotIndex)
+        {
+            if (destinationListType != InventoryListType.Main)
+                return true;
+
+            if (destinationSlotIndex >= 9 && destinationSlotIndex <= 64)
+                return itemKind == "equipment";
+
+            return true;
         }
 
         private static bool CanSwap(ItemRecord source, ItemRecord destination)
@@ -1441,6 +1635,238 @@ WHERE character_id = @cid AND list_type = @lt
             return requestedMoveCount;
         }
 
+        private static void SetEquipmentSocketOpenFields(CommonInventoryItem item)
+        {
+            if (item == null)
+                return;
+
+            item.TailData2F = NormalizeBytes(item.TailData2F, 37);
+            item.JewelSocket = BuildJewelSocketData(item.ItemTemplateId);
+            EnsureVisibleSocketCount(item, 2);
+        }
+
+        private static bool TrySetAvatarSocketOpenFields(AvatarInventoryItem item, IReadOnlyList<byte> socketTypes)
+        {
+            if (item == null)
+                return false;
+
+            if (socketTypes == null || socketTypes.Count == 0)
+                return false;
+
+            item.Reserved2 = BuildAvatarSocketData(socketTypes);
+            return true;
+        }
+
+        private static byte[] BuildAvatarSocketData(IReadOnlyList<byte> socketTypes)
+        {
+            var data = new byte[30];
+            if (socketTypes == null)
+                return data;
+
+            var count = Math.Min(5, socketTypes.Count);
+            for (var i = 0; i < count; i++)
+            {
+                var offset = i * 6;
+                data[offset] = 0;
+                data[offset + 1] = socketTypes[i];
+                data[offset + 2] = socketTypes[i] == 0xEF ? (byte)0xFF : (byte)0;
+            }
+            return data;
+        }
+
+        private static byte[] BuildJewelSocketData(int itemTemplateId)
+        {
+            var data = new byte[30];
+            var socketType = ResolveJewelSocketType(itemTemplateId);
+            for (var i = 0; i < 2; i++)
+            {
+                var offset = i * 6;
+                data[offset] = socketType;
+                data[offset + 1] = 0;
+            }
+            return data;
+        }
+
+        private static byte ResolveJewelSocketType(int itemTemplateId)
+        {
+            var equipmentType = ItemMetadataResolver.ResolveEquipmentType(itemTemplateId);
+            if (string.IsNullOrWhiteSpace(equipmentType))
+                return 0x10;
+
+            switch (equipmentType)
+            {
+                case "[coat]":
+                case "[pants]":
+                    return 0x04;
+                case "[shoulder]":
+                case "[amulet]":
+                    return 0x02;
+                case "[belt]":
+                case "[waist]":
+                case "[ring]":
+                    return 0x01;
+                case "[shoes]":
+                case "[wrist]":
+                    return 0x08;
+                default:
+                    return 0x10;
+            }
+        }
+
+        private static int CountOpenJewelSockets(CommonInventoryItem item)
+        {
+            var data = item?.JewelSocket;
+            if (data == null || data.Length < 8)
+                return 0;
+
+            var count = 0;
+            for (var i = 0; i < 2; i++)
+            {
+                var offset = i * 6;
+                if (offset < data.Length && data[offset] != 0)
+                    count++;
+            }
+            return count;
+        }
+
+        private static int CountOpenAvatarSockets(AvatarInventoryItem item)
+        {
+            var data = item?.Reserved2;
+            if (data == null || data.Length < 6)
+                return 0;
+
+            var count = 0;
+            for (var i = 0; i < 5; i++)
+            {
+                var offset = i * 6;
+                if (IsAvatarSocketOpen(data, offset))
+                    count++;
+            }
+            return count;
+        }
+
+        private static bool IsAvatarSocketOpen(byte[] data, int offset)
+        {
+            return data != null
+                && offset >= 0
+                && offset + 5 < data.Length
+                && data[offset] == 0
+                && data[offset + 1] != 0
+                && (data[offset + 1] != 0xEF || data[offset + 2] == 0xFF);
+        }
+
+        private static bool AvatarSocketLayoutMatches(byte[] data, IReadOnlyList<byte> socketTypes)
+        {
+            if (socketTypes == null || socketTypes.Count == 0)
+                return false;
+
+            data = NormalizeBytes(data, 30);
+            var expectedCount = Math.Min(5, socketTypes.Count);
+            for (var i = 0; i < expectedCount; i++)
+            {
+                var offset = i * 6;
+                if (data[offset] != 0 || data[offset + 1] != socketTypes[i])
+                    return false;
+
+                if (socketTypes[i] == 0xEF && data[offset + 2] != 0xFF)
+                    return false;
+            }
+
+            for (var i = expectedCount; i < 5; i++)
+            {
+                var offset = i * 6;
+                if (IsAvatarSocketOpen(data, offset))
+                    return false;
+            }
+
+            return true;
+        }
+
+        private static void EnsureVisibleSocketCount(CommonInventoryItem item, int openCount)
+        {
+            if (item == null || openCount <= 0)
+                return;
+
+            item.TailData2F = NormalizeBytes(item.TailData2F, 37);
+            item.TailData2F[0] = (byte)Math.Max(item.TailData2F[0], Math.Min(openCount, 2));
+            for (var i = 0; i < openCount && i < 2; i++)
+            {
+                var offset = 1 + i * 4;
+                if (offset + 4 <= item.TailData2F.Length && BitConverter.ToInt32(item.TailData2F, offset) == 0)
+                    BitConverter.GetBytes(-1).CopyTo(item.TailData2F, offset);
+            }
+        }
+
+        private static void NormalizeEquipmentSocketLayout(CommonInventoryItem item)
+        {
+            if (item == null)
+                return;
+
+            item.JewelSocket = NormalizeBytes(item.JewelSocket, 30);
+            var changed = false;
+            for (var i = 0; i < 2; i++)
+            {
+                var offset = i * 6;
+                if (item.JewelSocket[offset] == 0 && IsKnownJewelSocketType(item.JewelSocket[offset + 1]))
+                {
+                    item.JewelSocket[offset] = item.JewelSocket[offset + 1];
+                    item.JewelSocket[offset + 1] = 0;
+                    changed = true;
+                }
+                else if (item.JewelSocket[offset] == 0x02 && IsKnownJewelSocketType(item.JewelSocket[offset + 1]))
+                {
+                    item.JewelSocket[offset] = item.JewelSocket[offset + 1];
+                    item.JewelSocket[offset + 1] = 0;
+                    changed = true;
+                }
+            }
+
+            if (changed)
+                EnsureVisibleSocketCount(item, CountOpenJewelSockets(item));
+        }
+
+        private static bool RepairJewelSocketTypes(CommonInventoryItem item, int itemTemplateId)
+        {
+            if (item == null)
+                return false;
+
+            item.JewelSocket = NormalizeBytes(item.JewelSocket, 30);
+            var expectedType = ResolveJewelSocketType(itemTemplateId);
+            var changed = false;
+            for (var i = 0; i < 2; i++)
+            {
+                var offset = i * 6;
+                if (offset >= item.JewelSocket.Length || item.JewelSocket[offset] == 0)
+                    continue;
+
+                if (item.JewelSocket[offset] != expectedType)
+                {
+                    item.JewelSocket[offset] = expectedType;
+                    item.JewelSocket[offset + 1] = 0;
+                    changed = true;
+                }
+            }
+
+            return changed;
+        }
+
+        private static bool IsKnownJewelSocketType(byte socketType)
+        {
+            return socketType == 0x01
+                || socketType == 0x02
+                || socketType == 0x04
+                || socketType == 0x08
+                || socketType == 0x10;
+        }
+
+        private static byte[] NormalizeBytes(byte[] source, int expectedLength)
+        {
+            var buffer = new byte[expectedLength];
+            if (source != null && source.Length > 0)
+                Buffer.BlockCopy(source, 0, buffer, 0, Math.Min(source.Length, expectedLength));
+            return buffer;
+        }
+
         internal static int NormalizeRemovalCount(ItemRecord source, short requestedCount)
         {
             if (source.ItemKind != "stackable")
@@ -1463,8 +1889,8 @@ WHERE character_id = @cid AND list_type = @lt
             }
         }
 
-        // 宠物判定: 物品在 equipment.lst 且 .equ 的 [equipment type] 为 [creature]。
-        // CreatureExtraResolver 对不在 equipment.lst 的物品会抛异常, 这里吞掉返回 false。
+        // 瀹犵墿鍒ゅ畾: 鐗╁搧鍦?equipment.lst 涓?.equ 鐨?[equipment type] 涓?[creature]銆?
+        // CreatureExtraResolver 瀵逛笉鍦?equipment.lst 鐨勭墿鍝佷細鎶涘紓甯? 杩欓噷鍚炴帀杩斿洖 false銆?
         internal static bool IsCreatureItem(int itemTemplateId)
         {
             try
@@ -1473,7 +1899,7 @@ WHERE character_id = @cid AND list_type = @lt
             }
             catch (Exception ex)
             {
-                FileLogger.Log($"  [CeraShopBuy] IsCreatureItem(0x{itemTemplateId:X8}) 判定失败, 视为非宠物: {ex.Message}");
+                FileLogger.Log($"  [CeraShopBuy] IsCreatureItem(0x{itemTemplateId:X8}) 鍒ゅ畾澶辫触, 瑙嗕负闈炲疇鐗? {ex.Message}");
                 return false;
             }
         }

@@ -23,6 +23,27 @@ namespace DfoServer.Network.Builders
             return writer.ToArray();
         }
 
+        public static byte[] BuildCompactCommonUpdates(IReadOnlyList<InventoryMutationResult> items)
+        {
+            var writer = new GamePacketWriter();
+
+            writer.WriteByte(0x00);
+            writer.WriteUInt16((ushort)(items != null ? items.Count : 0));
+
+            if (items != null)
+            {
+                foreach (var item in items)
+                {
+                    writer.WriteInt16(item.SlotIndex);
+                    writer.WriteInt32(item.ItemTemplateId);
+                    writer.WriteInt32(item.RemainingStackCount);
+                    writer.WriteZeroBytes(0x4A);
+                }
+            }
+
+            return writer.ToArray();
+        }
+
         public static byte[] BuildPetUpdates(IReadOnlyList<PetInventoryItem> items)
         {
             var writer = new GamePacketWriter();

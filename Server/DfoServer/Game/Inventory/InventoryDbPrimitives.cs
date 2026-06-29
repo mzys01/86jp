@@ -254,6 +254,38 @@ WHERE character_id = @characterId AND list_type = @listType AND slot_index = @sl
             }
         }
 
+        internal AvatarInventoryItem LoadAvatarItem(SqliteConnection connection, SqliteTransaction transaction, int characterId, short slotIndex)
+        {
+            using (var command = connection.CreateCommand())
+            {
+                command.Transaction = transaction;
+                command.CommandText = @"
+SELECT list_type, slot_index, item_template_id, item_kind, stack_count, instance_value,
+       durability, seal_flag, option_value, expire_time, marker_16, pet_serial_or_handle, extra_json
+FROM character_items
+WHERE character_id = @characterId AND list_type = @listType AND slot_index = @slotIndex
+ORDER BY CASE item_kind
+    WHEN 'equipment' THEN 0
+    WHEN 'avatar' THEN 1
+    WHEN 'pet' THEN 2
+    WHEN 'stackable' THEN 3
+    ELSE 4
+END, item_uid DESC
+LIMIT 1;";
+                command.Parameters.AddWithValue("@characterId", characterId);
+                command.Parameters.AddWithValue("@listType", (int)InventoryListType.Avatar);
+                command.Parameters.AddWithValue("@slotIndex", slotIndex);
+
+                using (var reader = command.ExecuteReader())
+                {
+                    if (!reader.Read())
+                        return null;
+
+                    return InventoryItemCodec.ReadAvatarItem(reader, reader.IsDBNull(12) ? "{}" : reader.GetString(12));
+                }
+            }
+        }
+
         internal List<SqliteInventoryStore.ItemRecord> LoadItemsByListType(SqliteConnection connection, SqliteTransaction transaction, int characterId, InventoryListType listType)
         {
             var items = new List<SqliteInventoryStore.ItemRecord>();
@@ -448,6 +480,26 @@ SET extra_json = @extraJson,
     updated_at = CURRENT_TIMESTAMP
 WHERE item_uid = @itemUid;";
                 command.Parameters.AddWithValue("@extraJson", InventoryItemCodec.SerializeCommon(item));
+                command.Parameters.AddWithValue("@itemUid", itemUid);
+                command.ExecuteNonQuery();
+            }
+        }
+
+        internal void UpdateAvatarExtraJson(SqliteConnection connection, SqliteTransaction transaction, long itemUid, AvatarInventoryItem item)
+        {
+            using (var command = connection.CreateCommand())
+            {
+                command.Transaction = transaction;
+                command.CommandText = @"
+UPDATE character_items
+SET extra_json = @extraJson,
+    option_value = @optionValue,
+    marker_16 = @marker16,
+    updated_at = CURRENT_TIMESTAMP
+WHERE item_uid = @itemUid;";
+                command.Parameters.AddWithValue("@extraJson", InventoryItemCodec.SerializeAvatar(item));
+                command.Parameters.AddWithValue("@optionValue", (int)item.OptionValue);
+                command.Parameters.AddWithValue("@marker16", item.UnknownFixed30);
                 command.Parameters.AddWithValue("@itemUid", itemUid);
                 command.ExecuteNonQuery();
             }
