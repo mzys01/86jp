@@ -1347,5 +1347,104 @@ namespace DfoServer.Network.Handlers
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000E, consumeUpd));
             }
         }
+        public async Task Handle_DEPOSIT_MONEY(EnhancedClientSession session, GamePacketHeader header, byte[] body)
+        {
+            await HandleCargoGold(session, header.type, body, isDeposit: true);
+        }
+
+        public async Task Handle_WITHDRAW_MONEY(EnhancedClientSession session, GamePacketHeader header, byte[] body)
+        {
+            await HandleCargoGold(session, header.type, body, isDeposit: false);
+        }
+
+        private async Task HandleCargoGold(EnhancedClientSession session, ushort wireType, byte[] body, bool isDeposit)
+        {
+            if (body == null || body.Length < 4)
+            {
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, wireType, new byte[] { 0x00, 0x0A }));
+                return;
+            }
+
+            int amount = BitConverter.ToInt32(body, 0);
+            if (amount <= 0)
+            {
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, wireType, new byte[] { 0x00, 0x0A }));
+                return;
+            }
+
+            var (cid, aid) = ResolveOwner(session);
+            var connStr = Infrastructure.SqliteDatabaseBootstrap.Initialize(
+                Infrastructure.ServerPaths.DatabasePath, Infrastructure.ServerPaths.SchemaFilePath);
+
+            using (var conn = new Microsoft.Data.Sqlite.SqliteConnection(connStr))
+            {
+                conn.Open();
+                using (var tx = conn.BeginTransaction())
+                {
+                    var wallet = CurrencyService.LoadWallet(conn, tx, cid);
+                    int cargoGold = LoadCargoGold(conn, tx, aid);
+
+                    int newCharGold, newCargoGold;
+                    if (isDeposit)
+                    {
+                        if (wallet.Gold < amount)
+                        {
+                            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, wireType, new byte[] { 0x00, 0x0A }));
+                            return;
+                        }
+                        newCharGold = wallet.Gold - amount;
+                        newCargoGold = cargoGold + amount;
+                    }
+                    else
+                    {
+                        if (cargoGold < amount)
+                        {
+                            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, wireType, new byte[] { 0x00, 0x0A }));
+                            return;
+                        }
+                        newCargoGold = cargoGold - amount;
+                        newCharGold = wallet.Gold + amount;
+                    }
+
+                    CurrencyService.UpdateGold(conn, tx, cid, newCharGold);
+                    SaveCargoGold(conn, tx, aid, newCargoGold);
+                    tx.Commit();
+
+                    var ack = new GamePacketWriter();
+                    ack.WriteByte(0x01);
+                    ack.WriteInt32(newCargoGold);
+                    await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, wireType, ack.ToArray()));
+
+                    await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000E,
+                        Builders.TeleportPacketBuilder.BuildItemListUpdate(0, 0, newCharGold)));
+
+                    FileLogger.Log($"[{ProtocolName}] {(isDeposit ? "DEPOSIT" : "WITHDRAW")}_MONEY: amount={amount} charGold={newCharGold} cargoGold={newCargoGold}");
+                }
+            }
+        }
+
+        private static int LoadCargoGold(Microsoft.Data.Sqlite.SqliteConnection conn, Microsoft.Data.Sqlite.SqliteTransaction tx, int accountId)
+        {
+            using (var cmd = conn.CreateCommand())
+            {
+                cmd.Transaction = tx;
+                cmd.CommandText = "SELECT value32 FROM account_cargo_state WHERE account_id=@aid;";
+                cmd.Parameters.AddWithValue("@aid", accountId);
+                var result = cmd.ExecuteScalar();
+                return result != null && result != DBNull.Value ? Convert.ToInt32(result) : 0;
+            }
+        }
+
+        private static void SaveCargoGold(Microsoft.Data.Sqlite.SqliteConnection conn, Microsoft.Data.Sqlite.SqliteTransaction tx, int accountId, int gold)
+        {
+            using (var cmd = conn.CreateCommand())
+            {
+                cmd.Transaction = tx;
+                cmd.CommandText = "UPDATE account_cargo_state SET value32=@gold, updated_at=CURRENT_TIMESTAMP WHERE account_id=@aid;";
+                cmd.Parameters.AddWithValue("@gold", gold);
+                cmd.Parameters.AddWithValue("@aid", accountId);
+                cmd.ExecuteNonQuery();
+            }
+        }
     }
 }
