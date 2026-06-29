@@ -1377,6 +1377,9 @@ ORDER BY slot_index;";
             if (!IsSupportedSortListType(listType))
                 return false;
 
+            if (listType == InventoryListType.AccountCargo)
+                return TrySortAccountCargoItems();
+
             var segmentMap = GetSortSegmentMap(listType);
             if (!segmentMap.TryGetValue(category, out var range))
                 return true;
@@ -1443,6 +1446,55 @@ ORDER BY slot_index;";
                         }
                     }
                 }
+                transaction.Commit();
+                return true;
+            }
+        }
+
+        private bool TrySortAccountCargoItems()
+        {
+            using (var connection = _context.OpenConnection())
+            using (var transaction = connection.BeginTransaction())
+            {
+                var items = new List<long>();
+                using (var cmd = connection.CreateCommand())
+                {
+                    cmd.Transaction = transaction;
+                    cmd.CommandText = @"SELECT item_uid FROM account_cargo_items
+                        WHERE account_id = @aid ORDER BY item_kind ASC, item_template_id ASC";
+                    cmd.Parameters.AddWithValue("@aid", _context.AccountId);
+                    using (var reader = cmd.ExecuteReader())
+                    {
+                        while (reader.Read())
+                            items.Add(reader.GetInt64(0));
+                    }
+                }
+
+                int tempSlot = -10000;
+                foreach (var uid in items)
+                {
+                    using (var upd = connection.CreateCommand())
+                    {
+                        upd.Transaction = transaction;
+                        upd.CommandText = "UPDATE account_cargo_items SET slot_index = @slot WHERE item_uid = @uid";
+                        upd.Parameters.AddWithValue("@slot", tempSlot--);
+                        upd.Parameters.AddWithValue("@uid", uid);
+                        upd.ExecuteNonQuery();
+                    }
+                }
+
+                for (var i = 0; i < items.Count; i++)
+                {
+                    using (var upd = connection.CreateCommand())
+                    {
+                        upd.Transaction = transaction;
+                        upd.CommandText = "UPDATE account_cargo_items SET slot_index = @slot WHERE item_uid = @uid";
+                        upd.Parameters.AddWithValue("@slot", i);
+                        upd.Parameters.AddWithValue("@uid", items[i]);
+                        upd.ExecuteNonQuery();
+                    }
+                }
+
                 transaction.Commit();
                 return true;
             }
