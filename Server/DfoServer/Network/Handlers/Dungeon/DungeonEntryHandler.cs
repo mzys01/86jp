@@ -113,16 +113,31 @@ namespace DfoServer.Network.Handlers.Dungeon
                 FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] SELECT_DUNGEON: manual hell requested dungeon={req.DungeonId} enabled={session.Player.CurDungeonHellMode}");
 
             HashSet<int> activeQuestIds = null;
+            HashSet<int> relatedQuestIds = null;
             try
             {
                 var connStr = SqliteDatabaseBootstrap.Initialize(
                     ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
                 var quests = QuestService.LoadActiveQuests(connStr, session.Player.CharacterId);
                 if (quests.Count > 0)
+                {
                     activeQuestIds = new HashSet<int>(quests.ConvertAll(q => (int)q.QuestId));
+                    relatedQuestIds = new HashSet<int>();
+                    foreach (var quest in quests)
+                    {
+                        var preRequired = QuestData.GetPreRequiredQuests(quest.QuestId);
+                        foreach (var questId in preRequired)
+                        {
+                            if (questId > 0 && !activeQuestIds.Contains(questId))
+                                relatedQuestIds.Add(questId);
+                        }
+                    }
+                    if (relatedQuestIds.Count == 0)
+                        relatedQuestIds = null;
+                }
             }
             catch { }
-            var selection = DungeonData.SelectDungeonMaze(req.DungeonId, activeQuestIds);
+            var selection = DungeonData.SelectDungeonMaze(req.DungeonId, activeQuestIds, relatedQuestIds);
             session.Player.CurMazeIndex = selection.Index;
             var bossPos = DungeonData.RandomizeBossPosition(selection.Maze.BossMap);
             session.Player.CurBossMapPos = bossPos;

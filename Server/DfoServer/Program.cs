@@ -35,6 +35,12 @@ namespace DfoServer
                 return;
             }
 
+            if (Array.IndexOf(args, "--selftest-dungeon-map-fallback") >= 0)
+            {
+                Environment.Exit(SelfTests.DungeonMapFallbackSelfTest.Run());
+                return;
+            }
+
             GameNetworkConfig.Configure(args);
 
             PacketFileLogger.Initialize();
