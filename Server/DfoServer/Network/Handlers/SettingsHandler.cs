@@ -57,5 +57,20 @@ namespace DfoServer.Network.Handlers
             _repo.SaveQuickchatBank(aid, bankIndex, blob);
             FileLogger.Log($"[GameProtocol] SAVE_QUICKCHAT: account={aid} bank={bankIndex} len={len}");
         }
+
+        public void Handle_SAVE_CHARACTER_OPTION(EnhancedClientSession session, GamePacketHeader header, byte[] body)
+        {
+            var (characterId, accountId) = SessionOwnerResolver.Resolve(session);
+            if (characterId <= 0 || body == null)
+            {
+                FileLogger.Log($"[GameProtocol] SAVE_CHARACTER_OPTION ignored: character={characterId} account={accountId} len={body?.Length ?? 0}");
+                return;
+            }
+
+            var repo = new Game.CharacterData.SqliteCharacterStateRepository(
+                ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
+            repo.SaveCharacterOption(characterId, body);
+            FileLogger.Log($"[GameProtocol] SAVE_CHARACTER_OPTION: character={characterId} account={accountId} len={body.Length}");
+        }
     }
 }
