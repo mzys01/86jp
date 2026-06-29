@@ -657,5 +657,3 @@ INSERT OR IGNORE INTO accounts (account_id, m_id, password_hash) VALUES
 
 -- character 和 container_state 由 EnsureInitialized 从封包样本动态 seed（不再硬编码）
 
-INSERT OR IGNORE INTO account_cargo_state (account_id, selection_key, value32) VALUES
-    (1, 16, 0);
