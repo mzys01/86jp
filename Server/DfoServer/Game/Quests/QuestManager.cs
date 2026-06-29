@@ -144,6 +144,11 @@ namespace DfoServer.Game.Quests
                             await SendExpertJobChangeNotification(cid, expertJobType);
                             await SendUserInfoBroadcast(cid);
                         }
+                        else if (chainType == GameWorld.QuestData.ChainTypeSlotExpansion)
+                        {
+                            // The ACK completes the quest, but the client opens the visual slot from refreshed subtype1 data.
+                            await SendUserInfoBroadcast(cid);
+                        }
                     }
                 }
 
