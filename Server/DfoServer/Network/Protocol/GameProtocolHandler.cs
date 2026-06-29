@@ -218,6 +218,7 @@ namespace DfoServer.Network
         {
             d[0x001C] = _skillHandler.Handle_CHANGE_SKILLSLOT;                     //28
             d[0x001D] = _skillHandler.Handle_BUY_SKILL;                            //29
+            d[0x0104] = _skillHandler.Handle_CHANGE_ANOTHER_SKILL_TREE;            //260
             d[0x014B] = _skillHandler.Handle_CHANGE_SKILL_COMMAND;                 //331
             d[0x014C] = _skillHandler.Handle_RESET_ALL_SKILL_COMMANDS;             //332
             d[0x01EC] = _skillHandler.Handle_SKILL_INIT;                           //492

@@ -1,4 +1,5 @@
 using DfoServer.Game.Dungeon;
+using DfoServer.Game.Skills;
 using DfoServer.GameWorld;
 using DfoServer.Infrastructure;
 using DfoServer.Network.Builders;
@@ -139,11 +140,12 @@ namespace DfoServer.Network.Handlers.Dungeon
                 ushort remainSp = 0, remainTp = 0;
                 try
                 {
-                    var points = _svc.LoadSyncedSkillState(session.Player.CharacterId, session.Player.Level, persist: leveledUp).Points;
-                    if (points != null)
+                    var synced = _svc.LoadSyncedSkillState(session.Player.CharacterId, session.Player.Level, persist: leveledUp);
+                    if (synced.Points != null)
                     {
-                        remainSp = (ushort)points.RemainingSp;
-                        remainTp = (ushort)points.RemainingTp;
+                        var pageIndex = session.Player.Subtype0Tail?.SkillTreeIndex == 1 ? 1 : 0;
+                        remainSp = SkillStateService.GetPageRemainingSp(synced.Skills, synced.Points, pageIndex);
+                        remainTp = (ushort)synced.Points.RemainingTp;
                     }
                 }
                 catch { }
