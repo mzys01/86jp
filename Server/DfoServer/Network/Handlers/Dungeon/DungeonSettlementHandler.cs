@@ -82,6 +82,8 @@ namespace DfoServer.Network.Handlers.Dungeon
             session.Player.CurPaidCardSlots = new byte[] { 0xFF, 0xFF, 0xFF, 0xFF };
 
             ScheduleAutoFlow(session, layoutDelayMs: 2000, autoFlipDelayMs: 4000);
+
+            await _svc.UpdateDungeonPermission(session, session.Player.CurDungeon, session.Player.CurDungeonDifficulty);
         }
 
         // ── Auto-flow timer ────────────────────────────────────────────────────
