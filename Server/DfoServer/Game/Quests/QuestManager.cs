@@ -7,6 +7,7 @@ using DfoServer.Game.Dungeon;
 using DfoServer.Game.Inventory;
 using DfoServer.Game.Session;
 using DfoServer.Game.Skills;
+using DfoServer.Game.SelectCharacter;
 using DfoServer.Infrastructure;
 using DfoServer.Network.Builders;
 
