@@ -466,6 +466,10 @@ namespace DfoServer.Game.Quests
                 {
                     UpdateExpertJob(scope.Connection, scope.Transaction, characterId, reward.GrowNumber);
                 }
+                else if (reward.ChainType == GameWorld.QuestData.ChainTypeSlotExpansion)
+                {
+                    UpdateSlotExpansion(scope.Connection, scope.Transaction, characterId, reward.GrowNumber);
+                }
 
                 if (!GameWorld.QuestData.IsRepeatableQuest(questId))
                     MarkQuestCleared(scope.Connection, scope.Transaction, characterId, questId);
@@ -514,6 +518,12 @@ namespace DfoServer.Game.Quests
             else if (reward.ChainType == 20)
             {
                 w.WriteByte((byte)reward.GrowNumber); // expert job type
+                w.WriteByte(0); // npcCount layer 1
+                w.WriteByte(0); // npcCount layer 2
+            }
+            else if (reward.ChainType == GameWorld.QuestData.ChainTypeSlotExpansion)
+            {
+                w.WriteByte((byte)reward.GrowNumber); // expanded equipment slot id (21=support, 22=magic stone)
                 w.WriteByte(0); // npcCount layer 1
                 w.WriteByte(0); // npcCount layer 2
             }
@@ -694,6 +704,40 @@ namespace DfoServer.Game.Quests
             }
 
             FileLogger.Log($"[QuestService] UpdateExpertJob: cid={characterId} expertJobType={expertJobType}");
+        }
+
+        private static void UpdateSlotExpansion(SqliteConnection conn, SqliteTransaction tx, int characterId, int slotId)
+        {
+            // Special equipment slots are stored as bits in ex_equip_slot_stat: 21=support, 22=magic stone, 23=earring.
+            var flag = ResolveSlotExpansionFlag(slotId);
+            if (flag == 0)
+            {
+                FileLogger.Log($"[QuestService] UpdateSlotExpansion skipped: cid={characterId} unsupported slotId={slotId}");
+                return;
+            }
+
+            using (var cmd = conn.CreateCommand())
+            {
+                cmd.Transaction = tx;
+                cmd.CommandText = @"
+                    UPDATE characters
+                    SET ex_equip_slot_stat = (ex_equip_slot_stat | @flag),
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE character_id = @cid;";
+                cmd.Parameters.AddWithValue("@flag", flag);
+                cmd.Parameters.AddWithValue("@cid", characterId);
+                cmd.ExecuteNonQuery();
+            }
+
+            FileLogger.Log($"[QuestService] UpdateSlotExpansion: cid={characterId} slotId={slotId} flag=0x{flag:X2}");
+        }
+
+        private static int ResolveSlotExpansionFlag(int slotId)
+        {
+            // Slot ids follow the client equipment index; the persisted flag is zero-based from support equipment.
+            if (slotId < 21 || slotId > 23)
+                return 0;
+            return 1 << (slotId - 21);
         }
 
         private static byte[] BuildExpertJobBlob(byte state0, byte mode, int expertJobType)

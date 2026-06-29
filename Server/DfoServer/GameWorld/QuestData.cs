@@ -22,6 +22,9 @@ namespace DfoServer.GameWorld
 
     internal static class QuestData
     {
+        // PVF [slot expansion] rewards use reward int data as an equipment slot id, not an item id.
+        internal const int ChainTypeSlotExpansion = 21;
+
         private static readonly Lazy<QuestIndex> Index = new Lazy<QuestIndex>(BuildQuestIndex);
         private static readonly Lazy<QuestParameterTable> Parameters = new Lazy<QuestParameterTable>(LoadParameters);
         private static readonly Lazy<Dictionary<int, HashSet<int>>> TrainingQuestNpcs = new Lazy<Dictionary<int, HashSet<int>>>(LoadTrainingQuestNpcs);
@@ -463,7 +466,7 @@ namespace DfoServer.GameWorld
                 var consumeItems = ParseItemPairs(qst.DependGiveItem);
 
                 int growNumber = 0;
-                if (chainType == 1 || chainType == 2 || chainType == 20)
+                if (chainType == 1 || chainType == 2 || chainType == 20 || chainType == ChainTypeSlotExpansion)
                 {
                     var rewardValues = ParseIntList(qst.RewardIntData);
                     if (rewardValues.Count > 0)
@@ -487,6 +490,7 @@ namespace DfoServer.GameWorld
                 case "[grow type]": return 1;
                 case "[creature evolution]": return 10;
                 case "[expert job]": return 20;
+                case "[slot expansion]": return ChainTypeSlotExpansion;
                 case "[event creature evolution]": return 25;
                 default: return 0;
             }
