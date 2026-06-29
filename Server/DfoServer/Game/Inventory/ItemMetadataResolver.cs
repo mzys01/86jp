@@ -150,7 +150,7 @@ namespace DfoServer.Game.Inventory
                     ItemKind = "stackable",
                     StackableType = stackable.StackableType,
                     PvfFilePath = stackableEntry.FilePath,
-                    BuyGold = hasMaterialCost ? 0 : buyGold,
+                    BuyGold = buyGold,
                     SellGold = sellGold,
                     Durability = 0,
                     StackLimit = stackable.StackLimit,
