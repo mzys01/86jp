@@ -81,7 +81,7 @@ namespace DfoServer.Game.Inventory
 
         public short AppliedCount { get; set; }
 
-        // 鏈璐拱鏄惁鎵ｄ簡閲戝竵(鐢ㄤ簬鍟嗗煄鍥炲寘鍐冲畾鏄惁鍒锋柊涓昏儗鍖?slot0 閲戝竵鏄剧ず)銆?
+        // 本次购买是否扣了金币(用于商城回包决定是否刷新主背包 slot0 金币显示)。
         public bool GoldSpent { get; set; }
 
         public int CostItemTemplateId { get; set; }
@@ -128,6 +128,24 @@ namespace DfoServer.Game.Inventory
         public bool MaterialConsumed { get; set; }
     }
 
+    public sealed class EquipmentEmblemApplyRequest
+    {
+        public short EmblemSlot { get; set; }
+
+        public int EmblemItemTemplateId { get; set; }
+
+        public byte SocketIndex { get; set; }
+    }
+
+    public sealed class EquipmentEmblemMutationResult
+    {
+        public CommonInventoryItem TargetItem { get; set; }
+
+        public bool TargetEquipped { get; set; }
+
+        public List<InventoryMutationResult> ConsumedEmblems { get; } = new List<InventoryMutationResult>();
+    }
+
     public sealed class AvatarSocketMutationResult
     {
         public AvatarInventoryItem TargetItem { get; set; }
@@ -135,6 +153,13 @@ namespace DfoServer.Game.Inventory
         public InventoryMutationResult MaterialItem { get; set; }
 
         public bool MaterialConsumed { get; set; }
+    }
+
+    public sealed class AvatarEmblemMutationResult
+    {
+        public AvatarInventoryItem TargetItem { get; set; }
+
+        public List<InventoryMutationResult> ConsumedEmblems { get; } = new List<InventoryMutationResult>();
     }
 
     public sealed class SqliteInventoryStore : IInventoryStore
@@ -317,7 +342,7 @@ ORDER BY slot_index;";
                     }
                 }
 
-                // 璇诲彇璐﹀彿绾ф櫠鍧? 鍚堟垚铏氭嫙 slot 鏉＄洰娣诲姞鍒?MainItems
+                // 读取账号级晶块, 合成虚拟 slot 条目添加到 MainItems
                 var cubeFragments = CurrencyService.LoadCubeFragments(connection, null, _context.AccountId);
                 foreach (var (itemId, slot, count) in cubeFragments)
                 {
@@ -475,10 +500,10 @@ ORDER BY slot_index;";
             }
         }
 
-        // 鍚堝苟瑁呮壆(鏃惰鍚堟垚): 鎵ｆ帀 slot1/slot2 涓や欢鏃ф椂瑁?+ 1 涓秷鑰楀搧(鍚堟垚鍣?, 鍦ㄦ椂瑁呮爮绗竴涓?
-        // 绌轰綅鎻掑叆鏂版椂瑁呫€傛柊鏃惰itemId鐢?resolveNewItemId(oldItemId1, oldItemId2, consumeMaterialId)
-        // 鍥炶皟璁＄畻(鍦ㄤ簨鍔″唴銆佽鍒颁笁涓湡瀹瀒tem涔嬪悗鎵嶈皟鐢? 淇濊瘉姒傜巼鍒ゅ畾鐢ㄧ殑鏄簨鍔″唴鐨勭湡瀹炴暟鎹?銆?
-        // 杩斿洖鏂版椂瑁呮墍鍦?slot (newSlotOut)銆備竴涓簨鍔″唴瀹屾垚, 澶辫触鍥炴粴銆?
+        // 合并装扮(时装合成): 扣掉 slot1/slot2 两件旧时装 + 1 个消耗品(合成器), 在时装栏第一个
+        // 空位插入新时装。新时装itemId由 resolveNewItemId(oldItemId1, oldItemId2, consumeMaterialId)
+        // 回调计算(在事务内、读到三个真实item之后才调用, 保证概率判定用的是事务内的真实数据)。
+        // 返回新时装所在 slot (newSlotOut)。一个事务内完成, 失败回滚。
         public bool TryCompoundAvatar(short slot1, short slot2, short consumeSlot,
                 Func<int, int, int, List<int>> resolveNewItemIds, byte newOption,
                 out List<int> newSlotsOut, out int oldItemId1, out int oldItemId2, out List<int> newItemIdsOut,
@@ -514,12 +539,12 @@ ORDER BY slot_index;";
                 var newItemIds = resolveNewItemIds(oldItemId1, oldItemId2, consumeItem.ItemTemplateId);
                 newItemIdsOut = newItemIds;
 
-                // 鍙版湇鍋氭硶(閫嗗悜 CInventory::AddAvatarItem 寰楀埌, 0x8509b9e): 鍒犳帀slot1/slot2涓や釜妲?
-                // (reset娓呯┖, 涓嶇Щ鍔ㄥ叾浠栫墿鍝併€佷笉绱у噾閲嶆帓), 鐒跺悗浠庢Ы浣?寮€濮嬬嚎鎬ф壂鎻忕涓€涓猧temId=0鐨?
-                // 绌烘鎻掑叆鏂版椂瑁?鍙版湇纭紪鐮佷笂闄?04=105鏍? 瀵瑰簲鍙版湇鍥哄畾澶у皬鏃惰鏍?銆?
-                // 86JP鏃惰鏍忔牸鏁板叕寮?瀹炴祴纭): 鍩虹105鏍?鍥哄畾) + list_param16鎷撳睍鍊?0~105, 姣忕敤1寮?
-                // "瑁呮壆鏍忔嫇灞曞埜"+7鏍? = 鎬绘牸鏁?105~210)銆俢haracter_container_state.list_param16
-                // 灏辨槸杩欎釜鎷撳睍鍊? 涓嶆槸"宸茶В閿佹牸鏁?鏈韩, 涓婇檺瑕佺敤 105+璇ュ€?鎵嶅銆?
+                // 台服做法(逆向 CInventory::AddAvatarItem 得到, 0x8509b9e): 删掉slot1/slot2两个槛
+                // (reset清空, 不移动其他物品、不紧凑重排), 然后从槽位0开始线性扫描第一个itemId=0的
+                // 空槛插入新时装(台服硬编码上限104=105格, 对应台服固定大小时装栏)。
+                // 86JP时装栏格数公式(实测确认): 基础105格(固定) + list_param16拓展值(0~105, 每用1张
+                // "装扮栏拓展券"+7格) = 总格数(105~210)。character_container_state.list_param16
+                // 就是这个拓展值, 不是"已解锁格数"本身, 上限要用 105+该值 才对。
                 _db.DeleteItem(connection, transaction, item1.ItemUid);
                 _db.DeleteItem(connection, transaction, item2.ItemUid);
 
@@ -559,10 +584,10 @@ ORDER BY slot_index;";
             }
         }
 
-        // 8浠堕珮绾ц鎵?-> 100%鍚堟垚鎸囧畾绋€鏈夎鎵?鍏嬮殕瑁呮壆鍚堟垚鍣? 濡?鏃峰彜澶╁▏"绯诲垪)銆?
-        // 娑堣€楀搧鎸夎姹俠ody閲屾惡甯︾殑Main鍒楄〃妲涗綅鍙风簿纭畾浣?瀹炴祴涓ょ粍涓嶅悓妲涗綅鏁版嵁浜ゅ弶楠岃瘉寰楀埌璇ュ瓧娈?銆?
-        // resolveNewItemId: 杈撳叆娑堣€楀搧item_template_id, 鐢辫皟鐢ㄦ柟(AbsoluteBindCubeService)鎸夎鍚堟垚鍣?
-        // 鐨刐action type]閰嶇疆 + 瑙掕壊鑱屼笟鏌ヨ〃鏍￠獙/绾犳瀹㈡埛绔姹傜殑鐩爣itemId; 杩斿洖璐熸暟琛ㄧず鏍￠獙澶辫触銆?
+        // 8件高级装扮 -> 100%合成指定稀有装扮(克隆装扮合成器, 如"旷古天娇"系列)。
+        // 消耗品按请求body里携带的Main列表槛位号精确定位(实测两组不同槛位数据交叉验证得到该字段)。
+        // resolveNewItemId: 输入消耗品item_template_id, 由调用方(AbsoluteBindCubeService)按该合成器
+        // 的[action type]配置 + 角色职业查表校验/纠正客户端请求的目标itemId; 返回负数表示校验失败。
         public bool TryCompoundAvatarSet(short[] consumeSlots, int[] expectedItemIds, Func<int, int> resolveNewItemId, byte newOption,
                 short consumeStackableSlot,
                 out int newSlot, out List<int> oldItemIds, out int newItemId, out int consumedItemTemplateId, out int consumedItemRemainingCount)
@@ -586,7 +611,7 @@ ORDER BY slot_index;";
                         return false;
                     }
 
-                    // 闃叉敼鍖? 姣斿瀹㈡埛绔０绉扮殑 itemId 涓?DB 瀹為檯鐗╁搧, 涓嶇鍒欐嫆缁?闃叉鏀瑰寘鍒犱换鎰忔Ы浣嶇墿鍝?
+                    // 防改包: 比对客户端声称的 itemId 与 DB 实际物品, 不符则拒绝(防止改包删任意槽位物品)
                     if (expectedItemIds != null && i < expectedItemIds.Length && expectedItemIds[i] != items[i].ItemTemplateId)
                     {
                         FileLogger.Log($"  [CompoundAvatarSet] REJECT: itemId mismatch at slot={consumeSlots[i]} expected=0x{expectedItemIds[i]:X8} actual=0x{items[i].ItemTemplateId:X8}");
@@ -626,8 +651,8 @@ ORDER BY slot_index;";
                     _db.DeleteItem(connection, transaction, consumeItem.ItemUid);
                 }
 
-                // 鍚?TryCompoundAvatar: 鎸夊彴鏈?AddAvatarItem 绠楁硶浠庢Ы浣?鎵弿绗竴涓┖妲涗綅, 涓婇檺鎸?
-                // 105(鍩虹) + character_container_state.list_param16(鎷撳睍鍊? 0~105, 姣忓紶鎷撳睍鍒?7)銆?
+                // 同 TryCompoundAvatar: 按台服 AddAvatarItem 算法从槽位0扫描第一个空槛位, 上限按
+                // 105(基础) + character_container_state.list_param16(拓展值, 0~105, 每张拓展券+7)。
                 var avatarExpansion = GetListParam(_equipStore.LoadContainerState(connection, transaction, _context.CharacterId, _context.AccountId), InventoryListType.Avatar);
                 var avatarCapacity = 105 + avatarExpansion;
                 var emptySlot = _db.FindEmptySlot(connection, transaction, _context.CharacterId, InventoryListType.Avatar, 0, avatarCapacity - 1);
@@ -662,8 +687,8 @@ ORDER BY slot_index;";
         internal const int RentalBagSlotStart = 9;
         internal const int RentalBagSlotEnd = 64;
 
-        // 瀹犵墿鏍?list 7)"瀹犵墿"鏈綋鍒嗛〉妲芥(category 5): slot 0..139 鍏?140 鏍?瀹炴祴璁℃暟)銆?
-        // 鍏跺悗 瀹犵墿瑁呭=140..188(cat6)銆佸疇鐗╄€楀搧=189..237(cat7)銆傛柊璐疇鐗╀粠鏈〉棣栨牸寮€濮嬪～銆?
+        // 宠物栏(list 7)"宠物"本体分页槽段(category 5): slot 0..139 共 140 格(实测计数)。
+        // 其后 宠物装备=140..188(cat6)、宠物耗品=189..237(cat7)。新购宠物从本页首格开始填。
         // Client pet inventory pages share list 7 but use separate slot ranges:
         // category 5 = pets, category 6 = pet equipment, category 7 = pet consumables.
         internal const int PetInventorySlotStart = 0;
@@ -703,7 +728,7 @@ ORDER BY slot_index;";
         {
             assignedSlot = -1;
 
-            // 鏅跺潡璧拌处鍙风骇瀛樺偍, 涓嶈繘 character_items
+            // 晶块走账号级存储, 不进 character_items
             if (CurrencyService.IsCubeFragment(itemTemplateId))
             {
                 CurrencyService.AddCubeFragment(connection, transaction, accountId, itemTemplateId, stackCount);
@@ -872,6 +897,174 @@ ORDER BY slot_index;";
             }
         }
 
+        public bool TrySetEquipmentEmblems(short targetSlotIndex, int targetItemTemplateId, IReadOnlyList<EquipmentEmblemApplyRequest> emblems, out EquipmentEmblemMutationResult result)
+        {
+            result = null;
+            if (emblems == null || emblems.Count == 0)
+                return false;
+
+            using (var connection = _context.OpenConnection())
+            using (var transaction = connection.BeginTransaction())
+            {
+                var target = _db.LoadItemRecord(connection, transaction, _context.CharacterId, InventoryListType.Main, targetSlotIndex);
+                if (target == null || target.ItemKind != "equipment" || target.ItemTemplateId != targetItemTemplateId)
+                    return TrySetEquippedEquipmentEmblems(connection, transaction, targetSlotIndex, targetItemTemplateId, emblems, out result);
+
+                var common = _db.LoadCommonItem(connection, transaction, _context.CharacterId, InventoryListType.Main, targetSlotIndex);
+                if (common == null)
+                    return false;
+
+                common.TailData2F = NormalizeBytes(common.TailData2F, 37);
+                common.JewelSocket = NormalizeBytes(common.JewelSocket, 30);
+                NormalizeEquipmentSocketLayout(common);
+                RepairJewelSocketTypes(common, targetItemTemplateId);
+
+                var openCount = CountOpenJewelSockets(common);
+                if (openCount <= 0 && common.TailData2F[0] > 0)
+                {
+                    var rebuiltCount = Math.Min(2, (int)common.TailData2F[0]);
+                    common.JewelSocket = BuildJewelSocketData(targetItemTemplateId);
+                    EnsureVisibleSocketCount(common, rebuiltCount);
+                    openCount = CountOpenJewelSockets(common);
+                    FileLogger.Log($"  [EmblemAttach] repaired missing jewelSocket targetSlot={targetSlotIndex} item=0x{targetItemTemplateId:X8} count={openCount}");
+                }
+
+                if (openCount <= 0)
+                {
+                    FileLogger.Log($"  [EmblemAttach] REJECT: no open sockets targetSlot={targetSlotIndex} item=0x{targetItemTemplateId:X8} tailCount={common.TailData2F[0]} jewel={BitConverter.ToString(common.JewelSocket)}");
+                    return false;
+                }
+
+                EnsureVisibleSocketCount(common, openCount);
+
+                var consumed = new List<InventoryMutationResult>();
+                foreach (var request in emblems)
+                {
+                    if (request.SocketIndex >= openCount || request.SocketIndex >= 5)
+                        return false;
+
+                    var socketType = GetJewelSocketType(common, request.SocketIndex);
+                    var emblemType = ItemMetadataResolver.ResolveEmblemSocketType(request.EmblemItemTemplateId);
+                    if (!CanAttachEmblemToJewelSocket(socketType, emblemType))
+                    {
+                        FileLogger.Log($"  [EmblemAttach] REJECT: socketType=0x{socketType:X2} emblemType=0x{emblemType:X2} emblem=0x{request.EmblemItemTemplateId:X8}");
+                        return false;
+                    }
+
+                    var emblem = _db.LoadItemRecord(connection, transaction, _context.CharacterId, InventoryListType.Main, request.EmblemSlot);
+                    if (emblem == null || emblem.ItemTemplateId != request.EmblemItemTemplateId || emblem.StackCount <= 0)
+                        return false;
+
+                    WriteEmblemToTail(common.TailData2F, request.SocketIndex, request.EmblemItemTemplateId);
+                    WriteEmblemToJewelSocket(common.JewelSocket, request.SocketIndex, request.EmblemItemTemplateId);
+
+                    var remaining = Math.Max(0, emblem.StackCount - 1);
+                    if (remaining > 0)
+                        _db.UpdateStackCount(connection, transaction, emblem.ItemUid, remaining);
+                    else
+                    {
+                        _db.DeleteItem(connection, transaction, emblem.ItemUid);
+                        DeleteSortItemLock(connection, transaction, emblem.ListType, emblem.SlotIndex);
+                    }
+
+                    _auditLogger.WriteDeleteAuditLog(connection, transaction, _context.CharacterId, emblem, 1);
+                    consumed.Add(new InventoryMutationResult
+                    {
+                        ListType = emblem.ListType,
+                        SlotIndex = emblem.SlotIndex,
+                        ItemTemplateId = emblem.ItemTemplateId,
+                        RemainingStackCount = remaining,
+                        InstanceValue = remaining,
+                        Durability = emblem.Durability,
+                        RequestedCount = 1,
+                        AppliedCount = 1,
+                    });
+                }
+
+                _db.UpdateCommonExtraJson(connection, transaction, target.ItemUid, common);
+                _auditLogger.WriteAuditLog(connection, transaction, _context.CharacterId, "set_equipment_emblems", target, target.ListType, target.SlotIndex, emblems.Count);
+                transaction.Commit();
+
+                result = new EquipmentEmblemMutationResult
+                {
+                    TargetItem = common,
+                };
+                result.ConsumedEmblems.AddRange(consumed);
+                return true;
+            }
+        }
+
+        private bool TrySetEquippedEquipmentEmblems(SqliteConnection connection, SqliteTransaction transaction, short targetSlotIndex, int targetItemTemplateId, IReadOnlyList<EquipmentEmblemApplyRequest> emblems, out EquipmentEmblemMutationResult result)
+        {
+            result = null;
+            var entry = LoadEquippedEntry(connection, transaction, _context.CharacterId, targetSlotIndex);
+            if (entry == null || entry.ItemId != targetItemTemplateId || entry.Raw == null || entry.Raw.Length == 0)
+                return false;
+
+            var fields = MakeEquipListCodec.ParseDisplayFields(entry.Raw);
+            var openCount = fields.Emblem != null && fields.Emblem.Length > 0 ? fields.Emblem[0] : 0;
+            if (openCount <= 0)
+            {
+                FileLogger.Log($"  [EmblemAttach] REJECT equipped: no open sockets equipSlot={targetSlotIndex} item=0x{targetItemTemplateId:X8}");
+                return false;
+            }
+
+            var socketType = ResolveJewelSocketType(targetItemTemplateId);
+            var consumed = new List<InventoryMutationResult>();
+            foreach (var request in emblems)
+            {
+                if (request.SocketIndex >= openCount || request.SocketIndex >= 5)
+                    return false;
+
+                var emblemType = ItemMetadataResolver.ResolveEmblemSocketType(request.EmblemItemTemplateId);
+                if (!CanAttachEmblemToJewelSocket(socketType, emblemType))
+                {
+                    FileLogger.Log($"  [EmblemAttach] REJECT equipped: socketType=0x{socketType:X2} emblemType=0x{emblemType:X2} emblem=0x{request.EmblemItemTemplateId:X8}");
+                    return false;
+                }
+
+                var emblem = _db.LoadItemRecord(connection, transaction, _context.CharacterId, InventoryListType.Main, request.EmblemSlot);
+                if (emblem == null || emblem.ItemTemplateId != request.EmblemItemTemplateId || emblem.StackCount <= 0)
+                    return false;
+
+                WriteEmblemToEquippedFields(ref fields.Emblem, request.SocketIndex, request.EmblemItemTemplateId);
+
+                var remaining = Math.Max(0, emblem.StackCount - 1);
+                if (remaining > 0)
+                    _db.UpdateStackCount(connection, transaction, emblem.ItemUid, remaining);
+                else
+                {
+                    _db.DeleteItem(connection, transaction, emblem.ItemUid);
+                    DeleteSortItemLock(connection, transaction, emblem.ListType, emblem.SlotIndex);
+                }
+
+                _auditLogger.WriteDeleteAuditLog(connection, transaction, _context.CharacterId, emblem, 1);
+                consumed.Add(new InventoryMutationResult
+                {
+                    ListType = emblem.ListType,
+                    SlotIndex = emblem.SlotIndex,
+                    ItemTemplateId = emblem.ItemTemplateId,
+                    RemainingStackCount = remaining,
+                    InstanceValue = remaining,
+                    Durability = emblem.Durability,
+                    RequestedCount = 1,
+                    AppliedCount = 1,
+                });
+            }
+
+            entry.Raw = MakeEquipListCodec.BuildEntryFromDisplayFields(targetSlotIndex, targetItemTemplateId, fields);
+            UpdateEquippedEntryRaw(connection, transaction, _context.CharacterId, targetSlotIndex, targetItemTemplateId, entry.Raw);
+            FileLogger.Log($"  [EmblemAttach] equipped OK slot={targetSlotIndex} item=0x{targetItemTemplateId:X8} emblems={emblems.Count}");
+            transaction.Commit();
+
+            result = new EquipmentEmblemMutationResult
+            {
+                TargetEquipped = true,
+            };
+            result.ConsumedEmblems.AddRange(consumed);
+            return true;
+        }
+
         public bool TryOpenAvatarSocket(short targetSlotIndex, int targetItemTemplateId, short materialSlotIndex, out AvatarSocketMutationResult result)
         {
             result = null;
@@ -957,6 +1150,85 @@ ORDER BY slot_index;";
             }
         }
 
+        public bool TrySetAvatarEmblems(short targetSlotIndex, int targetItemTemplateId, IReadOnlyList<EquipmentEmblemApplyRequest> emblems, out AvatarEmblemMutationResult result)
+        {
+            result = null;
+            if (emblems == null || emblems.Count == 0)
+                return false;
+
+            using (var connection = _context.OpenConnection())
+            using (var transaction = connection.BeginTransaction())
+            {
+                var target = _db.LoadItemRecord(connection, transaction, _context.CharacterId, InventoryListType.Avatar, targetSlotIndex);
+                if (target == null || target.ItemKind != "avatar" || target.ItemTemplateId != targetItemTemplateId)
+                    return false;
+
+                var avatar = _db.LoadAvatarItem(connection, transaction, _context.CharacterId, targetSlotIndex);
+                if (avatar == null)
+                    return false;
+
+                avatar.Reserved2 = NormalizeBytes(avatar.Reserved2, 30);
+                var expectedSocketTypes = ItemMetadataResolver.ResolveAvatarSocketTypes(targetItemTemplateId);
+                var openCount = CountOpenAvatarSockets(avatar);
+                if (openCount <= 0)
+                    return false;
+
+                var consumed = new List<InventoryMutationResult>();
+                foreach (var request in emblems)
+                {
+                    if (request.SocketIndex >= openCount || request.SocketIndex >= 5)
+                        return false;
+
+                    var socketType = GetAvatarSocketType(avatar, request.SocketIndex);
+                    var emblemType = ItemMetadataResolver.ResolveEmblemSocketType(request.EmblemItemTemplateId);
+                    if (socketType != 0 && emblemType != 0 && socketType != 0x10 && socketType != 0xEF && socketType != emblemType)
+                    {
+                        FileLogger.Log($"  [AvatarEmblemAttach] REJECT: socketType=0x{socketType:X2} emblemType=0x{emblemType:X2} emblem=0x{request.EmblemItemTemplateId:X8}");
+                        return false;
+                    }
+
+                    var emblem = _db.LoadItemRecord(connection, transaction, _context.CharacterId, InventoryListType.Main, request.EmblemSlot);
+                    if (emblem == null || emblem.ItemTemplateId != request.EmblemItemTemplateId || emblem.StackCount <= 0)
+                        return false;
+
+                    WriteEmblemToAvatarSocket(avatar.Reserved2, request.SocketIndex, request.EmblemItemTemplateId);
+
+                    var remaining = Math.Max(0, emblem.StackCount - 1);
+                    if (remaining > 0)
+                        _db.UpdateStackCount(connection, transaction, emblem.ItemUid, remaining);
+                    else
+                    {
+                        _db.DeleteItem(connection, transaction, emblem.ItemUid);
+                        DeleteSortItemLock(connection, transaction, emblem.ListType, emblem.SlotIndex);
+                    }
+
+                    _auditLogger.WriteDeleteAuditLog(connection, transaction, _context.CharacterId, emblem, 1);
+                    consumed.Add(new InventoryMutationResult
+                    {
+                        ListType = emblem.ListType,
+                        SlotIndex = emblem.SlotIndex,
+                        ItemTemplateId = emblem.ItemTemplateId,
+                        RemainingStackCount = remaining,
+                        InstanceValue = remaining,
+                        Durability = emblem.Durability,
+                        RequestedCount = 1,
+                        AppliedCount = 1,
+                    });
+                }
+
+                _db.UpdateAvatarExtraJson(connection, transaction, target.ItemUid, avatar);
+                _auditLogger.WriteAuditLog(connection, transaction, _context.CharacterId, "set_avatar_emblems", target, target.ListType, target.SlotIndex, emblems.Count);
+                transaction.Commit();
+
+                result = new AvatarEmblemMutationResult
+                {
+                    TargetItem = avatar,
+                };
+                result.ConsumedEmblems.AddRange(consumed);
+                return true;
+            }
+        }
+
         public bool TryMoveItem(InventoryMoveRequest request, out InventoryMoveResult result)
         {
             result = null;
@@ -1010,7 +1282,7 @@ ORDER BY slot_index;";
                 {
                     if (destination != null)
                     {
-                        FileLogger.Log($"  [MoveItem] MOVE(empty-src): dst uid={destination.ItemUid} tmpl=0x{destination.ItemTemplateId:X8} 鈫?({dbSrcList},{request.SourceSlotIndex})");
+                        FileLogger.Log($"  [MoveItem] MOVE(empty-src): dst uid={destination.ItemUid} tmpl=0x{destination.ItemTemplateId:X8} → ({dbSrcList},{request.SourceSlotIndex})");
                         _db.UpdateItemPosition(connection, transaction, destination.ItemUid, dbSrcList, request.SourceSlotIndex);
                         MoveSortItemLock(connection, transaction, dbDstList, request.DestinationSlotIndex, dbSrcList, request.SourceSlotIndex);
                         _auditLogger.WriteAuditLog(connection, transaction, _context.CharacterId, "move_itemspace", destination, dbSrcList, request.SourceSlotIndex, request.MoveCount);
@@ -1060,7 +1332,7 @@ ORDER BY slot_index;";
 
                 if (destination == null)
                 {
-                    FileLogger.Log($"  [MoveItem] MOVE: src uid={source.ItemUid} kind={source.ItemKind} tmpl=0x{source.ItemTemplateId:X8} 鈫?({dbDstList},{request.DestinationSlotIndex})");
+                    FileLogger.Log($"  [MoveItem] MOVE: src uid={source.ItemUid} kind={source.ItemKind} tmpl=0x{source.ItemTemplateId:X8} → ({dbDstList},{request.DestinationSlotIndex})");
                     _db.UpdateItemPosition(connection, transaction, source.ItemUid, dbDstList, request.DestinationSlotIndex);
                     MoveSortItemLock(connection, transaction, dbSrcList, request.SourceSlotIndex, dbDstList, request.DestinationSlotIndex);
                     _auditLogger.WriteAuditLog(connection, transaction, _context.CharacterId, "move_itemspace", source, dbDstList, request.DestinationSlotIndex, moveCount);
@@ -1072,7 +1344,7 @@ ORDER BY slot_index;";
                 if (!CanSwap(source, destination))
                     return false;
 
-                FileLogger.Log($"  [MoveItem] SWAP: src uid={source.ItemUid} kind={source.ItemKind} tmpl=0x{source.ItemTemplateId:X8} 鈫?dst uid={destination.ItemUid} kind={destination.ItemKind} tmpl=0x{destination.ItemTemplateId:X8}");
+                FileLogger.Log($"  [MoveItem] SWAP: src uid={source.ItemUid} kind={source.ItemKind} tmpl=0x{source.ItemTemplateId:X8} ↔ dst uid={destination.ItemUid} kind={destination.ItemKind} tmpl=0x{destination.ItemTemplateId:X8}");
                 _db.SwapItems(connection, transaction, source, destination);
                 SwapSortItemLocks(connection, transaction, source.ListType, source.SlotIndex, destination.ListType, destination.SlotIndex);
                 _auditLogger.WriteAuditLog(connection, transaction, _context.CharacterId, "move_itemspace", source, dbDstList, request.DestinationSlotIndex, moveCount);
@@ -1443,9 +1715,9 @@ WHERE character_id = @cid AND list_type = @lt
                 case InventoryListType.Pet:
                     return new Dictionary<byte, (short, short)>
                     {
-                        { 5, (0, 139) },    // 瀹犵墿(鏈綋), 鍏?140 鏍?
-                        { 6, (140, 188) },  // 瀹犵墿瑁呭
-                        { 7, (189, 237) },  // 瀹犵墿鑰楀搧
+                        { 5, (0, 139) },    // 宠物(本体), 共 140 格
+                        { 6, (140, 188) },  // 宠物装备
+                        { 7, (189, 237) },  // 宠物耗品
                     };
                 case InventoryListType.Avatar:
                     return new Dictionary<byte, (short, short)>
@@ -1745,6 +2017,32 @@ WHERE character_id = @cid AND list_type = @lt
             return count;
         }
 
+        private static byte GetJewelSocketType(CommonInventoryItem item, byte socketIndex)
+        {
+            var data = NormalizeBytes(item?.JewelSocket, 30);
+            var offset = socketIndex * 6;
+            if (data == null || offset >= data.Length)
+                return 0;
+            return data[offset];
+        }
+
+        private static bool CanAttachEmblemToJewelSocket(byte socketType, byte emblemType)
+        {
+            if (socketType == 0 || emblemType == 0)
+                return true;
+
+            return (socketType & emblemType) != 0;
+        }
+
+        private static byte GetAvatarSocketType(AvatarInventoryItem item, byte socketIndex)
+        {
+            if (item == null)
+                return 0;
+
+            var socketTypes = ItemMetadataResolver.ResolveAvatarSocketTypes(item.AvatarItemId);
+            return socketTypes != null && socketIndex < socketTypes.Count ? socketTypes[socketIndex] : (byte)0;
+        }
+
         private static bool IsAvatarSocketOpen(byte[] data, int offset)
         {
             return data != null
@@ -1780,6 +2078,77 @@ WHERE character_id = @cid AND list_type = @lt
             }
 
             return true;
+        }
+
+        private static void WriteEmblemToTail(byte[] tailData2F, byte socketIndex, int emblemItemTemplateId)
+        {
+            if (tailData2F == null || tailData2F.Length < 37)
+                return;
+
+            tailData2F[0] = Math.Max(tailData2F[0], (byte)(socketIndex + 1));
+            var offset = 1 + socketIndex * 4;
+            if (offset + 4 <= tailData2F.Length)
+                BitConverter.GetBytes(emblemItemTemplateId).CopyTo(tailData2F, offset);
+        }
+
+        private static void WriteEmblemToEquippedFields(ref byte[] emblemData, byte socketIndex, int emblemItemTemplateId)
+        {
+            var requiredLength = 1 + (socketIndex + 1) * 4;
+            if (emblemData == null || emblemData.Length < requiredLength)
+            {
+                var resized = new byte[Math.Max(requiredLength, emblemData != null && emblemData.Length > 0 ? emblemData.Length : 1)];
+                if (emblemData != null)
+                    Buffer.BlockCopy(emblemData, 0, resized, 0, Math.Min(emblemData.Length, resized.Length));
+                emblemData = resized;
+            }
+
+            emblemData[0] = Math.Max(emblemData[0], (byte)(socketIndex + 1));
+            BitConverter.GetBytes(emblemItemTemplateId).CopyTo(emblemData, 1 + socketIndex * 4);
+        }
+
+        private static MakeEquipListCodec.Entry LoadEquippedEntry(SqliteConnection connection, SqliteTransaction transaction, int characterId, short slotIndex)
+        {
+            using (var command = connection.CreateCommand())
+            {
+                command.Transaction = transaction;
+                command.CommandText = @"
+SELECT slot, item_id, expire_time, raw_entry
+FROM character_equipped_entries
+WHERE character_id = @cid AND slot = @slot
+LIMIT 1;";
+                command.Parameters.AddWithValue("@cid", characterId);
+                command.Parameters.AddWithValue("@slot", (int)slotIndex);
+                using (var reader = command.ExecuteReader())
+                {
+                    if (!reader.Read())
+                        return null;
+
+                    return new MakeEquipListCodec.Entry
+                    {
+                        Slot = reader.GetInt32(0),
+                        ItemId = reader.GetInt32(1),
+                        ExpireTime = reader.GetInt32(2),
+                        Raw = (byte[])reader.GetValue(3),
+                    };
+                }
+            }
+        }
+
+        private static void UpdateEquippedEntryRaw(SqliteConnection connection, SqliteTransaction transaction, int characterId, short slotIndex, int itemTemplateId, byte[] rawEntry)
+        {
+            using (var command = connection.CreateCommand())
+            {
+                command.Transaction = transaction;
+                command.CommandText = @"
+UPDATE character_equipped_entries
+SET raw_entry = @raw
+WHERE character_id = @cid AND slot = @slot AND item_id = @itemId;";
+                command.Parameters.AddWithValue("@raw", rawEntry);
+                command.Parameters.AddWithValue("@cid", characterId);
+                command.Parameters.AddWithValue("@slot", (int)slotIndex);
+                command.Parameters.AddWithValue("@itemId", itemTemplateId);
+                command.ExecuteNonQuery();
+            }
         }
 
         private static void EnsureVisibleSocketCount(CommonInventoryItem item, int openCount)
@@ -1859,6 +2228,29 @@ WHERE character_id = @cid AND list_type = @lt
                 || socketType == 0x10;
         }
 
+        private static void WriteEmblemToJewelSocket(byte[] jewelSocket, byte socketIndex, int emblemItemTemplateId)
+        {
+            if (jewelSocket == null || jewelSocket.Length < 30)
+                return;
+
+            var offset = socketIndex * 6 + 2;
+            if (offset + 4 <= jewelSocket.Length)
+                BitConverter.GetBytes(emblemItemTemplateId).CopyTo(jewelSocket, offset);
+        }
+
+        private static void WriteEmblemToAvatarSocket(byte[] reserved2, byte socketIndex, int emblemItemTemplateId)
+        {
+            if (reserved2 == null || reserved2.Length < 30)
+                return;
+
+            var offset = socketIndex * 6 + 3;
+            if (offset + 3 <= reserved2.Length)
+            {
+                var bytes = BitConverter.GetBytes(emblemItemTemplateId);
+                Buffer.BlockCopy(bytes, 0, reserved2, offset, 3);
+            }
+        }
+
         private static byte[] NormalizeBytes(byte[] source, int expectedLength)
         {
             var buffer = new byte[expectedLength];
@@ -1889,8 +2281,8 @@ WHERE character_id = @cid AND list_type = @lt
             }
         }
 
-        // 瀹犵墿鍒ゅ畾: 鐗╁搧鍦?equipment.lst 涓?.equ 鐨?[equipment type] 涓?[creature]銆?
-        // CreatureExtraResolver 瀵逛笉鍦?equipment.lst 鐨勭墿鍝佷細鎶涘紓甯? 杩欓噷鍚炴帀杩斿洖 false銆?
+        // 宠物判定: 物品在 equipment.lst 且 .equ 的 [equipment type] 为 [creature]。
+        // CreatureExtraResolver 对不在 equipment.lst 的物品会抛异常, 这里吞掉返回 false。
         internal static bool IsCreatureItem(int itemTemplateId)
         {
             try
@@ -1899,7 +2291,7 @@ WHERE character_id = @cid AND list_type = @lt
             }
             catch (Exception ex)
             {
-                FileLogger.Log($"  [CeraShopBuy] IsCreatureItem(0x{itemTemplateId:X8}) 鍒ゅ畾澶辫触, 瑙嗕负闈炲疇鐗? {ex.Message}");
+                FileLogger.Log($"  [CeraShopBuy] IsCreatureItem(0x{itemTemplateId:X8}) 判定失败, 视为非宠物: {ex.Message}");
                 return false;
             }
         }

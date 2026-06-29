@@ -73,7 +73,9 @@ namespace DfoServer.Network
             RegisterInventoryHandlers(_cmdDispatch);
             RegisterSortItemLockHandlers(_cmdDispatch);
             RegisterEquipmentSocketHandlers(_cmdDispatch);
+            RegisterEquipmentEmblemHandlers(_cmdDispatch);
             RegisterAvatarSocketHandlers(_cmdDispatch);
+            RegisterAvatarEmblemHandlers(_cmdDispatch);
             RegisterDungeonHandlers(_cmdDispatch);
             RegisterSkillHandlers(_cmdDispatch);
             RegisterTownHandlers(_cmdDispatch);
@@ -188,9 +190,19 @@ namespace DfoServer.Network
             d[0x031D] = _inventoryHandler.Handle_EQUIPMENT_SOCKET_OPEN;
         }
 
+        private void RegisterEquipmentEmblemHandlers(Dictionary<ushort, Func<EnhancedClientSession, GamePacketHeader, byte[], Task>> d)
+        {
+            d[0x031C] = _inventoryHandler.Handle_EQUIPMENT_EMBLEM_ATTACH;
+        }
+
         private void RegisterAvatarSocketHandlers(Dictionary<ushort, Func<EnhancedClientSession, GamePacketHeader, byte[], Task>> d)
         {
             d[0x00CE] = _inventoryHandler.Handle_AVATAR_SOCKET_OPEN;
+        }
+
+        private void RegisterAvatarEmblemHandlers(Dictionary<ushort, Func<EnhancedClientSession, GamePacketHeader, byte[], Task>> d)
+        {
+            d[0x00C9] = _inventoryHandler.Handle_AVATAR_EMBLEM_ATTACH;
         }
 
         private void RegisterDungeonHandlers(Dictionary<ushort, Func<EnhancedClientSession, GamePacketHeader, byte[], Task>> d)

@@ -49,7 +49,11 @@ namespace DfoServer.Game.Inventory
 
         bool TryOpenEquipmentSocket(short targetSlotIndex, int targetItemTemplateId, short materialSlotIndex, out EquipmentSocketMutationResult result);
 
+        bool TrySetEquipmentEmblems(short targetSlotIndex, int targetItemTemplateId, IReadOnlyList<EquipmentEmblemApplyRequest> emblems, out EquipmentEmblemMutationResult result);
+
         bool TryOpenAvatarSocket(short targetSlotIndex, int targetItemTemplateId, short materialSlotIndex, out AvatarSocketMutationResult result);
+
+        bool TrySetAvatarEmblems(short targetSlotIndex, int targetItemTemplateId, IReadOnlyList<EquipmentEmblemApplyRequest> emblems, out AvatarEmblemMutationResult result);
 
         bool TryCompoundAvatar(short slot1, short slot2, short consumeSlot,
             Func<int, int, int, List<int>> resolveNewItemIds, byte newOption,
