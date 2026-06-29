@@ -34,6 +34,10 @@ namespace DfoServer.Infrastructure
                 {
                     ("expire_time", "INTEGER NOT NULL DEFAULT 0"),
                 });
+                DfoServer.Sqlite.SqliteSchemaMigrator.EnsureColumns(conn, "character_init_flags", new[]
+                {
+                    ("character_option_blob", "BLOB"),
+                });
                 DfoServer.Game.Inventory.CurrencyService.MigrateCeraFromPacketTemplates(conn);
 
                 // 晶块账号化: 旧库补列 + 从 character_items slot 354-359 迁移到 accounts 表

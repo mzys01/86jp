@@ -41,6 +41,12 @@ namespace DfoServer
                 return;
             }
 
+            if (Array.IndexOf(args, "--selftest-character-option") >= 0)
+            {
+                Environment.Exit(SelfTests.CharacterOptionSelfTest.Run());
+                return;
+            }
+
             GameNetworkConfig.Configure(args);
 
             PacketFileLogger.Initialize();

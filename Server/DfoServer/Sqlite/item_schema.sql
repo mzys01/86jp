@@ -180,6 +180,7 @@ CREATE TABLE IF NOT EXISTS character_init_flags (
     main_game_option_blob BLOB,
     quickchat_bank0 BLOB,
     quickchat_bank1 BLOB,
+    character_option_blob BLOB,       -- NOTI 0x0187 CHARACTER_OPTION, saved by CMD 0x01C0 SAVE_CHARACTER_OPTION
     charac_invisible_falgs_payload_len INTEGER NOT NULL DEFAULT 0,  -- IDA 正名: CLEAR_QUEST_LIST payload 长度
     racing_dungeon_current_enter_count INTEGER NOT NULL DEFAULT 0,  -- IDA 正名: DAILY_CHALLENGE 当日进入次数
     racing_dungeon_group_flags BLOB,  -- IDA 正名: DAILY_CHALLENGE 组标志

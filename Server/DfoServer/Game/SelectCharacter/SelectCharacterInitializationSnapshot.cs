@@ -54,6 +54,8 @@ namespace DfoServer.Game.SelectCharacter
 
         public byte[] QuickchatBank1 { get; set; }
 
+        public byte[] CharacterOptionBlob { get; set; }
+
         
         
         
