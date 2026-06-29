@@ -96,6 +96,7 @@ namespace DfoServer.Game.Inventory
             {
                 SlotIndex = request.SlotIndex,
                 PackageItemTemplateId = packageItem.ItemTemplateId,
+                SourceRemainingStackCount = Math.Max(0, packageItem.StackCount - 1),
                 AddedAvatarCount = addedAvatarCount,
                 AddedMainItemCount = addedMainItemCount,
                 AddedPetCount = addedPetCount,
@@ -279,6 +280,7 @@ namespace DfoServer.Game.Inventory
             {
                 SlotIndex = request.SlotIndex,
                 PackageItemTemplateId = packageItem.ItemTemplateId,
+                SourceRemainingStackCount = Math.Max(0, packageItem.StackCount - 1),
                 RewardItemTemplateId = rewardForResult.ItemTemplateId,
                 AddedMainItemCount = addedMainItemCount,
                 AddedAvatarCount = addedAvatarCount,
