@@ -275,7 +275,10 @@ namespace DfoServer.GameWorld
             return new[] { bossMap[pick * 2], bossMap[pick * 2 + 1] };
         }
 
-        public static (MazeInfo Maze, int Index) SelectDungeonMaze(int dungeonId, ICollection<int> activeQuestIds = null)
+        public static (MazeInfo Maze, int Index) SelectDungeonMaze(
+            int dungeonId,
+            ICollection<int> activeQuestIds = null,
+            ICollection<int> relatedQuestIds = null)
         {
             var dgnlst = LoadLstFile(Path.Combine("dungeon", "dungeon.lst"));
             if (dgnlst == null)
@@ -286,17 +289,16 @@ namespace DfoServer.GameWorld
             if (dngFile.Mazes == null || dngFile.Mazes.Count == 0)
                 throw new Exception("未解析到迷宫信息");
 
-            if (activeQuestIds != null && activeQuestIds.Count > 0)
+            var questMazeIndex = FindQuestConnectedMazeIndex(
+                dngFile.Mazes,
+                activeQuestIds,
+                relatedQuestIds,
+                out var matchedQuestId,
+                out var matchSource);
+            if (questMazeIndex >= 0)
             {
-                for (int i = 0; i < dngFile.Mazes.Count; i++)
-                {
-                    var qc = dngFile.Mazes[i].QuestConnection;
-                    if (qc != null && qc.Length >= 2 && activeQuestIds.Contains(qc[1]))
-                    {
-                        FileLogger.Log($"[Dungeon] SelectMaze: dungeon={dungeonId} matched quest maze #{i} (questId={qc[1]})");
-                        return (dngFile.Mazes[i], i);
-                    }
-                }
+                FileLogger.Log($"[Dungeon] SelectMaze: dungeon={dungeonId} matched quest maze #{questMazeIndex} (questId={matchedQuestId} source={matchSource})");
+                return (dngFile.Mazes[questMazeIndex], questMazeIndex);
             }
 
             var candidates = new List<(MazeInfo maze, int index)>();
@@ -311,6 +313,59 @@ namespace DfoServer.GameWorld
 
             var pick = candidates[_mazeRng.Next(candidates.Count)];
             return (pick.maze, pick.index);
+        }
+
+        internal static int FindQuestConnectedMazeIndex(
+            IReadOnlyList<MazeInfo> mazes,
+            ICollection<int> primaryQuestIds,
+            ICollection<int> fallbackQuestIds,
+            out int matchedQuestId,
+            out string matchSource)
+        {
+            matchedQuestId = -1;
+            matchSource = string.Empty;
+
+            var primaryMatch = FindQuestConnectedMazeIndex(mazes, primaryQuestIds, out matchedQuestId);
+            if (primaryMatch >= 0)
+            {
+                matchSource = "active";
+                return primaryMatch;
+            }
+
+            var fallbackMatch = FindQuestConnectedMazeIndex(mazes, fallbackQuestIds, out matchedQuestId);
+            if (fallbackMatch >= 0)
+            {
+                matchSource = "related";
+                return fallbackMatch;
+            }
+
+            matchedQuestId = -1;
+            return -1;
+        }
+
+        private static int FindQuestConnectedMazeIndex(
+            IReadOnlyList<MazeInfo> mazes,
+            ICollection<int> questIds,
+            out int matchedQuestId)
+        {
+            matchedQuestId = -1;
+            if (mazes == null || questIds == null || questIds.Count == 0)
+                return -1;
+
+            for (int i = 0; i < mazes.Count; i++)
+            {
+                var qc = mazes[i].QuestConnection;
+                if (qc == null || qc.Length < 2)
+                    continue;
+
+                if (!questIds.Contains(qc[1]))
+                    continue;
+
+                matchedQuestId = qc[1];
+                return i;
+            }
+
+            return -1;
         }
 
         public static int[] GetLayeredMapIds(int dungeonId, int x, int y, int mazeIndex)
@@ -853,9 +908,7 @@ namespace DfoServer.GameWorld
             bool isBossRoom = effectiveBoss != null && effectiveBoss[0] == x && effectiveBoss[1] == y;
             bool IsQuestVariantFile(string fileName)
             {
-                if (string.IsNullOrEmpty(fileName)) return false;
-                return fileName.StartsWith("q_", StringComparison.OrdinalIgnoreCase)
-                    || fileName.StartsWith("quest_", StringComparison.OrdinalIgnoreCase);
+                return IsQuestVariantFileName(fileName);
             }
             bool InCandidateDir(string filePath)
             {
@@ -1065,50 +1118,22 @@ namespace DfoServer.GameWorld
 
             if (mapId == -1)
             {
-                // Fallback 1: 使用本迷宫第一个有效的地图规格
-                foreach (var item in defaultMaze.MapSpecifications)
-                {
-                    if (item.Index > 0)
-                    {
-                        mapId = item.MapCandidates != null && item.MapCandidates.Length > 0
-                            ? item.MapCandidates[_mazeRng.Next(item.MapCandidates.Length)]
-                            : item.Index;
-                        FileLogger.Log($"[Dungeon] GetDungeonMapMonsterSummaryInformation fallback to first map spec: dungeon={dungeonId} maze={mazeIndex} room=({x},{y}) -> map={mapId} specType={item.Type}");
-                        break;
-                    }
-                }
-            }
+                var preferQuestVariantFallback = isStartRoom
+                    || (defaultMaze.QuestConnection != null && defaultMaze.QuestConnection.Length >= 2);
+                string fallbackReason;
+                mapId = SelectFallbackMapIdForUnresolvedRoom(
+                    dungeonId,
+                    mazeIndex,
+                    x,
+                    y,
+                    defaultMaze.MapSpecifications,
+                    maplst != null ? maplst.Entries : null,
+                    mapDirCandidates,
+                    preferQuestVariantFallback,
+                    out fallbackReason);
 
-            if (mapId == -1)
-            {
-                // Fallback 2: 在候选目录中找第一个可用地图（非任务变体）
-                if (maplst != null)
-                {
-                    foreach (var entry in maplst.Entries)
-                    {
-                        if (!InCandidateDir(entry.FilePath)) continue;
-                        var fileName = System.IO.Path.GetFileName(entry.FilePath);
-                        if (IsQuestVariantFile(fileName)) continue;
-                        mapId = entry.Id;
-                        FileLogger.Log($"[Dungeon] GetDungeonMapMonsterSummaryInformation fallback to first candidate map: dungeon={dungeonId} maze={mazeIndex} room=({x},{y}) -> map={mapId} file={entry.FilePath}");
-                        break;
-                    }
-                }
-            }
-
-            if (mapId == -1)
-            {
-                // Fallback 3: 任务地下城可能只有 quest variant 地图
-                if (maplst != null)
-                {
-                    foreach (var entry in maplst.Entries)
-                    {
-                        if (!InCandidateDir(entry.FilePath)) continue;
-                        mapId = entry.Id;
-                        FileLogger.Log($"[Dungeon] GetDungeonMapMonsterSummaryInformation fallback to quest-variant map: dungeon={dungeonId} maze={mazeIndex} room=({x},{y}) -> map={mapId} file={entry.FilePath}");
-                        break;
-                    }
-                }
+                if (mapId > 0)
+                    FileLogger.Log($"[Dungeon] GetDungeonMapMonsterSummaryInformation fallback to {fallbackReason}: dungeon={dungeonId} maze={mazeIndex} room=({x},{y}) -> map={mapId}");
             }
 
             if (mapId == -1)
@@ -1180,6 +1205,184 @@ namespace DfoServer.GameWorld
                 Y = y,
                 Index = mapId,
             };
+        }
+
+        internal static int SelectFallbackMapIdForUnresolvedRoom(
+            int dungeonId,
+            int mazeIndex,
+            int x,
+            int y,
+            IReadOnlyList<MapSpecificationItem> mapSpecifications,
+            IReadOnlyList<LstEntry> mapEntries,
+            IReadOnlyList<string> mapDirCandidates,
+            bool preferQuestVariant,
+            out string reason)
+        {
+            reason = string.Empty;
+
+            if (preferQuestVariant)
+            {
+                var questMapId = FindQuestVariantMapId(mapEntries, mapDirCandidates, x, y, out var questReason);
+                if (questMapId > 0)
+                {
+                    reason = questReason;
+                    return questMapId;
+                }
+            }
+
+            if (mapSpecifications != null)
+            {
+                for (var i = 0; i < mapSpecifications.Count; i++)
+                {
+                    var item = mapSpecifications[i];
+                    if (item == null || item.Index <= 0)
+                        continue;
+
+                    reason = "first map spec";
+                    if (item.MapCandidates != null && item.MapCandidates.Length > 0)
+                    {
+                        var pick = _mazeRng.Next(item.MapCandidates.Length);
+                        return item.MapCandidates[pick];
+                    }
+                    return item.Index;
+                }
+            }
+
+            var ordinaryMapId = FindCandidateMapId(mapEntries, mapDirCandidates, allowQuestVariant: false, out var ordinaryReason);
+            if (ordinaryMapId > 0)
+            {
+                reason = ordinaryReason;
+                return ordinaryMapId;
+            }
+
+            var fallbackQuestMapId = FindQuestVariantMapId(mapEntries, mapDirCandidates, x, y, out var fallbackQuestReason);
+            if (fallbackQuestMapId > 0)
+            {
+                reason = fallbackQuestReason;
+                return fallbackQuestMapId;
+            }
+
+            return -1;
+        }
+
+        private static int FindCandidateMapId(
+            IReadOnlyList<LstEntry> mapEntries,
+            IReadOnlyList<string> mapDirCandidates,
+            bool allowQuestVariant,
+            out string reason)
+        {
+            reason = string.Empty;
+            if (mapEntries == null)
+                return -1;
+
+            for (var i = 0; i < mapEntries.Count; i++)
+            {
+                var entry = mapEntries[i];
+                if (entry == null || !InMapDirCandidate(entry.FilePath, mapDirCandidates))
+                    continue;
+
+                var fileName = Path.GetFileName(entry.FilePath);
+                if (!allowQuestVariant && IsQuestVariantFileName(fileName))
+                    continue;
+
+                reason = allowQuestVariant ? "first candidate map" : "first non-quest candidate map";
+                return entry.Id;
+            }
+
+            return -1;
+        }
+
+        private static int FindQuestVariantMapId(
+            IReadOnlyList<LstEntry> mapEntries,
+            IReadOnlyList<string> mapDirCandidates,
+            int x,
+            int y,
+            out string reason)
+        {
+            reason = string.Empty;
+            if (mapEntries == null)
+                return -1;
+
+            var bestId = -1;
+            var bestScore = -1;
+            for (var i = 0; i < mapEntries.Count; i++)
+            {
+                var entry = mapEntries[i];
+                if (entry == null || !InMapDirCandidate(entry.FilePath, mapDirCandidates))
+                    continue;
+
+                var fileName = Path.GetFileName(entry.FilePath);
+                if (!IsQuestVariantFileName(fileName))
+                    continue;
+
+                var score = ScoreQuestVariantFileName(fileName, x, y);
+                if (score <= bestScore)
+                    continue;
+
+                bestScore = score;
+                bestId = entry.Id;
+            }
+
+            if (bestId > 0)
+            {
+                reason = bestScore >= 100 ? "quest-variant coordinate map" : "quest-variant map";
+                return bestId;
+            }
+
+            return -1;
+        }
+
+        private static int ScoreQuestVariantFileName(string fileName, int x, int y)
+        {
+            if (string.IsNullOrEmpty(fileName))
+                return -1;
+
+            var stem = Path.GetFileNameWithoutExtension(fileName) ?? string.Empty;
+            if (stem.IndexOf($"({x},{y})", StringComparison.OrdinalIgnoreCase) >= 0
+                || stem.IndexOf($"({x}.{y})", StringComparison.OrdinalIgnoreCase) >= 0)
+                return 120;
+
+            if (stem.IndexOf($"{x}_{y}", StringComparison.OrdinalIgnoreCase) >= 0
+                || stem.IndexOf($"{x}-{y}", StringComparison.OrdinalIgnoreCase) >= 0
+                || stem.IndexOf($"{x}.{y}", StringComparison.OrdinalIgnoreCase) >= 0)
+                return 100;
+
+            return 10;
+        }
+
+        private static bool IsQuestVariantFileName(string fileName)
+        {
+            if (string.IsNullOrEmpty(fileName)) return false;
+            var stem = Path.GetFileNameWithoutExtension(fileName) ?? string.Empty;
+            return stem.StartsWith("q_", StringComparison.OrdinalIgnoreCase)
+                || stem.StartsWith("quest_", StringComparison.OrdinalIgnoreCase)
+                || (stem.Length > 1
+                    && char.ToLowerInvariant(stem[0]) == 'q'
+                    && char.IsDigit(stem[1]));
+        }
+
+        private static bool InMapDirCandidate(string filePath, IReadOnlyList<string> mapDirCandidates)
+        {
+            if (string.IsNullOrEmpty(filePath))
+                return false;
+
+            if (mapDirCandidates == null || mapDirCandidates.Count == 0)
+                return true;
+
+            var normalizedPath = filePath.Replace('\\', '/');
+            for (var i = 0; i < mapDirCandidates.Count; i++)
+            {
+                var dir = mapDirCandidates[i];
+                if (string.IsNullOrEmpty(dir))
+                    continue;
+
+                dir = dir.Replace('\\', '/').TrimEnd('/');
+                if (normalizedPath.Equals(dir, StringComparison.OrdinalIgnoreCase)
+                    || normalizedPath.StartsWith(dir + "/", StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+
+            return false;
         }
 
         private static byte GetAICharacterLevel(int apcCode)
