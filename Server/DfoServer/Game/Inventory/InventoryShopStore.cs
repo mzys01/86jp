@@ -281,7 +281,7 @@ namespace DfoServer.Game.Inventory
                         SlotIndex = existingItem.SlotIndex,
                         ItemTemplateId = itemTemplateId,
                         RemainingStackCount = newStackCount,
-                        InstanceValue = newStackCount,
+                        InstanceValue = buyCount,
                         Durability = 0,
                         UpdatedGold = updGold,
                         UpdatedSp = walletCheck.Sp,
