@@ -463,7 +463,7 @@ namespace DfoServer.GameWorld
                 var consumeItems = ParseItemPairs(qst.DependGiveItem);
 
                 int growNumber = 0;
-                if (chainType == 1 || chainType == 2)
+                if (chainType == 1 || chainType == 2 || chainType == 20)
                 {
                     var rewardValues = ParseIntList(qst.RewardIntData);
                     if (rewardValues.Count > 0)

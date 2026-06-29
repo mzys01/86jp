@@ -121,13 +121,24 @@ namespace DfoServer.Game.Quests
                     await SendUserInfoBroadcast(cid);
                 }
 
-                if (ack.Length >= 14)
+                if (ack.Length >= 13)
                 {
-                    int chainType = ack[13];
-                    if (chainType == 1 || chainType == 2)
+                    int consumedCount = ack[12];
+                    int chainTypeOffset = 13 + consumedCount * 7;
+                    if (ack.Length >= chainTypeOffset + 1)
                     {
-                        await SendJobChangeNotification(cid);
-                        await SendUserInfoBroadcast(cid);
+                        int chainType = ack[chainTypeOffset];
+                        if (chainType == 1 || chainType == 2)
+                        {
+                            await SendJobChangeNotification(cid);
+                            await SendUserInfoBroadcast(cid);
+                        }
+                        else if (chainType == 20 && ack.Length >= chainTypeOffset + 2)
+                        {
+                            int expertJobType = ack[chainTypeOffset + 1];
+                            await SendExpertJobChangeNotification(cid, expertJobType);
+                            await SendUserInfoBroadcast(cid);
+                        }
                     }
                 }
 
@@ -245,6 +256,44 @@ namespace DfoServer.Game.Quests
             catch (Exception ex)
             {
                 FileLogger.Log($"[QuestManager] SendJobChangeNotification ERROR: {ex.Message}");
+            }
+        }
+
+        private async Task SendExpertJobChangeNotification(int characterId, int expertJobType)
+        {
+            try
+            {
+                var charRepo = new SqliteCharacterRepository(ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
+                var record = charRepo.GetById(characterId);
+                if (record == null || _sender.Player == null) return;
+
+                var tail = _sender.Player.Subtype0Tail ?? new UserInfoMinimumTailSnapshot();
+                tail.ExpertJobType = (byte)expertJobType;
+                _sender.Player.Subtype0Tail = tail;
+                record.Subtype0Tail = tail;
+
+                // NOTI 0x00CD ExpertJobInfo
+                var ejw = new Network.GamePacketWriter();
+                ejw.WriteByte(1);          // State0
+                ejw.WriteByte(1);          // Mode
+                ejw.WriteByte(1);          // Count
+                ejw.WriteInt32(expertJobType);
+                await _sender.SendNotiAsync(0x00CD, ejw.ToArray());
+
+                // NOTI 0x0002 subtype 0 USERINFO Minimum
+                var w = new Network.GamePacketWriter();
+                w.WriteByte(0);
+                w.WriteUInt16(1);
+                w.WriteUInt16((ushort)record.CharacterId);
+                w.WriteDstr(record.Name);
+                w.WriteBytes(UserInfoSubtype0Builder.BuildRemainingBytes(record));
+                await _sender.SendNotiAsync(0x0002, w.ToArray());
+
+                FileLogger.Log($"[QuestManager] ExpertJobChange NOTI sent: cid={characterId} expertJobType={expertJobType}");
+            }
+            catch (Exception ex)
+            {
+                FileLogger.Log($"[QuestManager] SendExpertJobChangeNotification ERROR: {ex.Message}");
             }
         }
 

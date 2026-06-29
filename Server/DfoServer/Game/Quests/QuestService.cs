@@ -462,6 +462,10 @@ namespace DfoServer.Game.Quests
                 {
                     UpdateGrowType(scope.Connection, scope.Transaction, characterId, reward.ChainType, reward.GrowNumber);
                 }
+                else if (reward.ChainType == 20)
+                {
+                    UpdateExpertJob(scope.Connection, scope.Transaction, characterId, reward.GrowNumber);
+                }
 
                 if (!GameWorld.QuestData.IsRepeatableQuest(questId))
                     MarkQuestCleared(scope.Connection, scope.Transaction, characterId, questId);
@@ -504,6 +508,12 @@ namespace DfoServer.Game.Quests
             else if (reward.ChainType == 1 || reward.ChainType == 2)
             {
                 w.WriteByte((byte)reward.GrowNumber);
+                w.WriteByte(0); // npcCount layer 1
+                w.WriteByte(0); // npcCount layer 2
+            }
+            else if (reward.ChainType == 20)
+            {
+                w.WriteByte((byte)reward.GrowNumber); // expert job type
                 w.WriteByte(0); // npcCount layer 1
                 w.WriteByte(0); // npcCount layer 2
             }
@@ -663,6 +673,39 @@ namespace DfoServer.Game.Quests
             }
 
             FileLogger.Log($"[QuestService] UpdateGrowType: cid={characterId} chain={chainType} growNumber={growNumber} old=0x{currentGrowType:X2} new=0x{newGrowType:X2}");
+        }
+
+        private static void UpdateExpertJob(SqliteConnection conn, SqliteTransaction tx, int characterId, int expertJobType)
+        {
+            byte[] expertJobBlob = BuildExpertJobBlob(1, 1, expertJobType);
+
+            using (var cmd = conn.CreateCommand())
+            {
+                cmd.Transaction = tx;
+                cmd.CommandText = @"
+                    INSERT INTO character_subtype0_fields (character_id, expert_job_type) VALUES (@cid, @ejt)
+                    ON CONFLICT(character_id) DO UPDATE SET expert_job_type=@ejt;
+                    INSERT INTO character_init_flags (character_id, expert_job_blob) VALUES (@cid, @blob)
+                    ON CONFLICT(character_id) DO UPDATE SET expert_job_blob=@blob;";
+                cmd.Parameters.AddWithValue("@cid", characterId);
+                cmd.Parameters.AddWithValue("@ejt", expertJobType);
+                cmd.Parameters.AddWithValue("@blob", expertJobBlob);
+                cmd.ExecuteNonQuery();
+            }
+
+            FileLogger.Log($"[QuestService] UpdateExpertJob: cid={characterId} expertJobType={expertJobType}");
+        }
+
+        private static byte[] BuildExpertJobBlob(byte state0, byte mode, int expertJobType)
+        {
+            var list = new List<byte>();
+            list.Add(state0);
+            list.Add(mode);
+            list.AddRange(BitConverter.GetBytes(0));
+            list.AddRange(BitConverter.GetBytes(0));
+            list.Add((byte)1);
+            list.AddRange(BitConverter.GetBytes(expertJobType));
+            return list.ToArray();
         }
 
         private static int GetAccountIdByConnStr(string connStr, int characterId)
