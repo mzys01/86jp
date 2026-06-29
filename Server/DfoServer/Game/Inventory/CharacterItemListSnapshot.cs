@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 
 namespace DfoServer.Game.Inventory
@@ -36,6 +36,8 @@ namespace DfoServer.Game.Inventory
         public int ExpireTime { get; set; }
 
         public byte[] TailData2F { get; set; } = new byte[37];
+
+        public byte[] JewelSocket { get; set; } = new byte[30];
     }
 
     public sealed class AvatarInventoryItem

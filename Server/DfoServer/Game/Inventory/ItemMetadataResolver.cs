@@ -3,6 +3,7 @@ using PvfLib;
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Text.RegularExpressions;
 
 namespace DfoServer.Game.Inventory
 {
@@ -92,6 +93,12 @@ namespace DfoServer.Game.Inventory
         internal static readonly Lazy<LstFile> EquipmentList = new Lazy<LstFile>(() => LstFile.Parse(PvfArchiveAccessor.ReadText("equipment/equipment.lst")));
         private static readonly Lazy<LstFile> StackableList = new Lazy<LstFile>(() => LstFile.Parse(PvfArchiveAccessor.ReadText("stackable/stackable.lst")));
         private static readonly Lazy<ItemSellRates> SellRates = new Lazy<ItemSellRates>(() => ItemSellRates.Parse(PvfArchiveAccessor.ReadText("equipment/pricetable.tbl")));
+        private static readonly Regex AvatarSocketRegex = new Regex(@"\[\s*([ABCDSM])\s+socket\s*\]", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+        private const string AvatarTypeSelectTag = "[avatar type select]";
+        private const string AvatarTypeSelectEndTag = "[/avatar type select]";
+        private const string EmblemSocketDefaultTag = "[emblem socket default]";
+        private const string EmblemSocketDefaultEndTag = "[/emblem socket default]";
+        private const string AvatarEmblemSocketNumTag = "[avatar emblem socket num]";
 
         public static ItemMetadata Resolve(int itemTemplateId)
         {
@@ -174,6 +181,139 @@ namespace DfoServer.Game.Inventory
             return StackableList.Value.GetById(itemTemplateId);
         }
 
+        public static string ResolveEquipmentType(int itemTemplateId)
+        {
+            return TryGetEquipmentType(itemTemplateId, out var equipmentType)
+                ? equipmentType
+                : null;
+        }
+
+        public static IReadOnlyList<byte> ResolveAvatarSocketTypes(int itemTemplateId)
+        {
+            var result = new List<byte>();
+            var equipmentEntry = EquipmentList.Value.GetById(itemTemplateId);
+            if (equipmentEntry == null)
+                return result;
+
+            try
+            {
+                var text = PvfArchiveAccessor.ReadText(Path.Combine("equipment", equipmentEntry.FilePath));
+                var section = ExtractAvatarTypeSelectSection(text);
+                AddAvatarSocketMatches(result, section, 5);
+
+                if (result.Count == 0)
+                    AddAvatarSocketMatches(result, ExtractEmblemSocketDefaultSection(text), ResolveAvatarEmblemSocketNum(text));
+            }
+            catch (Exception ex)
+            {
+                FileLogger.Log($"  [AvatarSocket] ResolveAvatarSocketTypes(0x{itemTemplateId:X8}) failed: {ex.Message}");
+            }
+
+            return result;
+        }
+
+        private static void AddAvatarSocketMatches(List<byte> result, string section, int maxCount)
+        {
+            if (result == null || string.IsNullOrEmpty(section) || maxCount <= 0)
+                return;
+
+            foreach (Match match in AvatarSocketRegex.Matches(section))
+            {
+                if (!match.Success || match.Groups.Count < 2)
+                    continue;
+
+                if (TryMapAvatarSocketCode(match.Groups[1].Value[0], out var socketType))
+                {
+                    result.Add(socketType);
+                    if (result.Count >= maxCount)
+                        break;
+                }
+            }
+        }
+
+        public static byte ResolveAvatarSocketType(int itemTemplateId)
+        {
+            var socketTypes = ResolveAvatarSocketTypes(itemTemplateId);
+            return socketTypes != null && socketTypes.Count > 0 ? socketTypes[0] : (byte)0;
+        }
+
+        private static string ExtractAvatarTypeSelectSection(string text)
+        {
+            if (string.IsNullOrEmpty(text))
+                return string.Empty;
+
+            var start = text.IndexOf(AvatarTypeSelectTag, StringComparison.OrdinalIgnoreCase);
+            if (start < 0)
+                return string.Empty;
+
+            start += AvatarTypeSelectTag.Length;
+            var end = text.IndexOf(AvatarTypeSelectEndTag, start, StringComparison.OrdinalIgnoreCase);
+            return end > start ? text.Substring(start, end - start) : text.Substring(start);
+        }
+
+        private static string ExtractEmblemSocketDefaultSection(string text)
+        {
+            if (string.IsNullOrEmpty(text))
+                return string.Empty;
+
+            var start = text.IndexOf(EmblemSocketDefaultTag, StringComparison.OrdinalIgnoreCase);
+            if (start < 0)
+                return string.Empty;
+
+            start += EmblemSocketDefaultTag.Length;
+            var end = text.IndexOf(EmblemSocketDefaultEndTag, start, StringComparison.OrdinalIgnoreCase);
+            return end > start ? text.Substring(start, end - start) : text.Substring(start);
+        }
+
+        private static int ResolveAvatarEmblemSocketNum(string text)
+        {
+            if (string.IsNullOrEmpty(text))
+                return 5;
+
+            var start = text.IndexOf(AvatarEmblemSocketNumTag, StringComparison.OrdinalIgnoreCase);
+            if (start < 0)
+                return 5;
+
+            start += AvatarEmblemSocketNumTag.Length;
+            var end = text.IndexOf('[', start);
+            var section = end > start ? text.Substring(start, end - start) : text.Substring(start);
+            foreach (var token in section.Split(new[] { ' ', '\t', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                if (int.TryParse(token, out var count))
+                    return Math.Max(0, Math.Min(5, count));
+            }
+
+            return 5;
+        }
+
+        private static bool TryMapAvatarSocketCode(char code, out byte socketType)
+        {
+            switch (char.ToUpperInvariant(code))
+            {
+                case 'A':
+                    socketType = 0x01;
+                    return true;
+                case 'B':
+                    socketType = 0x02;
+                    return true;
+                case 'C':
+                    socketType = 0x04;
+                    return true;
+                case 'D':
+                    socketType = 0x08;
+                    return true;
+                case 'S':
+                    socketType = 0x10;
+                    return true;
+                case 'M':
+                    socketType = 0xEF;
+                    return true;
+                default:
+                    socketType = 0;
+                    return false;
+            }
+        }
+
         public static bool TryValidateEnchantByBeadTarget(int beadItemTemplateId, int targetItemTemplateId, byte enchantUpgradeCount, out int enchantCardItemId, out string rejectReason)
         {
             enchantCardItemId = 0;
@@ -195,7 +335,7 @@ namespace DfoServer.Game.Inventory
                 return false;
             }
 
-            // 宝珠直接声明 target item id 时，只有白名单装备能被附魔。
+            // 瀹濈彔鐩存帴澹版槑 target item id 鏃讹紝鍙湁鐧藉悕鍗曡澶囪兘琚檮榄斻€?
             if (bead.TargetItemIds != null && bead.TargetItemIds.Count > 0 && !bead.TargetItemIds.Contains(targetItemTemplateId))
             {
                 rejectReason = "target item id is not allowed by bead target item id";
@@ -224,7 +364,7 @@ namespace DfoServer.Game.Inventory
 
             if (card != null)
             {
-                // monster card 的 string data: 第一个是图片资源，后续是允许附魔的 equipment type。
+                // monster card 鐨?string data: 绗竴涓槸鍥剧墖璧勬簮锛屽悗缁槸鍏佽闄勯瓟鐨?equipment type銆?
                 var allowedTypes = ExtractAllowedEquipmentTypes(card.StringDataItems);
                 if (allowedTypes.Count > 0 && !allowedTypes.Contains(targetEquipmentType))
                 {
@@ -307,7 +447,7 @@ namespace DfoServer.Game.Inventory
         }
 
         /// <summary>
-        /// 判断物品是否为克隆装扮。克隆装扮的 PVF [item category] 段值为 "clear avatar"。
+        /// 鍒ゆ柇鐗╁搧鏄惁涓哄厠闅嗚鎵€傚厠闅嗚鎵殑 PVF [item category] 娈靛€间负 "clear avatar"銆?
         /// </summary>
         public static bool IsCloneAvatarItem(int itemTemplateId)
         {
