@@ -392,6 +392,89 @@ VALUES (
             }
         }
 
+        internal SqliteInventoryStore.ItemRecord LoadAccountCargoItemRecord(SqliteConnection connection, SqliteTransaction transaction, int accountId, short slotIndex)
+        {
+            using (var command = connection.CreateCommand())
+            {
+                command.Transaction = transaction;
+                command.CommandText = @"
+SELECT item_uid, 12 AS list_type, slot_index, item_template_id, item_kind, stack_count, instance_value,
+       durability, seal_flag, option_value, expire_time, marker_16, 0 AS pet_serial_or_handle, extra_json
+FROM account_cargo_items
+WHERE account_id = @accountId AND slot_index = @slotIndex;";
+                command.Parameters.AddWithValue("@accountId", accountId);
+                command.Parameters.AddWithValue("@slotIndex", slotIndex);
+                using (var reader = command.ExecuteReader())
+                {
+                    if (!reader.Read()) return null;
+                    return SqliteInventoryStore.ReadItemRecord(reader);
+                }
+            }
+        }
+
+        internal void DeleteAccountCargoItem(SqliteConnection connection, SqliteTransaction transaction, long itemUid)
+        {
+            using (var command = connection.CreateCommand())
+            {
+                command.Transaction = transaction;
+                command.CommandText = "DELETE FROM account_cargo_items WHERE item_uid = @itemUid;";
+                command.Parameters.AddWithValue("@itemUid", itemUid);
+                command.ExecuteNonQuery();
+            }
+        }
+
+        internal void UpdateAccountCargoItemSlot(SqliteConnection connection, SqliteTransaction transaction, long itemUid, short slotIndex)
+        {
+            using (var command = connection.CreateCommand())
+            {
+                command.Transaction = transaction;
+                command.CommandText = "UPDATE account_cargo_items SET slot_index = @slot, updated_at = CURRENT_TIMESTAMP WHERE item_uid = @uid;";
+                command.Parameters.AddWithValue("@slot", slotIndex);
+                command.Parameters.AddWithValue("@uid", itemUid);
+                command.ExecuteNonQuery();
+            }
+        }
+
+        internal void UpdateAccountCargoStackCount(SqliteConnection connection, SqliteTransaction transaction, long itemUid, int newCount)
+        {
+            using (var command = connection.CreateCommand())
+            {
+                command.Transaction = transaction;
+                command.CommandText = "UPDATE account_cargo_items SET stack_count = @count, instance_value = @count, updated_at = CURRENT_TIMESTAMP WHERE item_uid = @uid;";
+                command.Parameters.AddWithValue("@count", newCount);
+                command.Parameters.AddWithValue("@uid", itemUid);
+                command.ExecuteNonQuery();
+            }
+        }
+
+        internal void MoveItemToAccountCargo(SqliteConnection connection, SqliteTransaction transaction, int accountId, SqliteInventoryStore.ItemRecord source, short destSlot)
+        {
+            InsertAccountCargoItem(connection, transaction, accountId, new CommonInventoryItem
+            {
+                SlotIndex = destSlot,
+                ItemTemplateId = source.ItemTemplateId,
+                CountOrInstanceValue = source.StackCount,
+                Durability = (ushort)source.Durability,
+                SealFlag = (byte)source.SealFlag,
+                ExpireTime = source.ExpireTime,
+                Marker16 = source.Marker16,
+                PrefixData0E = new byte[8],
+                MiddleData1A = new byte[17],
+                TailData2F = new byte[37],
+            });
+            DeleteItem(connection, transaction, source.ItemUid);
+        }
+
+        internal void MoveItemFromAccountCargo(SqliteConnection connection, SqliteTransaction transaction, int characterId, SqliteInventoryStore.ItemRecord source, InventoryListType destList, short destSlot)
+        {
+            InsertCharacterItem(connection, transaction, characterId, destList, destSlot,
+                source.ItemTemplateId, source.ItemKind,
+                source.StackCount, source.InstanceValue,
+                source.Durability, source.SealFlag, 0,
+                source.ExpireTime, source.Marker16, 0, source.ExtraJson ?? "{}");
+            DeleteAccountCargoItem(connection, transaction, source.ItemUid);
+        }
+
         internal void InsertSplitItem(SqliteConnection connection, SqliteTransaction transaction, int characterId, SqliteInventoryStore.ItemRecord source, InventoryListType listType, short slotIndex, int moveCount)
         {
             InsertCharacterItem(

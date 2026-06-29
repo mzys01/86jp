@@ -1254,8 +1254,15 @@ ORDER BY slot_index;";
             using (var connection = _context.OpenConnection())
             using (var transaction = connection.BeginTransaction())
             {
-                var source = _db.LoadItemRecord(connection, transaction, _context.CharacterId, dbSrcList, request.SourceSlotIndex);
-                var destination = _db.LoadItemRecord(connection, transaction, _context.CharacterId, dbDstList, request.DestinationSlotIndex);
+                bool srcIsCargo = request.SourceListType == InventoryListType.AccountCargo;
+                bool dstIsCargo = request.DestinationListType == InventoryListType.AccountCargo;
+
+                var source = srcIsCargo
+                    ? _db.LoadAccountCargoItemRecord(connection, transaction, _context.AccountId, request.SourceSlotIndex)
+                    : _db.LoadItemRecord(connection, transaction, _context.CharacterId, dbSrcList, request.SourceSlotIndex);
+                var destination = dstIsCargo
+                    ? _db.LoadAccountCargoItemRecord(connection, transaction, _context.AccountId, request.DestinationSlotIndex)
+                    : _db.LoadItemRecord(connection, transaction, _context.CharacterId, dbDstList, request.DestinationSlotIndex);
 
                 FileLogger.Log($"  [MoveItem] source={(source != null ? $"uid={source.ItemUid} kind={source.ItemKind} tmpl=0x{source.ItemTemplateId:X8}" : "null")}, destination={(destination != null ? $"uid={destination.ItemUid} kind={destination.ItemKind} tmpl=0x{destination.ItemTemplateId:X8}" : "null")}");
 
@@ -1274,6 +1281,18 @@ ORDER BY slot_index;";
                     bool ok = _equipStore.HandleUnequipFromSlot(connection, transaction, _context.CharacterId, _context.AccountId, request.SourceSlotIndex);
                     if (ok) transaction.Commit();
                     result = CreateMoveResult(request, request.MoveCount, mutated: ok);
+                    return true;
+                }
+
+                if (srcIsCargo != dstIsCargo && source != null && destination == null)
+                {
+                    if (srcIsCargo)
+                        _db.MoveItemFromAccountCargo(connection, transaction, _context.CharacterId, source, dbDstList, request.DestinationSlotIndex);
+                    else
+                        _db.MoveItemToAccountCargo(connection, transaction, _context.AccountId, source, request.DestinationSlotIndex);
+                    transaction.Commit();
+                    result = CreateMoveResult(request, request.MoveCount);
+                    FileLogger.Log($"  [MoveItem] CARGO_MOVE: {(srcIsCargo ? "cargo→bag" : "bag→cargo")} item=0x{source.ItemTemplateId:X8}");
                     return true;
                 }
 
@@ -1829,7 +1848,8 @@ WHERE character_id = @cid AND list_type = @lt
                 || listType == InventoryListType.Avatar
                 || listType == InventoryListType.PersonalCargo
                 || listType == InventoryListType.Equipment
-                || listType == InventoryListType.Pet;
+                || listType == InventoryListType.Pet
+                || listType == InventoryListType.AccountCargo;
         }
 
         internal static InventoryListType MapToDbListType(InventoryListType listType)
@@ -1860,7 +1880,8 @@ WHERE character_id = @cid AND list_type = @lt
 
             if (destinationListType == InventoryListType.Main
                 || destinationListType == InventoryListType.Avatar
-                || destinationListType == InventoryListType.PersonalCargo)
+                || destinationListType == InventoryListType.PersonalCargo
+                || destinationListType == InventoryListType.AccountCargo)
                 return true;
 
             if (itemKind == "pet" && destinationListType == InventoryListType.Pet)
