@@ -256,7 +256,7 @@ ORDER BY slot;";
             {
                 int wantId = request.SourceInstanceValue;
                 var existing = entries.Find(e => e.Slot == equipSlot);
-                if (mainSource == null || mainSource.ItemKind != "equipment" || mainSource.ItemTemplateId != wantId)
+                if (mainSource == null || (mainSource.ItemKind != "equipment" && mainSource.ItemKind != "avatar") || mainSource.ItemTemplateId != wantId)
                 {
                     FileLogger.Log($"  [EquipMove] EQUIP blocked: invalid source slot={request.SourceSlotIndex} want=0x{wantId:X8} found={(mainSource != null ? $"0x{mainSource.ItemTemplateId:X8}/{mainSource.ItemKind}" : "null")}");
                     return EquipOutcome.NoOp;
