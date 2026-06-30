@@ -5,6 +5,7 @@ using DfoServer.Game.Characters;
 using DfoServer.Game.CharacterData;
 using DfoServer.Game.Dungeon;
 using DfoServer.Game.Inventory;
+using DfoServer.Game.SelectCharacter;
 using DfoServer.Game.Session;
 using DfoServer.Game.Skills;
 using DfoServer.Infrastructure;
@@ -96,7 +97,7 @@ namespace DfoServer.Game.Quests
                     }
                 }
 
-                ushort spTree0 = 0, spTree1 = 0;
+                ushort remainSp = 0, remainTp = 0;
                 try
                 {
                     var charRepo = new SqliteCharacterRepository(ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
@@ -106,19 +107,49 @@ namespace DfoServer.Game.Quests
                     {
                         var synced = SkillStateService.LoadAndSync(
                             skillRepo, cid, rec.Job, player.Level, rec.BonusSp, rec.BonusTp, persist: player.Level > prevLevel);
-                        spTree0 = (ushort)synced.Points.RemainingSp;
-                        spTree1 = (ushort)synced.Points.RemainingSp;
+                        var skillTreeIndex = player.Subtype0Tail?.SkillTreeIndex
+                            ?? new SqliteSubtype1Repository(ServerPaths.DatabasePath, ServerPaths.SchemaFilePath)
+                                .LoadSkillTreeIndex(cid)
+                            ?? 0;
+                        remainSp = SkillStateService.GetPageRemainingSp(synced.Skills, synced.Points, skillTreeIndex == 1 ? 1 : 0);
+                        remainTp = (ushort)synced.Points.RemainingTp;
                     }
                 }
                 catch (Exception ex) { FileLogger.Log($"[QuestManager] SP calc ERROR: {ex.Message}"); }
 
                 await _sender.SendNotiAsync(0x0025,
-                    ExpNotificationBuilder.Build(player.Level, player.Exp, spTree0, spTree1));
+                    ExpNotificationBuilder.Build(player.Level, player.Exp, remainSp, remainTp));
 
                 if (player.Level > prevLevel)
                 {
                     FileLogger.Log($"[QuestManager] LEVEL UP from quest: cid={cid} {prevLevel}→{player.Level} exp={player.Exp}");
                     await SendUserInfoBroadcast(cid);
+                }
+
+                if (ack.Length >= 13)
+                {
+                    int consumedCount = ack[12];
+                    int chainTypeOffset = 13 + consumedCount * 7;
+                    if (ack.Length >= chainTypeOffset + 1)
+                    {
+                        int chainType = ack[chainTypeOffset];
+                        if (chainType == 1 || chainType == 2)
+                        {
+                            await SendJobChangeNotification(cid);
+                            await SendUserInfoBroadcast(cid);
+                        }
+                        else if (chainType == 20 && ack.Length >= chainTypeOffset + 2)
+                        {
+                            int expertJobType = ack[chainTypeOffset + 1];
+                            await SendExpertJobChangeNotification(cid, expertJobType);
+                            await SendUserInfoBroadcast(cid);
+                        }
+                        else if (chainType == GameWorld.QuestData.ChainTypeSlotExpansion)
+                        {
+                            // The ACK completes the quest, but the client opens the visual slot from refreshed subtype1 data.
+                            await SendUserInfoBroadcast(cid);
+                        }
+                    }
                 }
 
                 var noti = BuildAcceptedQuestNoti(cid);
@@ -131,6 +162,20 @@ namespace DfoServer.Game.Quests
         {
             int cid = _sender.CharacterId;
             if (cid <= 0) return;
+            var noti = BuildAcceptedQuestNoti(cid);
+            await _sender.SendNotiAsync(0x023F, noti);
+        }
+
+        public async Task SyncMonsterRewardItemProgressAsync(ICollection<int> itemFilter)
+        {
+            int cid = _sender.CharacterId;
+            if (cid <= 0) return;
+
+            bool matched = QuestService.SyncMonsterRewardItemProgress(
+                _connStr, cid, _assetService, _sender.AccountId, itemFilter);
+            if (!matched)
+                return;
+
             var noti = BuildAcceptedQuestNoti(cid);
             await _sender.SendNotiAsync(0x023F, noti);
         }
@@ -195,6 +240,70 @@ namespace DfoServer.Game.Quests
             catch (Exception ex)
             {
                 FileLogger.Log($"[QuestManager] SendUserInfoBroadcast ERROR: {ex.Message}");
+            }
+        }
+
+        private async Task SendJobChangeNotification(int characterId)
+        {
+            try
+            {
+                var charRepo = new SqliteCharacterRepository(ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
+                var record = charRepo.GetById(characterId);
+                if (record == null) return;
+
+                _sender.Player.GrowType = record.GrowType;
+
+                var w = new Network.GamePacketWriter();
+                w.WriteByte(0);
+                w.WriteUInt16(1);
+                w.WriteUInt16((ushort)record.CharacterId);
+                w.WriteDstr(record.Name);
+                w.WriteBytes(UserInfoSubtype0Builder.BuildRemainingBytes(record));
+                await _sender.SendNotiAsync(0x0002, w.ToArray());
+
+                FileLogger.Log($"[QuestManager] JobChange NOTI 2 subtype0 sent: cid={characterId} growType=0x{record.GrowType:X2}");
+            }
+            catch (Exception ex)
+            {
+                FileLogger.Log($"[QuestManager] SendJobChangeNotification ERROR: {ex.Message}");
+            }
+        }
+
+        private async Task SendExpertJobChangeNotification(int characterId, int expertJobType)
+        {
+            try
+            {
+                var charRepo = new SqliteCharacterRepository(ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
+                var record = charRepo.GetById(characterId);
+                if (record == null || _sender.Player == null) return;
+
+                var tail = _sender.Player.Subtype0Tail ?? new UserInfoMinimumTailSnapshot();
+                tail.ExpertJobType = (byte)expertJobType;
+                _sender.Player.Subtype0Tail = tail;
+                record.Subtype0Tail = tail;
+
+                // NOTI 0x00CD ExpertJobInfo
+                var ejw = new Network.GamePacketWriter();
+                ejw.WriteByte(1);          // State0
+                ejw.WriteByte(1);          // Mode
+                ejw.WriteByte(1);          // Count
+                ejw.WriteInt32(expertJobType);
+                await _sender.SendNotiAsync(0x00CD, ejw.ToArray());
+
+                // NOTI 0x0002 subtype 0 USERINFO Minimum
+                var w = new Network.GamePacketWriter();
+                w.WriteByte(0);
+                w.WriteUInt16(1);
+                w.WriteUInt16((ushort)record.CharacterId);
+                w.WriteDstr(record.Name);
+                w.WriteBytes(UserInfoSubtype0Builder.BuildRemainingBytes(record));
+                await _sender.SendNotiAsync(0x0002, w.ToArray());
+
+                FileLogger.Log($"[QuestManager] ExpertJobChange NOTI sent: cid={characterId} expertJobType={expertJobType}");
+            }
+            catch (Exception ex)
+            {
+                FileLogger.Log($"[QuestManager] SendExpertJobChangeNotification ERROR: {ex.Message}");
             }
         }
 

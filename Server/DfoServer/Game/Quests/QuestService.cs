@@ -94,17 +94,8 @@ namespace DfoServer.Game.Quests
             if (IsQuestCleared(connStr, characterId, questId) && !repeatable)
                 return BuildFailAck(18);
 
-            var preReqs = GameWorld.QuestData.GetPreRequiredQuests(questId);
-            if (preReqs.Count > 0)
-            {
-                bool allCleared = true;
-                foreach (var preQid in preReqs)
-                {
-                    if (preQid > 0 && !IsQuestCleared(connStr, characterId, (ushort)preQid))
-                    { allCleared = false; break; }
-                }
-                if (!allCleared) return BuildFailAck(21);
-            }
+            if (!CheckPreRequiredQuests(connStr, characterId, questId))
+                return BuildFailAck(21);
 
             var collisions = GameWorld.QuestData.GetCollisionQuests(questId);
             foreach (var colQid in collisions)
@@ -250,6 +241,114 @@ namespace DfoServer.Game.Quests
             return w.ToArray();
         }
 
+        public static bool SyncMonsterRewardItemProgress(
+            string connStr,
+            int characterId,
+            IAssetService assetService,
+            int accountId,
+            ICollection<int> itemFilter)
+        {
+            var active = LoadActiveQuests(connStr, characterId);
+            if (active.Count == 0 || assetService == null)
+                return false;
+
+            var itemCountCache = new Dictionary<int, int>();
+            Func<int, int> getHeldCount = itemId =>
+            {
+                int count;
+                if (itemCountCache.TryGetValue(itemId, out count))
+                    return count;
+
+                try
+                {
+                    using (var scope = assetService.OpenScope(characterId, accountId))
+                        count = assetService.CountItem(scope, itemId);
+                }
+                catch
+                {
+                    count = 0;
+                }
+
+                itemCountCache[itemId] = count;
+                return count;
+            };
+
+            var changed = new List<ActiveQuest>();
+            bool matchedQuestItem = false;
+
+            foreach (var q in active)
+            {
+                var seekItems = GameWorld.QuestData.GetSeekingConsumeItems(q.QuestId);
+                if (seekItems.Count == 0)
+                    continue;
+
+                var relevantItems = new List<GameWorld.QuestRewardItem>();
+                bool matchesFilter = itemFilter == null || itemFilter.Count == 0;
+                foreach (var si in seekItems)
+                {
+                    if (si.ItemId <= 0 || si.Count <= 0)
+                        continue;
+
+                    relevantItems.Add(si);
+                    if (!matchesFilter && itemFilter.Contains(si.ItemId))
+                        matchesFilter = true;
+                }
+
+                if (relevantItems.Count == 0 || !matchesFilter)
+                    continue;
+
+                matchedQuestItem = true;
+                long missingHeld = 0;
+                foreach (var si in relevantItems)
+                {
+                    int required = Math.Max(1, si.Count);
+                    int held = Math.Max(0, getHeldCount(si.ItemId));
+
+                    missingHeld += Math.Max(0, required - held);
+                }
+
+                var persistTrigger = ToTriggerValue(missingHeld);
+
+                if (q.TriggerValue != persistTrigger)
+                {
+                    q.TriggerValue = persistTrigger;
+                    changed.Add(q);
+                }
+            }
+
+            if (changed.Count > 0)
+            {
+                using (var conn = new SqliteConnection(connStr))
+                {
+                    conn.Open();
+                    using (var tx = conn.BeginTransaction())
+                    {
+                        foreach (var q in changed)
+                        {
+                            using (var cmd = new SqliteCommand(
+                                "UPDATE character_active_quests SET trigger_value=@tv WHERE character_id=@cid AND slot=@s", conn, tx))
+                            {
+                                cmd.Parameters.AddWithValue("@tv", (long)q.TriggerValue);
+                                cmd.Parameters.AddWithValue("@cid", characterId);
+                                cmd.Parameters.AddWithValue("@s", q.Slot);
+                                cmd.ExecuteNonQuery();
+                            }
+                        }
+                        tx.Commit();
+                    }
+                }
+            }
+
+            return matchedQuestItem;
+        }
+
+        private static uint ToTriggerValue(long missingCount)
+        {
+            if (missingCount <= 0) return 0;
+            if (missingCount > uint.MaxValue) return uint.MaxValue;
+            return (uint)missingCount;
+        }
+
         private static uint DecrementTriggerChannel(uint trigger, byte triggerType)
         {
             if (triggerType == 0) return trigger > 0 ? trigger - 1 : 0;
@@ -291,7 +390,8 @@ namespace DfoServer.Game.Quests
 
             int playerLevel = GetCharacterLevel(connStr, characterId);
             int playerJob = GetCharacterJob(connStr, characterId);
-            var reward = GameWorld.QuestData.GetRewardExp(questId, rewardSelectIdx, playerLevel, playerJob);
+            int playerGrowType = GetCharacterGrowType(connStr, characterId);
+            var reward = GameWorld.QuestData.GetRewardExp(questId, rewardSelectIdx, playerLevel, playerJob, playerGrowType);
             var consumedEntries = new List<ConsumedItemEntry>();
             var insertedEntries = new List<InsertedItemEntry>();
 
@@ -358,6 +458,18 @@ namespace DfoServer.Game.Quests
                         }
                     }
                 }
+                else if (reward.ChainType == 1 || reward.ChainType == 2)
+                {
+                    UpdateGrowType(scope.Connection, scope.Transaction, characterId, reward.ChainType, reward.GrowNumber);
+                }
+                else if (reward.ChainType == 20)
+                {
+                    UpdateExpertJob(scope.Connection, scope.Transaction, characterId, reward.GrowNumber);
+                }
+                else if (reward.ChainType == GameWorld.QuestData.ChainTypeSlotExpansion)
+                {
+                    UpdateSlotExpansion(scope.Connection, scope.Transaction, characterId, reward.GrowNumber);
+                }
 
                 if (!GameWorld.QuestData.IsRepeatableQuest(questId))
                     MarkQuestCleared(scope.Connection, scope.Transaction, characterId, questId);
@@ -381,7 +493,7 @@ namespace DfoServer.Game.Quests
                 w.WriteUInt32(ce.RemainingCount);
             }
 
-            // Phase 4: chainType + reward items
+            // Phase 4: chainType + reward data
             w.WriteByte((byte)reward.ChainType);
             if (reward.ChainType == 0)
             {
@@ -396,6 +508,24 @@ namespace DfoServer.Game.Quests
                     w.WriteUInt32(0); // reserved
                     w.WriteByte(0);   // extraFlags
                 }
+            }
+            else if (reward.ChainType == 1 || reward.ChainType == 2)
+            {
+                w.WriteByte((byte)reward.GrowNumber);
+                w.WriteByte(0); // npcCount layer 1
+                w.WriteByte(0); // npcCount layer 2
+            }
+            else if (reward.ChainType == 20)
+            {
+                w.WriteByte((byte)reward.GrowNumber); // expert job type
+                w.WriteByte(0); // npcCount layer 1
+                w.WriteByte(0); // npcCount layer 2
+            }
+            else if (reward.ChainType == GameWorld.QuestData.ChainTypeSlotExpansion)
+            {
+                w.WriteByte((byte)reward.GrowNumber); // expanded equipment slot id (21=support, 22=magic stone)
+                w.WriteByte(0); // npcCount layer 1
+                w.WriteByte(0); // npcCount layer 2
             }
 
             FileLogger.Log($"[QuestService] FINISH quest={questId} rewardIdx={rewardSelectIdx} mult={multiplier} gold={reward.Gold * multiplier} consumed={consumedEntries.Count} rewarded={insertedEntries.Count}");
@@ -446,6 +576,39 @@ namespace DfoServer.Game.Quests
             return new ConsumedItemEntry { UpdateType = 0, SlotIndex = (ushort)slotIndex, RemainingCount = (uint)removedCount };
         }
 
+        private static bool CheckPreRequiredQuests(string connStr, int characterId, int questId)
+        {
+            var qst = GameWorld.QuestData.GetQuestFile(questId);
+            if (qst == null) return true;
+
+            if (qst.PreRequiredQuestGroups != null && qst.PreRequiredQuestGroups.Count > 0)
+            {
+                foreach (var group in qst.PreRequiredQuestGroups)
+                {
+                    var ids = GameWorld.QuestData.ParseIntList(group);
+                    bool groupOk = true;
+                    foreach (var pq in ids)
+                    {
+                        if (pq > 0 && !IsQuestCleared(connStr, characterId, (ushort)pq))
+                        { groupOk = false; break; }
+                    }
+                    if (groupOk) return true;
+                }
+                return false;
+            }
+
+            var preReqs = GameWorld.QuestData.GetPreRequiredQuests(questId);
+            if (preReqs.Count > 0)
+            {
+                foreach (var preQid in preReqs)
+                {
+                    if (preQid > 0 && !IsQuestCleared(connStr, characterId, (ushort)preQid))
+                        return false;
+                }
+            }
+            return true;
+        }
+
         private static int GetCharacterLevel(string connStr, int characterId)
         {
             using (var conn = new SqliteConnection(connStr))
@@ -472,6 +635,121 @@ namespace DfoServer.Game.Quests
                     return (result != null) ? Convert.ToInt32(result) : -1;
                 }
             }
+        }
+
+        private static int GetCharacterGrowType(string connStr, int characterId)
+        {
+            using (var conn = new SqliteConnection(connStr))
+            {
+                conn.Open();
+                using (var cmd = new SqliteCommand("SELECT grow_type FROM characters WHERE character_id=@cid", conn))
+                {
+                    cmd.Parameters.AddWithValue("@cid", characterId);
+                    var result = cmd.ExecuteScalar();
+                    return (result != null) ? Convert.ToInt32(result) : 0;
+                }
+            }
+        }
+
+        private static void UpdateGrowType(SqliteConnection conn, SqliteTransaction tx, int characterId, int chainType, int growNumber)
+        {
+            byte currentGrowType = 0;
+            using (var cmd = conn.CreateCommand())
+            {
+                cmd.Transaction = tx;
+                cmd.CommandText = "SELECT grow_type FROM characters WHERE character_id = @cid";
+                cmd.Parameters.AddWithValue("@cid", characterId);
+                var val = cmd.ExecuteScalar();
+                if (val != null) currentGrowType = (byte)Convert.ToInt32(val);
+            }
+
+            int firstGrow = currentGrowType & 0xF;
+            int secondGrow = (currentGrowType >> 4) & 0xF;
+
+            if (chainType == 1)
+                firstGrow = growNumber;
+            else if (chainType == 2)
+                secondGrow = growNumber;
+
+            byte newGrowType = (byte)((secondGrow << 4) | (firstGrow & 0xF));
+
+            using (var cmd = conn.CreateCommand())
+            {
+                cmd.Transaction = tx;
+                cmd.CommandText = "UPDATE characters SET grow_type = @grow WHERE character_id = @cid";
+                cmd.Parameters.AddWithValue("@grow", (int)newGrowType);
+                cmd.Parameters.AddWithValue("@cid", characterId);
+                cmd.ExecuteNonQuery();
+            }
+
+            FileLogger.Log($"[QuestService] UpdateGrowType: cid={characterId} chain={chainType} growNumber={growNumber} old=0x{currentGrowType:X2} new=0x{newGrowType:X2}");
+        }
+
+        private static void UpdateExpertJob(SqliteConnection conn, SqliteTransaction tx, int characterId, int expertJobType)
+        {
+            byte[] expertJobBlob = BuildExpertJobBlob(1, 1, expertJobType);
+
+            using (var cmd = conn.CreateCommand())
+            {
+                cmd.Transaction = tx;
+                cmd.CommandText = @"
+                    INSERT INTO character_subtype0_fields (character_id, expert_job_type) VALUES (@cid, @ejt)
+                    ON CONFLICT(character_id) DO UPDATE SET expert_job_type=@ejt;
+                    INSERT INTO character_init_flags (character_id, expert_job_blob) VALUES (@cid, @blob)
+                    ON CONFLICT(character_id) DO UPDATE SET expert_job_blob=@blob;";
+                cmd.Parameters.AddWithValue("@cid", characterId);
+                cmd.Parameters.AddWithValue("@ejt", expertJobType);
+                cmd.Parameters.AddWithValue("@blob", expertJobBlob);
+                cmd.ExecuteNonQuery();
+            }
+
+            FileLogger.Log($"[QuestService] UpdateExpertJob: cid={characterId} expertJobType={expertJobType}");
+        }
+
+        private static void UpdateSlotExpansion(SqliteConnection conn, SqliteTransaction tx, int characterId, int slotId)
+        {
+            // Special equipment slots are stored as bits in ex_equip_slot_stat: 21=support, 22=magic stone, 23=earring.
+            var flag = ResolveSlotExpansionFlag(slotId);
+            if (flag == 0)
+            {
+                FileLogger.Log($"[QuestService] UpdateSlotExpansion skipped: cid={characterId} unsupported slotId={slotId}");
+                return;
+            }
+
+            using (var cmd = conn.CreateCommand())
+            {
+                cmd.Transaction = tx;
+                cmd.CommandText = @"
+                    UPDATE characters
+                    SET ex_equip_slot_stat = (ex_equip_slot_stat | @flag),
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE character_id = @cid;";
+                cmd.Parameters.AddWithValue("@flag", flag);
+                cmd.Parameters.AddWithValue("@cid", characterId);
+                cmd.ExecuteNonQuery();
+            }
+
+            FileLogger.Log($"[QuestService] UpdateSlotExpansion: cid={characterId} slotId={slotId} flag=0x{flag:X2}");
+        }
+
+        private static int ResolveSlotExpansionFlag(int slotId)
+        {
+            // Slot ids follow the client equipment index; the persisted flag is zero-based from support equipment.
+            if (slotId < 21 || slotId > 23)
+                return 0;
+            return 1 << (slotId - 21);
+        }
+
+        private static byte[] BuildExpertJobBlob(byte state0, byte mode, int expertJobType)
+        {
+            var list = new List<byte>();
+            list.Add(state0);
+            list.Add(mode);
+            list.AddRange(BitConverter.GetBytes(0));
+            list.AddRange(BitConverter.GetBytes(0));
+            list.Add((byte)1);
+            list.AddRange(BitConverter.GetBytes(expertJobType));
+            return list.ToArray();
         }
 
         private static int GetAccountIdByConnStr(string connStr, int characterId)

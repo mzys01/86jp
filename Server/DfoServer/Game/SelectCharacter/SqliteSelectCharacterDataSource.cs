@@ -2,6 +2,7 @@ using DfoServer.Game.CharacterData;
 using DfoServer.Game.Characters;
 using DfoServer.Game.ExpertJob;
 using DfoServer.Game.Inventory;
+using DfoServer.Game.ItemUpgrade;
 using DfoServer.Game.Premium;
 using DfoServer.Game.Settings;
 using System;
@@ -87,12 +88,18 @@ namespace DfoServer.Game.SelectCharacter
             {
                 using (var assetScope = _assetService.OpenScope(characterId, accountId))
                 {
-                    initSnapshot.LuckyStar = _assetService.LoadWallet(assetScope).LuckyStar;
+                    var wallet = _assetService.LoadWallet(assetScope);
+                    ApplyWallet(initSnapshot, wallet);
                 }
             }
             else
             {
-                initSnapshot.LuckyStar = CurrencyService.LoadLuckyStar(_connectionString, accountId);
+                using (var conn = new SqliteConnection(_connectionString))
+                {
+                    conn.Open();
+                    var wallet = CurrencyService.LoadWallet(conn, null, characterId);
+                    ApplyWallet(initSnapshot, wallet);
+                }
             }
 
             var acctSettings = _accountSettingsRepository.Load(accountId);
@@ -206,6 +213,17 @@ namespace DfoServer.Game.SelectCharacter
             });
         }
 
+        private static void ApplyWallet(SelectCharacterInitializationSnapshot initSnapshot, WalletSnapshot wallet)
+        {
+            if (initSnapshot == null || wallet == null)
+                return;
+
+            initSnapshot.AckCera = wallet.Cera;
+            initSnapshot.AckTokenCera = wallet.TokenCera;
+            initSnapshot.AckHappyTokenCera = wallet.HappyTokenCera;
+            initSnapshot.LuckyStar = wallet.LuckyStar;
+        }
+
         public CharacterItemListSnapshot LoadItemListSnapshot(int characterId, int accountId)
         {
             if (_assetService != null)
@@ -259,10 +277,12 @@ namespace DfoServer.Game.SelectCharacter
                 return _inventoryStore.TryBuyItem(itemTemplateId, buyCount, out result);
         }
 
-        public bool TryBuyCeraShopItem(int characterId, int accountId, int productId, int buyCount, out InventoryMutationResult result)
+        // 透传 paymentMode 与 attributeValue 到下层 InventoryStore。
+        // 此方法仅做 Scope 管理，实际逻辑在 InventoryShopStore.TryBuyCeraShopItem。
+        public bool TryBuyCeraShopItem(int characterId, int accountId, int productId, int buyCount, int paymentMode, byte attributeValue, out InventoryMutationResult result)
         {
             using (_inventoryStore.BeginScope(characterId, accountId))
-                return _inventoryStore.TryBuyCeraShopItem(productId, buyCount, out result);
+                return _inventoryStore.TryBuyCeraShopItem(productId, buyCount, paymentMode, attributeValue, out result);
         }
 
         public bool TrySellItem(int characterId, int accountId, InventoryListType listType, short slotIndex, short sellCount, out InventoryMutationResult result)
@@ -277,6 +297,12 @@ namespace DfoServer.Game.SelectCharacter
                 return _inventoryStore.TryEnchantByBead(command, out result);
         }
 
+        public bool TryUpgradeItem(int characterId, int accountId, ItemUpgradeCommand command, out ItemUpgradeResult result)
+        {
+            using (_inventoryStore.BeginScope(characterId, accountId))
+                return _inventoryStore.TryUpgradeItem(command, out result);
+        }
+
         public bool TryCompoundAvatar(int characterId, int accountId, short slot1, short slot2, short consumeSlot,
                 Func<int, int, int, System.Collections.Generic.List<int>> resolveNewItemIds, byte newOption,
                 out System.Collections.Generic.List<int> newSlots, out int oldItemId1, out int oldItemId2, out System.Collections.Generic.List<int> newItemIds,
@@ -287,10 +313,72 @@ namespace DfoServer.Game.SelectCharacter
                     out newSlots, out oldItemId1, out oldItemId2, out newItemIds, out consumedItemTemplateId, out consumedItemRemainingCount);
         }
 
+        public bool TryCompoundAvatarSet(int characterId, int accountId, short[] consumeSlots, int[] expectedItemIds, Func<int, int> resolveNewItemId, byte newOption,
+                short consumeStackableSlot, out int newSlot, out System.Collections.Generic.List<int> oldItemIds, out int newItemId,
+                out int consumedItemTemplateId, out int consumedItemRemainingCount)
+        {
+            using (_inventoryStore.BeginScope(characterId, accountId))
+                return _inventoryStore.TryCompoundAvatarSet(consumeSlots, expectedItemIds, resolveNewItemId, newOption, consumeStackableSlot, out newSlot, out oldItemIds, out newItemId, out consumedItemTemplateId, out consumedItemRemainingCount);
+        }
+
+        public bool TryOpenEquipmentSocket(int characterId, int accountId, short targetSlotIndex, int targetItemTemplateId, short materialSlotIndex, out EquipmentSocketMutationResult result)
+        {
+            using (_inventoryStore.BeginScope(characterId, accountId))
+                return _inventoryStore.TryOpenEquipmentSocket(targetSlotIndex, targetItemTemplateId, materialSlotIndex, out result);
+        }
+
+        public bool TrySetEquipmentEmblems(int characterId, int accountId, short targetSlotIndex, int targetItemTemplateId, IReadOnlyList<EquipmentEmblemApplyRequest> emblems, out EquipmentEmblemMutationResult result)
+        {
+            using (_inventoryStore.BeginScope(characterId, accountId))
+                return _inventoryStore.TrySetEquipmentEmblems(targetSlotIndex, targetItemTemplateId, emblems, out result);
+        }
+
+        public bool TryOpenAvatarSocket(int characterId, int accountId, short targetSlotIndex, int targetItemTemplateId, short materialSlotIndex, out AvatarSocketMutationResult result)
+        {
+            using (_inventoryStore.BeginScope(characterId, accountId))
+                return _inventoryStore.TryOpenAvatarSocket(targetSlotIndex, targetItemTemplateId, materialSlotIndex, out result);
+        }
+
+        public bool TrySetAvatarEmblems(int characterId, int accountId, short targetSlotIndex, int targetItemTemplateId, IReadOnlyList<EquipmentEmblemApplyRequest> emblems, out AvatarEmblemMutationResult result)
+        {
+            using (_inventoryStore.BeginScope(characterId, accountId))
+                return _inventoryStore.TrySetAvatarEmblems(targetSlotIndex, targetItemTemplateId, emblems, out result);
+        }
+
         public bool TrySortItems(int characterId, int accountId, InventoryListType listType, byte category)
         {
             using (_inventoryStore.BeginScope(characterId, accountId))
                 return _inventoryStore.TrySortItems(characterId, listType, category);
+        }
+
+        public bool TryToggleSortItemLock(int characterId, int accountId, InventoryListType listType, short slotIndex, out SortItemLockEntry entry)
+        {
+            using (_inventoryStore.BeginScope(characterId, accountId))
+                return _inventoryStore.TryToggleSortItemLock(listType, slotIndex, out entry);
+        }
+
+        public bool TryUnlockSortItemLock(int characterId, int accountId, InventoryListType listType, short slotIndex)
+        {
+            using (_inventoryStore.BeginScope(characterId, accountId))
+                return _inventoryStore.TryUnlockSortItemLock(listType, slotIndex);
+        }
+
+        public IReadOnlyList<SortItemLockEntry> LoadSortItemLocks(int characterId, int accountId)
+        {
+            using (_inventoryStore.BeginScope(characterId, accountId))
+                return _inventoryStore.LoadSortItemLocks();
+        }
+
+        public IReadOnlyList<SortItemLockEntry> LoadSortItemLocks(int characterId, int accountId, InventoryListType listType)
+        {
+            using (_inventoryStore.BeginScope(characterId, accountId))
+                return _inventoryStore.LoadSortItemLocks(listType);
+        }
+
+        public CommonInventoryItem LoadCommonItemForRefresh(int characterId, int accountId, InventoryListType listType, short slotIndex)
+        {
+            using (_inventoryStore.BeginScope(characterId, accountId))
+                return _inventoryStore.LoadCommonItemForRefresh(listType, slotIndex);
         }
 
         public byte[] LoadCharacterInitBody(int characterId, ushort notiType, int occurrenceIndex = 0)
@@ -372,7 +460,6 @@ namespace DfoServer.Game.SelectCharacter
                     initialSkills, null, job, 1, 0, 0);
                 points.RemainingSp = points.TotalSp;
                 points.RemainingTp = points.TotalTp;
-                points.RemainingSfp = points.TotalSfp;
                 Skills.SkillStateService.Persist(_initDataRepository, characterId, initialSkills, points);
             }
 

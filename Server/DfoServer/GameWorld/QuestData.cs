@@ -9,6 +9,7 @@ namespace DfoServer.GameWorld
         public uint Exp;
         public uint Gold;
         public int ChainType;
+        public int GrowNumber;
         public List<QuestRewardItem> Items;
         public List<QuestRewardItem> ConsumeItems;
     }
@@ -21,6 +22,9 @@ namespace DfoServer.GameWorld
 
     internal static class QuestData
     {
+        // PVF [slot expansion] rewards use reward int data as an equipment slot id, not an item id.
+        internal const int ChainTypeSlotExpansion = 21;
+
         private static readonly Lazy<QuestIndex> Index = new Lazy<QuestIndex>(BuildQuestIndex);
         private static readonly Lazy<QuestParameterTable> Parameters = new Lazy<QuestParameterTable>(LoadParameters);
         private static readonly Lazy<Dictionary<int, HashSet<int>>> TrainingQuestNpcs = new Lazy<Dictionary<int, HashSet<int>>>(LoadTrainingQuestNpcs);
@@ -214,10 +218,16 @@ namespace DfoServer.GameWorld
                     continue;
 
                 // check_possible: growType / jobChangeQuest
-                // value=10/20→bypass growType, other→checkGrowType
+                // jcq=1: 一转相关(转职任务+转职贺礼), 不过滤growType, 靠pre_required_quest控制顺序
+                // jcq=2: 二转(觉醒)任务, 需 growType 匹配 [grow type]
+                // jcq=10/20: 跳过 growType 检查
                 int jcq = qst.JobChangeQuestValue;
-                if (jcq == 1) continue;
-                if (qst.GrowType != -1 && jcq != 10 && jcq != 20 && growType >= 0)
+                if (jcq == 2)
+                {
+                    int firstGrow = growType & 0xF;
+                    if (qst.GrowType != -1 && qst.GrowType != firstGrow) continue;
+                }
+                else if (qst.GrowType != -1 && jcq != 1 && jcq != 10 && jcq != 20 && growType >= 0)
                 {
                     if (!MatchesGrowType(qst.GrowType, characterJob, growType)) continue;
                 }
@@ -373,7 +383,7 @@ namespace DfoServer.GameWorld
             if (baseIdx < 0 || baseIdx >= jobNames.Length) return false;
             bool isAt = IsAtVariant(characterJob);
             if (isAt)
-                return jobStr.Contains(atJobNames[baseIdx]) || jobStr.Contains(jobNames[baseIdx]);
+                return jobStr.Contains(atJobNames[baseIdx]);
             return jobStr.Contains(jobNames[baseIdx]);
         }
 
@@ -406,7 +416,7 @@ namespace DfoServer.GameWorld
         }
 
 
-        public static QuestReward GetRewardExp(int questId, int rewardSelectIdx = -1, int playerLevel = 1, int playerJob = -1)
+        public static QuestReward GetRewardExp(int questId, int rewardSelectIdx = -1, int playerLevel = 1, int playerJob = -1, int playerGrowType = -1)
         {
             var empty = new QuestReward { Exp = 0, Gold = 0, ChainType = 0, Items = new List<QuestRewardItem>(), ConsumeItems = new List<QuestRewardItem>() };
             var qst = GetQuestFile(questId);
@@ -431,7 +441,7 @@ namespace DfoServer.GameWorld
                 uint gold = 0;
                 if (chainType == 0)
                 {
-                    var fixedRewards = ParseItemPairs(qst.RewardIntData, playerJob);
+                    var fixedRewards = ParseItemPairs(qst.RewardIntData, playerJob, playerGrowType);
                     foreach (var fr in fixedRewards)
                     {
                         if (fr.ItemId == 0)
@@ -447,7 +457,7 @@ namespace DfoServer.GameWorld
 
                     if (rewardSelectIdx >= 0)
                     {
-                        var selectable = ParseItemPairs(qst.RewardSelectionIntData, playerJob);
+                        var selectable = ParseItemPairs(qst.RewardSelectionIntData, playerJob, playerGrowType);
                         if (rewardSelectIdx < selectable.Count)
                             items.Add(selectable[rewardSelectIdx]);
                     }
@@ -455,7 +465,15 @@ namespace DfoServer.GameWorld
 
                 var consumeItems = ParseItemPairs(qst.DependGiveItem);
 
-                return new QuestReward { Exp = exp, Gold = gold, ChainType = chainType, Items = items, ConsumeItems = consumeItems };
+                int growNumber = 0;
+                if (chainType == 1 || chainType == 2 || chainType == 20 || chainType == ChainTypeSlotExpansion)
+                {
+                    var rewardValues = ParseIntList(qst.RewardIntData);
+                    if (rewardValues.Count > 0)
+                        growNumber = rewardValues[0];
+                }
+
+                return new QuestReward { Exp = exp, Gold = gold, ChainType = chainType, GrowNumber = growNumber, Items = items, ConsumeItems = consumeItems };
             }
             catch
             {
@@ -472,12 +490,13 @@ namespace DfoServer.GameWorld
                 case "[grow type]": return 1;
                 case "[creature evolution]": return 10;
                 case "[expert job]": return 20;
+                case "[slot expansion]": return ChainTypeSlotExpansion;
                 case "[event creature evolution]": return 25;
                 default: return 0;
             }
         }
 
-        private static List<QuestRewardItem> ParseItemPairs(string data, int playerJob = -1)
+        private static List<QuestRewardItem> ParseItemPairs(string data, int playerJob = -1, int playerGrowType = -1)
         {
             var result = new List<QuestRewardItem>();
             if (string.IsNullOrWhiteSpace(data)) return result;
@@ -490,18 +509,19 @@ namespace DfoServer.GameWorld
                 if (!int.TryParse(tokens[i], out itemId)) { i++; continue; }
                 i++;
 
-                // check for `[job]` marker
                 if (i < tokens.Length && tokens[i].IndexOf("[job]", StringComparison.OrdinalIgnoreCase) >= 0)
                 {
-                    i++; // skip `[job]`
+                    i++;
                     int jobId = -1;
-                    if (i < tokens.Length) { int.TryParse(tokens[i], out jobId); i++; }
-                    // skip -1 separator
-                    if (i < tokens.Length) { int sep; if (int.TryParse(tokens[i], out sep) && sep == -1) i++; }
+                    int growType = -1;
                     int count = 1;
+                    if (i < tokens.Length) { int.TryParse(tokens[i], out jobId); i++; }
+                    if (i < tokens.Length) { int.TryParse(tokens[i], out growType); i++; }
                     if (i < tokens.Length) { int.TryParse(tokens[i], out count); i++; }
 
-                    if (itemId > 0 && (playerJob < 0 || jobId == playerJob))
+                    bool jobMatch = playerJob < 0 || jobId == playerJob;
+                    bool growMatch = playerGrowType < 0 || growType == -1 || growType == (playerGrowType & 0xF);
+                    if (itemId > 0 && jobMatch && growMatch)
                         result.Add(new QuestRewardItem { ItemId = itemId, Count = count });
                 }
                 else
@@ -569,7 +589,7 @@ namespace DfoServer.GameWorld
             return (uint)(((f2 & 0x1FF) << 18) | ((f1 & 0x1FF) << 9) | (f0 & 0x1FF));
         }
 
-        private static List<int> ParseIntList(string data)
+        internal static List<int> ParseIntList(string data)
         {
             var result = new List<int>();
             if (string.IsNullOrWhiteSpace(data)) return result;

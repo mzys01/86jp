@@ -15,6 +15,12 @@ namespace DfoServer.Game.Skills
         public static Result Calculate(byte job, byte level, int bonusSp, int bonusTp,
             SelectCharacter.SkillInfoSnapshot skills)
         {
+            return Calculate(job, level, bonusSp, bonusTp, skills, 0);
+        }
+
+        public static Result Calculate(byte job, byte level, int bonusSp, int bonusTp,
+            SelectCharacter.SkillInfoSnapshot skills, int pageIndex)
+        {
             int totalSp = SpTableProvider.GetTotalSp(level) + bonusSp;
             int spentSp = 0;
 
@@ -23,13 +29,14 @@ namespace DfoServer.Game.Skills
             var initialLevels = new System.Collections.Generic.Dictionary<ushort, byte>();
             if (initialSkills != null && initialSkills.Pages.Count > 0)
             {
-                foreach (var ie in initialSkills.Pages[0].Entries)
+                var initialPageIndex = pageIndex >= 0 && pageIndex < initialSkills.Pages.Count ? pageIndex : 0;
+                foreach (var ie in initialSkills.Pages[initialPageIndex].Entries)
                     initialLevels[ie.SkillId] = ie.Level;
             }
 
-            if (skills != null && skills.Pages.Count > 0)
+            if (skills != null && pageIndex >= 0 && pageIndex < skills.Pages.Count)
             {
-                foreach (var e in skills.Pages[0].Entries)
+                foreach (var e in skills.Pages[pageIndex].Entries)
                 {
                     var sd = SkillDataProvider.GetSkill(job, e.SkillId);
                     if (sd == null) continue;

@@ -96,8 +96,28 @@ CREATE TABLE IF NOT EXISTS account_cargo_state (
     account_id INTEGER PRIMARY KEY,
     selection_key INTEGER NOT NULL DEFAULT 0,
     value32 INTEGER NOT NULL DEFAULT 0,
-    item_count INTEGER NOT NULL DEFAULT 0, -- 此前只在 RunMigrations 的 ALTER 里, 空库全新 CREATE 不走迁移 → 选角查询崩(2026-06-11 修)
+    item_count INTEGER NOT NULL DEFAULT 0,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS account_cargo_items (
+    item_uid INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id INTEGER NOT NULL,
+    slot_index INTEGER NOT NULL,
+    item_template_id INTEGER NOT NULL,
+    item_kind TEXT NOT NULL DEFAULT 'unknown',
+    stack_count INTEGER NOT NULL DEFAULT 0,
+    instance_value INTEGER NOT NULL DEFAULT 0,
+    durability INTEGER NOT NULL DEFAULT 0,
+    seal_flag INTEGER NOT NULL DEFAULT 0,
+    option_value INTEGER NOT NULL DEFAULT 0,
+    expire_time INTEGER NOT NULL DEFAULT 0,
+    marker_16 INTEGER NOT NULL DEFAULT 0,
+    extra_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(account_id, slot_index),
+    FOREIGN KEY (account_id) REFERENCES accounts(account_id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS item_audit_log (
@@ -180,6 +200,7 @@ CREATE TABLE IF NOT EXISTS character_init_flags (
     main_game_option_blob BLOB,
     quickchat_bank0 BLOB,
     quickchat_bank1 BLOB,
+    character_option_blob BLOB,       -- NOTI 0x0187 CHARACTER_OPTION, saved by CMD 0x01C0 SAVE_CHARACTER_OPTION
     charac_invisible_falgs_payload_len INTEGER NOT NULL DEFAULT 0,  -- IDA 正名: CLEAR_QUEST_LIST payload 长度
     racing_dungeon_current_enter_count INTEGER NOT NULL DEFAULT 0,  -- IDA 正名: DAILY_CHALLENGE 当日进入次数
     racing_dungeon_group_flags BLOB,  -- IDA 正名: DAILY_CHALLENGE 组标志
@@ -610,6 +631,17 @@ CREATE TABLE IF NOT EXISTS character_abuse_values (
     FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS character_sort_item_locks (
+    character_id INTEGER NOT NULL,
+    sort_order INTEGER NOT NULL,
+    list_type INTEGER NOT NULL,
+    slot_index INTEGER NOT NULL,
+    state INTEGER NOT NULL,
+    PRIMARY KEY (character_id, sort_order),
+    UNIQUE(character_id, list_type, slot_index),
+    FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS account_settings (
     account_id INTEGER PRIMARY KEY,
     main_game_option BLOB,
@@ -625,5 +657,3 @@ INSERT OR IGNORE INTO accounts (account_id, m_id, password_hash) VALUES
 
 -- character 和 container_state 由 EnsureInitialized 从封包样本动态 seed（不再硬编码）
 
-INSERT OR IGNORE INTO account_cargo_state (account_id, selection_key, value32) VALUES
-    (1, 16, 0);

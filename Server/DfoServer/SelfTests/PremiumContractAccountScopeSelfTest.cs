@@ -2,6 +2,7 @@ using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
 using DfoServer.Game.SelectCharacter;
 using DfoServer.Infrastructure;
+using DfoServer.Network.Builders;
 using Microsoft.Data.Sqlite;
 using System;
 using System.Collections.Generic;
@@ -30,6 +31,7 @@ namespace DfoServer.SelfTests
             AccountOwnedClientNativeAckPremiumBlobProjectsToOtherCharacters();
             UpdatedContractStackProjectsAsActiveContract();
             EmptyPacketSequenceStillFallsBackToDefaultInitSequence();
+            CeraInitPacketUsesAccountWallet();
 
             Console.WriteLine($"=== result: {_pass} PASS, {_fail} FAIL ===");
             return _fail == 0 ? 0 : 1;
@@ -91,6 +93,33 @@ namespace DfoServer.SelfTests
             Check(
                 "empty packet sequence remains empty so default init sequence is used",
                 snapshot.PacketTemplates.Count == 0);
+        }
+
+        private static void CeraInitPacketUsesAccountWallet()
+        {
+            var tempDb = Path.Combine(Path.GetTempPath(), "premium_contract_cera_wallet_selftest.db");
+            DeleteTempDatabase(tempDb);
+
+            EnsureAccountAndCharacters(tempDb);
+            SeedAccountWallet(tempDb, 987200, 1000000, 938390);
+
+            var dataSource = new SqliteSelectCharacterDataSource(
+                tempDb,
+                ServerPaths.SchemaFilePath,
+                new SqliteCharacterRepository(tempDb, ServerPaths.SchemaFilePath));
+
+            var snapshot = dataSource.Load(ReceiverCharacterId, AccountId);
+            var ok = new CeraBodyBuilder().TryBuild(snapshot, 0, out var body);
+
+            Check(
+                "0x0035 init packet carries cera/token/happy wallet",
+                ok
+                && body != null
+                && body.Length == 13
+                && body[0] == 1
+                && BitConverter.ToInt32(body, 1) == 987200
+                && BitConverter.ToInt32(body, 5) == 1000000
+                && BitConverter.ToInt32(body, 9) == 938390);
         }
 
         private static void UpdatedContractStackProjectsAsActiveContract()
@@ -236,6 +265,33 @@ VALUES (@ownerCid);";
                     cmd.Parameters.AddWithValue("@aid", AccountId);
                     cmd.Parameters.AddWithValue("@receiverCid", ReceiverCharacterId);
                     cmd.Parameters.AddWithValue("@ownerCid", OwnerCharacterId);
+                    cmd.ExecuteNonQuery();
+                }
+            }
+        }
+
+        private static void SeedAccountWallet(string databasePath, int cera, int tokenCera, int happyTokenCera)
+        {
+            var connectionString = SqliteDatabaseBootstrap.Initialize(databasePath, ServerPaths.SchemaFilePath);
+            using (var conn = new SqliteConnection(connectionString))
+            {
+                conn.Open();
+                using (var cmd = conn.CreateCommand())
+                {
+                    cmd.CommandText = @"
+UPDATE accounts
+SET cera = @cera,
+    token_cera = @tokenCera,
+    happy_token_cera = @happyTokenCera
+WHERE account_id = @aid;
+
+UPDATE characters
+SET coin = @cera
+WHERE account_id = @aid;";
+                    cmd.Parameters.AddWithValue("@aid", AccountId);
+                    cmd.Parameters.AddWithValue("@cera", cera);
+                    cmd.Parameters.AddWithValue("@tokenCera", tokenCera);
+                    cmd.Parameters.AddWithValue("@happyTokenCera", happyTokenCera);
                     cmd.ExecuteNonQuery();
                 }
             }

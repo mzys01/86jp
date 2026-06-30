@@ -101,6 +101,7 @@ namespace DfoServer.Game.Inventory
             {
                 SlotIndex = request.SlotIndex,
                 PackageItemTemplateId = packageItem.ItemTemplateId,
+                SourceRemainingStackCount = Math.Max(0, packageItem.StackCount - 1),
                 AddedAvatarCount = addedAvatarCount,
                 AddedMainItemCount = addedMainItemCount,
                 AddedPetCount = addedPetCount,
@@ -284,6 +285,7 @@ namespace DfoServer.Game.Inventory
             {
                 SlotIndex = request.SlotIndex,
                 PackageItemTemplateId = packageItem.ItemTemplateId,
+                SourceRemainingStackCount = Math.Max(0, packageItem.StackCount - 1),
                 RewardItemTemplateId = rewardForResult.ItemTemplateId,
                 AddedMainItemCount = addedMainItemCount,
                 AddedAvatarCount = addedAvatarCount,
@@ -503,6 +505,8 @@ namespace DfoServer.Game.Inventory
                 return true;
             }
 
+            var isPetConsumable = ItemMetadataResolver.IsPetConsumableItem(metadata);
+            var stackListType = isPetConsumable ? InventoryListType.Pet : InventoryListType.Main;
             if (metadata.IsStackable)
             {
                 var remaining = reward.Count;
@@ -510,7 +514,7 @@ namespace DfoServer.Game.Inventory
                     connection,
                     transaction,
                     characterId,
-                    InventoryListType.Main,
+                    stackListType,
                     reward.ItemTemplateId,
                     reward.ExpireTime,
                     metadata.StackLimit);
@@ -520,10 +524,13 @@ namespace DfoServer.Game.Inventory
                     var addCount = Math.Min(remaining, capacity);
                     if (addCount > 0)
                     {
-                        _db.UpdateStackCount(connection, transaction, existingItem.ItemUid, existingItem.StackCount + addCount);
+                        if (isPetConsumable)
+                            _db.UpdatePetStackCount(connection, transaction, existingItem.ItemUid, existingItem.StackCount + addCount);
+                        else
+                            _db.UpdateStackCount(connection, transaction, existingItem.ItemUid, existingItem.StackCount + addCount);
                         grantedItems?.Add(new PackageGrantedItem
                         {
-                            ListType = InventoryListType.Main,
+                            ListType = stackListType,
                             SlotIndex = existingItem.SlotIndex,
                             ItemTemplateId = reward.ItemTemplateId,
                             DisplayCount = addCount,
@@ -536,7 +543,7 @@ namespace DfoServer.Game.Inventory
                         connection,
                         transaction,
                         characterId,
-                        InventoryListType.Main,
+                        stackListType,
                         reward.ItemTemplateId,
                         reward.ExpireTime,
                         metadata.StackLimit);
@@ -546,8 +553,17 @@ namespace DfoServer.Game.Inventory
                 {
                     var insertCount = metadata.StackLimit > 0 ? Math.Min(metadata.StackLimit, remaining) : remaining;
                     int slotStart, slotEnd;
-                    metadata.GetSlotRange(out slotStart, out slotEnd);
-                    var targetSlot = _db.FindEmptySlotPreferOther(connection, transaction, characterId, InventoryListType.Main, slotStart, slotEnd, sourceSlotToUseLast);
+                    if (isPetConsumable)
+                    {
+                        slotStart = SqliteInventoryStore.PetConsumableSlotStart;
+                        slotEnd = SqliteInventoryStore.PetConsumableSlotEnd;
+                    }
+                    else
+                    {
+                        metadata.GetSlotRange(out slotStart, out slotEnd);
+                    }
+
+                    var targetSlot = _db.FindEmptySlotPreferOther(connection, transaction, characterId, stackListType, slotStart, slotEnd, sourceSlotToUseLast);
                     if (targetSlot < 0)
                         return false;
 
@@ -555,10 +571,10 @@ namespace DfoServer.Game.Inventory
                         connection,
                         transaction,
                         characterId,
-                        InventoryListType.Main,
+                        stackListType,
                         (short)targetSlot,
                         reward.ItemTemplateId,
-                        reward.ExpireTime > 0 ? "special" : metadata.ItemKind,
+                        isPetConsumable ? "pet" : reward.ExpireTime > 0 ? "special" : metadata.ItemKind,
                         insertCount,
                         insertCount,
                         0,
@@ -566,11 +582,11 @@ namespace DfoServer.Game.Inventory
                         0,
                         reward.ExpireTime,
                         0,
-                        0,
+                        isPetConsumable ? insertCount : 0,
                         "{}");
                     grantedItems?.Add(new PackageGrantedItem
                     {
-                        ListType = InventoryListType.Main,
+                        ListType = stackListType,
                         SlotIndex = (short)targetSlot,
                         ItemTemplateId = reward.ItemTemplateId,
                         DisplayCount = insertCount,
@@ -579,17 +595,24 @@ namespace DfoServer.Game.Inventory
                     remaining -= insertCount;
                 }
 
-                addedMainItemCount += reward.Count;
+                if (isPetConsumable)
+                    addedPetCount += reward.Count;
+                else
+                    addedMainItemCount += reward.Count;
                 return true;
             }
 
-            var isCreature = string.Equals(metadata.ItemKind, "equipment", StringComparison.Ordinal) &&
-                             SqliteInventoryStore.IsCreatureItem(reward.ItemTemplateId);
+            var isPetEquipment = string.Equals(metadata.ItemKind, "equipment", StringComparison.Ordinal) &&
+                ItemMetadataResolver.IsPetInventoryEquipment(reward.ItemTemplateId);
+            var isCreature = isPetEquipment && SqliteInventoryStore.IsCreatureItem(reward.ItemTemplateId);
+            var isPetArtifactEquipment = isPetEquipment && !isCreature;
             for (var i = 0; i < reward.Count; i++)
             {
-                if (isCreature)
+                if (isCreature || isPetArtifactEquipment)
                 {
-                    var petSlot = _db.FindEmptySlot(connection, transaction, characterId, InventoryListType.Pet, SqliteInventoryStore.PetInventorySlotStart, SqliteInventoryStore.PetInventorySlotEnd);
+                    var petSlotStart = isCreature ? SqliteInventoryStore.PetInventorySlotStart : SqliteInventoryStore.PetEquipmentSlotStart;
+                    var petSlotEnd = isCreature ? SqliteInventoryStore.PetInventorySlotEnd : SqliteInventoryStore.PetEquipmentSlotEnd;
+                    var petSlot = _db.FindEmptySlot(connection, transaction, characterId, InventoryListType.Pet, petSlotStart, petSlotEnd);
                     if (petSlot < 0)
                         return false;
 
@@ -608,7 +631,7 @@ namespace DfoServer.Game.Inventory
                         0,
                         0,
                         0,
-                        _db.NextPetSerialOrHandle(connection, transaction, characterId),
+                        isCreature ? _db.NextPetSerialOrHandle(connection, transaction, characterId) : 0,
                         "{}");
                     grantedItems?.Add(new PackageGrantedItem
                     {

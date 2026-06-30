@@ -173,8 +173,6 @@ WHERE character_id = @cid", conn))
                         {
                             TotalSp = reader.GetInt32(0),
                             RemainingSp = reader.GetInt32(1),
-                            TotalSfp = reader.GetInt32(2),
-                            RemainingSfp = reader.GetInt32(3),
                             TotalTp = reader.GetInt32(4),
                             RemainingTp = reader.GetInt32(5),
                             SyncedLevel = (byte)reader.GetInt32(6),
@@ -212,8 +210,8 @@ ON CONFLICT(character_id) DO UPDATE SET
                 cmd.Parameters.AddWithValue("@cid", characterId);
                 cmd.Parameters.AddWithValue("@totalSp", state.TotalSp);
                 cmd.Parameters.AddWithValue("@remainingSp", state.RemainingSp);
-                cmd.Parameters.AddWithValue("@totalSfp", state.TotalSfp);
-                cmd.Parameters.AddWithValue("@remainingSfp", state.RemainingSfp);
+                cmd.Parameters.AddWithValue("@totalSfp", 0);
+                cmd.Parameters.AddWithValue("@remainingSfp", 0);
                 cmd.Parameters.AddWithValue("@totalTp", state.TotalTp);
                 cmd.Parameters.AddWithValue("@remainingTp", state.RemainingTp);
                 cmd.Parameters.AddWithValue("@level", (int)state.SyncedLevel);

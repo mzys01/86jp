@@ -1,4 +1,5 @@
 using DfoServer.Game.Dungeon;
+using DfoServer.Game.Skills;
 using DfoServer.GameWorld;
 using DfoServer.Infrastructure;
 using DfoServer.Network.Builders;
@@ -45,6 +46,14 @@ namespace DfoServer.Network.Handlers.Dungeon
             var roomLocalIndex = req.LocalIndex - session.Player.CurRoomStartSequence;
             var monsters = session.Player.CurRoomMonsters;
 
+            if (roomLocalIndex < 0 || roomLocalIndex >= monsters.Count)
+            {
+                if (TryGetCurrentRoomState(session, out var outOfRangeRoomState) && outOfRangeRoomState.IsHellPartyRoom)
+                {
+                    FileLogger.Log($"[DungeonHandler] HELLPARTY DIE_MONSTER: seqId={req.LocalIndex} local={roomLocalIndex} source=out-of-start-map ignoredForClear tracked={outOfRangeRoomState.MonsterCount} killed={session.Player.CurRoomKilledSeqIds.Count}");
+                }
+            }
+
             List<DropInfo> drops = null;
             byte killedMonsterType = 0;
             int killedMonsterCode = 0;
@@ -55,26 +64,54 @@ namespace DfoServer.Network.Handlers.Dungeon
                 killedMonsterCode = monster.Code;
                 var monsterLevel = monster.Level;
 
-                var weight = DungeonData.GetExperienceWeight(session.Player.CurDungeon);
-                var gainedExp = (uint)MonsterRewardTable.CalcExp(monsterLevel, weight);
-
-                var dropPool = MonsterDropTable.GetDropPool(monster.Code);
-
-                // Area material injected into mob [item] drop pool (PVF has no config, server-side compensation)
-                int areaMaterialId = AreaMaterialDropProvider.GetAreaMaterialItem(session.Player.CurDungeon);
-                if (areaMaterialId > 0)
+                TryGetCurrentRoomState(session, out var dieRoomState);
+                if (dieRoomState != null && dieRoomState.IsHellPartyRoom)
                 {
-                    var extended = new List<MonsterDropTable.DropPoolEntry>();
-                    if (dropPool != null) extended.AddRange(dropPool);
-                    extended.Add(new MonsterDropTable.DropPoolEntry { ItemId = areaMaterialId, Weight = 100 });
-                    dropPool = extended;
+                    var source = monster.Flag0 == 0 ? "normal" : "hell-hidden";
+                    FileLogger.Log($"[DungeonHandler] HELLPARTY DIE_MONSTER: seqId={req.LocalIndex} local={roomLocalIndex} source={source} code={monster.Code} type={monster.Type} level={monster.Level} order={monster.TemplateOrder} flag0={monster.Flag0} flag1={monster.Flag1} group={monster.HellPartyGroupId} hellMonster={monster.IsHellMonsterScript} tracked={dieRoomState.MonsterCount} killed={session.Player.CurRoomKilledSeqIds.Count}");
                 }
 
-                var generator = new DropGenerator(session.Player.CurRoomLcg);
+                var weight = DungeonData.GetExperienceWeight(session.Player.CurDungeon);
+                var gainedExp = (uint)MonsterRewardTable.CalcExp(monsterLevel, weight, session.Player.CurDungeonDifficulty);
+
                 var slotCounter = session.Player.CurSceneSlotCounter;
                 int dungeonBasisLevel = monsterLevel;
                 try { dungeonBasisLevel = DungeonData.GetDungeonBasicLv(session.Player.CurDungeon); } catch { }
-                var (goldGained, generatedDrops) = generator.GenerateMonsterDrops(monsterLevel, monster.Type, monster.Code, session.Player.CurDungeonDifficulty, dungeonBasisLevel, ref slotCounter, dropPool);
+                int dungeonMinimumLevel = dungeonBasisLevel;
+                try { dungeonMinimumLevel = DungeonData.GetDungeonMinimumRequiredLevel(session.Player.CurDungeon); } catch { }
+                int goldGained;
+                List<DropInfo> generatedDrops;
+                if (monster.IsHellPartyActor && dieRoomState != null && dieRoomState.IsHellPartyRoom)
+                {
+                    generatedDrops = GenerateHellPartyActorDrops(
+                        session,
+                        dieRoomState,
+                        monster,
+                        dungeonMinimumLevel,
+                        dungeonBasisLevel,
+                        ref slotCounter);
+                    goldGained = 0;
+                }
+                else
+                {
+                    var dropPool = MonsterDropTable.GetDropPool(monster.Code);
+
+                    // 区域材料是服务端补偿到普通怪物 [item] 池里的掉落，深渊 hidden actor 不走这条普通分支。
+                    int areaMaterialId = AreaMaterialDropProvider.GetAreaMaterialItem(session.Player.CurDungeon);
+                    if (areaMaterialId > 0)
+                    {
+                        var extended = new List<MonsterDropTable.DropPoolEntry>();
+                        if (dropPool != null) extended.AddRange(dropPool);
+                        extended.Add(new MonsterDropTable.DropPoolEntry { ItemId = areaMaterialId, Weight = 100 });
+                        dropPool = extended;
+                    }
+
+                    var generator = new DropGenerator(session.Player.CurRoomLcg);
+                    var dropRateLevel = session.Player.CurDungeonHellMode ? dungeonBasisLevel : (int)monsterLevel;
+                    var result = generator.GenerateMonsterDrops(dropRateLevel, monster.Type, monster.Code, session.Player.CurDungeonDifficulty, dungeonBasisLevel, ref slotCounter, dropPool);
+                    goldGained = result.goldAmount;
+                    generatedDrops = result.drops;
+                }
 
                 session.Player.CurSceneSlotCounter = slotCounter;
 
@@ -100,20 +137,21 @@ namespace DfoServer.Network.Handlers.Dungeon
                     _svc.PersistLevelAndExp(session.Player.CharacterId, session.Player.Level, session.Player.Exp);
                 }
 
-                ushort spTree0 = 0, spTree1 = 0;
+                ushort remainSp = 0, remainTp = 0;
                 try
                 {
-                    var points = _svc.LoadSyncedSkillState(session.Player.CharacterId, session.Player.Level, persist: leveledUp).Points;
-                    if (points != null)
+                    var synced = _svc.LoadSyncedSkillState(session.Player.CharacterId, session.Player.Level, persist: leveledUp);
+                    if (synced.Points != null)
                     {
-                        spTree0 = (ushort)points.RemainingSp;
-                        spTree1 = (ushort)points.RemainingSp;
+                        var pageIndex = session.Player.Subtype0Tail?.SkillTreeIndex == 1 ? 1 : 0;
+                        remainSp = SkillStateService.GetPageRemainingSp(synced.Skills, synced.Points, pageIndex);
+                        remainTp = (ushort)synced.Points.RemainingTp;
                     }
                 }
                 catch { }
 
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0025,
-                    ExpNotificationBuilder.Build(session.Player.Level, session.Player.Exp, spTree0, spTree1)));
+                    ExpNotificationBuilder.Build(session.Player.Level, session.Player.Exp, remainSp, remainTp)));
 
                 if (leveledUp)
                 {
@@ -170,6 +208,15 @@ namespace DfoServer.Network.Handlers.Dungeon
                 FileLogger.Log($"[DungeonHandler] ROOM CLEARED: dungeon={session.Player.CurDungeon} killed={session.Player.CurRoomKilledSeqIds.Count}/{blockingCount}");
             }
 
+            if (roomCleared
+                && TryGetCurrentRoomState(session, out var currentRoomState)
+                && currentRoomState.IsHellPartyRoom
+                && currentRoomState.HellPartyPhase == HellPartyPhase.Started)
+            {
+                currentRoomState.HellPartyPhase = HellPartyPhase.Complete;
+                FileLogger.Log("[DungeonHandler] HELLPARTY complete: tracked monsters cleared");
+            }
+
             // Path A: ClearCondition(type, monsterCode) (df_game_r kill_monster tail)
             // monsterType -> conditionType: boss(3)->4, apc(5-8)->3, normal->2
             if (session.Player.CurClearCondition != null)
@@ -178,6 +225,64 @@ namespace DfoServer.Network.Handlers.Dungeon
                 if (session.Player.CurClearCondition.Check(ccType, killedMonsterCode))
                     await _settlement.TryClearDungeon(session, $"ClearCondition type={ccType} target={killedMonsterCode}", killedMonsterCode);
             }
+        }
+
+        private static bool TryGetCurrentRoomState(EnhancedClientSession session, out RoomState roomState)
+        {
+            return session.Player.DungeonRoomStates.TryGetValue(session.Player.CurRoomKey, out roomState);
+        }
+
+        private static List<DropInfo> GenerateHellPartyActorDrops(
+            EnhancedClientSession session,
+            RoomState roomState,
+            DungeonData.MonsterSumInfo monster,
+            int dungeonMinimumLevel,
+            int dungeonBasisLevel,
+            ref ushort slotCounter)
+        {
+            var drops = IndependentDropSystem.GenerateDrops(
+                monster.Code,
+                session.Player.CurDungeonDifficulty,
+                dungeonBasisLevel,
+                session.Player.CurRoomLcg,
+                ref slotCounter);
+
+            var remainingBefore = 0;
+            var remainingAfter = 0;
+            var isLastGroupMonster = false;
+            if (roomState.HellPartyGroupRemaining != null
+                && monster.HellPartyGroupId > 0
+                && roomState.HellPartyGroupRemaining.TryGetValue(monster.HellPartyGroupId, out remainingBefore))
+            {
+                remainingAfter = Math.Max(0, remainingBefore - 1);
+                if (remainingAfter == 0)
+                {
+                    roomState.HellPartyGroupRemaining.Remove(monster.HellPartyGroupId);
+                    isLastGroupMonster = true;
+                }
+                else
+                {
+                    roomState.HellPartyGroupRemaining[monster.HellPartyGroupId] = remainingAfter;
+                }
+            }
+
+            var hellRewardDrops = 0;
+            if (isLastGroupMonster && !monster.IsHellMonsterScript)
+            {
+                var rewardDrops = HellMonsterDropConfig.GenerateSpecificEquipmentDrops(
+                    session.Player.CurRoomLcg,
+                    dungeonMinimumLevel,
+                    dungeonBasisLevel,
+                    session.Player.CurDungeonDifficulty,
+                    monster.HellPartyDifficulty,
+                    monster.HellRewardRollCount,
+                    ref slotCounter);
+                hellRewardDrops = rewardDrops.Count;
+                drops.AddRange(rewardDrops);
+            }
+
+            FileLogger.Log($"[DungeonHandler] HELLPARTY_DROP: code={monster.Code} type={monster.Type} group={monster.HellPartyGroupId} hellDifficulty={monster.HellPartyDifficulty} remainingBefore={remainingBefore} remainingAfter={remainingAfter} isLastGroup={isLastGroupMonster} hellMonster={monster.IsHellMonsterScript} rewardRolls={monster.HellRewardRollCount} independentDrops={drops.Count - hellRewardDrops} hellRewardDrops={hellRewardDrops}");
+            return drops;
         }
 
         internal async Task HandleDieCharacter(EnhancedClientSession session, GamePacketHeader header, byte[] body)
@@ -246,6 +351,9 @@ namespace DfoServer.Network.Handlers.Dungeon
                 session.Player.CurDungeonDrops.Remove(req.SrcSlot);
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0027,
                     DropItemBuilder.BuildPickupItem(req.SrcSlot, session.Player.UserId, (ushort)invSlot, 7)));
+                if (session.GameSession?.QuestManager != null && matchedDrop.TemplateId > 0)
+                    await session.GameSession.QuestManager.SyncMonsterRewardItemProgressAsync(
+                        new[] { (int)matchedDrop.TemplateId });
                 FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] GET_ITEM: item pickup srcSlot={req.SrcSlot} templateId={matchedDrop.TemplateId} invSlot={invSlot}");
             }
         }

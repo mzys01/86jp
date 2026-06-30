@@ -20,6 +20,32 @@ namespace PvfLib
         public int Count { get; set; }
     }
 
+    public class EquipmentUpgradeTicketInfo
+    {
+        public int TargetLevel { get; set; } = -1;
+        public int SuccessRatePercent { get; set; } = -1;
+        public string ApplyMode { get; set; }
+        public int ApplyValue { get; set; } = -1;
+        public List<int> ExtraValues { get; set; } = new List<int>();
+
+        // 普通强化券/增幅券用百分比保存，业务层按万分权重消费。
+        public int SuccessWeight => SuccessRatePercent >= 0 ? SuccessRatePercent * 1000 : -1;
+    }
+
+    public class EnchantRandomUpgradeEntry
+    {
+        public int TargetLevel { get; set; }
+        public int SuccessWeight { get; set; }
+    }
+
+    public class EnchantRandomUpgradeInfo
+    {
+        public List<int> RarityRestrictions { get; set; } = new List<int>();
+        public int SlotRestriction { get; set; } = -1;
+        public int SealRestriction { get; set; } = -1;
+        public List<EnchantRandomUpgradeEntry> EnchantEntries { get; set; } = new List<EnchantRandomUpgradeEntry>();
+    }
+
     
     
     
@@ -74,6 +100,7 @@ namespace PvfLib
         public string UsableJob { get; set; }
         public string SuitableJob { get; set; }
         public string ImpossibleContents { get; set; }
+        public List<string> ImpossibleContentItems { get; set; } = new List<string>();
         public int ExpirationDate { get; set; } = -1;
         public int UsablePeriod { get; set; } = -1;
         public int TradeLimit { get; set; } = -1;
@@ -84,6 +111,15 @@ namespace PvfLib
 
         public int EnchantIndex { get; set; } = -1;
         public List<int> EnchantTable { get; set; } = new List<int>();
+        // [action type] `[xxx]` p1 p2 ...: ActionTypeName="[xxx]", ActionTypeParams=[p1,p2,...]
+        public string ActionTypeName { get; set; }
+        public List<int> ActionTypeParams { get; set; } = new List<int>();
+        public EquipmentUpgradeTicketInfo EquipmentReinforcementTicket { get; set; }
+        public EquipmentUpgradeTicketInfo EquipmentAmplifyReinforcementTicket { get; set; }
+        public EnchantRandomUpgradeInfo EnchantRandomUpgrade { get; set; }
+        public List<int> CheckUsableItemLevels { get; set; } = new List<int>();
+        public int CheckUsableItemLevelMin => CheckUsableItemLevels.Count > 0 ? CheckUsableItemLevels[0] : -1;
+        public int CheckUsableItemLevelMax => CheckUsableItemLevels.Count > 1 ? CheckUsableItemLevels[1] : -1;
         public string BoosterInfo { get; set; }
         public int BoosterCategoryNum { get; set; } = -1;
         public int BoosterSelectionNum { get; set; } = -1;
@@ -174,7 +210,10 @@ namespace PvfLib
                     
                     case "usable job": stk.UsableJob = StripBacktick(data); break;
                     case "suitable job": stk.SuitableJob = StripBacktick(data); break;
-                    case "impossible contents": stk.ImpossibleContents = data; break;
+                    case "impossible contents":
+                        stk.ImpossibleContents = data;
+                        stk.ImpossibleContentItems = ParseStringList(node, content);
+                        break;
                     case "expiration date": stk.ExpirationDate = ParseInt(data); break;
                     case "usable period": stk.UsablePeriod = ParseInt(data); break;
                     case "trade limit max": stk.TradeLimit = ParseInt(data); break;
@@ -182,6 +221,11 @@ namespace PvfLib
                     
                     case "enchant index": stk.EnchantIndex = ParseInt(data); break;
                     case "enchant table": stk.EnchantTable = ParseEnchantTableIndexes(node, content); break;
+                    case "action type": ParseActionType(node, content, stk); break;
+                    case "equipment reinforcement ticket": stk.EquipmentReinforcementTicket = ParseUpgradeTicket(node, content); break;
+                    case "equipment amplify reinforcement ticket": stk.EquipmentAmplifyReinforcementTicket = ParseUpgradeTicket(node, content); break;
+                    case "enchant random": stk.EnchantRandomUpgrade = ParseEnchantRandomUpgrade(node, content); break;
+                    case "check usable itemlevel": stk.CheckUsableItemLevels = ParseIntList(node, content); break;
                     case "booster info": stk.BoosterInfo = data; break;
                     case "booster category num": stk.BoosterCategoryNum = ParseInt(data); break;
                     case "booster selection num": stk.BoosterSelectionNum = ParseInt(data); break;
@@ -384,7 +428,11 @@ namespace PvfLib
             var start = 0;
             if (ints.Count >= 4 && (ints.Count - 1) % 3 == 0)
             {
-                group = ints[0];
+                // Repeated [etc] blocks under [booster info] are independent
+                // reward pools. The leading value belongs to the block itself,
+                // so keep the parser-assigned block group instead of merging
+                // identical tags such as two "[etc] 1 ..." sections.
+                drawCount = Math.Max(1, ints[0]);
                 start = 1;
             }
 
@@ -489,6 +537,140 @@ namespace PvfLib
             }
 
             return result;
+        }
+
+        private static void ParseActionType(ScriptNode node, string content, StackableItemFile stk)
+        {
+            if (node == null || node.DataItems == null)
+                return;
+
+            foreach (var item in node.DataItems)
+            {
+                var raw = item.GetContent(content);
+                var nameMatch = Regex.Match(raw, "`([^`]*)`");
+                if (!nameMatch.Success)
+                    continue;
+
+                stk.ActionTypeName = nameMatch.Groups[1].Value.Trim();
+                var rest = raw.Substring(nameMatch.Index + nameMatch.Length);
+                foreach (var token in rest.Split(new[] { ' ', '\t', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
+                {
+                    if (int.TryParse(token, out var value))
+                        stk.ActionTypeParams.Add(value);
+                }
+                break;
+            }
+        }
+
+        private static EquipmentUpgradeTicketInfo ParseUpgradeTicket(ScriptNode node, string content)
+        {
+            var ticket = new EquipmentUpgradeTicketInfo();
+            if (node == null || node.DataItems == null)
+                return ticket;
+
+            foreach (var item in node.DataItems)
+            {
+                var raw = item.GetContent(content);
+                var nameMatch = Regex.Match(raw, "`([^`]*)`");
+                if (nameMatch.Success)
+                {
+                    ApplyUpgradeTicketValues(ticket, ParseInts(raw.Substring(0, nameMatch.Index)));
+                    ticket.ApplyMode = nameMatch.Groups[1].Value.Trim();
+                    var rest = raw.Substring(nameMatch.Index + nameMatch.Length);
+                    var modeValues = ParseInts(rest);
+                    if (modeValues.Count > 0)
+                        ticket.ApplyValue = modeValues[0];
+                    if (modeValues.Count > 1)
+                        ticket.ExtraValues.AddRange(modeValues.GetRange(1, modeValues.Count - 1));
+                    continue;
+                }
+
+                var values = ParseInts(raw);
+                if (values.Count >= 2 && ticket.TargetLevel < 0)
+                {
+                    ticket.TargetLevel = values[0];
+                    ticket.SuccessRatePercent = values[1];
+                    if (values.Count > 2)
+                        ticket.ExtraValues.AddRange(values.GetRange(2, values.Count - 2));
+                }
+                else if (values.Count > 0)
+                {
+                    ticket.ExtraValues.AddRange(values);
+                }
+            }
+
+            return ticket;
+        }
+
+        private static void ApplyUpgradeTicketValues(EquipmentUpgradeTicketInfo ticket, List<int> values)
+        {
+            if (ticket == null || values == null || values.Count == 0)
+                return;
+
+            if (values.Count >= 2 && ticket.TargetLevel < 0)
+            {
+                ticket.TargetLevel = values[0];
+                ticket.SuccessRatePercent = values[1];
+                if (values.Count > 2)
+                    ticket.ExtraValues.AddRange(values.GetRange(2, values.Count - 2));
+                return;
+            }
+
+            ticket.ExtraValues.AddRange(values);
+        }
+
+        private static EnchantRandomUpgradeInfo ParseEnchantRandomUpgrade(ScriptNode node, string content)
+        {
+            var info = new EnchantRandomUpgradeInfo();
+            if (node == null)
+                return info;
+
+            foreach (var child in node.Children)
+            {
+                switch (child.Tag.ToLowerInvariant())
+                {
+                    case "er_grade":
+                        info.RarityRestrictions = ParseIntList(child, content);
+                        break;
+                    case "er_slot":
+                        info.SlotRestriction = ParseFirstInt(child, content);
+                        break;
+                    case "er_seal":
+                        info.SealRestriction = ParseFirstInt(child, content);
+                        break;
+                    case "er_enchant":
+                        info.EnchantEntries = ParseEnchantRandomEntries(child, content);
+                        break;
+                }
+            }
+
+            return info;
+        }
+
+        private static List<EnchantRandomUpgradeEntry> ParseEnchantRandomEntries(ScriptNode node, string content)
+        {
+            var result = new List<EnchantRandomUpgradeEntry>();
+            var values = ParseIntList(node, content);
+            var start = 0;
+            if (values.Count > 0 && values.Count == 1 + values[0] * 2)
+                start = 1;
+
+            for (var i = start; i + 1 < values.Count; i += 2)
+            {
+                result.Add(new EnchantRandomUpgradeEntry
+                {
+                    TargetLevel = values[i],
+                    SuccessWeight = values[i + 1],
+                });
+            }
+
+            return result;
+        }
+
+        private static int ParseFirstInt(ScriptNode node, string content)
+        {
+            var values = ParseIntList(node, content);
+            return values.Count > 0 ? values[0] : -1;
         }
 
         private static List<int> ParseEnchantTableIndexes(ScriptNode node, string content)

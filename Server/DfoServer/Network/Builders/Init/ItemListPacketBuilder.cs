@@ -162,9 +162,9 @@ namespace DfoServer.Network.Builders
         {
             var writer = new GamePacketWriter();
             writer.WriteByte((byte)InventoryListType.AccountCargo);
-            writer.WriteUInt16(state.SelectionKey);
-            writer.WriteUInt16(state.ItemCount);
-            writer.WriteInt32(state.Value32);
+            writer.WriteUInt16(state.SelectionKey);          // capacity (开通槽位数)
+            writer.WriteInt32(state.Value32);                // gold (金库金币)
+            writer.WriteUInt16((ushort)items.Count);         // itemCount (物品数量)
 
             foreach (var item in items)
             {

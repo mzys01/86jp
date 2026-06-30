@@ -12,8 +12,8 @@ namespace DfoServer.Network.Builders
             writer.WriteByte((byte)result.ListType);
             writer.WriteByte(0x01);
             writer.WriteInt16(result.SlotIndex);
-            writer.WriteInt32(result.RemainingStackCount);
-            writer.WriteInt16(result.AppliedCount);
+            writer.WriteInt32(result.AppliedCount);
+            writer.WriteInt16(0);
             return writer.ToArray();
         }
     }

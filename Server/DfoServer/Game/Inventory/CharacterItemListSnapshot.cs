@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 
 namespace DfoServer.Game.Inventory
@@ -36,6 +36,8 @@ namespace DfoServer.Game.Inventory
         public int ExpireTime { get; set; }
 
         public byte[] TailData2F { get; set; } = new byte[37];
+
+        public byte[] JewelSocket { get; set; } = new byte[30];
     }
 
     public sealed class AvatarInventoryItem
@@ -107,5 +109,14 @@ namespace DfoServer.Game.Inventory
             Array.Copy(source, offset, buffer, 0, length);
             return buffer;
         }
+    }
+
+    public sealed class SortItemLockEntry
+    {
+        public InventoryListType ListType { get; set; }
+
+        public short SlotIndex { get; set; }
+
+        public byte State { get; set; } = 1;
     }
 }

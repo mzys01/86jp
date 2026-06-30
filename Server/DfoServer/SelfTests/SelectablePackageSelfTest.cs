@@ -543,7 +543,7 @@ namespace DfoServer.SelfTests
             using (store.BeginScope(CharacterId, AccountId))
             {
                 Check("cera-shop magic-hammer bundle purchase succeeds",
-                    store.TryBuyCeraShopItem(SampleMagicHammerBundleProductId, 1, out var ceraShopBundleResult));
+                    store.TryBuyCeraShopItem(SampleMagicHammerBundleProductId, 1, 0, 0, out var ceraShopBundleResult));
                 if (ceraShopBundleResult != null)
                 {
                     var ceraAckBody = CeraShopPurchaseAckBuilder.BuildSuccess(SampleMagicHammerBundleProductId, ceraShopBundleResult);

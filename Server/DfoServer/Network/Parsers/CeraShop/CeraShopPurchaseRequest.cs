@@ -7,7 +7,11 @@ namespace DfoServer.Network.Parsers.CeraShop
         // 一次购买可包含多件不同商品(购物车), 每件一个 commodityNo
         public System.Collections.Generic.List<int> CommodityNos { get; } = new System.Collections.Generic.List<int>();
 
-        public byte UnknownFlag { get; private set; }
+        // 每件商品对应的属性选择字节，仅装扮类商品生效。
+        public System.Collections.Generic.List<byte> AttributeValues { get; } = new System.Collections.Generic.List<byte>();
+
+        // 支付方式: 0=点券(Cera), 1=装扮兑换券(AvatarCoupon)。
+        public byte PaymentMode { get; private set; }
 
         // 兼容旧调用: 取第一件
         public int ProductId => CommodityNos.Count > 0 ? CommodityNos[0] : 0;
@@ -15,7 +19,7 @@ namespace DfoServer.Network.Parsers.CeraShop
         public int Count => 1; // 每个 commodityNo 购买 1 份, 份内数量由 cerashop 商品定义
 
         // 请求 body 布局(由客户端 sendBuyPacket 逆向):
-        //   [0..1] 未知  [2] totalCount(byte)  [3] flag
+        //   [0..1] 未知  [2] totalCount(byte)  [3] 未知  [4] paymentMode(0=点券,1=兑换券)
         //   之后每件商品项 15 字节, commodityNo(int) 在项内偏移 +3
         private const int HeaderSize = 4;
         private const int ItemStride = 15;
@@ -31,15 +35,19 @@ namespace DfoServer.Network.Parsers.CeraShop
             if (totalCount <= 0)
                 totalCount = 1;
 
-            var parsed = new CeraShopPurchaseRequest { UnknownFlag = body[5] };
+            var parsed = new CeraShopPurchaseRequest { PaymentMode = body[4] };
             for (int i = 0; i < totalCount; i++)
             {
-                int commodityOffset = HeaderSize + i * ItemStride + CommodityOffsetInItem;
+                int itemBase = HeaderSize + i * ItemStride;
+                int commodityOffset = itemBase + CommodityOffsetInItem;
                 if (commodityOffset + 4 > body.Length)
                     break;
                 int commodityNo = BitConverter.ToInt32(body, commodityOffset);
                 if (commodityNo > 0)
+                {
                     parsed.CommodityNos.Add(commodityNo);
+                    parsed.AttributeValues.Add(body[itemBase + 1]);
+                }
             }
 
             if (parsed.CommodityNos.Count == 0)

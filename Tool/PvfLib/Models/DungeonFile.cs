@@ -43,6 +43,8 @@ namespace PvfLib
         public int[] BossMap { get; set; }                  // 多个参数
         public int[] HitCount { get; set; }
         public int SealDoorAppearRate { get; set; } = -1;
+        public int SealDoorMapIndex { get; set; } = -1;
+        public int[] SealDoorPos { get; set; }
         public int[] QuestConnection { get; set; }          // [flag, questId, value]
         public RidableObjectScript RidableScript { get; set; }
         public List<ClearConditionEntry> ClearConditions { get; set; } = new List<ClearConditionEntry>();
@@ -75,6 +77,8 @@ namespace PvfLib
         public string WorldmapPatternInfo { get; set; }
         public string WorldmapInfo { get; set; }
         public int Difficulty { get; set; } = -1;
+        public int[] DifficultyLevel { get; set; }
+        public int[] DesignateDungeonDifficulty { get; set; }
         public bool NoFatigue { get; set; }
         public int[] NamedMonster { get; set; }
         public int[] RecommendedLevel { get; set; }         // [min, max]
@@ -92,7 +96,7 @@ namespace PvfLib
         private static readonly HashSet<string> MazeTags = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
             "size", "greed", "map specification", "start map", "boss map",
-            "hit count", "seal door appear rate", "quest connection",
+            "hit count", "seal door appear rate", "seal door map index", "seal door pos", "quest connection",
             "randomized object creation", "clear condition"
         };
 
@@ -188,6 +192,12 @@ namespace PvfLib
                     case "difficulty":
                         dgn.Difficulty = ParseInt(data);
                         break;
+                    case "difficulty level":
+                        dgn.DifficultyLevel = ParseIntArray(data);
+                        break;
+                    case "designate dungeon difficulty":
+                        dgn.DesignateDungeonDifficulty = ParseIntArray(data);
+                        break;
                     case "no fatigue":
                         dgn.NoFatigue = true;
                         break;
@@ -266,6 +276,12 @@ namespace PvfLib
                         break;
                     case "seal door appear rate":
                         maze.SealDoorAppearRate = ParseInt(data);
+                        break;
+                    case "seal door map index":
+                        maze.SealDoorMapIndex = ParseInt(data);
+                        break;
+                    case "seal door pos":
+                        maze.SealDoorPos = ParseIntArray(data);
                         break;
                     case "quest connection":
                         maze.QuestConnection = ParseIntArray(data);
@@ -438,6 +454,34 @@ namespace PvfLib
                                 LayeredMapIds = ids.ToArray(),
                             });
                         }
+                        continue;
+                    }
+                }
+                else
+                {
+                    // 兼容任务地下城等使用非标准类型（如 quest）的 map specification：只要格式为 type x y mapId... 就保留
+                    if (int.TryParse(values[index + 1], out var ux) &&
+                        int.TryParse(values[index + 2], out var uy) &&
+                        int.TryParse(values[index + 3], out var uMapIndex))
+                    {
+                        var item = new MapSpecificationItem
+                        {
+                            Type = type,
+                            X = ux,
+                            Y = uy,
+                            Index = uMapIndex,
+                        };
+                        var candidates = new System.Collections.Generic.List<int> { uMapIndex };
+                        index += 4;
+                        while (index < values.Length && int.TryParse(values[index], out var extra))
+                        {
+                            candidates.Add(extra);
+                            index++;
+                        }
+                        if (candidates.Count > 1)
+                            item.MapCandidates = candidates.ToArray();
+
+                        result.Add(item);
                         continue;
                     }
                 }

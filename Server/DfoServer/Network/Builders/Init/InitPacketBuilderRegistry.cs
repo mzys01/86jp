@@ -43,7 +43,7 @@ namespace DfoServer.Network.Builders
             
             Register(new EventInfoBodyBuilder());                                       
             Register(new HotkeyConfigBodyBuilder());                                    
-            Register(new ServerEventPhaseBodyBuilder());                                
+            Register(new CharacterOptionBodyBuilder());
 
             
             Register(new GameOptionBodyBuilder());                                      

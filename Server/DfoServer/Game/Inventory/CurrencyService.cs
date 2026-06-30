@@ -32,6 +32,21 @@ namespace DfoServer.Game.Inventory
             return -1;
         }
 
+        public static int GetCubeFragmentItemIdFromSlot(int slot)
+        {
+            foreach (var kv in CubeFragmentMap)
+            {
+                if (kv.Value.Slot == slot)
+                    return kv.Key;
+            }
+            return -1;
+        }
+
+        public static bool IsCubeFragmentSlot(int slot)
+        {
+            return slot >= CubeFragmentSlotStart && slot <= CubeFragmentSlotEnd;
+        }
+
         /// <summary>
         /// 读取账号的 6 种晶块数量, 返回 (itemId, slot, count) 列表。
         /// </summary>
@@ -76,6 +91,8 @@ namespace DfoServer.Game.Inventory
                 cmd.ExecuteNonQuery();
             }
         }
+
+
 
         /// <summary>
         /// 启动时迁移: 把 character_items slot 354-359 的旧晶块数量归集到 accounts 表, 然后删除旧行。
@@ -360,7 +377,7 @@ WHERE character_id = @cid AND list_type = 0 AND slot_index = @slot;";
             using (var cmd = connection.CreateCommand())
             {
                 cmd.Transaction = transaction;
-                cmd.CommandText = @"INSERT INTO character_items
+                cmd.CommandText = @"INSERT OR REPLACE INTO character_items
 (owner_scope, owner_id, character_id, list_type, slot_index, item_template_id, item_kind, stack_count, instance_value, durability, seal_flag, option_value, expire_time, marker_16)
 VALUES ('character', @cid, @cid, 0, @slot, 0, 'special', @val, @val, 0, 0, 0, 0, 0);";
                 cmd.Parameters.AddWithValue("@val", value);

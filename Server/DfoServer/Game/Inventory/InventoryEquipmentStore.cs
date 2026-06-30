@@ -240,6 +240,12 @@ ORDER BY slot;";
                 // 卸下克隆装扮时清零 raw[12..15] 克隆目标
                 if (ItemMetadataResolver.IsCloneAvatarItem(removed.ItemId))
                   Array.Clear(removed.Raw, 12, 4);
+                var occupiedTarget = _db.LoadItemRecord(connection, transaction, characterId, dbSrcList, request.SourceSlotIndex);
+                if (occupiedTarget != null)
+                {
+                    FileLogger.Log($"  [EquipMove] UNEQUIP blocked: target container slot occupied list={dbSrcList} slot={request.SourceSlotIndex} item=0x{occupiedTarget.ItemTemplateId:X8} kind={occupiedTarget.ItemKind}");
+                    return EquipOutcome.NoOp;
+                }
                 entries.Remove(removed);
                 SaveEquipEntriesTx(connection, transaction, characterId, entries);
                 InsertEquipToContainer(connection, transaction, characterId, dbSrcList, request.SourceSlotIndex, removed.ItemId, removed.Raw, removed.ExpireTime);
@@ -250,6 +256,11 @@ ORDER BY slot;";
             {
                 int wantId = request.SourceInstanceValue;
                 var existing = entries.Find(e => e.Slot == equipSlot);
+                if (mainSource == null || (mainSource.ItemKind != "equipment" && mainSource.ItemKind != "avatar") || mainSource.ItemTemplateId != wantId)
+                {
+                    FileLogger.Log($"  [EquipMove] EQUIP blocked: invalid source slot={request.SourceSlotIndex} want=0x{wantId:X8} found={(mainSource != null ? $"0x{mainSource.ItemTemplateId:X8}/{mainSource.ItemKind}" : "null")}");
+                    return EquipOutcome.NoOp;
+                }
                 if (equipSlot == 12 && existing != null && existing.ItemId == wantId)
                 {
                     FileLogger.Log($"  [EquipMove] slot {equipSlot} 已是 0x{wantId:X8} (称号 P2 反转包) -> ReverseError");
@@ -398,17 +409,13 @@ VALUES (@accountId, @selectionKey, @value32, @itemCount, CURRENT_TIMESTAMP);";
             }
         }
 
-        internal ushort CountAccountCargoItems(SqliteConnection connection, SqliteTransaction transaction, int characterId, int accountId)
+        internal ushort CountAccountCargoItems(SqliteConnection connection, SqliteTransaction transaction, int accountId)
         {
             using (var command = connection.CreateCommand())
             {
                 command.Transaction = transaction;
-                command.CommandText = @"
-SELECT COUNT(1)
-FROM character_items
-WHERE owner_scope = 'account' AND owner_id = @accountId AND list_type = @listType;";
+                command.CommandText = "SELECT COUNT(1) FROM account_cargo_items WHERE account_id = @accountId;";
                 command.Parameters.AddWithValue("@accountId", accountId);
-                command.Parameters.AddWithValue("@listType", (int)InventoryListType.AccountCargo);
                 return Convert.ToUInt16(Convert.ToInt32(command.ExecuteScalar(), CultureInfo.InvariantCulture), CultureInfo.InvariantCulture);
             }
         }

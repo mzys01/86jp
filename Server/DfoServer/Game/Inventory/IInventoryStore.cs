@@ -1,4 +1,5 @@
 using DfoServer.Game.ExpertJob;
+using DfoServer.Game.ItemUpgrade;
 using Microsoft.Data.Sqlite;
 using System;
 using System.Collections.Generic;
@@ -47,19 +48,44 @@ namespace DfoServer.Game.Inventory
 
         bool TryEnchantByBead(EnchantByBeadCommand command, out EnchantByBeadResult result);
 
+        bool TryUpgradeItem(ItemUpgradeCommand command, out ItemUpgradeResult result);
+
+        bool TryOpenEquipmentSocket(short targetSlotIndex, int targetItemTemplateId, short materialSlotIndex, out EquipmentSocketMutationResult result);
+
+        bool TrySetEquipmentEmblems(short targetSlotIndex, int targetItemTemplateId, IReadOnlyList<EquipmentEmblemApplyRequest> emblems, out EquipmentEmblemMutationResult result);
+
+        bool TryOpenAvatarSocket(short targetSlotIndex, int targetItemTemplateId, short materialSlotIndex, out AvatarSocketMutationResult result);
+
+        bool TrySetAvatarEmblems(short targetSlotIndex, int targetItemTemplateId, IReadOnlyList<EquipmentEmblemApplyRequest> emblems, out AvatarEmblemMutationResult result);
+
         bool TryCompoundAvatar(short slot1, short slot2, short consumeSlot,
             Func<int, int, int, List<int>> resolveNewItemIds, byte newOption,
             out List<int> newSlotsOut, out int oldItemId1, out int oldItemId2, out List<int> newItemIdsOut,
             out int consumedItemTemplateId, out int consumedItemRemainingCount);
 
+        bool TryCompoundAvatarSet(short[] consumeSlots, int[] expectedItemIds, Func<int, int> resolveNewItemId, byte newOption,
+            short consumeStackableSlot,
+            out int newSlot, out List<int> oldItemIds, out int newItemId, out int consumedItemTemplateId, out int consumedItemRemainingCount);
+
         bool TryMoveItem(InventoryMoveRequest request, out InventoryMoveResult result);
 
         bool TrySortItems(int characterId, InventoryListType listType, byte category);
+
+        bool TryToggleSortItemLock(InventoryListType listType, short slotIndex, out SortItemLockEntry entry);
+
+        bool TryUnlockSortItemLock(InventoryListType listType, short slotIndex);
+
+        IReadOnlyList<SortItemLockEntry> LoadSortItemLocks();
+
+        IReadOnlyList<SortItemLockEntry> LoadSortItemLocks(InventoryListType listType);
+
+        CommonInventoryItem LoadCommonItemForRefresh(InventoryListType listType, short slotIndex);
 
         void SaveEquipListBlob(byte[] blob);
 
         void SeedNewCharacterEquipment((short slot, int itemId)[] equipment);
 
-        bool TryBuyCeraShopItem(int productId, int buyCount, out InventoryMutationResult result);
+        // 商城购买: paymentMode=0 走点券瀑布扣减, paymentMode=1 走装扮兑换券抵扣(不扣Cera)。
+        bool TryBuyCeraShopItem(int productId, int buyCount, int paymentMode, byte attributeValue, out InventoryMutationResult result);
     }
 }

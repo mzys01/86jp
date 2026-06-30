@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using DfoServer.Game.Inventory;
 
 namespace DfoServer.Game.Dungeon
 {
@@ -14,6 +15,7 @@ namespace DfoServer.Game.Dungeon
             public int ItemId;
             public int StackCount;
             public bool IsEquipment;
+            public ushort Durability;
         }
 
         public static CardReward GenerateGoldCard(int dungeonLevel, int difficulty, DnfLcg lcg)
@@ -39,6 +41,9 @@ namespace DfoServer.Game.Dungeon
             int rarity = RollClearRewardRarity(lcg);
             int itemId = MonsterDropConfig.ChooseEquipment(lcg, dungeonLevel, rarity);
             bool isEquip = itemId > 0;
+            ushort durability = 0;
+            if (isEquip)
+                durability = ItemMetadataResolver.Resolve(itemId).Durability;
 
             if (itemId <= 0)
                 itemId = MonsterDropConfig.ChooseStackable(lcg, dungeonLevel, rarity);
@@ -46,7 +51,14 @@ namespace DfoServer.Game.Dungeon
             if (itemId <= 0)
                 return new CardReward { IsGold = true, GoldAmount = 100 };
 
-            return new CardReward { IsGold = false, ItemId = itemId, StackCount = 1, IsEquipment = isEquip };
+            return new CardReward
+            {
+                IsGold = false,
+                ItemId = itemId,
+                StackCount = 1,
+                IsEquipment = isEquip,
+                Durability = durability
+            };
         }
 
         private static int RollClearRewardRarity(DnfLcg lcg)

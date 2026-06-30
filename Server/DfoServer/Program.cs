@@ -1,6 +1,7 @@
 using DfoServer.Network;
 using System;
 using System.Collections.Generic;
+using System.Threading;
 
 namespace DfoServer
 {
@@ -31,6 +32,30 @@ namespace DfoServer
             if (Array.IndexOf(args, "--selftest-premium-contract-account-scope") >= 0)
             {
                 Environment.Exit(SelfTests.PremiumContractAccountScopeSelfTest.Run());
+                return;
+            }
+
+            if (Array.IndexOf(args, "--selftest-dungeon-map-fallback") >= 0)
+            {
+                Environment.Exit(SelfTests.DungeonMapFallbackSelfTest.Run());
+                return;
+            }
+
+            if (Array.IndexOf(args, "--selftest-character-option") >= 0)
+            {
+                Environment.Exit(SelfTests.CharacterOptionSelfTest.Run());
+                return;
+            }
+
+            if (Array.IndexOf(args, "--selftest-slot-expansion-quest") >= 0)
+            {
+                Environment.Exit(SelfTests.SlotExpansionQuestSelfTest.Run());
+                return;
+            }
+
+            if (Array.IndexOf(args, "--selftest-character-slot-policy") >= 0)
+            {
+                Environment.Exit(SelfTests.CharacterSlotPolicySelfTest.Run());
                 return;
             }
 
@@ -78,7 +103,7 @@ namespace DfoServer
             var portConfigs = new Dictionary<int, (IProtocolHandler handler, IPacketHeader structure)>
             {
                 { channelPort, (new ChannelProtocolHandler(), new ChannelPacketHeader()) },
-                { gamePort, (new GameProtocolHandler(), new GamePacketHeader()) }
+                { gamePort, (new GameProtocolHandler(packet => server.BroadcastToPortAsync(gamePort, packet)), new GamePacketHeader()) }
             };
 
             server.Start(portConfigs);
@@ -88,27 +113,44 @@ namespace DfoServer
 
             Console.WriteLine("Multi-structure TCP server started!");
             Console.WriteLine($"Advertised server IP: {GameNetworkConfig.ServerIp} (ports 7001 channel, 10011 game)");
-            Console.WriteLine("Press 's' for statistics, 'q' to quit.");
+            var interactiveConsole = Environment.UserInteractive && !Console.IsInputRedirected;
+            Console.WriteLine(interactiveConsole
+                ? "Press 's' for statistics, 'q' to quit."
+                : "Running without interactive console. Stop the service to quit.");
 
-            while (true)
+            if (!interactiveConsole)
             {
-                var key = Console.ReadKey(intercept: true);
+                var stopped = new ManualResetEventSlim(false);
+                Console.CancelKeyPress += (sender, e) =>
+                {
+                    e.Cancel = true;
+                    stopped.Set();
+                };
+                AppDomain.CurrentDomain.ProcessExit += (sender, e) => stopped.Set();
+                stopped.Wait();
+            }
+            else
+            {
+                while (true)
+                {
+                    var key = Console.ReadKey(intercept: true);
 
-                if (key.KeyChar == 's' || key.KeyChar == 'S')
-                {
-                    var stats = server.GetStatistics();
-                    Console.WriteLine("\n=== Server Statistics ===");
-                    Console.WriteLine($"Total Clients: {stats.TotalClients}");
-                    foreach (var stat in stats.PortStats)
+                    if (key.KeyChar == 's' || key.KeyChar == 'S')
                     {
-                        var config = portConfigs[stat.Key];
-                        Console.WriteLine($"Port {stat.Key} ({config.structure.GetType().Name}): {stat.Value} clients");
+                        var stats = server.GetStatistics();
+                        Console.WriteLine("\n=== Server Statistics ===");
+                        Console.WriteLine($"Total Clients: {stats.TotalClients}");
+                        foreach (var stat in stats.PortStats)
+                        {
+                            var config = portConfigs[stat.Key];
+                            Console.WriteLine($"Port {stat.Key} ({config.structure.GetType().Name}): {stat.Value} clients");
+                        }
+                        Console.WriteLine("=========================\n");
                     }
-                    Console.WriteLine("=========================\n");
-                }
-                else if (key.KeyChar == 'q' || key.KeyChar == 'Q')
-                {
-                    break;
+                    else if (key.KeyChar == 'q' || key.KeyChar == 'Q')
+                    {
+                        break;
+                    }
                 }
             }
 

@@ -22,7 +22,8 @@ namespace DfoServer.Game.Inventory
     
     public static class CreatureExtraResolver
     {
-        private static readonly ConcurrentDictionary<int, bool> Cache = new ConcurrentDictionary<int, bool>();
+        private static readonly ConcurrentDictionary<int, bool> CreatureExtraCache = new ConcurrentDictionary<int, bool>();
+        private static readonly ConcurrentDictionary<int, bool> PetInventoryEquipmentCache = new ConcurrentDictionary<int, bool>();
 
         private static readonly Lazy<LstFile> EquipmentList = new Lazy<LstFile>(
             () => LstFile.Parse(PvfArchiveAccessor.ReadText("equipment/equipment.lst")));
@@ -33,10 +34,31 @@ namespace DfoServer.Game.Inventory
         
         public static bool HasCreatureExtra(int itemTemplateId)
         {
-            return Cache.GetOrAdd(itemTemplateId, ResolveFromPvf);
+            return CreatureExtraCache.GetOrAdd(itemTemplateId, ResolveCreatureExtraFromPvf);
         }
 
-        private static bool ResolveFromPvf(int itemTemplateId)
+        public static bool IsPetInventoryEquipment(int itemTemplateId)
+        {
+            return PetInventoryEquipmentCache.GetOrAdd(itemTemplateId, ResolvePetInventoryEquipmentFromPvf);
+        }
+
+        private static bool ResolveCreatureExtraFromPvf(int itemTemplateId)
+        {
+            var valueLine = LoadEquipmentTypeLine(itemTemplateId);
+            return valueLine != null && valueLine.Contains("[creature]");
+        }
+
+        private static bool ResolvePetInventoryEquipmentFromPvf(int itemTemplateId)
+        {
+            var valueLine = LoadEquipmentTypeLine(itemTemplateId);
+            return valueLine != null &&
+                (valueLine.Contains("[creature]")
+                    || valueLine.Contains("[artifact red]")
+                    || valueLine.Contains("[artifact blue]")
+                    || valueLine.Contains("[artifact green]"));
+        }
+
+        private static string LoadEquipmentTypeLine(int itemTemplateId)
         {
             var entry = EquipmentList.Value.GetById(itemTemplateId);
             if (entry == null)
@@ -54,10 +76,10 @@ namespace DfoServer.Game.Inventory
                 var valueLine = lineEnd >= 0
                     ? text.Substring(lineEnd + 1, (valueEnd >= 0 ? valueEnd : text.Length) - lineEnd - 1)
                     : "";
-                return valueLine.Contains("[creature]");
+                return valueLine;
             }
 
-            return false;
+            return null;
         }
     }
 }

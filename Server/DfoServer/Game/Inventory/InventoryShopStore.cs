@@ -25,6 +25,24 @@ namespace DfoServer.Game.Inventory
             OnlyCeraPoint,
         }
 
+        // ============================================================
+        // 装扮兑换券对照表 [grade][durIndex] = couponId
+        // ============================================================
+        // grade: 来自装备 PVF [grade] 字段，1=普通, 2=高级, 3=稀有。
+        // durIndex: 商城档位 (product.Count), 1=7天, 2=30天, 3=永久(无期限)。
+        // couponId: PVF stackable 物品 ID, 对应客户端背包中的兑换券道具, 需与客户端约定一致。
+        //
+        // 设计要点:
+        //   稀有装扮(grade=3)仅开放永久兑换(durIndex=3), 因为稀有兑换券只有一种;
+        //   TryGetAvatarCouponId 中对 grade=3 且 durIndex≠3 的情况会显式拒绝。
+        //   此表为静态只读, 兑换券 ID 固定不变, 无运行时并发写入风险。
+        private static readonly Dictionary<int, Dictionary<int, int>> AvatarCouponTable = new()
+        {
+            { 1, new() { { 1, 2681588 }, { 2, 2681589 }, { 3, 2681590 } } }, // 普通
+            { 2, new() { { 1, 2681591 }, { 2, 2681592 }, { 3, 2681593 } } }, // 高级
+            { 3, new() { { 3, 2681594 } } },                                   // 稀有(仅永久)
+        };
+
         private struct CeraShopPaymentPlan
         {
             public bool Ok;
@@ -100,6 +118,60 @@ namespace DfoServer.Game.Inventory
             CurrencyService.UpdateHappyTokenCera(connection, transaction, characterId, plan.NewHappyTokenCera);
         }
 
+        // ============================================================
+        // 兑换券扣减: 与 ApplyCeraShopPayment 在同一事务内执行
+        // ============================================================
+        // 若 couponItemUid>0, 则扣减1个兑换券:
+        //   - 扣后栈数>0 → UpdateStackCount
+        //   - 扣后栈数=0 → DeleteItem (整行删除)
+        // 此方法必须在 ApplyCeraShopPayment 之后调用, 确保事务内顺序为:
+        //   1) ComputeCeraShopPayment (计算不扣费)
+        //   2) ApplyCeraShopPayment (扣点券, 若 paymentMode=0)
+        //   3) DeductCouponIfNeeded (扣兑换券, 若 paymentMode=1)
+        // 若任意步骤失败, 事务回滚, 已扣点券/已扣兑换券均回滚。
+        private void DeductCouponIfNeeded(SqliteConnection connection, SqliteTransaction transaction, long couponItemUid, int couponNewStackCount)
+        {
+            if (couponItemUid <= 0)
+                return;
+            if (couponNewStackCount > 0)
+                _db.UpdateStackCount(connection, transaction, couponItemUid, couponNewStackCount);
+            else
+                _db.DeleteItem(connection, transaction, couponItemUid);
+        }
+
+        // ============================================================
+        // 根据装扮等级+期限查找对应兑换券 ID
+        // ============================================================
+        // grade: 物品 PVF [grade] 字段值 (1=普通, 2=高级, 3=稀有)
+        // durIndex: 商城档位 (product.Count, 1=7天, 2=30天, 3=永久)
+        //
+        // 安全约束:
+        //   - 稀有装扮(grade=3)仅允许永久兑换券(durIndex=3), 因为稀有兑换券只有一种 ID(2681594)。
+        //   - 若 AvatarCouponTable 中无对应映射, 返回 false 并记录日志, 购买流程终止。
+        //   - 此映射表为静态只读, 无并发写入风险。
+        private static bool TryGetAvatarCouponId(int grade, int durIndex, out int couponId)
+        {
+            couponId = 0;
+
+            // 稀有装扮(durIndex 非 3/永久时报错)
+            if (grade == 3)
+            {
+                if (durIndex != 3)
+                {
+                    FileLogger.Log($"  [CeraShopBuy] REJECT: rare avatar only supports permanent coupon, grade={grade} durIndex={durIndex}");
+                    return false;
+                }
+                couponId = 2681594;
+                return true;
+            }
+
+            if (AvatarCouponTable.TryGetValue(grade, out var durMap) && durMap.TryGetValue(durIndex, out couponId))
+                return true;
+
+            FileLogger.Log($"  [CeraShopBuy] REJECT: no coupon for grade={grade} durIndex={durIndex}");
+            return false;
+        }
+
         public bool TryBuyItem(SqliteConnection connection, SqliteTransaction transaction, int characterId, int accountId, int itemTemplateId, int buyCount, out InventoryMutationResult result)
         {
             result = null;
@@ -109,6 +181,17 @@ namespace DfoServer.Game.Inventory
 
             if (!SqliteInventoryStore.CanMoveToListType(metadata.ItemKind, InventoryListType.Main))
                 return false;
+
+            // NPC shops can sell pet tab items too; route them to the same category slot ranges as cera/package rewards.
+            var isPetConsumable = ItemMetadataResolver.IsPetConsumableItem(metadata);
+            var isPetEquipment = string.Equals(metadata.ItemKind, "equipment", StringComparison.Ordinal) &&
+                ItemMetadataResolver.IsPetInventoryEquipment(itemTemplateId);
+            var isCreature = isPetEquipment && SqliteInventoryStore.IsCreatureItem(itemTemplateId);
+            var isPetArtifactEquipment = isPetEquipment && !isCreature;
+            var targetListType = isCreature || isPetArtifactEquipment || isPetConsumable
+                ? InventoryListType.Pet
+                : InventoryListType.Main;
+            var targetItemKind = targetListType == InventoryListType.Pet ? "pet" : metadata.ItemKind;
 
             if (CurrencyService.IsCubeFragment(itemTemplateId))
             {
@@ -122,27 +205,8 @@ namespace DfoServer.Game.Inventory
                 if (metadata.IsMaterialExchange)
                 {
                     var totalMaterialCost = metadata.NeedMaterialCount * buyCount;
-                    if (CurrencyService.IsCubeFragment(metadata.NeedMaterialId))
-                    {
-                        var cubes = CurrencyService.LoadCubeFragments(connection, transaction, accountId);
-                        var have = 0;
-                        foreach (var c in cubes)
-                            if (c.ItemId == metadata.NeedMaterialId) have = c.Count;
-                        if (have < totalMaterialCost)
-                            return false;
-                        CurrencyService.AddCubeFragment(connection, transaction, accountId, metadata.NeedMaterialId, -totalMaterialCost);
-                        materialNewCount = have - totalMaterialCost;
-                        materialSlotIndex = (short)CurrencyService.GetCubeFragmentSlot(metadata.NeedMaterialId);
-                    }
-                    else
-                    {
-                        var materialItem = _db.FindItemByTemplateId(connection, transaction, characterId, InventoryListType.Main, metadata.NeedMaterialId);
-                        if (materialItem == null || materialItem.StackCount < totalMaterialCost)
-                            return false;
-                        _db.UpdateStackCount(connection, transaction, materialItem.ItemUid, materialItem.StackCount - totalMaterialCost);
-                        materialNewCount = materialItem.StackCount - totalMaterialCost;
-                        materialSlotIndex = materialItem.SlotIndex;
-                    }
+                    if (!TryConsumeMaterial(connection, transaction, characterId, accountId, metadata.NeedMaterialId, totalMaterialCost, out materialNewCount, out materialSlotIndex))
+                        return false;
                 }
 
                 if (totalGoldCost > 0)
@@ -179,38 +243,59 @@ namespace DfoServer.Game.Inventory
                     return false;
                 }
 
-                var materialItem = _db.FindItemByTemplateId(connection, transaction, characterId, InventoryListType.Main, metadata.NeedMaterialId);
-                if (materialItem == null || materialItem.StackCount < totalMaterialCost)
-                {
-                    FileLogger.Log($"  [BuyItem] REJECT: need {totalMaterialCost}x item {metadata.NeedMaterialId}, have {materialItem?.StackCount ?? 0}");
+                int materialNewCount;
+                short materialSlotIndex;
+                if (!TryConsumeMaterial(connection, transaction, characterId, accountId, metadata.NeedMaterialId, totalMaterialCost, out materialNewCount, out materialSlotIndex))
                     return false;
-                }
 
                 short matTargetSlot;
-                var targetItem = _db.FindItemByTemplateId(connection, transaction, characterId, InventoryListType.Main, itemTemplateId);
+                var targetItem = isCreature || isPetArtifactEquipment
+                    ? null
+                    : _db.FindItemByTemplateId(connection, transaction, characterId, targetListType, itemTemplateId);
                 if (targetItem == null)
                 {
                     int matSlotStart, matSlotEnd;
-                    metadata.GetSlotRange(out matSlotStart, out matSlotEnd);
-                    var emptySlot = _db.FindEmptySlot(connection, transaction, characterId, InventoryListType.Main, matSlotStart, matSlotEnd);
+                    if (isCreature)
+                    {
+                        matSlotStart = SqliteInventoryStore.PetInventorySlotStart;
+                        matSlotEnd = SqliteInventoryStore.PetInventorySlotEnd;
+                    }
+                    else if (isPetArtifactEquipment)
+                    {
+                        matSlotStart = SqliteInventoryStore.PetEquipmentSlotStart;
+                        matSlotEnd = SqliteInventoryStore.PetEquipmentSlotEnd;
+                    }
+                    else if (isPetConsumable)
+                    {
+                        matSlotStart = SqliteInventoryStore.PetConsumableSlotStart;
+                        matSlotEnd = SqliteInventoryStore.PetConsumableSlotEnd;
+                    }
+                    else
+                    {
+                        metadata.GetSlotRange(out matSlotStart, out matSlotEnd);
+                    }
+
+                    var emptySlot = _db.FindEmptySlot(connection, transaction, characterId, targetListType, matSlotStart, matSlotEnd);
                     if (emptySlot < 0)
                     {
                         FileLogger.Log($"  [BuyItem] REJECT: no empty slot for material exchange item {itemTemplateId}");
                         return false;
                     }
-                    _db.UpdateStackCount(connection, transaction, materialItem.ItemUid, materialItem.StackCount - totalMaterialCost);
-                    _db.InsertCharacterItem(connection, transaction, characterId, InventoryListType.Main, (short)emptySlot,
-                        itemTemplateId, metadata.ItemKind, buyCount, buyCount,
-                        metadata.Durability, 0, 0, 0, 0, 0, "{}");
+                    _db.InsertCharacterItem(connection, transaction, characterId, targetListType, (short)emptySlot,
+                        itemTemplateId, targetItemKind, isCreature || isPetArtifactEquipment ? 0 : buyCount, isPetEquipment ? 0 : buyCount,
+                        targetListType == InventoryListType.Pet ? (ushort)0 : metadata.Durability, 0, 0, 0, 0,
+                        isPetConsumable ? buyCount : isCreature ? _db.NextPetSerialOrHandle(connection, transaction, characterId) : 0,
+                        "{}");
                     matTargetSlot = (short)emptySlot;
                 }
                 else
                 {
-                    _db.UpdateStackCount(connection, transaction, materialItem.ItemUid, materialItem.StackCount - totalMaterialCost);
-                    _db.UpdateStackCount(connection, transaction, targetItem.ItemUid, targetItem.StackCount + buyCount);
+                    if (isPetConsumable)
+                        _db.UpdatePetStackCount(connection, transaction, targetItem.ItemUid, targetItem.StackCount + buyCount);
+                    else
+                        _db.UpdateStackCount(connection, transaction, targetItem.ItemUid, targetItem.StackCount + buyCount);
                     matTargetSlot = targetItem.SlotIndex;
                 }
-                var newMaterialCount = materialItem.StackCount - totalMaterialCost;
 
                 if (totalGoldCost > 0)
                     _db.UpdateWallet(connection, transaction, characterId, wallet.Gold - totalGoldCost, wallet.Coin);
@@ -219,7 +304,7 @@ namespace DfoServer.Game.Inventory
 
                 result = new InventoryMutationResult
                 {
-                    ListType = InventoryListType.Main,
+                    ListType = targetListType,
                     SlotIndex = matTargetSlot,
                     ItemTemplateId = itemTemplateId,
                     RemainingStackCount = buyCount,
@@ -231,8 +316,8 @@ namespace DfoServer.Game.Inventory
                     RequestedCount = (short)buyCount,
                     AppliedCount = (short)buyCount,
                     CostItemTemplateId = metadata.NeedMaterialId,
-                    CostItemNewStackCount = newMaterialCount,
-                    CostItemSlotIndex = materialItem.SlotIndex,
+                    CostItemNewStackCount = materialNewCount,
+                    CostItemSlotIndex = materialSlotIndex,
                 };
                 return true;
             }
@@ -244,14 +329,18 @@ namespace DfoServer.Game.Inventory
             // For stackable items, try to stack onto existing item first
             if (metadata.IsStackable)
             {
-                var existingItem = _db.FindItemByTemplateId(connection, transaction, characterId, InventoryListType.Main, itemTemplateId);
+                var existingItem = _db.FindItemByTemplateId(connection, transaction, characterId, targetListType, itemTemplateId);
                 if (existingItem != null)
                 {
                     var totalCostGold = metadata.BuyGold * buyCount;
                     var totalCostCoin = metadata.BuyCoin * buyCount;
                     if (walletCheck.Gold < totalCostGold || walletCheck.Coin < totalCostCoin)
                         return false;
-                    _db.UpdateStackCount(connection, transaction, existingItem.ItemUid, existingItem.StackCount + buyCount);
+                    var newStackCount = existingItem.StackCount + buyCount;
+                    if (isPetConsumable)
+                        _db.UpdatePetStackCount(connection, transaction, existingItem.ItemUid, newStackCount);
+                    else
+                        _db.UpdateStackCount(connection, transaction, existingItem.ItemUid, newStackCount);
                     var updGold = walletCheck.Gold - totalCostGold;
                     var updCoin = walletCheck.Coin - totalCostCoin;
                     if (totalCostGold > 0 || totalCostCoin > 0)
@@ -260,10 +349,10 @@ namespace DfoServer.Game.Inventory
 
                     result = new InventoryMutationResult
                     {
-                        ListType = InventoryListType.Main,
+                        ListType = targetListType,
                         SlotIndex = existingItem.SlotIndex,
                         ItemTemplateId = itemTemplateId,
-                        RemainingStackCount = buyCount,
+                        RemainingStackCount = newStackCount,
                         InstanceValue = buyCount,
                         Durability = 0,
                         UpdatedGold = updGold,
@@ -283,30 +372,51 @@ namespace DfoServer.Game.Inventory
                 return false;
 
             int slotStart, slotEnd;
-            metadata.GetSlotRange(out slotStart, out slotEnd);
-            var targetSlot = _db.FindEmptySlot(connection, transaction, characterId, InventoryListType.Main, slotStart, slotEnd);
+            if (isCreature)
+            {
+                slotStart = SqliteInventoryStore.PetInventorySlotStart;
+                slotEnd = SqliteInventoryStore.PetInventorySlotEnd;
+            }
+            else if (isPetArtifactEquipment)
+            {
+                slotStart = SqliteInventoryStore.PetEquipmentSlotStart;
+                slotEnd = SqliteInventoryStore.PetEquipmentSlotEnd;
+            }
+            else if (isPetConsumable)
+            {
+                slotStart = SqliteInventoryStore.PetConsumableSlotStart;
+                slotEnd = SqliteInventoryStore.PetConsumableSlotEnd;
+            }
+            else
+            {
+                metadata.GetSlotRange(out slotStart, out slotEnd);
+            }
+
+            var targetSlot = _db.FindEmptySlot(connection, transaction, characterId, targetListType, slotStart, slotEnd);
             if (targetSlot < 0)
                 return false;
 
-            var qualitySeed = InventoryDbPrimitives.GenerateInstanceValue(itemTemplateId, targetSlot);
-            var buyStackCount = metadata.IsStackable ? effectiveCount : qualitySeed;
+            var qualitySeed = targetListType == InventoryListType.Pet ? 0 : InventoryDbPrimitives.GenerateInstanceValue(itemTemplateId, targetSlot);
+            var buyStackCount = isPetEquipment ? 0 : metadata.IsStackable ? effectiveCount : qualitySeed;
             var buyInstanceValue = metadata.IsStackable ? effectiveCount : qualitySeed;
+            var buyDurability = targetListType == InventoryListType.Pet ? (ushort)0 : metadata.Durability;
+            var buyPetSerial = isPetConsumable ? effectiveCount : isCreature ? _db.NextPetSerialOrHandle(connection, transaction, characterId) : 0;
             _db.InsertCharacterItem(
                 connection,
                 transaction,
                 characterId,
-                InventoryListType.Main,
+                targetListType,
                 (short)targetSlot,
                 itemTemplateId,
-                metadata.ItemKind,
+                targetItemKind,
                 buyStackCount,
                 buyInstanceValue,
-                metadata.Durability,
+                buyDurability,
                 0,
                 0,
+                targetListType == InventoryListType.Pet ? 0 : metadata.IsStackable ? 0 : -1,
                 0,
-                metadata.IsStackable ? 0 : -1,
-                0,
+                buyPetSerial,
                 "{}");
 
             var updatedGold = walletCheck.Gold - totalBuyGold;
@@ -316,12 +426,12 @@ namespace DfoServer.Game.Inventory
 
             result = new InventoryMutationResult
             {
-                ListType = InventoryListType.Main,
+                ListType = targetListType,
                 SlotIndex = (short)targetSlot,
                 ItemTemplateId = itemTemplateId,
                 RemainingStackCount = effectiveCount,
                 InstanceValue = buyInstanceValue,
-                Durability = metadata.Durability,
+                Durability = buyDurability,
                 UpdatedGold = updatedGold,
                 UpdatedSp = walletCheck.Sp,
                 UpdatedCoin = updatedCoin,
@@ -384,7 +494,7 @@ namespace DfoServer.Game.Inventory
             return true;
         }
 
-        public bool TryBuyCeraShopItem(SqliteConnection connection, SqliteTransaction transaction, int characterId, int accountId, int productId, int buyCount, out InventoryMutationResult result)
+       public bool TryBuyCeraShopItem(SqliteConnection connection, SqliteTransaction transaction, int characterId, int accountId, int productId, int buyCount, int paymentMode, int attributeValue, out InventoryMutationResult result)
         {
             result = null;
             FileLogger.Log($"  [CeraShopBuy] clientProductId=0x{productId:X8} ({productId}) buyCount={buyCount}");
@@ -415,13 +525,19 @@ namespace DfoServer.Game.Inventory
             var isAvatar = string.Equals(product.Section, "avatar", StringComparison.OrdinalIgnoreCase);
             // 宠物(creature): 装备类且 .equ 的 [equipment type]=[creature], 应进专用宠物栏(Pet 列表 7),
             // 而不是主背包装备格。判定基于物品本身的 equipment type, 不依赖 cerashop 段名(段内还混有可堆叠饲料)。
-            var isCreature = !isAvatar && string.Equals(itemKind, "equipment", StringComparison.Ordinal) && SqliteInventoryStore.IsCreatureItem(itemTemplateId);
+            // Pet tab is split by client category slots: creature, artifact equipment, consumables.
+            var isPetEquipment = !isAvatar && string.Equals(itemKind, "equipment", StringComparison.Ordinal) && ItemMetadataResolver.IsPetInventoryEquipment(itemTemplateId);
+            var isCreature = isPetEquipment && SqliteInventoryStore.IsCreatureItem(itemTemplateId);
+            var isPetArtifactEquipment = isPetEquipment && !isCreature;
+            var isPetConsumable = !isAvatar && ItemMetadataResolver.IsPetConsumableItem(metadata);
+            var stackListType = isPetConsumable ? InventoryListType.Pet : InventoryListType.Main;
             var avatarDurationDays = 0;
             // 发货数量 = 份数 × 每份数量(cerashop count); 价格 = 每份价 × 份数 (avatar 恒为 1)
             var effectiveCount = (isStackable && !isAvatar) ? Math.Min(999, buyCount * Math.Max(1, product.Count)) : 1;
             // 价格来自 cerashop 三列: 金币 / 胜点(忽略) / 点券。金币与点券一般互斥(只一个非 0)。
             var goldPrice = Math.Max(0, product.GoldPrice);
             var ceraPrice = Math.Max(0, product.CoinPrice);
+            // Keep pet shop purchases in the slot range for the page where the client displays them.
             if (isAvatar)
             {
                 goldPrice = 0; // 时装走点券
@@ -452,9 +568,48 @@ namespace DfoServer.Game.Inventory
                 : CeraShopProductCatalog.IsBuyOnlyCeraPoint(itemTemplateId) ? CeraPayMode.OnlyCeraPoint
                 : CeraPayMode.Default;
 
+            // ============================================================
+            // 兑换券支付分支 (paymentMode == 1)
+            // ============================================================
+            // 与点券支付互斥:
+            //   - 通过 TryGetAvatarCouponId 根据装扮等级+期限查到兑换券 ID。
+            //   - 在角色背包中查找该兑换券是否存在, 不存在则拒绝交易。
+            //   - 将 totalCeraCost 和 ceraPrice 置零, 后续 ComputeCeraShopPayment
+            //     传入 ceraCost=0, 因此不会扣任何点券, ComputeCeraShopPayment 必然 Ok。
+            //     这样保证了兑换券支付与点券支付走同一套 ComputeCeraShopPayment + ApplyCeraShopPayment
+            //     流程, 仅在兑换券扣减时走 DeductCouponIfNeeded, 两条路径互不干扰。
+            //   - 兑换券扣减 (DeductCouponIfNeeded) 与 ApplyCeraShopPayment 在同一事务内,
+            //     任一步骤失败整体回滚, 不会出现"券已扣但装扮未发"。
+            var couponItemUid = 0L;
+            var couponSlotIndex = (short)0;
+            var couponNewStackCount = 0;
+            var couponId = 0;
+            if (paymentMode == 1)
+            {
+                var durIndex = product.Count;
+                if (!TryGetAvatarCouponId(metadata.Grade, durIndex, out couponId))
+                {
+                    FileLogger.Log($"  [CeraShopBuy] REJECT: couponId not resolved, grade={metadata.Grade} durIndex={durIndex} product=0x{productId:X8}");
+                    return false;
+                }
+                // 置零点券消耗, 兑换券抵扣不涉及 Cera 扣减。后文 ComputeCeraShopPayment 收到 ceraCost=0 必然 Ok。
+                totalCeraCost = 0;
+                ceraPrice = 0;
+                // 在主背包中查找兑换券道具。兑换券是可堆叠的 stackable 物品, 栈数>0 即存在。
+                var couponItem = _db.FindItemByTemplateId(connection, transaction, characterId, InventoryListType.Main, couponId);
+                if (couponItem == null)
+                {
+                    FileLogger.Log($"  [CeraShopBuy] REJECT: no avatar coupon (0x{couponId:X8}) in inventory, product=0x{productId:X8}");
+                    return false;
+                }
+                couponItemUid = couponItem.ItemUid;
+                couponSlotIndex = couponItem.SlotIndex;
+                couponNewStackCount = couponItem.StackCount - 1;
+            }
+
             var wallet = _db.LoadWallet(connection, transaction, characterId);
             var plan = ComputeCeraShopPayment(wallet, totalGoldCost, totalCeraCost, ceraMode);
-            FileLogger.Log($"  [CeraShopBuy] product=0x{productId:X8} -> item=0x{itemTemplateId:X8} section={product.Section} kind={itemKind} count={effectiveCount} gold={totalGoldCost} cera={totalCeraCost} mode={ceraMode} wallet(g={wallet.Gold},c={wallet.Coin},t={wallet.TokenCera},h={wallet.HappyTokenCera}) ok={plan.Ok}");
+            FileLogger.Log($"  [CeraShopBuy] product=0x{productId:X8} -> item=0x{itemTemplateId:X8} section={product.Section} kind={itemKind} count={effectiveCount} gold={totalGoldCost} cera={totalCeraCost} mode={ceraMode} payMode={paymentMode} wallet(g={wallet.Gold},c={wallet.Coin},t={wallet.TokenCera},h={wallet.HappyTokenCera}) ok={plan.Ok}");
             if (!plan.Ok)
             {
                 FileLogger.Log($"  [CeraShopBuy] REJECT: insufficient funds gold={totalGoldCost} cera={totalCeraCost} mode={ceraMode}");
@@ -483,11 +638,23 @@ namespace DfoServer.Game.Inventory
                     return false;
 
                 ApplyCeraShopPayment(connection, transaction, characterId, plan);
+                DeductCouponIfNeeded(connection, transaction, couponItemUid, couponNewStackCount);
                 _auditLogger.WriteBuyAuditLog(connection, transaction, characterId, itemTemplateId, 0, totalGoldCost, totalCeraCost);
                 foreach (var rewardResult in openedResults)
                     _auditLogger.WriteBuyAuditLog(connection, transaction, characterId, rewardResult.ItemTemplateId, rewardResult.SlotIndex, 0, 0);
 
                 result = openedResults[0];
+                if (couponItemUid > 0)
+                {
+                    result.ExtraResults.Add(new InventoryMutationResult
+                    {
+                        ListType = InventoryListType.Main,
+                        SlotIndex = couponSlotIndex,
+                        ItemTemplateId = couponId,
+                        RemainingStackCount = couponNewStackCount,
+                        InstanceValue = couponNewStackCount,
+                    });
+                }
                 result.UpdatedGold = plan.NewGold;
                 result.UpdatedSp = wallet.Sp;
                 result.UpdatedCoin = plan.NewCera;
@@ -503,18 +670,28 @@ namespace DfoServer.Game.Inventory
 
             if (isStackable)
             {
-                var existingItem = _db.FindItemByTemplateId(connection, transaction, characterId, InventoryListType.Main, itemTemplateId);
+                var existingItem = _db.FindItemByTemplateId(connection, transaction, characterId, stackListType, itemTemplateId);
                 var stackLimit = metadata.StackLimit;
-                if (existingItem != null && (stackLimit <= 0 || existingItem.StackCount + effectiveCount <= stackLimit))
+                if (existingItem != null && stackLimit > 0 && existingItem.StackCount + effectiveCount > stackLimit)
+                {
+                    FileLogger.Log($"  [CeraShopBuy] REJECT: stack limit reached product=0x{productId:X8} item=0x{itemTemplateId:X8} slot={existingItem.SlotIndex} current={existingItem.StackCount} add={effectiveCount} limit={stackLimit}");
+                    return false;
+                }
+
+                if (existingItem != null)
                 {
                     var newStackCount = existingItem.StackCount + effectiveCount;
-                    _db.UpdateStackCount(connection, transaction, existingItem.ItemUid, newStackCount);
+                    if (isPetConsumable)
+                        _db.UpdatePetStackCount(connection, transaction, existingItem.ItemUid, newStackCount);
+                    else
+                        _db.UpdateStackCount(connection, transaction, existingItem.ItemUid, newStackCount);
                     ApplyCeraShopPayment(connection, transaction, characterId, plan);
+                    DeductCouponIfNeeded(connection, transaction, couponItemUid, couponNewStackCount);
                     _auditLogger.WriteBuyAuditLog(connection, transaction, characterId, itemTemplateId, existingItem.SlotIndex, totalGoldCost, totalCeraCost);
 
                     result = new InventoryMutationResult
                     {
-                        ListType = InventoryListType.Main,
+                        ListType = stackListType,
                         SlotIndex = existingItem.SlotIndex,
                         ItemTemplateId = itemTemplateId,
                         RemainingStackCount = newStackCount,
@@ -529,45 +706,25 @@ namespace DfoServer.Game.Inventory
                         RequestedCount = (short)effectiveCount,
                         AppliedCount = (short)effectiveCount,
                     };
+                    if (couponItemUid > 0)
+                    {
+                        result.ExtraResults.Add(new InventoryMutationResult
+                        {
+                            ListType = InventoryListType.Main,
+                            SlotIndex = couponSlotIndex,
+                            ItemTemplateId = couponId,
+                            RemainingStackCount = couponNewStackCount,
+                            InstanceValue = couponNewStackCount,
+                        });
+                    }
                     return true;
                 }
             }
 
-            if (isStackable)
+            if (isStackable && metadata.StackLimit > 0 && effectiveCount > metadata.StackLimit)
             {
-                var stackLimit = metadata.StackLimit;
-                if (IsCeraShopStackablePackage(product.Section))
-                    stackLimit = int.MaxValue;
-
-                var existingItem = _db.FindStackableItemByTemplateIdAndExpireTime(
-                    connection, transaction, characterId, InventoryListType.Main, itemTemplateId, 0, stackLimit);
-
-                if (existingItem != null && (stackLimit <= 0 || existingItem.StackCount + effectiveCount <= stackLimit))
-                {
-                    var newStackCount = existingItem.StackCount + effectiveCount;
-                    _db.UpdateStackCount(connection, transaction, existingItem.ItemUid, newStackCount);
-                    ApplyCeraShopPayment(connection, transaction, characterId, plan);
-                    _auditLogger.WriteBuyAuditLog(connection, transaction, characterId, itemTemplateId, existingItem.SlotIndex, totalGoldCost, totalCeraCost);
-
-                    result = new InventoryMutationResult
-                    {
-                        ListType = InventoryListType.Main,
-                        SlotIndex = existingItem.SlotIndex,
-                        ItemTemplateId = itemTemplateId,
-                        RemainingStackCount = newStackCount,
-                        InstanceValue = newStackCount,
-                        Durability = 0,
-                        UpdatedGold = plan.NewGold,
-                        UpdatedSp = wallet.Sp,
-                        UpdatedCoin = plan.NewCera,
-                        UpdatedTokenCera = plan.NewTokenCera,
-                        UpdatedHappyTokenCera = plan.NewHappyTokenCera,
-                        GoldSpent = goldSpent,
-                        RequestedCount = (short)effectiveCount,
-                        AppliedCount = (short)effectiveCount,
-                    };
-                    return true;
-                }
+                FileLogger.Log($"  [CeraShopBuy] REJECT: stack limit exceeded product=0x{productId:X8} item=0x{itemTemplateId:X8} count={effectiveCount} limit={metadata.StackLimit}");
+                return false;
             }
 
             int slotStart;
@@ -595,6 +752,22 @@ namespace DfoServer.Game.Inventory
                 slotEnd = SqliteInventoryStore.PetInventorySlotEnd;
                 expireTime = 0;
             }
+            else if (isPetArtifactEquipment)
+            {
+                insertListType = InventoryListType.Pet;
+                insertKind = "pet";
+                slotStart = SqliteInventoryStore.PetEquipmentSlotStart;
+                slotEnd = SqliteInventoryStore.PetEquipmentSlotEnd;
+                expireTime = 0;
+            }
+            else if (isPetConsumable)
+            {
+                insertListType = InventoryListType.Pet;
+                insertKind = "pet";
+                slotStart = SqliteInventoryStore.PetConsumableSlotStart;
+                slotEnd = SqliteInventoryStore.PetConsumableSlotEnd;
+                expireTime = 0;
+            }
             else
             {
                 metadata.GetSlotRange(out slotStart, out slotEnd);
@@ -607,12 +780,14 @@ namespace DfoServer.Game.Inventory
                 return false;
             }
 
-            var petSerial = isCreature ? _db.NextPetSerialOrHandle(connection, transaction, characterId) : 0;
-            var instanceValue = isStackable ? effectiveCount : (isCreature || isAvatar ? 0 : InventoryDbPrimitives.GenerateInstanceValue(itemTemplateId, targetSlot));
-            var durability = (isAvatar || isCreature) ? (ushort)0 : metadata.Durability;
+            var usesPetInventory = isCreature || isPetArtifactEquipment || isPetConsumable;
+            // For pet consumables this field is displayed as the stack count in pet-list entries.
+            var petSerial = isPetConsumable ? effectiveCount : (isCreature ? _db.NextPetSerialOrHandle(connection, transaction, characterId) : 0);
+            var instanceValue = isStackable ? effectiveCount : (usesPetInventory || isAvatar ? 0 : InventoryDbPrimitives.GenerateInstanceValue(itemTemplateId, targetSlot));
+            var durability = (isAvatar || usesPetInventory) ? (ushort)0 : metadata.Durability;
             if (isAvatar)
             {
-                var avatarItem = SqliteInventoryStore.CreateDefaultAvatarItem((short)targetSlot, itemTemplateId, 0);
+                var avatarItem = SqliteInventoryStore.CreateDefaultAvatarItem((short)targetSlot, itemTemplateId, (byte)attributeValue);
                 _db.InsertCharacterItem(
                     connection,
                     transaction,
@@ -641,7 +816,7 @@ namespace DfoServer.Game.Inventory
                     (short)targetSlot,
                     itemTemplateId,
                     insertKind,
-                    isCreature ? 0 : effectiveCount,
+                    isPetEquipment ? 0 : effectiveCount,
                     instanceValue,
                     durability,
                     0,
@@ -653,6 +828,7 @@ namespace DfoServer.Game.Inventory
             }
 
             ApplyCeraShopPayment(connection, transaction, characterId, plan);
+            DeductCouponIfNeeded(connection, transaction, couponItemUid, couponNewStackCount);
             _auditLogger.WriteBuyAuditLog(connection, transaction, characterId, itemTemplateId, (short)targetSlot, totalGoldCost, totalCeraCost);
 
             result = new InventoryMutationResult
@@ -672,16 +848,58 @@ namespace DfoServer.Game.Inventory
                 RequestedCount = (short)effectiveCount,
                 AppliedCount = (short)effectiveCount,
             };
+            if (couponItemUid > 0)
+            {
+                result.ExtraResults.Add(new InventoryMutationResult
+                {
+                    ListType = InventoryListType.Main,
+                    SlotIndex = couponSlotIndex,
+                    ItemTemplateId = couponId,
+                    RemainingStackCount = couponNewStackCount,
+                    InstanceValue = couponNewStackCount,
+                });
+            }
             return true;
         }
 
-        private static bool IsCeraShopStackablePackage(string section)
+        /// <summary>
+        /// 检查并扣减材料。支持立方体碎片（accounts表）和普通背包物品。
+        /// </summary>
+        private bool TryConsumeMaterial(SqliteConnection connection, SqliteTransaction transaction,
+            int characterId, int accountId, int materialId, int cost,
+            out int newCount, out short slotIndex)
         {
-            if (string.IsNullOrWhiteSpace(section))
-                return false;
+            newCount = -1;
+            slotIndex = -1;
 
-            return section.Equals("package", StringComparison.OrdinalIgnoreCase)
-                || section.Equals("booster", StringComparison.OrdinalIgnoreCase);
+            if (CurrencyService.IsCubeFragment(materialId))
+            {
+                var cubes = CurrencyService.LoadCubeFragments(connection, transaction, accountId);
+                var have = 0;
+                foreach (var c in cubes)
+                    if (c.ItemId == materialId) have = c.Count;
+                if (have < cost)
+                {
+                    FileLogger.Log($"  [BuyItem] REJECT: need {cost}x cube fragment {materialId}, have {have}");
+                    return false;
+                }
+                CurrencyService.AddCubeFragment(connection, transaction, accountId, materialId, -cost);
+                newCount = have - cost;
+                slotIndex = (short)CurrencyService.GetCubeFragmentSlot(materialId);
+            }
+            else
+            {
+                var materialItem = _db.FindItemByTemplateId(connection, transaction, characterId, InventoryListType.Main, materialId);
+                if (materialItem == null || materialItem.StackCount < cost)
+                {
+                    FileLogger.Log($"  [BuyItem] REJECT: need {cost}x item {materialId}, have {materialItem?.StackCount ?? 0}");
+                    return false;
+                }
+                _db.UpdateStackCount(connection, transaction, materialItem.ItemUid, materialItem.StackCount - cost);
+                newCount = materialItem.StackCount - cost;
+                slotIndex = materialItem.SlotIndex;
+            }
+            return true;
         }
     }
 }

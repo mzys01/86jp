@@ -42,6 +42,22 @@ namespace PvfLib
         public int Flags { get; set; }
     }
 
+    public class HellPartyMapEntry
+    {
+        public int GroupId { get; set; }
+        public int Rate { get; set; }
+        public int Order { get; set; }
+    }
+
+    public class SpecialPassiveObjectInfo
+    {
+        public int ObjectCode { get; set; }
+        public int X { get; set; }
+        public int Y { get; set; }
+        public int Flags { get; set; }
+        public List<HellPartyMapEntry> HellPartyEntries { get; set; } = new List<HellPartyMapEntry>();
+    }
+
     public enum ApcFaction
     {
         Character = 0,
@@ -87,6 +103,7 @@ namespace PvfLib
         public int PassiveObjectCount { get; set; } = -1;
         public List<PassiveObjectInfo> PassiveObjects { get; set; } = new List<PassiveObjectInfo>();
         public int SpecialPassiveObjectCount { get; set; } = -1;
+        public List<SpecialPassiveObjectInfo> SpecialPassiveObjects { get; set; } = new List<SpecialPassiveObjectInfo>();
         public int MonsterCount { get; set; } = -1;
         public List<MonsterInfo> Monsters { get; set; } = new List<MonsterInfo>();
         public int EventMonsterPositionCount { get; set; } = -1;
@@ -97,6 +114,9 @@ namespace PvfLib
 
         private static readonly Regex BacktickStringRx = new Regex("`([^`]+)`", RegexOptions.Compiled);
         private static readonly Regex AniReferenceRx = new Regex("`[^`]+\\.ani`", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+        private static readonly Regex InlineHellPartyRx = new Regex(
+            @"`?\[hellparty\]`?(?<body>.*?)`?\[/hellparty\]`?",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.Singleline);
 
         public static MapFile Parse(string content)
         {
@@ -159,6 +179,7 @@ namespace PvfLib
                         break;
                     case "special passive object":
                         map.SpecialPassiveObjectCount = CountNumberGroups(data, 4);
+                        map.SpecialPassiveObjects = ParseSpecialPassiveObjects(data);
                         break;
                     case "monster":
                         map.MonsterCount = CountNumberGroups(data, 4);
@@ -257,7 +278,7 @@ namespace PvfLib
                     else if (a == "[boss]") entry.AIType = ApcAIType.Boss;
                     i++;
                 }
-                // trailing field1, field2
+                // 末尾两个数值字段当前未使用。
                 for (int skip = 0; skip < 2 && i < values.Length; skip++)
                 {
                     int dummy;
@@ -311,6 +332,52 @@ namespace PvfLib
                     Flags = nums[i + 3],
                 });
             }
+            return result;
+        }
+
+        private static List<SpecialPassiveObjectInfo> ParseSpecialPassiveObjects(string data)
+        {
+            var result = new List<SpecialPassiveObjectInfo>();
+            if (string.IsNullOrWhiteSpace(data)) return result;
+
+            var hellMatch = InlineHellPartyRx.Match(data);
+            var head = hellMatch.Success ? data.Substring(0, hellMatch.Index) : data;
+            var nums = ParseIntArray(head);
+            for (int i = 0; i + 3 < nums.Length; i += 4)
+            {
+                result.Add(new SpecialPassiveObjectInfo
+                {
+                    ObjectCode = nums[i],
+                    X = nums[i + 1],
+                    Y = nums[i + 2],
+                    Flags = nums[i + 3],
+                });
+            }
+
+            if (hellMatch.Success && result.Count > 0)
+            {
+                var entries = ParseHellPartyEntries(hellMatch.Groups["body"].Value);
+                if (entries.Count > 0)
+                    result[result.Count - 1].HellPartyEntries.AddRange(entries);
+            }
+
+            return result;
+        }
+
+        private static List<HellPartyMapEntry> ParseHellPartyEntries(string data)
+        {
+            var result = new List<HellPartyMapEntry>();
+            var nums = ParseIntArray(data);
+            for (int i = 0; i + 2 < nums.Length; i += 3)
+            {
+                result.Add(new HellPartyMapEntry
+                {
+                    GroupId = nums[i],
+                    Rate = nums[i + 1],
+                    Order = nums[i + 2],
+                });
+            }
+
             return result;
         }
 

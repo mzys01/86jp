@@ -11,6 +11,15 @@ namespace DfoServer.Game.Session
         public int CurLayeredMapIndex { get; set; } = -1;
         public byte CurDungeonFlag1 { get; set; }
         public byte CurDungeonFlag2 { get; set; }
+        public bool HellPartyGorgeousChallengeEnabled { get; set; }
+        public bool CurDungeonHellMode { get; set; }
+        public byte CurDungeonHellPartyMode { get; set; }
+        public bool CurDungeonVeryDifficultHell { get; set; }
+        public bool CurDungeonHellGorgeousChallenge { get; set; }
+        public int CurDungeonHellMapId { get; set; } = -1;
+        public byte CurDungeonHellMapX { get; set; } = 0xFF;
+        public byte CurDungeonHellMapY { get; set; } = 0xFF;
+        public GameWorld.Dungeon.HellPartyRoomInfo CurDungeonHellRoomInfo { get; set; }
         public byte CurMap { get; set; }
         public uint CurMoveMapU15 { get; set; }
         public uint CurMoveMapU19 { get; set; }
@@ -31,6 +40,7 @@ namespace DfoServer.Game.Session
             = new Dictionary<ushort, Dungeon.DropInfo>();
         public uint CurDungeonSeed { get; set; }
         public Dungeon.DnfLcg CurRoomLcg { get; set; }
+        public Dungeon.RoomKey CurRoomKey { get; set; }
         public Dictionary<Dungeon.RoomKey, Dungeon.RoomState> DungeonRoomStates { get; set; }
             = new Dictionary<Dungeon.RoomKey, Dungeon.RoomState>();
         public List<Dungeon.RidableObjectSpawnEntry> CurDungeonRidableObjects { get; set; }

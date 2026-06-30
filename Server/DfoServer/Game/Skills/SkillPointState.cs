@@ -9,10 +9,6 @@ namespace DfoServer.Game.Skills
 
         public int RemainingSp { get; set; }
 
-        public int TotalSfp { get; set; }
-
-        public int RemainingSfp { get; set; }
-
         public int TotalTp { get; set; }
 
         public int RemainingTp { get; set; }
@@ -46,18 +42,13 @@ namespace DfoServer.Game.Skills
             {
                 var gainedSp = calculated.TotalSp - persisted.TotalSp;
                 var gainedTp = calculated.TotalTp - persisted.TotalTp;
-                var totalSfp = Max(persisted.TotalSfp, persisted.RemainingSfp);
                 state.RemainingSp = Clamp(persisted.RemainingSp + gainedSp, 0, calculated.TotalSp);
                 state.RemainingTp = Clamp(persisted.RemainingTp + gainedTp, 0, calculated.TotalTp);
-                state.TotalSfp = totalSfp;
-                state.RemainingSfp = Clamp(persisted.RemainingSfp, 0, totalSfp);
             }
             else
             {
                 state.RemainingSp = calculated.RemainingSp;
                 state.RemainingTp = calculated.RemainingTp;
-                state.TotalSfp = 0;
-                state.RemainingSfp = 0;
             }
 
             return state;
@@ -70,9 +61,24 @@ namespace DfoServer.Game.Skills
                 skills.Pages.Add(new SkillInfoPageSnapshot());
 
             skills.Pages[0].HeaderValue = ToUInt16(state.RemainingSp);
-            skills.Tail0 = ToUInt16(state.RemainingSfp);
-            skills.Tail1 = ToUInt16(state.RemainingSp);
+            skills.Tail0 = ToUInt16(state.RemainingTp);
+            skills.Tail1 = 0;
             skills.HasTailValues = true;
+        }
+
+        public static ushort GetPageRemainingSp(SkillInfoSnapshot skills, SkillPointState points, int pageIndex)
+        {
+            if (pageIndex < 0)
+                pageIndex = 0;
+
+            if (skills != null && pageIndex < skills.Pages.Count)
+            {
+                var page = skills.Pages[pageIndex];
+                if (page != null && page.HeaderValue > 0)
+                    return page.HeaderValue;
+            }
+
+            return ToUInt16(points != null ? points.RemainingSp : 0);
         }
 
         public static void Persist(
@@ -98,7 +104,6 @@ namespace DfoServer.Game.Skills
             var points = ResolvePointState(skills, null, job, level, bonusSp, bonusTp);
             points.RemainingSp = points.TotalSp;
             points.RemainingTp = points.TotalTp;
-            points.RemainingSfp = points.TotalSfp;
             Persist(repository, characterId, skills, points);
             return (skills, points);
         }
@@ -114,13 +119,58 @@ namespace DfoServer.Game.Skills
         {
             var skills = repository.LoadSkills(characterId);
             var persisted = repository.LoadSkillPointState(characterId);
+            var oldTotalSp = ResolvePreviousTotalSp(skills, persisted, job, level, bonusSp, bonusTp);
             var points = ResolvePointState(skills, persisted, job, level, bonusSp, bonusTp);
+            SyncSkillPageRemainingSp(skills, job, level, bonusSp, oldTotalSp, points.TotalSp);
             ApplyProtocolMirrors(skills, points);
             if (persist)
             {
                 repository.SaveSkillProgress(characterId, skills, points);
             }
             return (skills, points);
+        }
+
+        private static int ResolvePreviousTotalSp(
+            SkillInfoSnapshot skills,
+            SkillPointState persisted,
+            byte job,
+            byte level,
+            int bonusSp,
+            int bonusTp)
+        {
+            if (persisted != null && persisted.HasPersistedState)
+                return persisted.TotalSp;
+
+            return SkillPointCalculator.Calculate(job, level, bonusSp, bonusTp, skills, 0).TotalSp;
+        }
+
+        private static void SyncSkillPageRemainingSp(
+            SkillInfoSnapshot skills,
+            byte job,
+            byte level,
+            int bonusSp,
+            int oldTotalSp,
+            int newTotalSp)
+        {
+            if (skills == null || skills.Pages.Count == 0)
+                return;
+
+            var gainedSp = newTotalSp - oldTotalSp;
+            if (gainedSp == 0)
+                return;
+
+            for (var i = 1; i < skills.Pages.Count; i++)
+            {
+                var page = skills.Pages[i];
+                if (page == null)
+                    continue;
+
+                var calculated = SkillPointCalculator.Calculate(job, level, bonusSp, 0, skills, i);
+                var remaining = page.HeaderValue > 0
+                    ? page.HeaderValue + gainedSp
+                    : calculated.RemainingSp;
+                page.HeaderValue = ToUInt16(remaining);
+            }
         }
 
         private static ushort ToUInt16(int value)

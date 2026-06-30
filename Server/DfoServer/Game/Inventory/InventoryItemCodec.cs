@@ -25,6 +25,7 @@ namespace DfoServer.Game.Inventory
                 PrefixData0E = ReadHexValue(extraJson, "prefixData0E", 8),
                 MiddleData1A = ReadHexValue(extraJson, "middleData1A", 17),
                 TailData2F = ReadHexValue(extraJson, "tailData2F", 37),
+                JewelSocket = ReadHexValue(extraJson, "jewelSocket", 30),
             };
         }
 
@@ -124,6 +125,7 @@ namespace DfoServer.Game.Inventory
                 + ",\"prefixData0E\":\"" + ToHex(item.PrefixData0E) + "\""
                 + ",\"middleData1A\":\"" + ToHex(item.MiddleData1A) + "\""
                 + ",\"tailData2F\":\"" + ToHex(item.TailData2F) + "\""
+                + ",\"jewelSocket\":\"" + ToHex(item.JewelSocket) + "\""
                 + "}";
         }
 

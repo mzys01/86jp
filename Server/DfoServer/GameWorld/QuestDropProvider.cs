@@ -18,10 +18,10 @@ namespace DfoServer.GameWorld
         /// <summary>
         /// 检查杀怪是否触发任务物品掉落。
         /// 匹配逻辑 (IDA 实证 Quest::CheckKillMonster @ 0x83535d6):
-        ///   monsterCode 精确匹配 (无通配), dungeonId -1=任意, difficulty 忽略, enemyType 默认1
+        ///   monsterCode 精确匹配 (无通配), dungeonId -1=任意, difficulty -1=任意, enemyType 默认1
         /// </summary>
         public static List<QuestDropCandidate> CheckMonsterDrop(
-            ICollection<int> activeQuestIds, int dungeonIndex, int monsterCode)
+            ICollection<int> activeQuestIds, int dungeonIndex, int difficulty, int monsterCode)
         {
             if (activeQuestIds == null || activeQuestIds.Count == 0)
                 return null;
@@ -41,6 +41,8 @@ namespace DfoServer.GameWorld
                         if (entry.MonsterCode != monsterCode)
                             continue;
                         if (entry.DungeonId != -1 && entry.DungeonId != dungeonIndex)
+                            continue;
+                        if (entry.Difficulty >= 0 && entry.Difficulty != difficulty)
                             continue;
 
                         results.Add(new QuestDropCandidate
