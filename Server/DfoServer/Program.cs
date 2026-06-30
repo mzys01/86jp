@@ -53,6 +53,12 @@ namespace DfoServer
                 return;
             }
 
+            if (Array.IndexOf(args, "--selftest-clear-map-quest") >= 0)
+            {
+                Environment.Exit(SelfTests.ClearMapQuestSelfTest.Run());
+                return;
+            }
+
             GameNetworkConfig.Configure(args);
 
             PacketFileLogger.Initialize();

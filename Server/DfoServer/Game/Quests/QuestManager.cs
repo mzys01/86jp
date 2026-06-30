@@ -58,6 +58,14 @@ namespace DfoServer.Game.Quests
             var qBody = StripEcho(body);
             int cid = _sender.CharacterId;
             if (cid <= 0) return;
+
+            byte[] deferredAck;
+            if (TryBuildDeferredClearMapSetTriggerAck(cid, qBody, out deferredAck))
+            {
+                await _sender.SendCmdAckAsync(wireType, deferredAck);
+                return;
+            }
+
             var ack = QuestService.HandleSetTrigger(_connStr, cid, qBody);
             await _sender.SendCmdAckAsync(wireType, ack);
         }
@@ -178,6 +186,94 @@ namespace DfoServer.Game.Quests
 
             var noti = BuildAcceptedQuestNoti(cid);
             await _sender.SendNotiAsync(0x023F, noti);
+        }
+
+        public async Task SyncClearMapQuestProgressAsync(int dungeonId, int mapId)
+        {
+            int cid = _sender.CharacterId;
+            if (cid <= 0) return;
+
+            bool changed = QuestService.SyncClearMapQuestProgress(
+                _connStr, cid, dungeonId, mapId);
+            if (!changed)
+                return;
+
+            var noti = BuildAcceptedQuestNoti(cid);
+            await _sender.SendNotiAsync(0x023F, noti);
+        }
+
+        private bool TryBuildDeferredClearMapSetTriggerAck(int characterId, byte[] qBody, out byte[] ack)
+        {
+            ack = null;
+            if (qBody == null || qBody.Length < 3)
+                return false;
+
+            var player = _sender.Player;
+            if (player == null || player.CurDungeon <= 0)
+                return false;
+
+            ushort questId = BitConverter.ToUInt16(qBody, 0);
+            byte triggerType = qBody[2];
+            bool isIncrement = qBody.Length >= 4 && qBody[3] != 0;
+            if (!ShouldDeferQuestConnectedStartMapSetTrigger(
+                    questId,
+                    triggerType,
+                    isIncrement,
+                    player.CurDungeonCleared,
+                    player.CurMazeQuestConnected,
+                    player.CurMazeStartMapId))
+                return false;
+
+            var active = QuestService.LoadActiveQuests(_connStr, characterId);
+            var quest = QuestService.FindByQuestId(active, questId);
+            if (quest == null || quest.TriggerValue == 0)
+                return false;
+
+            ack = BuildSetTriggerAck(questId, quest.TriggerValue);
+            FileLogger.Log($"[QuestManager] SET_TRIGGER deferred clear-map start target: cid={characterId} quest={questId} trigger={quest.TriggerValue} dungeon={player.CurDungeon} maze={player.CurMazeIndex} map={player.CurMazeStartMapId}");
+            return true;
+        }
+
+        internal static bool ShouldDeferQuestConnectedStartMapSetTrigger(
+            ushort questId,
+            byte triggerType,
+            bool isIncrement,
+            bool dungeonCleared,
+            bool mazeQuestConnected,
+            int mazeStartMapId)
+        {
+            if (questId == 0 || dungeonCleared || !mazeQuestConnected || mazeStartMapId <= 0)
+                return false;
+            if (triggerType != 0 || isIncrement)
+                return false;
+
+            return ShouldDeferQuestConnectedStartMapQuest(questId, mazeStartMapId);
+        }
+
+        internal bool HasDeferredQuestConnectedStartMapClearQuest(int characterId, int mazeStartMapId)
+        {
+            if (characterId <= 0 || mazeStartMapId <= 0)
+                return false;
+
+            var active = QuestService.LoadActiveQuests(_connStr, characterId);
+            foreach (var quest in active)
+            {
+                if (quest.TriggerValue == 0)
+                    continue;
+                if (ShouldDeferQuestConnectedStartMapQuest(quest.QuestId, mazeStartMapId))
+                    return true;
+            }
+
+            return false;
+        }
+
+        private static bool ShouldDeferQuestConnectedStartMapQuest(ushort questId, int mazeStartMapId)
+        {
+            var qst = GameWorld.QuestData.GetQuestFile(questId);
+            if (qst == null || qst.CompleteNpcIndex < 0)
+                return false;
+
+            return GameWorld.QuestData.MatchesClearMapTarget(qst, dungeonId: 0, mapId: mazeStartMapId);
         }
 
         private async Task SendAcceptableQuestListAsync()
@@ -317,6 +413,15 @@ namespace DfoServer.Game.Quests
                 w.WriteUInt16(q.QuestId);
                 w.WriteUInt32(q.TriggerValue);
             }
+            return w.ToArray();
+        }
+
+        private static byte[] BuildSetTriggerAck(ushort questId, uint triggerValue)
+        {
+            var w = new Network.GamePacketWriter();
+            w.WriteByte(0x01);
+            w.WriteUInt16(questId);
+            w.WriteUInt32(triggerValue);
             return w.ToArray();
         }
     }

@@ -400,6 +400,50 @@ namespace DfoServer.GameWorld
             return qst != null ? ComputeInitTrigger(qst) : 1;
         }
 
+        internal static bool IsClearMapQuest(int questId)
+        {
+            return IsClearMapQuest(GetQuestFile(questId));
+        }
+
+        internal static bool MatchesClearMapTarget(int questId, int dungeonId, int mapId)
+        {
+            return MatchesClearMapTarget(GetQuestFile(questId), dungeonId, mapId);
+        }
+
+        internal static bool MatchesClearMapTarget(QuestFile qst, int dungeonId, int mapId)
+        {
+            return IsClearMapQuest(qst) && MatchesClearMapTargetData(qst.IntData, dungeonId, mapId);
+        }
+
+        internal static bool MatchesClearMapTargetData(string intData, int dungeonId, int mapId)
+        {
+            var values = ParseIntList(intData);
+            for (int i = 0; i < values.Count; i++)
+            {
+                var target = values[i];
+                if (target <= 0)
+                    continue;
+                if (dungeonId > 0 && target == dungeonId)
+                    return true;
+                if (mapId > 0 && target == mapId)
+                    return true;
+            }
+            return false;
+        }
+
+        private static bool IsClearMapQuest(QuestFile qst)
+        {
+            return qst != null && NormalizeQuestTag(qst.Type) == "clear map";
+        }
+
+        private static string NormalizeQuestTag(string value)
+        {
+            var tag = (value ?? "").Trim().ToLowerInvariant();
+            if (tag.Length >= 2 && tag[0] == '[' && tag[tag.Length - 1] == ']')
+                tag = tag.Substring(1, tag.Length - 2).Trim();
+            return tag;
+        }
+
         public static List<QuestRewardItem> GetEventItems(int questId)
         {
             var qst = GetQuestFile(questId);

@@ -11,6 +11,10 @@ namespace DfoServer.Game.Session
         public int CurLayeredMapIndex { get; set; } = -1;
         public byte CurDungeonFlag1 { get; set; }
         public byte CurDungeonFlag2 { get; set; }
+        public bool CurMazeQuestConnected { get; set; }
+        public int CurMazeStartMapId { get; set; }
+        public int CurMazeStartX { get; set; } = -1;
+        public int CurMazeStartY { get; set; } = -1;
         public bool HellPartyGorgeousChallengeEnabled { get; set; }
         public bool CurDungeonHellMode { get; set; }
         public byte CurDungeonHellPartyMode { get; set; }

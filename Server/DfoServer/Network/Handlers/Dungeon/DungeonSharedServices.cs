@@ -35,6 +35,10 @@ namespace DfoServer.Network.Handlers.Dungeon
             session.Player.CurDungeonDifficulty = 0;
             session.Player.CurDungeonFlag1 = 0;
             session.Player.CurDungeonFlag2 = 0;
+            session.Player.CurMazeQuestConnected = false;
+            session.Player.CurMazeStartMapId = 0;
+            session.Player.CurMazeStartX = -1;
+            session.Player.CurMazeStartY = -1;
             session.Player.CurDungeonHellMode = false;
             session.Player.CurDungeonHellPartyMode = 0;
             session.Player.CurDungeonVeryDifficultHell = false;
