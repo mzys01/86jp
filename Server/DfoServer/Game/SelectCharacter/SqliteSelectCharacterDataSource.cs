@@ -217,16 +217,19 @@ namespace DfoServer.Game.SelectCharacter
                 conn.Open();
                 using (var cmd = conn.CreateCommand())
                 {
-                    cmd.CommandText = "SELECT premium_type, end_time FROM account_premiums WHERE account_id=@aid AND end_time>0 ORDER BY premium_type;";
+                    var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+                    cmd.CommandText = "SELECT premium_type, end_time FROM account_premiums WHERE account_id=@aid AND end_time>@now ORDER BY premium_type;";
                     cmd.Parameters.AddWithValue("@aid", accountId);
+                    cmd.Parameters.AddWithValue("@now", now);
                     using (var reader = cmd.ExecuteReader())
                     {
                         while (reader.Read())
                         {
+                            var remaining = Math.Max(0, reader.GetInt64(1) - now);
                             var entry = new AckPremiumEntrySnapshot
                             {
                                 PremiumType = (byte)reader.GetInt32(0),
-                                EndTime = BitConverter.GetBytes(reader.GetInt64(1)),
+                                EndTime = BitConverter.GetBytes(remaining),
                             };
                             initSnapshot.AckPremiums.Add(entry);
                         }

@@ -44,6 +44,7 @@ namespace DfoServer.Network.Handlers
             var results = new System.Collections.Generic.List<InventoryMutationResult>();
             var successItems = new System.Collections.Generic.List<System.Tuple<int, InventoryMutationResult>>();
             var boughtExpertContract = false;
+            var premiumNotifications = new List<(int premiumType, long remaining)>();
             for (int idx = 0; idx < request.CommodityNos.Count; idx++)
             {
                 var commodityNo = request.CommodityNos[idx];
@@ -55,6 +56,9 @@ namespace DfoServer.Network.Handlers
                     successItems.Add(System.Tuple.Create(commodityNo, result));
                     if (result.ItemTemplateId == 44 || result.ItemTemplateId == 45)
                         boughtExpertContract = true;
+                    var activated = TryActivatePremium(aid, result.ItemTemplateId);
+                    if (activated != null)
+                        premiumNotifications.Add(activated.Value);
                 }
                 else
                 {
@@ -149,7 +153,16 @@ namespace DfoServer.Network.Handlers
                 }
             }
 
-            // NOTI 0x35 点券更新(最终余额)
+            foreach (var pn in premiumNotifications)
+            {
+                var nw = new GamePacketWriter();
+                nw.WriteUInt16(2);
+                nw.WriteByte((byte)pn.premiumType);
+                nw.WriteBytes(BitConverter.GetBytes(pn.remaining));
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0042, nw.ToArray()));
+                FileLogger.Log($"[{ProtocolName}] CERA_SHOP_BUY: premium notify type={pn.premiumType} remaining={pn.remaining}");
+            }
+
             if (boughtExpertContract)
                 await SendPremiumServiceRefresh(session, cid, aid);
 
@@ -263,6 +276,59 @@ namespace DfoServer.Network.Handlers
             writer.WriteInt32(tokenCera);      // [5..8] token/event cera point
             writer.WriteInt32(happyTokenCera); // [9..12] happy token/event cera point
             return writer.ToArray();
+        }
+        private static (int premiumType, long remaining)? TryActivatePremium(int accountId, int itemTemplateId)
+        {
+            try
+            {
+                if (!Game.Premium.PremiumCatalog.Load().TryGetValue(itemTemplateId, out var premiumType, out var durationDays))
+                    return null;
+                if (premiumType <= 0 || durationDays <= 0)
+                    return null;
+
+                var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+                var duration = (long)durationDays * 86400;
+                var connStr = Infrastructure.SqliteDatabaseBootstrap.Initialize(
+                    Infrastructure.ServerPaths.DatabasePath, Infrastructure.ServerPaths.SchemaFilePath);
+
+                long newExpire;
+                using (var conn = new Microsoft.Data.Sqlite.SqliteConnection(connStr))
+                {
+                    conn.Open();
+                    long oldExpire = 0;
+                    using (var q = conn.CreateCommand())
+                    {
+                        q.CommandText = "SELECT end_time FROM account_premiums WHERE account_id=@aid AND premium_type=@type;";
+                        q.Parameters.AddWithValue("@aid", accountId);
+                        q.Parameters.AddWithValue("@type", premiumType);
+                        var val = q.ExecuteScalar();
+                        if (val != null && val != DBNull.Value)
+                            oldExpire = Convert.ToInt64(val);
+                    }
+                    newExpire = Math.Max(now, oldExpire) + duration;
+                    using (var cmd = conn.CreateCommand())
+                    {
+                        cmd.CommandText = @"
+INSERT INTO account_premiums (account_id, premium_type, end_time, updated_at)
+VALUES (@aid, @type, @expire, CURRENT_TIMESTAMP)
+ON CONFLICT(account_id, premium_type)
+DO UPDATE SET end_time = @expire, updated_at = CURRENT_TIMESTAMP;";
+                        cmd.Parameters.AddWithValue("@aid", accountId);
+                        cmd.Parameters.AddWithValue("@type", premiumType);
+                        cmd.Parameters.AddWithValue("@expire", newExpire);
+                        cmd.ExecuteNonQuery();
+                    }
+                }
+
+                var remaining = newExpire - now;
+                FileLogger.Log($"[CeraShop] Premium activated: account={accountId} type={premiumType} days={durationDays} remaining={remaining} item=0x{itemTemplateId:X8}");
+                return (premiumType, remaining);
+            }
+            catch (Exception ex)
+            {
+                FileLogger.Log($"[CeraShop] Premium activation failed: item=0x{itemTemplateId:X8} {ex.Message}");
+                return null;
+            }
         }
     }
 }
