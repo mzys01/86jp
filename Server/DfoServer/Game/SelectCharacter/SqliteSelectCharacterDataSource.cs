@@ -118,7 +118,8 @@ namespace DfoServer.Game.SelectCharacter
             initSnapshot.ServerEventPhaseBitmap = _initFlagsRepository.LoadServerEventPhaseBitmap();
 
             initSnapshot.PremiumServiceType = 1;
-            initSnapshot.PremiumServiceData = new byte[74];
+            initSnapshot.PremiumServiceData = Premium.PremiumService.BuildPremiumServiceData(
+                _connectionString, accountId);
             LoadAccountPremiums(accountId, initSnapshot);
 
             
@@ -212,12 +213,14 @@ namespace DfoServer.Game.SelectCharacter
         private void LoadAccountPremiums(int accountId, SelectCharacterInitializationSnapshot initSnapshot)
         {
             initSnapshot.AckPremiums.Clear();
+            var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            long devilContractMaxExpire = 0;
+
             using (var conn = new SqliteConnection(_connectionString))
             {
                 conn.Open();
                 using (var cmd = conn.CreateCommand())
                 {
-                    var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
                     cmd.CommandText = "SELECT premium_type, end_time FROM account_premiums WHERE account_id=@aid AND end_time>@now ORDER BY premium_type;";
                     cmd.Parameters.AddWithValue("@aid", accountId);
                     cmd.Parameters.AddWithValue("@now", now);
@@ -225,16 +228,34 @@ namespace DfoServer.Game.SelectCharacter
                     {
                         while (reader.Read())
                         {
-                            var remaining = Math.Max(0, reader.GetInt64(1) - now);
-                            var entry = new AckPremiumEntrySnapshot
+                            var pt = reader.GetInt32(0);
+                            var endTime = reader.GetInt64(1);
+
+                            if (Premium.DevilContractCatalog.IsDevilContractSlotType(pt))
                             {
-                                PremiumType = (byte)reader.GetInt32(0),
+                                if (endTime > devilContractMaxExpire)
+                                    devilContractMaxExpire = endTime;
+                                continue;
+                            }
+
+                            var remaining = Math.Max(0, endTime - now);
+                            initSnapshot.AckPremiums.Add(new AckPremiumEntrySnapshot
+                            {
+                                PremiumType = (byte)pt,
                                 EndTime = BitConverter.GetBytes(remaining),
-                            };
-                            initSnapshot.AckPremiums.Add(entry);
+                            });
                         }
                     }
                 }
+            }
+
+            if (devilContractMaxExpire > now)
+            {
+                initSnapshot.AckPremiums.Add(new AckPremiumEntrySnapshot
+                {
+                    PremiumType = (byte)Premium.DevilContractCatalog.ActivationPremiumType,
+                    EndTime = BitConverter.GetBytes(devilContractMaxExpire - now),
+                });
             }
         }
 
