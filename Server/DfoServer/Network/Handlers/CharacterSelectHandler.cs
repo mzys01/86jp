@@ -262,8 +262,10 @@ namespace DfoServer.Network.Handlers
             var accountId = session.Account?.AccountId ?? 1;
 
             var count = _characterRepository.CountByAccount(accountId);
-            if (count >= 16)
+            var slotLimit = CharacterSlotPolicy.ResolveSlotLimit(_getUserInfoTemplate?.GateOrCount1, _getUserInfoTemplate?.GateOrCount2);
+            if (!CharacterSlotPolicy.HasAvailableSlot(count, _getUserInfoTemplate?.GateOrCount1, _getUserInfoTemplate?.GateOrCount2))
             {
+                FileLogger.Log($"[{ProtocolName}] CREATE_CHARACTER: account_id={accountId} has no free character slot (count={count}, limit={slotLimit})");
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0005, new byte[] { 0x04 }));
                 return;
             }
@@ -383,9 +385,10 @@ namespace DfoServer.Network.Handlers
             var writer = new GamePacketWriter();
 
             var t = _getUserInfoTemplate;
+            var slotLimit = CharacterSlotPolicy.ResolveSlotLimit(t?.GateOrCount1, t?.GateOrCount2);
             writer.WriteByte(2);                                                      // userInfoType = 2
-            writer.WriteUInt16(t != null ? t.GateOrCount1 : (ushort)17);              // CharacSlotLimit
-            writer.WriteUInt16(t != null ? t.GateOrCount2 : (ushort)17);              // SlotEffectCount
+            writer.WriteUInt16(slotLimit);                                             // CharacSlotLimit
+            writer.WriteUInt16(t != null ? t.GateOrCount2 : slotLimit);               // SlotEffectCount
             writer.WriteByte(t != null ? t.FlagOrManage : (byte)0);                   // ManageLevel
             writer.WriteInt32(t != null ? t.KeyOrPoint : 0);                          // ManagePoint
             writer.WriteUInt16(t != null ? t.Unknown16 : (ushort)0);                  // unknownA

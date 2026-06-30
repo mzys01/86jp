@@ -53,6 +53,12 @@ namespace DfoServer
                 return;
             }
 
+            if (Array.IndexOf(args, "--selftest-character-slot-policy") >= 0)
+            {
+                Environment.Exit(SelfTests.CharacterSlotPolicySelfTest.Run());
+                return;
+            }
+
             GameNetworkConfig.Configure(args);
 
             PacketFileLogger.Initialize();
