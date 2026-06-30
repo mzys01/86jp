@@ -85,6 +85,7 @@ namespace DfoServer.Game.Inventory
 
         void SeedNewCharacterEquipment((short slot, int itemId)[] equipment);
 
-        bool TryBuyCeraShopItem(int productId, int buyCount, out InventoryMutationResult result);
+        // 商城购买: paymentMode=0 走点券瀑布扣减, paymentMode=1 走装扮兑换券抵扣(不扣Cera)。
+        bool TryBuyCeraShopItem(int productId, int buyCount, int paymentMode, byte attributeValue, out InventoryMutationResult result);
     }
 }
