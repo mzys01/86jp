@@ -31,7 +31,7 @@ namespace DfoServer.Network.Handlers
                 return;
             }
 
-            FileLogger.Log($"[{ProtocolName}] CERA_SHOP_BUY parsed: {request.CommodityNos.Count} item(s) [{string.Join(", ", request.CommodityNos)}] flag=0x{request.UnknownFlag:X2}");
+            FileLogger.Log($"[{ProtocolName}] CERA_SHOP_BUY parsed: {request.CommodityNos.Count} item(s) [{string.Join(", ", request.CommodityNos)}] paymentMode={request.PaymentMode}");
             var cid = session.Player?.CharacterId ?? 0;
             var aid = session.Account?.AccountId ?? 0;
             if (cid <= 0 || aid <= 0)
@@ -45,9 +45,11 @@ namespace DfoServer.Network.Handlers
             var results = new System.Collections.Generic.List<InventoryMutationResult>();
             var successItems = new System.Collections.Generic.List<System.Tuple<int, InventoryMutationResult>>();
             var boughtExpertContract = false;
-            foreach (var commodityNo in request.CommodityNos)
+            for (int idx = 0; idx < request.CommodityNos.Count; idx++)
             {
-                if (_sqliteSelectCharacterDataSource.TryBuyCeraShopItem(cid, aid, commodityNo, 1, out var result))
+                var commodityNo = request.CommodityNos[idx];
+                var attrValue = idx < request.AttributeValues.Count ? request.AttributeValues[idx] : (byte)0;
+                if (_sqliteSelectCharacterDataSource.TryBuyCeraShopItem(cid, aid, commodityNo, 1, request.PaymentMode, attrValue, out var result))
                 {
                     FileLogger.Log($"[{ProtocolName}] CERA_SHOP_BUY: OK commodityNo={commodityNo} slot={result.SlotIndex} item=0x{result.ItemTemplateId:X8} count={result.AppliedCount} coin={result.UpdatedCoin} extra={result.ExtraResults.Count}");
                     results.Add(result);
