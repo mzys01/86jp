@@ -1,5 +1,6 @@
 using DfoServer.Infrastructure;
 using DfoServer.Game.ExpertJob;
+using DfoServer.Game.ItemUpgrade;
 using System;
 using System.Collections.Generic;
 using System.Globalization;
@@ -174,6 +175,7 @@ namespace DfoServer.Game.Inventory
         private readonly InventoryAuditLogger _auditLogger;
         internal readonly InventoryDbPrimitives _db;
         private readonly InventoryEnchantStore _enchantStore;
+        private readonly InventoryItemUpgradeStore _itemUpgradeStore;
         private readonly InventoryPackageStore _packageStore;
         private readonly InventoryShopStore _shopStore;
         internal readonly InventoryEquipmentStore _equipStore;
@@ -185,6 +187,7 @@ namespace DfoServer.Game.Inventory
             _auditLogger = new InventoryAuditLogger();
             _db = new InventoryDbPrimitives();
             _enchantStore = new InventoryEnchantStore(_db, _auditLogger);
+            _itemUpgradeStore = new InventoryItemUpgradeStore(_db, _auditLogger);
             _packageStore = new InventoryPackageStore(_db, _auditLogger);
             _shopStore = new InventoryShopStore(_db, _auditLogger);
             _equipStore = new InventoryEquipmentStore(_db, _auditLogger);
@@ -814,6 +817,17 @@ ORDER BY slot_index;";
             using (var transaction = connection.BeginTransaction())
             {
                 var ok = _enchantStore.TryEnchantByBead(connection, transaction, _context.CharacterId, _context.AccountId, command, out result);
+                if (ok) transaction.Commit();
+                return ok;
+            }
+        }
+
+        public bool TryUpgradeItem(ItemUpgradeCommand command, out ItemUpgradeResult result)
+        {
+            using (var connection = _context.OpenConnection())
+            using (var transaction = connection.BeginTransaction())
+            {
+                var ok = _itemUpgradeStore.TryUpgradeItem(connection, transaction, _context.CharacterId, _context.AccountId, command, out result);
                 if (ok) transaction.Commit();
                 return ok;
             }

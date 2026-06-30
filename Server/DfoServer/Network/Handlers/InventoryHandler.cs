@@ -2,6 +2,7 @@ using DfoServer.Game.Appearance;
 using DfoServer.Game.Characters;
 using DfoServer.Game.ExpertJob;
 using DfoServer.Game.Inventory;
+using DfoServer.Game.ItemUpgrade;
 using DfoServer.Game.SelectCharacter;
 using DfoServer.GameWorld;
 using DfoServer.Network.Builders;
@@ -18,13 +19,18 @@ namespace DfoServer.Network.Handlers
     {
         private readonly SqliteSelectCharacterDataSource _sqliteSelectCharacterDataSource;
         private readonly ICharacterRepository _characterRepository;
+        private readonly Func<byte[], Task> _broadcastGamePacket;
 
         public string ProtocolName => "GameProtocol";
 
-        public InventoryHandler(SqliteSelectCharacterDataSource sqliteSelectCharacterDataSource, ICharacterRepository characterRepository)
+        public InventoryHandler(
+            SqliteSelectCharacterDataSource sqliteSelectCharacterDataSource,
+            ICharacterRepository characterRepository,
+            Func<byte[], Task> broadcastGamePacket = null)
         {
             _sqliteSelectCharacterDataSource = sqliteSelectCharacterDataSource ?? throw new ArgumentNullException(nameof(sqliteSelectCharacterDataSource));
             _characterRepository = characterRepository ?? throw new ArgumentNullException(nameof(characterRepository));
+            _broadcastGamePacket = broadcastGamePacket;
         }
 
         public async Task Handle_ENUM_CMDPACKET_MOVE_ITEMSPACE(EnhancedClientSession session, GamePacketHeader header, byte[] body)
@@ -313,6 +319,75 @@ namespace DfoServer.Network.Handlers
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0110, EnchantByBeadAckBuilder.BuildSuccess(result)));
 
             FileLogger.Log($"[{ProtocolName}] ENCHANT_BY_BEAD: OK target=({request.TargetListType},{request.TargetSlotIndex}) enchantCard=0x{result.EnchantCardItemId:X8}");
+        }
+
+        public async Task Handle_ENUM_CMDPACKET_UPGRADE_ITEM(EnhancedClientSession session, GamePacketHeader header, byte[] body)
+        {
+            if (!ItemUpgradeRequest.TryParse(body, out var request))
+            {
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0050,
+                    ItemUpgradeAckBuilder.BuildError(ItemUpgradeResult.ErrorInvalidTarget)));
+                return;
+            }
+
+            FileLogger.Log($"[{ProtocolName}] UPGRADE_ITEM raw({body?.Length ?? 0}B): {(body != null ? BitConverter.ToString(body) : "null")} mode={request.Mode} target=({request.TargetSlotIndex},0x{request.TargetItemTemplateId:X8}) materialSlot={request.MaterialSlotIndex} optSlot={request.OptionalTicketSlotIndex} name={request.TargetItemName}");
+
+            var (cid, aid) = ResolveOwner(session);
+            var command = request.ToCommand();
+            if (!_sqliteSelectCharacterDataSource.TryUpgradeItem(cid, aid, command, out var result))
+            {
+                var errorCode = result != null ? result.ErrorCode : ItemUpgradeResult.ErrorInvalidTarget;
+                FileLogger.Log($"[{ProtocolName}] UPGRADE_ITEM: FAILED error={errorCode} mode={request.Mode} targetSlot={request.TargetSlotIndex} materialSlot={request.MaterialSlotIndex}");
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0050, ItemUpgradeAckBuilder.BuildError(errorCode)));
+                return;
+            }
+
+            var updates = new List<CommonInventoryItem>();
+            if (result.TargetItem != null)
+                updates.Add(result.TargetItem);
+            if (result.ExtraItems != null)
+                updates.AddRange(result.ExtraItems);
+            // 0x0050 负责结果框；目标装备和金币仍通过 NOTI 14 实时刷新。
+
+            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0050, ItemUpgradeAckBuilder.BuildSuccess(result)));
+
+            if (updates.Count > 0)
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000E, ItemListUpdateBuilder.BuildCommonUpdates(updates)));
+
+            if (result.GoldCost > 0)
+            {
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000E,
+                    TeleportPacketBuilder.BuildItemListUpdate(0, 0, result.UpdatedGold)));
+                FileLogger.Log($"[{ProtocolName}] UPGRADE_ITEM: gold refresh queued gold={result.UpdatedGold}");
+            }
+
+            await SendSortItemLockRefresh(session, InventoryListType.Main);
+
+            if (result.NoticeRequired)
+                await BroadcastItemUpgradeNotice(session, result);
+
+            FileLogger.Log($"[{ProtocolName}] UPGRADE_ITEM: OK scene={result.Scene} mode={result.Mode} targetSlot={result.TargetSlotIndex} level={result.OldLevel}->{result.NewLevel} success={result.UpgradeSucceeded} resultCode={result.ResultCode} rate={result.FinalSuccessWeight} gold={result.UpdatedGold}");
+        }
+
+        private async Task BroadcastItemUpgradeNotice(EnhancedClientSession session, ItemUpgradeResult result)
+        {
+            if (_broadcastGamePacket == null || result == null)
+                return;
+
+            try
+            {
+                var userUniqueId = session?.Player?.UserId ?? 0;
+                if (userUniqueId == 0 && session?.Player?.CharacterId > 0)
+                    userUniqueId = (ushort)session.Player.CharacterId;
+
+                var body = ItemUpgradeNoticeBuilder.Build(result, userUniqueId);
+                await _broadcastGamePacket(GamePacketEnvelopeBuilder.Build(0x00, 0x0056, body));
+                FileLogger.Log($"[{ProtocolName}] UPGRADE_ITEM: notice broadcast type=0x0056 uniqueId={userUniqueId} item=0x{result.TargetItemTemplateId:X8} level={result.NewLevel} mode={result.Mode}");
+            }
+            catch (Exception ex)
+            {
+                FileLogger.Log($"[{ProtocolName}] UPGRADE_ITEM: notice broadcast failed: {ex.Message}");
+            }
         }
 
         public async Task Handle_EQUIPMENT_SOCKET_OPEN(EnhancedClientSession session, GamePacketHeader header, byte[] body)

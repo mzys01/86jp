@@ -97,7 +97,7 @@ namespace DfoServer
             var portConfigs = new Dictionary<int, (IProtocolHandler handler, IPacketHeader structure)>
             {
                 { channelPort, (new ChannelProtocolHandler(), new ChannelPacketHeader()) },
-                { gamePort, (new GameProtocolHandler(), new GamePacketHeader()) }
+                { gamePort, (new GameProtocolHandler(packet => server.BroadcastToPortAsync(gamePort, packet)), new GamePacketHeader()) }
             };
 
             server.Start(portConfigs);

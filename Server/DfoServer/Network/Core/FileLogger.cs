@@ -8,12 +8,14 @@ namespace DfoServer
     {
         private static readonly object _lock = new object();
         private static readonly string _logPath;
+        private static readonly Encoding _encoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: true);
 
         static FileLogger()
         {
             var dir = AppContext.BaseDirectory;
             _logPath = Path.Combine(dir, "server.log");
-            File.WriteAllText(_logPath, $"=== DfoServer started {DateTime.Now:yyyy-MM-dd HH:mm:ss} ===\r\n");
+            // server.log 包含中文诊断字段，显式写入 BOM 方便 Windows 查看器识别 UTF-8。
+            File.WriteAllText(_logPath, $"=== DfoServer started {DateTime.Now:yyyy-MM-dd HH:mm:ss} ===\r\n", _encoding);
         }
 
         public static void Log(string message)
@@ -21,7 +23,7 @@ namespace DfoServer
             var line = $"[{DateTime.Now:HH:mm:ss.fff}] {message}\r\n";
             lock (_lock)
             {
-                File.AppendAllText(_logPath, line, Encoding.UTF8);
+                File.AppendAllText(_logPath, line, _encoding);
             }
         }
 
