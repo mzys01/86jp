@@ -92,6 +92,8 @@ namespace PvfLib
         public int[] ForceResultItemRule { get; set; }
         
         public string UsableJob { get; set; }
+        public string ImpossibleContents { get; set; }
+        public List<string> ImpossibleContentItems { get; set; } = new List<string>();
 
         /// <summary>
         /// PVF [item category] 段值，用于判定克隆装扮等特殊类别。
@@ -176,11 +178,32 @@ namespace PvfLib
                     case "part set index": equ.PartSetIndex = ParseInt(data); break;
                     case "force result item rule": equ.ForceResultItemRule = ParseIntArray(data); break;
                     case "usable job": equ.UsableJob = StripBacktick(data); break;
+                    case "impossible contents":
+                        equ.ImpossibleContents = data;
+                        equ.ImpossibleContentItems = ParseStringList(node, content);
+                        break;
                     case "item category": equ.ItemCategory = StripBacktick(data); break;
                 }
             }
 
             return equ;
+        }
+
+        private static List<string> ParseStringList(ScriptNode node, string content)
+        {
+            var result = new List<string>();
+            if (node == null || node.DataItems == null)
+                return result;
+
+            foreach (var item in node.DataItems)
+            {
+                var raw = item.GetContent(content).Trim();
+                var value = StripBacktick(raw);
+                if (!string.IsNullOrWhiteSpace(value))
+                    result.Add(value.Trim());
+            }
+
+            return result;
         }
 
         #endregion

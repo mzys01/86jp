@@ -1,4 +1,5 @@
 using DfoServer.Game.ExpertJob;
+using DfoServer.Game.ItemUpgrade;
 using Microsoft.Data.Sqlite;
 using System;
 using System.Collections.Generic;
@@ -46,6 +47,8 @@ namespace DfoServer.Game.Inventory
         bool TrySellItem(InventoryListType listType, short slotIndex, short sellCount, out InventoryMutationResult result);
 
         bool TryEnchantByBead(EnchantByBeadCommand command, out EnchantByBeadResult result);
+
+        bool TryUpgradeItem(ItemUpgradeCommand command, out ItemUpgradeResult result);
 
         bool TryOpenEquipmentSocket(short targetSlotIndex, int targetItemTemplateId, short materialSlotIndex, out EquipmentSocketMutationResult result);
 

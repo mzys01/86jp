@@ -2,6 +2,7 @@
 using DfoServer.Game.Characters;
 using DfoServer.Game.ExpertJob;
 using DfoServer.Game.Inventory;
+using DfoServer.Game.ItemUpgrade;
 using DfoServer.Game.Premium;
 using DfoServer.Game.Settings;
 using System;
@@ -292,6 +293,12 @@ namespace DfoServer.Game.SelectCharacter
         {
             using (_inventoryStore.BeginScope(characterId, accountId))
                 return _inventoryStore.TryEnchantByBead(command, out result);
+        }
+
+        public bool TryUpgradeItem(int characterId, int accountId, ItemUpgradeCommand command, out ItemUpgradeResult result)
+        {
+            using (_inventoryStore.BeginScope(characterId, accountId))
+                return _inventoryStore.TryUpgradeItem(command, out result);
         }
 
         public bool TryCompoundAvatar(int characterId, int accountId, short slot1, short slot2, short consumeSlot,

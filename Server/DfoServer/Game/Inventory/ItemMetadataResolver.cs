@@ -33,6 +33,12 @@ namespace DfoServer.Game.Inventory
 
         public int MinimumLevel { get; set; }
 
+        public int Rarity { get; set; }
+
+        public string EquipmentType { get; set; }
+
+        public IReadOnlyList<string> ImpossibleContents { get; set; } = Array.Empty<string>();
+
         public bool IsStackable => string.Equals(ItemKind, "stackable", StringComparison.Ordinal);
 
         public bool IsMaterialExchange => NeedMaterialId > 0 && NeedMaterialCount > 0;
@@ -111,7 +117,8 @@ namespace DfoServer.Game.Inventory
                 
                 var baseSellPrice = equipment.Value >= 0 ? equipment.Value : buyGold;
                 var sellGold = Math.Max(1, baseSellPrice * SellRates.Value.Equipment / 1000);
-                var durability = equipment.Durability > 0 ? equipment.Durability : 45;
+                // PVF 未声明 [durability] 的装备按无耐久处理。
+                var durability = equipment.Durability > 0 ? equipment.Durability : 0;
 
                 return new ItemMetadata
                 {
@@ -123,6 +130,9 @@ namespace DfoServer.Game.Inventory
                     StackLimit = 1,
                     Grade = equipment.Grade,
                     MinimumLevel = equipment.MinimumLevel,
+                    Rarity = equipment.Rarity,
+                    EquipmentType = NormalizeEquipmentType(equipment.EquipmentType),
+                    ImpossibleContents = equipment.ImpossibleContentItems,
                 };
             }
 
@@ -163,6 +173,10 @@ namespace DfoServer.Game.Inventory
                     StackLimit = stackable.StackLimit,
                     NeedMaterialId = needMatId,
                     NeedMaterialCount = needMatCount,
+                    Grade = stackable.Grade,
+                    MinimumLevel = stackable.MinimumLevel,
+                    Rarity = stackable.Rarity,
+                    ImpossibleContents = stackable.ImpossibleContentItems,
                 };
             }
 
@@ -179,6 +193,27 @@ namespace DfoServer.Game.Inventory
         public static LstEntry GetStackableEntry(int itemTemplateId)
         {
             return StackableList.Value.GetById(itemTemplateId);
+        }
+
+        public static LstEntry GetEquipmentEntry(int itemTemplateId)
+        {
+            return EquipmentList.Value.GetById(itemTemplateId);
+        }
+
+        public static bool TryLoadEquipmentFile(int itemTemplateId, out EquipmentFile equipment)
+        {
+            equipment = null;
+            var equipmentEntry = EquipmentList.Value.GetById(itemTemplateId);
+            if (equipmentEntry == null)
+                return false;
+
+            equipment = EquipmentFile.Parse(PvfArchiveAccessor.ReadText(Path.Combine("equipment", equipmentEntry.FilePath)));
+            return true;
+        }
+
+        public static bool TryLoadStackableFile(int itemTemplateId, out StackableItemFile stackable)
+        {
+            return TryLoadStackable(itemTemplateId, out stackable);
         }
 
         public static string ResolveEquipmentType(int itemTemplateId)
