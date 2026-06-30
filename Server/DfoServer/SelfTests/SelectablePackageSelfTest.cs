@@ -415,7 +415,7 @@ namespace DfoServer.SelfTests
                 BoosterUseResult magicBoxResult = null;
                 using (store.BeginScope(CharacterId, AccountId))
                 {
-                    Check("open magic-box request with hammer material consumes one booster",
+                    Check("open magic-box request with hammer material consumes requested boosters",
                         store.TryUseBoosterItem(new BoosterUseRequest
                         {
                             SlotIndex = requestMagicBoxSlot,
@@ -423,36 +423,36 @@ namespace DfoServer.SelfTests
                             ExpectedItemTemplateId = magicBoxRequest.ItemTemplateId,
                             MaterialSlotIndex = requestMaterialSlot,
                             ExpectedMaterialItemTemplateId = magicBoxRequest.MaterialItemTemplateId,
+                            RequestedCount = magicBoxRequest.RequestedCount,
                         }, out magicBoxResult));
                 }
 
                 if (magicBoxResult != null)
                 {
-                    Check($"magic-box consumed source count={magicBoxResult.ConsumedSourceCount}", magicBoxResult.ConsumedSourceCount == 1);
+                    Check($"magic-box consumed source count={magicBoxResult.ConsumedSourceCount}", magicBoxResult.ConsumedSourceCount == MagicBoxBatchCount);
                     Check($"magic-box consumed material item={magicBoxResult.ConsumedMaterialItemTemplateId}", magicBoxResult.ConsumedMaterialItemTemplateId == MagicHammerItemTemplateId);
-                    Check($"magic-box consumed material count={magicBoxResult.ConsumedMaterialCount}", magicBoxResult.ConsumedMaterialCount == 1);
+                    Check($"magic-box consumed material count={magicBoxResult.ConsumedMaterialCount}", magicBoxResult.ConsumedMaterialCount == MagicBoxBatchCount);
                     Check("magic-box grants at least one reward", magicBoxResult.Rewards.Count > 0);
-                    Check($"magic-box grants instant teleport potions", magicBoxResult.Rewards.Find(x => x.ItemTemplateId == InstantTeleportPotionItemTemplateId)?.GrantedCount == 2);
-                    Check($"magic-box grants Seria luck boxes", magicBoxResult.Rewards.Find(x => x.ItemTemplateId == SeriaLuckItemTemplateId)?.GrantedCount == 1);
+                    Check($"magic-box grants instant teleport potions", magicBoxResult.Rewards.Find(x => x.ItemTemplateId == InstantTeleportPotionItemTemplateId)?.GrantedCount == MagicBoxBatchCount * 2);
+                    Check($"magic-box grants Seria luck boxes", magicBoxResult.Rewards.Find(x => x.ItemTemplateId == SeriaLuckItemTemplateId)?.GrantedCount == MagicBoxBatchCount);
                 }
 
                 short seriaLuckSlot = -1;
                 using (store.BeginScope(CharacterId, AccountId))
                 {
                     var snapshot = store.LoadCharacterItemListSnapshot();
-                    Check($"snapshot magic-box remaining count", snapshot.MainItems.Find(x => x.SlotIndex == requestMagicBoxSlot)?.CountOrInstanceValue == MagicBoxBatchCount - 1);
-                    Check($"snapshot material-tab magic hammer remaining count", snapshot.MainItems.Find(x => x.SlotIndex == requestMaterialSlot)?.CountOrInstanceValue == MagicBoxBatchCount - 1);
+                    Check("snapshot magic-box stack consumed", snapshot.MainItems.Find(x => x.SlotIndex == requestMagicBoxSlot)?.ItemTemplateId != MagicBoxItemTemplateId);
+                    Check("snapshot material-tab magic hammer consumed", snapshot.MainItems.Find(x => x.SlotIndex == requestMaterialSlot) == null);
                     Check($"wrong-tab magic hammer still ignored", snapshot.MainItems.Find(x => x.SlotIndex == WrongMagicHammerSlot)?.CountOrInstanceValue == 1);
-                    Check($"snapshot instant teleport potion count", snapshot.MainItems.Find(x => x.ItemTemplateId == InstantTeleportPotionItemTemplateId)?.CountOrInstanceValue == 2);
+                    Check($"snapshot instant teleport potion count", snapshot.MainItems.Find(x => x.ItemTemplateId == InstantTeleportPotionItemTemplateId)?.CountOrInstanceValue == MagicBoxBatchCount * 2);
                     var seriaLuckItem = snapshot.MainItems.Find(x => x.ItemTemplateId == SeriaLuckItemTemplateId);
-                    Check($"snapshot Seria luck count", seriaLuckItem?.CountOrInstanceValue == 1);
+                    Check($"snapshot Seria luck count", seriaLuckItem?.CountOrInstanceValue == MagicBoxBatchCount);
                     if (seriaLuckItem != null)
                         seriaLuckSlot = seriaLuckItem.SlotIndex;
                 }
 
                 if (seriaLuckRequest != null && seriaLuckSlot >= 0)
                 {
-                    SetStackCount(tempDb, seriaLuckSlot, 2);
                     var staleSeriaLuckSlot = seriaLuckSlot;
                     RelocateItemSlot(tempDb, staleSeriaLuckSlot, RelocatedSeriaLuckSlot);
                     seriaLuckSlot = RelocatedSeriaLuckSlot;
@@ -468,6 +468,7 @@ namespace DfoServer.SelfTests
                                 ExpectedItemTemplateId = seriaLuckRequest.ItemTemplateId,
                                 MaterialSlotIndex = seriaLuckRequest.MaterialSlotIndex,
                                 ExpectedMaterialItemTemplateId = seriaLuckRequest.MaterialItemTemplateId,
+                                RequestedCount = seriaLuckRequest.RequestedCount,
                             }, out seriaLuckResult));
                     }
 
@@ -480,7 +481,7 @@ namespace DfoServer.SelfTests
                     using (store.BeginScope(CharacterId, AccountId))
                     {
                         var snapshot = store.LoadCharacterItemListSnapshot();
-                        Check($"snapshot Seria luck remaining count", snapshot.MainItems.Find(x => x.SlotIndex == seriaLuckSlot)?.CountOrInstanceValue == 1);
+                        Check($"snapshot Seria luck remaining count", snapshot.MainItems.Find(x => x.SlotIndex == seriaLuckSlot)?.CountOrInstanceValue == MagicBoxBatchCount - SeriaLuckBatchCount);
                     }
 
                     if (seriaLuckSingleRequest != null)
@@ -507,7 +508,7 @@ namespace DfoServer.SelfTests
                         using (store.BeginScope(CharacterId, AccountId))
                         {
                             var snapshot = store.LoadCharacterItemListSnapshot();
-                            Check($"snapshot Seria luck consumed after single", snapshot.MainItems.Find(x => x.SlotIndex == seriaLuckSlot) == null);
+                            Check($"snapshot Seria luck remaining after single count", snapshot.MainItems.Find(x => x.SlotIndex == seriaLuckSlot)?.CountOrInstanceValue == MagicBoxBatchCount - SeriaLuckBatchCount - 1);
                         }
                     }
                 }

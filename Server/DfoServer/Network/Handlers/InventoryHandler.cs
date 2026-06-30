@@ -686,6 +686,7 @@ namespace DfoServer.Network.Handlers
                         ExpectedItemTemplateId = request.ItemTemplateId,
                         MaterialSlotIndex = materialSlotIndex,
                         ExpectedMaterialItemTemplateId = expectedMaterialItemTemplateId,
+                        RequestedCount = request.RequestedCount,
                     },
                     out var result))
             {
@@ -728,6 +729,7 @@ namespace DfoServer.Network.Handlers
                         ExpectedItemTemplateId = request.ItemTemplateId,
                         MaterialSlotIndex = materialSlotIndex,
                         ExpectedMaterialItemTemplateId = expectedMaterialItemTemplateId,
+                        RequestedCount = request.RequestedCount,
                     },
                     out var result))
             {

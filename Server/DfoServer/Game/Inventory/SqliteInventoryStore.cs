@@ -118,6 +118,8 @@ namespace DfoServer.Game.Inventory
         public short? MaterialSlotIndex { get; set; }
 
         public int ExpectedMaterialItemTemplateId { get; set; }
+
+        public int RequestedCount { get; set; } = 1;
     }
 
     public sealed class BoosterUseResult
