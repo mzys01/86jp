@@ -85,6 +85,10 @@ namespace DfoServer.Network.Handlers.Dungeon
             session.Player.CurDungeonDifficulty = req.Difficulty;
             session.Player.CurDungeonFlag1 = req.Flag1;
             session.Player.CurDungeonFlag2 = req.Flag2;
+            session.Player.CurMazeQuestConnected = false;
+            session.Player.CurMazeStartMapId = 0;
+            session.Player.CurMazeStartX = -1;
+            session.Player.CurMazeStartY = -1;
             session.Player.CurDungeonHellMode = req.HellPartyRequestFlag != 0 && DungeonData.IsHellDungeon(req.DungeonId);
             session.Player.CurDungeonHellPartyMode = 0;
             session.Player.CurDungeonVeryDifficultHell = false;
@@ -139,6 +143,15 @@ namespace DfoServer.Network.Handlers.Dungeon
             catch { }
             var selection = DungeonData.SelectDungeonMaze(req.DungeonId, activeQuestIds, relatedQuestIds);
             session.Player.CurMazeIndex = selection.Index;
+            session.Player.CurMazeQuestConnected = selection.Maze.QuestConnection != null
+                && selection.Maze.QuestConnection.Length >= 2;
+            session.Player.CurMazeStartX = selection.Maze.StartMap != null && selection.Maze.StartMap.Length >= 2
+                ? selection.Maze.StartMap[0]
+                : -1;
+            session.Player.CurMazeStartY = selection.Maze.StartMap != null && selection.Maze.StartMap.Length >= 2
+                ? selection.Maze.StartMap[1]
+                : -1;
+            session.Player.CurMazeStartMapId = ResolveMazeStartMapId(selection.Maze);
             var bossPos = DungeonData.RandomizeBossPosition(selection.Maze.BossMap);
             session.Player.CurBossMapPos = bossPos;
             session.Player.CurDungeonRidableObjects = DungeonMapHandler.InitRidableObjects(selection.Maze);
@@ -194,6 +207,26 @@ namespace DfoServer.Network.Handlers.Dungeon
 
             // 86 客户端 0x03B6：body[12] 固定为 7，body[13] 为 0 表示勾选，1 表示取消勾选。
             return body[13] == 0;
+        }
+
+        private static int ResolveMazeStartMapId(PvfLib.MazeInfo maze)
+        {
+            if (maze == null
+                || maze.StartMap == null
+                || maze.StartMap.Length < 2
+                || maze.MapSpecifications == null)
+                return 0;
+
+            var startX = maze.StartMap[0];
+            var startY = maze.StartMap[1];
+            foreach (var spec in maze.MapSpecifications)
+            {
+                if (spec.X != startX || spec.Y != startY || spec.Index <= 0)
+                    continue;
+                return spec.Index;
+            }
+
+            return 0;
         }
 
         private async Task PrepareManualHellPartyAsync(

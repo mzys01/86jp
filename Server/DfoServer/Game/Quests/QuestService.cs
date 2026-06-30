@@ -342,6 +342,87 @@ namespace DfoServer.Game.Quests
             return matchedQuestItem;
         }
 
+        public static bool SyncClearMapQuestProgress(
+            string connStr,
+            int characterId,
+            int dungeonId,
+            int mapId)
+        {
+            var changed = SyncClearMapQuestProgressCore(
+                connStr,
+                characterId,
+                dungeonId,
+                mapId,
+                (questId, targetDungeonId, targetMapId) =>
+                    GameWorld.QuestData.MatchesClearMapTarget(questId, targetDungeonId, targetMapId));
+
+            if (changed > 0)
+                FileLogger.Log($"[QuestService] CLEAR_MAP progress: cid={characterId} dungeon={dungeonId} map={mapId} changed={changed}");
+            return changed > 0;
+        }
+
+        internal static int SyncClearMapQuestProgressCore(
+            string connStr,
+            int characterId,
+            int dungeonId,
+            int mapId,
+            Func<ushort, int, int, bool> matchesClearMapQuest)
+        {
+            if (string.IsNullOrWhiteSpace(connStr) || characterId <= 0 || matchesClearMapQuest == null)
+                return 0;
+
+            var active = LoadActiveQuests(connStr, characterId);
+            if (active.Count == 0)
+                return 0;
+
+            var changed = new List<ActiveQuest>();
+            foreach (var q in active)
+            {
+                if (q.TriggerValue == 0)
+                    continue;
+
+                bool matched;
+                try
+                {
+                    matched = matchesClearMapQuest(q.QuestId, dungeonId, mapId);
+                }
+                catch
+                {
+                    matched = false;
+                }
+
+                if (!matched)
+                    continue;
+
+                q.TriggerValue = 0;
+                changed.Add(q);
+            }
+
+            if (changed.Count == 0)
+                return 0;
+
+            using (var conn = new SqliteConnection(connStr))
+            {
+                conn.Open();
+                using (var tx = conn.BeginTransaction())
+                {
+                    foreach (var q in changed)
+                    {
+                        using (var cmd = new SqliteCommand(
+                            "UPDATE character_active_quests SET trigger_value=0 WHERE character_id=@cid AND slot=@s", conn, tx))
+                        {
+                            cmd.Parameters.AddWithValue("@cid", characterId);
+                            cmd.Parameters.AddWithValue("@s", q.Slot);
+                            cmd.ExecuteNonQuery();
+                        }
+                    }
+                    tx.Commit();
+                }
+            }
+
+            return changed.Count;
+        }
+
         private static uint ToTriggerValue(long missingCount)
         {
             if (missingCount <= 0) return 0;
