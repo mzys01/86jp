@@ -1,6 +1,5 @@
 using DfoServer.Game.SelectCharacter;
 using DfoServer.Game.Inventory;
-using DfoServer.Game.Premium;
 using DfoServer.Network.Builders;
 using DfoServer.Network.Builders.CeraShop;
 using DfoServer.Network.Parsers.CeraShop;
@@ -54,7 +53,7 @@ namespace DfoServer.Network.Handlers
                     FileLogger.Log($"[{ProtocolName}] CERA_SHOP_BUY: OK commodityNo={commodityNo} slot={result.SlotIndex} item=0x{result.ItemTemplateId:X8} count={result.AppliedCount} coin={result.UpdatedCoin} extra={result.ExtraResults.Count}");
                     results.Add(result);
                     successItems.Add(System.Tuple.Create(commodityNo, result));
-                    if (PremiumContractService.IsExpertContractItem(result.ItemTemplateId))
+                    if (result.ItemTemplateId == 44 || result.ItemTemplateId == 45)
                         boughtExpertContract = true;
                 }
                 else

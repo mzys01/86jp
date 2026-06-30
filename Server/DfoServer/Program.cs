@@ -29,12 +29,6 @@ namespace DfoServer
                 return;
             }
 
-            if (Array.IndexOf(args, "--selftest-premium-contract-account-scope") >= 0)
-            {
-                Environment.Exit(SelfTests.PremiumContractAccountScopeSelfTest.Run());
-                return;
-            }
-
             if (Array.IndexOf(args, "--selftest-dungeon-map-fallback") >= 0)
             {
                 Environment.Exit(SelfTests.DungeonMapFallbackSelfTest.Run());
