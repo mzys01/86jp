@@ -120,6 +120,15 @@ CREATE TABLE IF NOT EXISTS account_cargo_items (
     FOREIGN KEY (account_id) REFERENCES accounts(account_id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS account_premiums (
+    account_id INTEGER NOT NULL,
+    premium_type INTEGER NOT NULL,
+    end_time INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (account_id, premium_type),
+    FOREIGN KEY (account_id) REFERENCES accounts(account_id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS item_audit_log (
     audit_id INTEGER PRIMARY KEY AUTOINCREMENT,
     owner_scope TEXT NOT NULL,

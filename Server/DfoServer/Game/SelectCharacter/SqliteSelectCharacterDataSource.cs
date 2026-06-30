@@ -118,23 +118,9 @@ namespace DfoServer.Game.SelectCharacter
 
             initSnapshot.ServerEventPhaseBitmap = _initFlagsRepository.LoadServerEventPhaseBitmap();
 
-            var premiumBody = _initFlagsRepository.LoadGlobalRawPacket(0x10312);
-            if (premiumBody != null && premiumBody.Length >= 3)
-            {
-                initSnapshot.PremiumServiceType = BitConverter.ToUInt16(premiumBody, 1);
-                var dataLen = premiumBody.Length - 3;
-                if (dataLen > 0)
-                {
-                    initSnapshot.PremiumServiceData = new byte[dataLen];
-                    Buffer.BlockCopy(premiumBody, 3, initSnapshot.PremiumServiceData, 0, dataLen);
-                }
-            }
-
-            PremiumContractService.ApplyAccountPremiums(
-                _databasePath,
-                _schemaFilePath,
-                accountId,
-                initSnapshot);
+            initSnapshot.PremiumServiceType = 1;
+            initSnapshot.PremiumServiceData = new byte[74];
+            LoadAccountPremiums(accountId, initSnapshot);
 
             
             
@@ -222,6 +208,32 @@ namespace DfoServer.Game.SelectCharacter
             initSnapshot.AckTokenCera = wallet.TokenCera;
             initSnapshot.AckHappyTokenCera = wallet.HappyTokenCera;
             initSnapshot.LuckyStar = wallet.LuckyStar;
+        }
+
+        private void LoadAccountPremiums(int accountId, SelectCharacterInitializationSnapshot initSnapshot)
+        {
+            initSnapshot.AckPremiums.Clear();
+            using (var conn = new SqliteConnection(_connectionString))
+            {
+                conn.Open();
+                using (var cmd = conn.CreateCommand())
+                {
+                    cmd.CommandText = "SELECT premium_type, end_time FROM account_premiums WHERE account_id=@aid AND end_time>0 ORDER BY premium_type;";
+                    cmd.Parameters.AddWithValue("@aid", accountId);
+                    using (var reader = cmd.ExecuteReader())
+                    {
+                        while (reader.Read())
+                        {
+                            var entry = new AckPremiumEntrySnapshot
+                            {
+                                PremiumType = (byte)reader.GetInt32(0),
+                                EndTime = BitConverter.GetBytes(reader.GetInt64(1)),
+                            };
+                            initSnapshot.AckPremiums.Add(entry);
+                        }
+                    }
+                }
+            }
         }
 
         public CharacterItemListSnapshot LoadItemListSnapshot(int characterId, int accountId)
