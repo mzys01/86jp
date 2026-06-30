@@ -17,7 +17,7 @@ namespace DfoServer.Network.Parsers.Inventory
 
         public int MaterialItemTemplateId { get; set; }
 
-        public int UseCount { get; set; }
+        public int RequestedCount { get; set; }
 
         public static bool TryParse(byte[] body, out MagicBoxOpenRequest request)
         {
@@ -32,8 +32,8 @@ namespace DfoServer.Network.Parsers.Inventory
             var itemTemplateId = BitConverter.ToInt32(body, 3);
             var materialSlotIndex = BitConverter.ToInt16(body, 7);
             var materialItemTemplateId = BitConverter.ToInt32(body, 9);
-            var useCount = BitConverter.ToUInt16(body, 13);
-            if (slotIndex < 0 || useCount <= 0 || itemTemplateId <= 0)
+            var requestedCount = BitConverter.ToUInt16(body, 13);
+            if (slotIndex < 0 || requestedCount <= 0 || itemTemplateId <= 0)
                 return false;
 
             var hasMaterial = materialSlotIndex >= 0 || materialItemTemplateId > 0;
@@ -54,7 +54,7 @@ namespace DfoServer.Network.Parsers.Inventory
                 ItemTemplateId = itemTemplateId,
                 MaterialSlotIndex = materialSlotIndex,
                 MaterialItemTemplateId = materialItemTemplateId,
-                UseCount = useCount,
+                RequestedCount = requestedCount,
             };
             return true;
         }
@@ -80,7 +80,7 @@ namespace DfoServer.Network.Parsers.Inventory
                 ItemTemplateId = 0,
                 MaterialSlotIndex = materialSlotIndex >= 0 ? materialSlotIndex : (short)-1,
                 MaterialItemTemplateId = materialSlotIndex >= 0 ? 0 : -1,
-                UseCount = 1,
+                RequestedCount = 1,
             };
             return true;
         }

@@ -317,7 +317,11 @@ namespace DfoServer.SelfTests
             BoosterUseResult boosterResult = null;
             using (store.BeginScope(CharacterId, AccountId))
             {
-                Check("open special-kind booster package succeeds", store.TryUseBoosterItem(SpecialBoosterPackageSlot, Array.Empty<int>(), out boosterResult));
+                Check("open special-kind booster package succeeds", store.TryUseBoosterItem(new BoosterUseRequest
+                {
+                    SlotIndex = SpecialBoosterPackageSlot,
+                    SelectedItemTemplateIds = Array.Empty<int>(),
+                }, out boosterResult));
             }
 
             if (boosterResult != null)
@@ -341,21 +345,21 @@ namespace DfoServer.SelfTests
                 Check($"magic-box request item={magicBoxRequest.ItemTemplateId}", magicBoxRequest.ItemTemplateId == MagicBoxItemTemplateId);
                 Check($"magic-box request material slot={magicBoxRequest.MaterialSlotIndex}", magicBoxRequest.MaterialSlotIndex == MagicHammerSlot);
                 Check($"magic-box request material item={magicBoxRequest.MaterialItemTemplateId}", magicBoxRequest.MaterialItemTemplateId == MagicHammerItemTemplateId);
-                Check($"magic-box request count={magicBoxRequest.UseCount}", magicBoxRequest.UseCount == MagicBoxBatchCount);
+                Check($"magic-box request count={magicBoxRequest.RequestedCount}", magicBoxRequest.RequestedCount == MagicBoxBatchCount);
 
                 Check("parse captured 0x03F3 Seria luck request", MagicBoxOpenRequest.TryParse(CapturedSeriaLuckOpenRequestBody, out var seriaLuckRequest));
                 if (seriaLuckRequest != null)
                 {
                     Check($"Seria luck request item={seriaLuckRequest.ItemTemplateId}", seriaLuckRequest.ItemTemplateId == SeriaLuckItemTemplateId);
                     Check($"Seria luck request material slot={seriaLuckRequest.MaterialSlotIndex}", seriaLuckRequest.MaterialSlotIndex == -1);
-                    Check($"Seria luck request count={seriaLuckRequest.UseCount}", seriaLuckRequest.UseCount == SeriaLuckBatchCount);
+                    Check($"Seria luck request count={seriaLuckRequest.RequestedCount}", seriaLuckRequest.RequestedCount == SeriaLuckBatchCount);
                 }
 
                 Check("parse captured 0x00D0 Seria luck single-open request", MagicBoxOpenRequest.TryParseSingle(CapturedSeriaLuckSingleOpenRequestBody, out var seriaLuckSingleRequest));
                 if (seriaLuckSingleRequest != null)
                 {
                     Check($"Seria luck single request item={seriaLuckSingleRequest.ItemTemplateId}", seriaLuckSingleRequest.ItemTemplateId == 0);
-                    Check($"Seria luck single request count={seriaLuckSingleRequest.UseCount}", seriaLuckSingleRequest.UseCount == 1);
+                    Check($"Seria luck single request count={seriaLuckSingleRequest.RequestedCount}", seriaLuckSingleRequest.RequestedCount == 1);
                 }
 
                 Check("0x03F3 magic-box success uses 0x00A0 popup without source ACK", !InventoryHandler.ShouldSendSourceAckForBoosterResponse(0x03F3));
@@ -366,12 +370,12 @@ namespace DfoServer.SelfTests
                 using (store.BeginScope(CharacterId, AccountId))
                 {
                     Check("open consumable magic-hammer bundle succeeds",
-                        store.TryUseBoosterItem(
-                            MagicHammerBundleSlot,
-                            Array.Empty<int>(),
-                            1,
-                            SampleMagicHammerBundleId,
-                            out hammerBundleResult));
+                        store.TryUseBoosterItem(new BoosterUseRequest
+                        {
+                            SlotIndex = MagicHammerBundleSlot,
+                            SelectedItemTemplateIds = Array.Empty<int>(),
+                            ExpectedItemTemplateId = SampleMagicHammerBundleId,
+                        }, out hammerBundleResult));
                 }
 
                 short materialHammerSlot = -1;
@@ -411,43 +415,44 @@ namespace DfoServer.SelfTests
                 BoosterUseResult magicBoxResult = null;
                 using (store.BeginScope(CharacterId, AccountId))
                 {
-                    Check("open magic-box batch with hammer material succeeds",
-                        store.TryUseBoosterItem(
-                            requestMagicBoxSlot,
-                            Array.Empty<int>(),
-                            magicBoxRequest.UseCount,
-                            magicBoxRequest.ItemTemplateId,
-                            requestMaterialSlot,
-                            magicBoxRequest.MaterialItemTemplateId,
-                            out magicBoxResult));
+                    Check("open magic-box request with hammer material consumes one booster",
+                        store.TryUseBoosterItem(new BoosterUseRequest
+                        {
+                            SlotIndex = requestMagicBoxSlot,
+                            SelectedItemTemplateIds = Array.Empty<int>(),
+                            ExpectedItemTemplateId = magicBoxRequest.ItemTemplateId,
+                            MaterialSlotIndex = requestMaterialSlot,
+                            ExpectedMaterialItemTemplateId = magicBoxRequest.MaterialItemTemplateId,
+                        }, out magicBoxResult));
                 }
 
                 if (magicBoxResult != null)
                 {
-                    Check($"magic-box consumed source count={magicBoxResult.ConsumedSourceCount}", magicBoxResult.ConsumedSourceCount == MagicBoxBatchCount);
+                    Check($"magic-box consumed source count={magicBoxResult.ConsumedSourceCount}", magicBoxResult.ConsumedSourceCount == 1);
                     Check($"magic-box consumed material item={magicBoxResult.ConsumedMaterialItemTemplateId}", magicBoxResult.ConsumedMaterialItemTemplateId == MagicHammerItemTemplateId);
-                    Check($"magic-box consumed material count={magicBoxResult.ConsumedMaterialCount}", magicBoxResult.ConsumedMaterialCount == MagicBoxBatchCount);
+                    Check($"magic-box consumed material count={magicBoxResult.ConsumedMaterialCount}", magicBoxResult.ConsumedMaterialCount == 1);
                     Check("magic-box grants at least one reward", magicBoxResult.Rewards.Count > 0);
-                    Check($"magic-box grants instant teleport potions", magicBoxResult.Rewards.Find(x => x.ItemTemplateId == InstantTeleportPotionItemTemplateId)?.GrantedCount == MagicBoxBatchCount * 2);
-                    Check($"magic-box grants Seria luck boxes", magicBoxResult.Rewards.Find(x => x.ItemTemplateId == SeriaLuckItemTemplateId)?.GrantedCount == MagicBoxBatchCount);
+                    Check($"magic-box grants instant teleport potions", magicBoxResult.Rewards.Find(x => x.ItemTemplateId == InstantTeleportPotionItemTemplateId)?.GrantedCount == 2);
+                    Check($"magic-box grants Seria luck boxes", magicBoxResult.Rewards.Find(x => x.ItemTemplateId == SeriaLuckItemTemplateId)?.GrantedCount == 1);
                 }
 
                 short seriaLuckSlot = -1;
                 using (store.BeginScope(CharacterId, AccountId))
                 {
                     var snapshot = store.LoadCharacterItemListSnapshot();
-                    Check("snapshot magic-box stack consumed", snapshot.MainItems.Find(x => x.SlotIndex == requestMagicBoxSlot)?.ItemTemplateId != MagicBoxItemTemplateId);
-                    Check("snapshot material-tab magic hammer consumed", snapshot.MainItems.Find(x => x.SlotIndex == requestMaterialSlot) == null);
+                    Check($"snapshot magic-box remaining count", snapshot.MainItems.Find(x => x.SlotIndex == requestMagicBoxSlot)?.CountOrInstanceValue == MagicBoxBatchCount - 1);
+                    Check($"snapshot material-tab magic hammer remaining count", snapshot.MainItems.Find(x => x.SlotIndex == requestMaterialSlot)?.CountOrInstanceValue == MagicBoxBatchCount - 1);
                     Check($"wrong-tab magic hammer still ignored", snapshot.MainItems.Find(x => x.SlotIndex == WrongMagicHammerSlot)?.CountOrInstanceValue == 1);
-                    Check($"snapshot instant teleport potion count", snapshot.MainItems.Find(x => x.ItemTemplateId == InstantTeleportPotionItemTemplateId)?.CountOrInstanceValue == MagicBoxBatchCount * 2);
+                    Check($"snapshot instant teleport potion count", snapshot.MainItems.Find(x => x.ItemTemplateId == InstantTeleportPotionItemTemplateId)?.CountOrInstanceValue == 2);
                     var seriaLuckItem = snapshot.MainItems.Find(x => x.ItemTemplateId == SeriaLuckItemTemplateId);
-                    Check($"snapshot Seria luck count", seriaLuckItem?.CountOrInstanceValue == MagicBoxBatchCount);
+                    Check($"snapshot Seria luck count", seriaLuckItem?.CountOrInstanceValue == 1);
                     if (seriaLuckItem != null)
                         seriaLuckSlot = seriaLuckItem.SlotIndex;
                 }
 
                 if (seriaLuckRequest != null && seriaLuckSlot >= 0)
                 {
+                    SetStackCount(tempDb, seriaLuckSlot, 2);
                     var staleSeriaLuckSlot = seriaLuckSlot;
                     RelocateItemSlot(tempDb, staleSeriaLuckSlot, RelocatedSeriaLuckSlot);
                     seriaLuckSlot = RelocatedSeriaLuckSlot;
@@ -455,15 +460,15 @@ namespace DfoServer.SelfTests
                     BoosterUseResult seriaLuckResult = null;
                     using (store.BeginScope(CharacterId, AccountId))
                     {
-                        Check("open Seria luck batch without material succeeds after stale source slot",
-                            store.TryUseBoosterItem(
-                                staleSeriaLuckSlot,
-                                Array.Empty<int>(),
-                                seriaLuckRequest.UseCount,
-                                seriaLuckRequest.ItemTemplateId,
-                                seriaLuckRequest.MaterialSlotIndex,
-                                seriaLuckRequest.MaterialItemTemplateId,
-                                out seriaLuckResult));
+                        Check("open Seria luck request without material succeeds after stale source slot",
+                            store.TryUseBoosterItem(new BoosterUseRequest
+                            {
+                                SlotIndex = staleSeriaLuckSlot,
+                                SelectedItemTemplateIds = Array.Empty<int>(),
+                                ExpectedItemTemplateId = seriaLuckRequest.ItemTemplateId,
+                                MaterialSlotIndex = seriaLuckRequest.MaterialSlotIndex,
+                                ExpectedMaterialItemTemplateId = seriaLuckRequest.MaterialItemTemplateId,
+                            }, out seriaLuckResult));
                     }
 
                     if (seriaLuckResult != null)
@@ -475,7 +480,7 @@ namespace DfoServer.SelfTests
                     using (store.BeginScope(CharacterId, AccountId))
                     {
                         var snapshot = store.LoadCharacterItemListSnapshot();
-                        Check($"snapshot Seria luck remaining count", snapshot.MainItems.Find(x => x.SlotIndex == seriaLuckSlot)?.CountOrInstanceValue == MagicBoxBatchCount - SeriaLuckBatchCount);
+                        Check($"snapshot Seria luck remaining count", snapshot.MainItems.Find(x => x.SlotIndex == seriaLuckSlot)?.CountOrInstanceValue == 1);
                     }
 
                     if (seriaLuckSingleRequest != null)
@@ -484,14 +489,14 @@ namespace DfoServer.SelfTests
                         using (store.BeginScope(CharacterId, AccountId))
                         {
                             Check("open Seria luck single without material succeeds",
-                                store.TryUseBoosterItem(
-                                    seriaLuckSlot,
-                                    Array.Empty<int>(),
-                                    seriaLuckSingleRequest.UseCount,
-                                    seriaLuckSingleRequest.ItemTemplateId,
-                                    seriaLuckSingleRequest.MaterialSlotIndex,
-                                    seriaLuckSingleRequest.MaterialItemTemplateId,
-                                    out seriaLuckSingleResult));
+                                store.TryUseBoosterItem(new BoosterUseRequest
+                                {
+                                    SlotIndex = seriaLuckSlot,
+                                    SelectedItemTemplateIds = Array.Empty<int>(),
+                                    ExpectedItemTemplateId = seriaLuckSingleRequest.ItemTemplateId,
+                                    MaterialSlotIndex = seriaLuckSingleRequest.MaterialSlotIndex,
+                                    ExpectedMaterialItemTemplateId = seriaLuckSingleRequest.MaterialItemTemplateId,
+                                }, out seriaLuckSingleResult));
                         }
 
                         if (seriaLuckSingleResult != null)
@@ -502,29 +507,30 @@ namespace DfoServer.SelfTests
                         using (store.BeginScope(CharacterId, AccountId))
                         {
                             var snapshot = store.LoadCharacterItemListSnapshot();
-                            Check($"snapshot Seria luck remaining after single count", snapshot.MainItems.Find(x => x.SlotIndex == seriaLuckSlot)?.CountOrInstanceValue == MagicBoxBatchCount - SeriaLuckBatchCount - 1);
+                            Check($"snapshot Seria luck consumed after single", snapshot.MainItems.Find(x => x.SlotIndex == seriaLuckSlot) == null);
                         }
                     }
                 }
 
+                DeleteItemAtSlot(tempDb, requestMaterialSlot);
                 using (store.BeginScope(CharacterId, AccountId))
                 {
-                    Check("magic-box batch rejects insufficient hammer material",
-                        !store.TryUseBoosterItem(
-                            requestMagicBoxSlot,
-                            Array.Empty<int>(),
-                            magicBoxRequest.UseCount,
-                            magicBoxRequest.ItemTemplateId,
-                            requestMaterialSlot,
-                            magicBoxRequest.MaterialItemTemplateId,
-                            out _));
-                    Check("magic-box batch rejects wrong-tab hammer without material slot",
-                        !store.TryUseBoosterItem(
-                            requestMagicBoxSlot,
-                            Array.Empty<int>(),
-                            magicBoxRequest.UseCount,
-                            magicBoxRequest.ItemTemplateId,
-                            out _));
+                    Check("magic-box request rejects insufficient hammer material",
+                        !store.TryUseBoosterItem(new BoosterUseRequest
+                        {
+                            SlotIndex = requestMagicBoxSlot,
+                            SelectedItemTemplateIds = Array.Empty<int>(),
+                            ExpectedItemTemplateId = magicBoxRequest.ItemTemplateId,
+                            MaterialSlotIndex = requestMaterialSlot,
+                            ExpectedMaterialItemTemplateId = magicBoxRequest.MaterialItemTemplateId,
+                        }, out _));
+                    Check("magic-box request rejects wrong-tab hammer without material slot",
+                        !store.TryUseBoosterItem(new BoosterUseRequest
+                        {
+                            SlotIndex = requestMagicBoxSlot,
+                            SelectedItemTemplateIds = Array.Empty<int>(),
+                            ExpectedItemTemplateId = magicBoxRequest.ItemTemplateId,
+                        }, out _));
                 }
 
                 using (store.BeginScope(CharacterId, AccountId))
@@ -721,6 +727,42 @@ WHERE character_id=@characterId AND list_type=0 AND slot_index=@fromSlot;";
                     command.Parameters.AddWithValue("@characterId", CharacterId);
                     command.Parameters.AddWithValue("@fromSlot", fromSlot);
                     command.Parameters.AddWithValue("@toSlot", toSlot);
+                    command.ExecuteNonQuery();
+                }
+            }
+        }
+
+        private static void SetStackCount(string databasePath, short slotIndex, int stackCount)
+        {
+            using (var connection = new SqliteConnection(SqliteDatabaseBootstrap.BuildConnectionString(databasePath)))
+            {
+                connection.Open();
+                using (var command = connection.CreateCommand())
+                {
+                    command.CommandText = @"
+UPDATE character_items
+SET stack_count=@stackCount, instance_value=@stackCount
+WHERE character_id=@characterId AND list_type=0 AND slot_index=@slotIndex;";
+                    command.Parameters.AddWithValue("@characterId", CharacterId);
+                    command.Parameters.AddWithValue("@slotIndex", slotIndex);
+                    command.Parameters.AddWithValue("@stackCount", stackCount);
+                    command.ExecuteNonQuery();
+                }
+            }
+        }
+
+        private static void DeleteItemAtSlot(string databasePath, short slotIndex)
+        {
+            using (var connection = new SqliteConnection(SqliteDatabaseBootstrap.BuildConnectionString(databasePath)))
+            {
+                connection.Open();
+                using (var command = connection.CreateCommand())
+                {
+                    command.CommandText = @"
+DELETE FROM character_items
+WHERE character_id=@characterId AND list_type=0 AND slot_index=@slotIndex;";
+                    command.Parameters.AddWithValue("@characterId", CharacterId);
+                    command.Parameters.AddWithValue("@slotIndex", slotIndex);
                     command.ExecuteNonQuery();
                 }
             }

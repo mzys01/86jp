@@ -293,35 +293,25 @@ namespace DfoServer.Game.Inventory
             return true;
         }
 
-        public bool TryUseBoosterItem(SqliteConnection connection, SqliteTransaction transaction, int characterId, int accountId, short? slotIndex, IReadOnlyList<int> selectedItemTemplateIds, out BoosterUseResult result)
-        {
-            return TryUseBoosterItem(connection, transaction, characterId, accountId, slotIndex, selectedItemTemplateIds, 1, 0, out result);
-        }
-
-        public bool TryUseBoosterItem(SqliteConnection connection, SqliteTransaction transaction, int characterId, int accountId, short? slotIndex, IReadOnlyList<int> selectedItemTemplateIds, int useCount, int expectedItemTemplateId, out BoosterUseResult result)
-        {
-            return TryUseBoosterItem(connection, transaction, characterId, accountId, slotIndex, selectedItemTemplateIds, useCount, expectedItemTemplateId, null, 0, out result);
-        }
-
-        public bool TryUseBoosterItem(SqliteConnection connection, SqliteTransaction transaction, int characterId, int accountId, short? slotIndex, IReadOnlyList<int> selectedItemTemplateIds, int useCount, int expectedItemTemplateId, short? materialSlotIndex, int expectedMaterialItemTemplateId, out BoosterUseResult result)
+        public bool TryUseBoosterItem(SqliteConnection connection, SqliteTransaction transaction, int characterId, int accountId, BoosterUseRequest request, out BoosterUseResult result)
         {
             result = null;
-            if (useCount <= 0)
-                return false;
+            request = request ?? new BoosterUseRequest();
+            var selectedItemTemplateIds = request.SelectedItemTemplateIds ?? Array.Empty<int>();
 
             var source = ResolveBoosterSource(
                 connection,
                 transaction,
                 characterId,
-                slotIndex,
-                expectedItemTemplateId);
+                request.SlotIndex,
+                request.ExpectedItemTemplateId);
             if (source == null)
                 return false;
-            if (expectedItemTemplateId > 0 && source.ItemTemplateId != expectedItemTemplateId)
+            if (request.ExpectedItemTemplateId > 0 && source.ItemTemplateId != request.ExpectedItemTemplateId)
                 return false;
-            if (source.StackCount <= 0 || source.StackCount < useCount)
+            if (source.StackCount <= 0)
             {
-                FileLogger.Log($"  [Booster] REJECT: item=0x{source.ItemTemplateId:X8} slot={source.SlotIndex} need={useCount}, have={source.StackCount}");
+                FileLogger.Log($"  [Booster] REJECT: item=0x{source.ItemTemplateId:X8} slot={source.SlotIndex} need=1, have={source.StackCount}");
                 return false;
             }
 
@@ -331,7 +321,7 @@ namespace DfoServer.Game.Inventory
 
             var stackableType = NormalizeStackableType(stackable.StackableType);
             ResolveNeedMaterial(source.ItemTemplateId, stackable, out var materialItemTemplateId, out var materialCountPerUse);
-            if (expectedMaterialItemTemplateId > 0 && materialItemTemplateId > 0 && materialItemTemplateId != expectedMaterialItemTemplateId)
+            if (request.ExpectedMaterialItemTemplateId > 0 && materialItemTemplateId > 0 && materialItemTemplateId != request.ExpectedMaterialItemTemplateId)
                 return false;
 
             SqliteInventoryStore.ItemRecord material = null;
@@ -339,15 +329,15 @@ namespace DfoServer.Game.Inventory
             {
                 var materialMetadata = ItemMetadataResolver.Resolve(materialItemTemplateId);
                 materialMetadata.GetSlotRange(out var materialSlotStart, out var materialSlotEnd);
-                material = materialSlotIndex.HasValue
-                    ? _db.LoadItemRecord(connection, transaction, characterId, InventoryListType.Main, materialSlotIndex.Value)
+                material = request.MaterialSlotIndex.HasValue
+                    ? _db.LoadItemRecord(connection, transaction, characterId, InventoryListType.Main, request.MaterialSlotIndex.Value)
                     : null;
                 if (material == null || material.ItemTemplateId != materialItemTemplateId)
                 {
                     var fallbackMaterial = _db.FindItemByTemplateIdInRange(connection, transaction, characterId, InventoryListType.Main, materialItemTemplateId, materialSlotStart, materialSlotEnd);
-                    if (fallbackMaterial != null && materialSlotIndex.HasValue && fallbackMaterial.SlotIndex != materialSlotIndex.Value)
+                    if (fallbackMaterial != null && request.MaterialSlotIndex.HasValue && fallbackMaterial.SlotIndex != request.MaterialSlotIndex.Value)
                     {
-                        FileLogger.Log($"  [Booster] WARN: material slot stale requested={materialSlotIndex.Value}, actual={fallbackMaterial.SlotIndex}, item=0x{materialItemTemplateId:X8}");
+                        FileLogger.Log($"  [Booster] WARN: material slot stale requested={request.MaterialSlotIndex.Value}, actual={fallbackMaterial.SlotIndex}, item=0x{materialItemTemplateId:X8}");
                     }
 
                     material = fallbackMaterial;
@@ -357,52 +347,42 @@ namespace DfoServer.Game.Inventory
                     || material.SlotIndex < materialSlotStart
                     || material.SlotIndex > materialSlotEnd)
                 {
-                    FileLogger.Log($"  [Booster] REJECT: need material=0x{materialItemTemplateId:X8} at slot={(materialSlotIndex.HasValue ? materialSlotIndex.Value.ToString() : "auto")} range={materialSlotStart}-{materialSlotEnd}, found=0x{material?.ItemTemplateId ?? 0:X8}@{material?.SlotIndex ?? 0}");
+                    FileLogger.Log($"  [Booster] REJECT: need material=0x{materialItemTemplateId:X8} at slot={(request.MaterialSlotIndex.HasValue ? request.MaterialSlotIndex.Value.ToString() : "auto")} range={materialSlotStart}-{materialSlotEnd}, found=0x{material?.ItemTemplateId ?? 0:X8}@{material?.SlotIndex ?? 0}");
                     return false;
                 }
             }
 
-            var totalMaterialCountLong = (long)materialCountPerUse * useCount;
-            if (totalMaterialCountLong > int.MaxValue)
-                return false;
-            var totalMaterialCount = (int)totalMaterialCountLong;
-            if (material != null && material.StackCount < totalMaterialCount)
+            if (material != null && material.StackCount < materialCountPerUse)
             {
-                FileLogger.Log($"  [Booster] REJECT: need {totalMaterialCount}x material=0x{materialItemTemplateId:X8}, have={material.StackCount}");
+                FileLogger.Log($"  [Booster] REJECT: need {materialCountPerUse}x material=0x{materialItemTemplateId:X8}, have={material.StackCount}");
                 return false;
             }
 
-            var rewardsToGrant = new List<PvfLib.BoosterRewardEntry>();
-            for (var useIndex = 0; useIndex < useCount; useIndex++)
+            if (!TryResolvePackageRewards(source.ItemTemplateId, stackable, stackableType, selectedItemTemplateIds, out var rewardsToGrant))
             {
-                if (!TryResolvePackageRewards(source.ItemTemplateId, stackable, stackableType, selectedItemTemplateIds, out var rewards))
-                {
-                    var selectedText = selectedItemTemplateIds == null || selectedItemTemplateIds.Count == 0
-                        ? "none"
-                        : string.Join(",", selectedItemTemplateIds.Select(id => $"0x{id:X8}"));
-                    FileLogger.Log($"  [Booster] unsupported/empty item=0x{source.ItemTemplateId:X8} type={stackableType} selected={selectedText} rewards(random={stackable.BoosterRewards.Count},select={stackable.BoosterSelectionRewards.Count},package={stackable.PackageRewards.Count},randombox={stackable.RandomBoxRewards.Count})");
-                    return false;
-                }
-
-                rewardsToGrant.AddRange(rewards);
+                var selectedText = selectedItemTemplateIds.Count == 0
+                    ? "none"
+                    : string.Join(",", selectedItemTemplateIds.Select(id => $"0x{id:X8}"));
+                FileLogger.Log($"  [Booster] unsupported/empty item=0x{source.ItemTemplateId:X8} type={stackableType} selected={selectedText} rewards(random={stackable.BoosterRewards.Count},select={stackable.BoosterSelectionRewards.Count},package={stackable.PackageRewards.Count},randombox={stackable.RandomBoxRewards.Count})");
+                return false;
             }
 
-            if (!TryConsumeStackableCount(connection, transaction, source, useCount))
+            if (!TryConsumeStackableCount(connection, transaction, source, 1))
                 return false;
-            if (material != null && material.ItemUid != source.ItemUid && !TryConsumeStackableCount(connection, transaction, material, totalMaterialCount))
+            if (material != null && material.ItemUid != source.ItemUid && !TryConsumeStackableCount(connection, transaction, material, materialCountPerUse))
                 return false;
 
             var useResult = new BoosterUseResult
             {
                 SourceSlotIndex = source.SlotIndex,
                 SourceItemTemplateId = source.ItemTemplateId,
-                SourceRemainingStackCount = Math.Max(0, source.StackCount - useCount),
+                SourceRemainingStackCount = Math.Max(0, source.StackCount - 1),
                 SourceInstanceValue = source.InstanceValue,
-                ConsumedSourceCount = useCount,
+                ConsumedSourceCount = 1,
                 ConsumedMaterialItemTemplateId = materialItemTemplateId,
-                ConsumedMaterialCount = totalMaterialCount,
+                ConsumedMaterialCount = material == null ? 0 : materialCountPerUse,
                 ConsumedMaterialSlotIndex = material?.SlotIndex ?? 0,
-                ConsumedMaterialRemainingStackCount = material == null ? 0 : Math.Max(0, material.StackCount - totalMaterialCount),
+                ConsumedMaterialRemainingStackCount = material == null ? 0 : Math.Max(0, material.StackCount - materialCountPerUse),
             };
 
             foreach (var reward in AggregateRewards(rewardsToGrant))
@@ -413,9 +393,9 @@ namespace DfoServer.Game.Inventory
                 useResult.Rewards.Add(rewardResult);
             }
 
-            _auditLogger.WriteDeleteAuditLog(connection, transaction, characterId, source, useCount);
+            _auditLogger.WriteDeleteAuditLog(connection, transaction, characterId, source, 1);
             if (material != null && material.ItemUid != source.ItemUid)
-                _auditLogger.WriteDeleteAuditLog(connection, transaction, characterId, material, totalMaterialCount);
+                _auditLogger.WriteDeleteAuditLog(connection, transaction, characterId, material, materialCountPerUse);
             foreach (var reward in useResult.Rewards)
                 _auditLogger.WriteBuyAuditLog(connection, transaction, characterId, reward.ItemTemplateId, reward.SlotIndex, 0, 0);
             result = useResult;

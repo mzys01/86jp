@@ -106,6 +106,19 @@ namespace DfoServer.Game.Inventory
         public int GrantedCount { get; set; }
     }
 
+    public sealed class BoosterUseRequest
+    {
+        public short? SlotIndex { get; set; }
+
+        public IReadOnlyList<int> SelectedItemTemplateIds { get; set; } = Array.Empty<int>();
+
+        public int ExpectedItemTemplateId { get; set; }
+
+        public short? MaterialSlotIndex { get; set; }
+
+        public int ExpectedMaterialItemTemplateId { get; set; }
+    }
+
     public sealed class BoosterUseResult
     {
         public short SourceSlotIndex { get; set; }
@@ -408,34 +421,12 @@ ORDER BY slot_index;";
             }
         }
 
-        public bool TryUseBoosterItem(short? slotIndex, IReadOnlyList<int> selectedItemTemplateIds, out BoosterUseResult result)
+        public bool TryUseBoosterItem(BoosterUseRequest request, out BoosterUseResult result)
         {
             using (var connection = _context.OpenConnection())
             using (var transaction = connection.BeginTransaction())
             {
-                var ok = _packageStore.TryUseBoosterItem(connection, transaction, _context.CharacterId, _context.AccountId, slotIndex, selectedItemTemplateIds, out result);
-                if (ok) transaction.Commit();
-                return ok;
-            }
-        }
-
-        public bool TryUseBoosterItem(short? slotIndex, IReadOnlyList<int> selectedItemTemplateIds, int useCount, int expectedItemTemplateId, out BoosterUseResult result)
-        {
-            using (var connection = _context.OpenConnection())
-            using (var transaction = connection.BeginTransaction())
-            {
-                var ok = _packageStore.TryUseBoosterItem(connection, transaction, _context.CharacterId, _context.AccountId, slotIndex, selectedItemTemplateIds, useCount, expectedItemTemplateId, out result);
-                if (ok) transaction.Commit();
-                return ok;
-            }
-        }
-
-        public bool TryUseBoosterItem(short? slotIndex, IReadOnlyList<int> selectedItemTemplateIds, int useCount, int expectedItemTemplateId, short? materialSlotIndex, int expectedMaterialItemTemplateId, out BoosterUseResult result)
-        {
-            using (var connection = _context.OpenConnection())
-            using (var transaction = connection.BeginTransaction())
-            {
-                var ok = _packageStore.TryUseBoosterItem(connection, transaction, _context.CharacterId, _context.AccountId, slotIndex, selectedItemTemplateIds, useCount, expectedItemTemplateId, materialSlotIndex, expectedMaterialItemTemplateId, out result);
+                var ok = _packageStore.TryUseBoosterItem(connection, transaction, _context.CharacterId, _context.AccountId, request, out result);
                 if (ok) transaction.Commit();
                 return ok;
             }

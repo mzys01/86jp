@@ -27,11 +27,7 @@ namespace DfoServer.Game.Inventory
 
         bool TryOpenSelectablePackage(SelectablePackageOpenRequest request, out SelectablePackageOpenResult result);
 
-        bool TryUseBoosterItem(short? slotIndex, IReadOnlyList<int> selectedItemTemplateIds, out BoosterUseResult result);
-
-        bool TryUseBoosterItem(short? slotIndex, IReadOnlyList<int> selectedItemTemplateIds, int useCount, int expectedItemTemplateId, out BoosterUseResult result);
-
-        bool TryUseBoosterItem(short? slotIndex, IReadOnlyList<int> selectedItemTemplateIds, int useCount, int expectedItemTemplateId, short? materialSlotIndex, int expectedMaterialItemTemplateId, out BoosterUseResult result);
+        bool TryUseBoosterItem(BoosterUseRequest request, out BoosterUseResult result);
 
         bool TryOpenPackage0207(short slotIndex, IReadOnlyList<int> selectedItemTemplateIds, out BoosterUseResult result);
 

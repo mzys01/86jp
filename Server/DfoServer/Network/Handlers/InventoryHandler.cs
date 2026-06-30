@@ -397,21 +397,23 @@ namespace DfoServer.Network.Handlers
             if (!_sqliteSelectCharacterDataSource.TryUseBoosterItem(
                     cid,
                     aid,
-                    request.SlotIndex,
-                    Array.Empty<int>(),
-                    request.UseCount,
-                    request.ItemTemplateId,
-                    materialSlotIndex,
-                    expectedMaterialItemTemplateId,
+                    new BoosterUseRequest
+                    {
+                        SlotIndex = request.SlotIndex,
+                        SelectedItemTemplateIds = Array.Empty<int>(),
+                        ExpectedItemTemplateId = request.ItemTemplateId,
+                        MaterialSlotIndex = materialSlotIndex,
+                        ExpectedMaterialItemTemplateId = expectedMaterialItemTemplateId,
+                    },
                     out var result))
             {
-                FileLogger.Log($"[{ProtocolName}] OPEN_MAGIC_BOX: failed cid={cid} aid={aid} slot={request.SlotIndex} item=0x{request.ItemTemplateId:X8} material=0x{request.MaterialItemTemplateId:X8}@{request.MaterialSlotIndex} requested={request.UseCount} elapsed={elapsed.ElapsedMilliseconds}ms");
+                FileLogger.Log($"[{ProtocolName}] OPEN_MAGIC_BOX: failed cid={cid} aid={aid} slot={request.SlotIndex} item=0x{request.ItemTemplateId:X8} material=0x{request.MaterialItemTemplateId:X8}@{request.MaterialSlotIndex} requested={request.RequestedCount} elapsed={elapsed.ElapsedMilliseconds}ms");
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, header.type, new byte[] { 0x00 }));
                 return;
             }
 
             await SendBoosterUseResult(session, header.type, result);
-            FileLogger.Log($"[{ProtocolName}] OPEN_MAGIC_BOX: source=0x{result.SourceItemTemplateId:X8} slot={result.SourceSlotIndex} requested={request.UseCount} applied={result.ConsumedSourceCount} remaining={result.SourceRemainingStackCount} material=0x{result.ConsumedMaterialItemTemplateId:X8}x{result.ConsumedMaterialCount}@{result.ConsumedMaterialSlotIndex} materialRemaining={result.ConsumedMaterialRemainingStackCount} rewards={string.Join(",", result.Rewards.Select(r => $"{r.ListType}:0x{r.ItemTemplateId:X8}x{r.GrantedCount}@{r.SlotIndex}"))} elapsed={elapsed.ElapsedMilliseconds}ms");
+            FileLogger.Log($"[{ProtocolName}] OPEN_MAGIC_BOX: source=0x{result.SourceItemTemplateId:X8} slot={result.SourceSlotIndex} requested={request.RequestedCount} applied={result.ConsumedSourceCount} remaining={result.SourceRemainingStackCount} material=0x{result.ConsumedMaterialItemTemplateId:X8}x{result.ConsumedMaterialCount}@{result.ConsumedMaterialSlotIndex} materialRemaining={result.ConsumedMaterialRemainingStackCount} rewards={string.Join(",", result.Rewards.Select(r => $"{r.ListType}:0x{r.ItemTemplateId:X8}x{r.GrantedCount}@{r.SlotIndex}"))} elapsed={elapsed.ElapsedMilliseconds}ms");
         }
 
         public async Task Handle_OPEN_MAGIC_BOX_SINGLE(EnhancedClientSession session, GamePacketHeader header, byte[] body)
@@ -437,21 +439,23 @@ namespace DfoServer.Network.Handlers
             if (!_sqliteSelectCharacterDataSource.TryUseBoosterItem(
                     cid,
                     aid,
-                    request.SlotIndex,
-                    Array.Empty<int>(),
-                    request.UseCount,
-                    request.ItemTemplateId,
-                    materialSlotIndex,
-                    expectedMaterialItemTemplateId,
+                    new BoosterUseRequest
+                    {
+                        SlotIndex = request.SlotIndex,
+                        SelectedItemTemplateIds = Array.Empty<int>(),
+                        ExpectedItemTemplateId = request.ItemTemplateId,
+                        MaterialSlotIndex = materialSlotIndex,
+                        ExpectedMaterialItemTemplateId = expectedMaterialItemTemplateId,
+                    },
                     out var result))
             {
-                FileLogger.Log($"[{ProtocolName}] OPEN_MAGIC_BOX_SINGLE: failed cid={cid} aid={aid} slot={request.SlotIndex} materialSlot={(materialSlotIndex.HasValue ? materialSlotIndex.Value.ToString() : "auto")} requested={request.UseCount} elapsed={elapsed.ElapsedMilliseconds}ms");
+                FileLogger.Log($"[{ProtocolName}] OPEN_MAGIC_BOX_SINGLE: failed cid={cid} aid={aid} slot={request.SlotIndex} materialSlot={(materialSlotIndex.HasValue ? materialSlotIndex.Value.ToString() : "auto")} requested={request.RequestedCount} elapsed={elapsed.ElapsedMilliseconds}ms");
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, header.type, new byte[] { 0x00 }));
                 return;
             }
 
             await SendBoosterUseResult(session, header.type, result);
-            FileLogger.Log($"[{ProtocolName}] OPEN_MAGIC_BOX_SINGLE: source=0x{result.SourceItemTemplateId:X8} slot={result.SourceSlotIndex} requested={request.UseCount} applied={result.ConsumedSourceCount} remaining={result.SourceRemainingStackCount} material=0x{result.ConsumedMaterialItemTemplateId:X8}x{result.ConsumedMaterialCount}@{result.ConsumedMaterialSlotIndex} materialRemaining={result.ConsumedMaterialRemainingStackCount} rewards={string.Join(",", result.Rewards.Select(r => $"{r.ListType}:0x{r.ItemTemplateId:X8}x{r.GrantedCount}@{r.SlotIndex}"))} elapsed={elapsed.ElapsedMilliseconds}ms");
+            FileLogger.Log($"[{ProtocolName}] OPEN_MAGIC_BOX_SINGLE: source=0x{result.SourceItemTemplateId:X8} slot={result.SourceSlotIndex} requested={request.RequestedCount} applied={result.ConsumedSourceCount} remaining={result.SourceRemainingStackCount} material=0x{result.ConsumedMaterialItemTemplateId:X8}x{result.ConsumedMaterialCount}@{result.ConsumedMaterialSlotIndex} materialRemaining={result.ConsumedMaterialRemainingStackCount} rewards={string.Join(",", result.Rewards.Select(r => $"{r.ListType}:0x{r.ItemTemplateId:X8}x{r.GrantedCount}@{r.SlotIndex}"))} elapsed={elapsed.ElapsedMilliseconds}ms");
         }
 
         private async Task<bool> TryHandleBoosterOpen(EnhancedClientSession session, GamePacketHeader header, byte[] body)
@@ -474,7 +478,11 @@ namespace DfoServer.Network.Handlers
             }
 
             var (cid, aid) = ResolveOwner(session);
-            if (!_sqliteSelectCharacterDataSource.TryUseBoosterItem(cid, aid, slotIndex, selectedItemTemplateIds, out var result))
+            if (!_sqliteSelectCharacterDataSource.TryUseBoosterItem(cid, aid, new BoosterUseRequest
+                {
+                    SlotIndex = slotIndex,
+                    SelectedItemTemplateIds = selectedItemTemplateIds,
+                }, out var result))
             {
                 FileLogger.Log($"[{ProtocolName}] USE_BOOSTER: failed cid={cid} aid={aid} slot={(slotIndex.HasValue ? slotIndex.Value.ToString() : "auto")} elapsed={elapsed.ElapsedMilliseconds}ms");
                 return false;
