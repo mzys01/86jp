@@ -1,3 +1,4 @@
+using DfoServer.Game.Currency;
 using DfoServer.Game.Inventory;
 using DfoServer.Network;
 using Microsoft.Data.Sqlite;

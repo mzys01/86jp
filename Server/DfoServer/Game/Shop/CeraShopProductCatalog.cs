@@ -3,7 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 
-namespace DfoServer.Game.Inventory
+namespace DfoServer.Game.Shop
 {
     public sealed class CeraShopProductEntry
     {

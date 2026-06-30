@@ -1,3 +1,4 @@
+using DfoServer.Game.Currency;
 using DfoServer.Infrastructure;
 using System;
 using System.Collections.Generic;

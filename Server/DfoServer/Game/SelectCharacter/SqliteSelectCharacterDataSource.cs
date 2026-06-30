@@ -1,5 +1,6 @@
 using DfoServer.Game.CharacterData;
 using DfoServer.Game.Characters;
+using DfoServer.Game.Currency;
 using DfoServer.Game.ExpertJob;
 using DfoServer.Game.Inventory;
 using DfoServer.Game.ItemUpgrade;
