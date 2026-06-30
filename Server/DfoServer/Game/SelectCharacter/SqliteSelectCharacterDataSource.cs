@@ -1,4 +1,4 @@
-﻿using DfoServer.Game.CharacterData;
+using DfoServer.Game.CharacterData;
 using DfoServer.Game.Characters;
 using DfoServer.Game.ExpertJob;
 using DfoServer.Game.Inventory;
@@ -277,10 +277,12 @@ namespace DfoServer.Game.SelectCharacter
                 return _inventoryStore.TryBuyItem(itemTemplateId, buyCount, out result);
         }
 
-        public bool TryBuyCeraShopItem(int characterId, int accountId, int productId, int buyCount, out InventoryMutationResult result)
+        // 透传 paymentMode 与 attributeValue 到下层 InventoryStore。
+        // 此方法仅做 Scope 管理，实际逻辑在 InventoryShopStore.TryBuyCeraShopItem。
+        public bool TryBuyCeraShopItem(int characterId, int accountId, int productId, int buyCount, int paymentMode, byte attributeValue, out InventoryMutationResult result)
         {
             using (_inventoryStore.BeginScope(characterId, accountId))
-                return _inventoryStore.TryBuyCeraShopItem(productId, buyCount, out result);
+                return _inventoryStore.TryBuyCeraShopItem(productId, buyCount, paymentMode, attributeValue, out result);
         }
 
         public bool TrySellItem(int characterId, int accountId, InventoryListType listType, short slotIndex, short sellCount, out InventoryMutationResult result)
