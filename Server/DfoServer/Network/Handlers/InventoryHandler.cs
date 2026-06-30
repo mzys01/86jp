@@ -165,10 +165,8 @@ namespace DfoServer.Network.Handlers
             var notiListType = MapToSortLockListType(listType);
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x02CB, SortItemLockBuilder.BuildUnlock(notiListType, slotIndex)));
 
-            if (RequiresMainListRefreshForSortItemUnlock(notiListType))
-                await SendItemListRefresh(session, InventoryListType.Main);
-            else
-                await SendSortItemLockSlotRefresh(session, notiListType, slotIndex);
+            if (listType != InventoryListType.Equipment)
+                await SendItemListRefresh(session, notiListType);
 
             await SendSortItemLockRefresh(session, notiListType);
         }
@@ -1202,11 +1200,6 @@ namespace DfoServer.Network.Handlers
                 || listType == InventoryListType.PersonalCargo
                 || listType == InventoryListType.AccountCargo
                 || listType == InventoryListType.Pet;
-        }
-
-        private static bool RequiresMainListRefreshForSortItemUnlock(InventoryListType listType)
-        {
-            return listType == InventoryListType.PersonalCargo;
         }
 
         private static InventoryListType MapToNotiListType(InventoryListType moveListType)

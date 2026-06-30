@@ -476,7 +476,7 @@ VALUES (@accountId, @selectionKey, @value32, @itemCount, CURRENT_TIMESTAMP);";
             using (var cmd = connection.CreateCommand())
             {
                 cmd.Transaction = transaction;
-                cmd.CommandText = @"SELECT item_template_id, stack_count, durability, extra_json
+                cmd.CommandText = @"SELECT item_template_id, stack_count, durability, option_value, extra_json
                                     FROM character_items WHERE character_id=@cid AND list_type=@lt AND slot_index=@si";
                 cmd.Parameters.AddWithValue("@cid", characterId);
                 cmd.Parameters.AddWithValue("@lt", (int)listType);
@@ -484,14 +484,16 @@ VALUES (@accountId, @selectionKey, @value32, @itemCount, CURRENT_TIMESTAMP);";
                 using (var reader = cmd.ExecuteReader())
                 {
                     if (!reader.Read()) return null;
-                    var extraJson = reader.IsDBNull(3) ? "{}" : reader.GetString(3);
+                    var extraJson = reader.IsDBNull(4) ? "{}" : reader.GetString(4);
                     var prefix = InventoryItemCodec.ReadHexValue(extraJson, "prefixData0E", 8);
                     var tail = InventoryItemCodec.ReadHexValue(extraJson, "tailData2F", 37);
                     var jewelHex = InventoryItemCodec.ReadRawStringValue(extraJson, "jewelSocket");
+                    var durabilityFromDb = (ushort)reader.GetInt32(2);
+                    var optionValue = (byte)reader.GetInt32(3);
                     var f = new MakeEquipListCodec.DisplayFields
                     {
                         InstanceValue = unchecked((uint)reader.GetInt32(1)),
-                        Durability = (ushort)reader.GetInt32(2),
+                        Durability = listType == InventoryListType.Avatar ? optionValue : durabilityFromDb,
                         Reinforce = (byte)InventoryItemCodec.ReadIntValue(extraJson, "extData0"),
                         Enchant = prefix.Length >= 4 ? BitConverter.ToUInt32(prefix, 0) : 0,
                         EnchantUpgradeCount = prefix.Length >= 5 ? prefix[4] : (byte)0,
