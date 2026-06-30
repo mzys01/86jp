@@ -960,7 +960,7 @@ ORDER BY slot_index;";
                 var openCount = CountOpenJewelSockets(common);
                 if (openCount <= 0 && common.TailData2F[0] > 0)
                 {
-                    var rebuiltCount = Math.Min(2, (int)common.TailData2F[0]);
+                    var rebuiltCount = Math.Min(GetEquipmentSocketOpenCount(targetItemTemplateId), (int)common.TailData2F[0]);
                     common.JewelSocket = BuildJewelSocketData(targetItemTemplateId);
                     EnsureVisibleSocketCount(common, rebuiltCount);
                     openCount = CountOpenJewelSockets(common);
@@ -978,10 +978,10 @@ ORDER BY slot_index;";
                 var consumed = new List<InventoryMutationResult>();
                 foreach (var request in emblems)
                 {
-                    if (request.SocketIndex >= openCount || request.SocketIndex >= 5)
+                    if (!TryResolveEquipmentSocketRequest(targetItemTemplateId, openCount, request.SocketIndex, out var logicalSocketIndex, out var physicalSocketIndex))
                         return false;
 
-                    var socketType = GetJewelSocketType(common, request.SocketIndex);
+                    var socketType = GetJewelSocketType(common, physicalSocketIndex);
                     var emblemType = ItemMetadataResolver.ResolveEmblemSocketType(request.EmblemItemTemplateId);
                     if (!CanAttachEmblemToJewelSocket(socketType, emblemType))
                     {
@@ -993,8 +993,8 @@ ORDER BY slot_index;";
                     if (emblem == null || emblem.ItemTemplateId != request.EmblemItemTemplateId || emblem.StackCount <= 0)
                         return false;
 
-                    WriteEmblemToTail(common.TailData2F, request.SocketIndex, request.EmblemItemTemplateId);
-                    WriteEmblemToJewelSocket(common.JewelSocket, request.SocketIndex, request.EmblemItemTemplateId);
+                    WriteEmblemToTail(common.TailData2F, logicalSocketIndex, request.EmblemItemTemplateId);
+                    WriteEmblemToJewelSocket(common.JewelSocket, physicalSocketIndex, request.EmblemItemTemplateId);
 
                     var remaining = Math.Max(0, emblem.StackCount - 1);
                     if (remaining > 0)
@@ -1051,7 +1051,7 @@ ORDER BY slot_index;";
             var consumed = new List<InventoryMutationResult>();
             foreach (var request in emblems)
             {
-                if (request.SocketIndex >= openCount || request.SocketIndex >= 5)
+                if (!TryResolveEquipmentSocketRequest(targetItemTemplateId, openCount, request.SocketIndex, out var logicalSocketIndex, out _))
                     return false;
 
                 var emblemType = ItemMetadataResolver.ResolveEmblemSocketType(request.EmblemItemTemplateId);
@@ -1065,7 +1065,7 @@ ORDER BY slot_index;";
                 if (emblem == null || emblem.ItemTemplateId != request.EmblemItemTemplateId || emblem.StackCount <= 0)
                     return false;
 
-                WriteEmblemToEquippedFields(ref fields.Emblem, request.SocketIndex, request.EmblemItemTemplateId);
+                WriteEmblemToEquippedFields(ref fields.Emblem, logicalSocketIndex, request.EmblemItemTemplateId);
 
                 var remaining = Math.Max(0, emblem.StackCount - 1);
                 if (remaining > 0)
@@ -2025,7 +2025,7 @@ WHERE character_id = @cid AND list_type = @lt
 
             item.TailData2F = NormalizeBytes(item.TailData2F, 37);
             item.JewelSocket = BuildJewelSocketData(item.ItemTemplateId);
-            EnsureVisibleSocketCount(item, 2);
+            EnsureVisibleSocketCount(item, GetEquipmentSocketOpenCount(item.ItemTemplateId));
         }
 
         private static bool TrySetAvatarSocketOpenFields(AvatarInventoryItem item, IReadOnlyList<byte> socketTypes)
@@ -2061,13 +2061,56 @@ WHERE character_id = @cid AND list_type = @lt
         {
             var data = new byte[30];
             var socketType = ResolveJewelSocketType(itemTemplateId);
-            for (var i = 0; i < 2; i++)
+            var socketCount = GetEquipmentSocketOpenCount(itemTemplateId);
+            for (var i = 0; i < socketCount; i++)
             {
-                var offset = i * 6;
+                var offset = GetEquipmentSocketPhysicalIndex(itemTemplateId, (byte)i) * 6;
                 data[offset] = socketType;
                 data[offset + 1] = 0;
             }
             return data;
+        }
+
+        private static int GetEquipmentSocketOpenCount(int itemTemplateId)
+        {
+            return IsSingleMiddleEquipmentSocket(itemTemplateId) ? 1 : 2;
+        }
+
+        private static bool IsSingleMiddleEquipmentSocket(int itemTemplateId)
+        {
+            var equipmentType = ItemMetadataResolver.ResolveEquipmentType(itemTemplateId);
+            return string.Equals(equipmentType, "[support]", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(equipmentType, "[magic stone]", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static byte GetEquipmentSocketPhysicalIndex(int itemTemplateId, byte logicalSocketIndex)
+        {
+            return IsSingleMiddleEquipmentSocket(itemTemplateId) ? (byte)1 : logicalSocketIndex;
+        }
+
+        private static bool TryResolveEquipmentSocketRequest(int itemTemplateId, int openCount, byte requestSocketIndex, out byte logicalSocketIndex, out byte physicalSocketIndex)
+        {
+            logicalSocketIndex = 0;
+            physicalSocketIndex = 0;
+
+            if (requestSocketIndex >= 5 || openCount <= 0)
+                return false;
+
+            if (IsSingleMiddleEquipmentSocket(itemTemplateId))
+            {
+                if (requestSocketIndex > 1)
+                    return false;
+
+                physicalSocketIndex = 1;
+                return true;
+            }
+
+            if (requestSocketIndex >= openCount)
+                return false;
+
+            logicalSocketIndex = requestSocketIndex;
+            physicalSocketIndex = requestSocketIndex;
+            return true;
         }
 
         private static byte ResolveJewelSocketType(int itemTemplateId)
@@ -2312,6 +2355,9 @@ WHERE character_id = @cid AND slot = @slot AND item_id = @itemId;";
 
             item.JewelSocket = NormalizeBytes(item.JewelSocket, 30);
             var expectedType = ResolveJewelSocketType(itemTemplateId);
+            if (IsSingleMiddleEquipmentSocket(itemTemplateId))
+                return RepairSingleMiddleJewelSocket(item, expectedType);
+
             var changed = false;
             for (var i = 0; i < 2; i++)
             {
@@ -2328,6 +2374,51 @@ WHERE character_id = @cid AND slot = @slot AND item_id = @itemId;";
             }
 
             return changed;
+        }
+
+        private static bool RepairSingleMiddleJewelSocket(CommonInventoryItem item, byte expectedType)
+        {
+            var sourceOffset = item.JewelSocket.Length > 6 && item.JewelSocket[6] != 0
+                ? 6
+                : FindFirstOpenJewelSocketOffset(item.JewelSocket, 3);
+
+            if (sourceOffset == 6 && item.JewelSocket[sourceOffset] == expectedType && !HasOpenEquipmentSocketOutsideMiddle(item.JewelSocket))
+                return false;
+
+            if (sourceOffset < 0)
+                return false;
+
+            var emblemBytes = new byte[4];
+            if (sourceOffset + 6 <= item.JewelSocket.Length)
+                Buffer.BlockCopy(item.JewelSocket, sourceOffset + 2, emblemBytes, 0, emblemBytes.Length);
+
+            Array.Clear(item.JewelSocket, 0, item.JewelSocket.Length);
+            item.JewelSocket[6] = expectedType;
+            item.JewelSocket[7] = 0;
+            Buffer.BlockCopy(emblemBytes, 0, item.JewelSocket, 8, emblemBytes.Length);
+            return true;
+        }
+
+        private static int FindFirstOpenJewelSocketOffset(byte[] jewelSocket, int maxSlots)
+        {
+            if (jewelSocket == null)
+                return -1;
+
+            for (var i = 0; i < maxSlots; i++)
+            {
+                var offset = i * 6;
+                if (offset < jewelSocket.Length && jewelSocket[offset] != 0)
+                    return offset;
+            }
+
+            return -1;
+        }
+
+        private static bool HasOpenEquipmentSocketOutsideMiddle(byte[] jewelSocket)
+        {
+            return jewelSocket != null
+                && ((jewelSocket.Length > 0 && jewelSocket[0] != 0)
+                    || (jewelSocket.Length > 12 && jewelSocket[12] != 0));
         }
 
         private static bool IsKnownJewelSocketType(byte socketType)
