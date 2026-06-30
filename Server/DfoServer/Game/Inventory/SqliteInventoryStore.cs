@@ -85,6 +85,9 @@ namespace DfoServer.Game.Inventory
         // 本次购买是否扣了金币(用于商城回包决定是否刷新主背包 slot0 金币显示)。
         public bool GoldSpent { get; set; }
 
+        // 契约等道具购买即消耗，不入库；为 true 时跳过 ITEM_LIST 更新通知。
+        public bool ConsumedOnPurchase { get; set; }
+
         public int CostItemTemplateId { get; set; }
 
         public int CostItemNewStackCount { get; set; }

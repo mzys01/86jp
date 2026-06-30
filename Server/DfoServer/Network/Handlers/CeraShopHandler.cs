@@ -95,6 +95,8 @@ namespace DfoServer.Network.Handlers
 
                 foreach (var updateResult in resultGroup)
                 {
+                    if (updateResult.ConsumedOnPurchase)
+                        continue;
                     if (updateResult.ListType == InventoryListType.Avatar)
                     {
                         avatarSlots.Add(updateResult.SlotIndex);
@@ -277,6 +279,7 @@ namespace DfoServer.Network.Handlers
             writer.WriteInt32(happyTokenCera); // [9..12] happy token/event cera point
             return writer.ToArray();
         }
+
         private static (int premiumType, long remaining)? TryActivatePremium(int accountId, int itemTemplateId)
         {
             try
