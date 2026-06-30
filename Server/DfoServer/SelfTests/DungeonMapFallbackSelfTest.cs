@@ -89,6 +89,23 @@ namespace DfoServer.SelfTests
                 mazeIndex == 1 && matchedQuestId == 1848 && matchSource == "related",
                 ref failures);
 
+            try
+            {
+                var issue189StartMap = DungeonData.GetDungeonMapMonsterSummaryInformation(
+                    dungeonId: 165,
+                    x: 0xFF,
+                    y: 0xFF,
+                    mazeIndex: 4);
+                Check("issue 189 quest maze start room uses map specification",
+                    issue189StartMap.Index == 33060,
+                    ref failures);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[FAIL] issue 189 quest maze start room uses map specification: {ex.Message}");
+                failures++;
+            }
+
             Console.WriteLine(failures == 0 ? "PASS" : $"FAIL: {failures}");
             return failures == 0 ? 0 : 1;
         }

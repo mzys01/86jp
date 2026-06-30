@@ -1032,8 +1032,32 @@ namespace DfoServer.GameWorld
                 }
                 return -1;
             }
+            int FindMapIdByMapSpecification(bool allowMapTypeForBossRoom)
+            {
+                if (defaultMaze.MapSpecifications == null)
+                    return -1;
 
-            if (isStartRoom)
+                foreach (var item in defaultMaze.MapSpecifications)
+                {
+                    if (item.X != x || item.Y != y)
+                        continue;
+                    if (isBossRoom && item.Type != "boss" && !allowMapTypeForBossRoom)
+                        continue;
+                    if (item.MapCandidates != null && item.MapCandidates.Length > 1)
+                        return item.MapCandidates[_mazeRng.Next(item.MapCandidates.Length)];
+                    return item.Index;
+                }
+
+                return -1;
+            }
+
+            var isQuestConnectedMaze = defaultMaze.QuestConnection != null
+                && defaultMaze.QuestConnection.Length >= 2;
+
+            if (isQuestConnectedMaze)
+                mapId = FindMapIdByMapSpecification(allowMapTypeForBossRoom: false);
+
+            if (mapId == -1 && isStartRoom)
             {
                 mapId = FindMapIdByFileName(new[]
                 {
@@ -1044,19 +1068,7 @@ namespace DfoServer.GameWorld
 
             if (mapId == -1)
             {
-                foreach (var item in defaultMaze.MapSpecifications)
-                {
-                    if (item.X == x && item.Y == y)
-                    {
-                        if (isBossRoom && item.Type != "boss")
-                            continue;
-                        if (item.MapCandidates != null && item.MapCandidates.Length > 1)
-                            mapId = item.MapCandidates[_mazeRng.Next(item.MapCandidates.Length)];
-                        else
-                            mapId = item.Index;
-                        break;
-                    }
-                }
+                mapId = FindMapIdByMapSpecification(allowMapTypeForBossRoom: false);
             }
 
             if (isBossRoom && mapId == -1)

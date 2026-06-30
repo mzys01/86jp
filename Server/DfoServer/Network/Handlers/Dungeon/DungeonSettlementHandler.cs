@@ -409,7 +409,46 @@ namespace DfoServer.Network.Handlers.Dungeon
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x001F, DungeonNotificationBuilder.BuildEnableClearDungeon()));
             var npcId = SecretShopNpcIds[DungeonSharedServices.SeedGen.Next(SecretShopNpcIds.Length)];
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0117, BitConverter.GetBytes(npcId)));
+            if (session.GameSession?.QuestManager != null)
+            {
+                var currentMapId = ResolveCurrentMapId(session);
+                await session.GameSession.QuestManager.SyncClearMapQuestProgressAsync(
+                    session.Player.CurDungeon,
+                    currentMapId);
+                if (ShouldSyncQuestConnectedStartMapOnDungeonClear(session, currentMapId))
+                {
+                    FileLogger.Log($"[DungeonHandler] CLEAR_MAP sync deferred quest-connected start map: dungeon={session.Player.CurDungeon} maze={session.Player.CurMazeIndex} map={session.Player.CurMazeStartMapId}");
+                    await session.GameSession.QuestManager.SyncClearMapQuestProgressAsync(
+                        0,
+                        session.Player.CurMazeStartMapId);
+                }
+            }
             FileLogger.Log($"[DungeonHandler] ClearDungeon: {reason} secretShopNpc={npcId}");
+        }
+
+        private static int ResolveCurrentMapId(EnhancedClientSession session)
+        {
+            if (session?.Player == null)
+                return 0;
+
+            RoomState state;
+            if (session.Player.DungeonRoomStates != null
+                && session.Player.DungeonRoomStates.TryGetValue(session.Player.CurRoomKey, out state)
+                && state != null
+                && state.Maze.Index > 0)
+                return state.Maze.Index;
+
+            return session.Player.CurMap;
+        }
+
+        private static bool ShouldSyncQuestConnectedStartMapOnDungeonClear(EnhancedClientSession session, int currentMapId)
+        {
+            var player = session?.Player;
+            if (player == null || !player.CurMazeQuestConnected)
+                return false;
+            if (player.CurMazeStartMapId <= 0 || player.CurMazeStartMapId == currentMapId)
+                return false;
+            return true;
         }
 
         // Returns true if paid card rewards are available (gold or item at indices 4/5 in card list).
