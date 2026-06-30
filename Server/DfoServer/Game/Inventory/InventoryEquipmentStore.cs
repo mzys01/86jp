@@ -607,9 +607,11 @@ VALUES (@accountId, @selectionKey, @value32, @itemCount, CURRENT_TIMESTAMP);";
                     + "\",\"tailData2F\":\"" + BitConverter.ToString(tail).Replace("-", "") + "\""
                     + jewelJson + "}";
             }
+            byte ov = (byte)(listType == InventoryListType.Avatar ? dur : 0);
             _db.InsertCharacterItem(connection, transaction, characterId, listType, slot, itemId, "equipment",
-                stackCount: countOrIv, instanceValue: 0, durability: dur, sealFlag: 0, optionValue: 0,
+                stackCount: countOrIv, instanceValue: 0, durability: dur, sealFlag: 0, optionValue: ov,
                 expireTime: expireTime, marker16: -1, petSerialOrHandle: 0, extraJson: extraJson);
+            FileLogger.Log($"  [InsertEquipToContainer] listType={listType} slot={slot} itemId=0x{itemId:X8} durability={dur} optionValue={ov}");
         }
 
         private static bool IsRentalRecord(int itemTemplateId, int expireTime, string seriesKey)
