@@ -229,7 +229,7 @@ namespace DfoServer.Network
             d[0x008F] = _dungeonHandler.Handle_ENUM_CMDPACKET_CHANGE_TUTORIAL_FLAG; //143
             d[0x00BF] = _dungeonHandler.Handle_ENUM_CMDPACKET_DUNGEON_EVENT_STORY_PAUSE; //191
             d[0x01E4] = _dungeonHandler.Handle_ENUM_CMDPACKET_TUTORIAL_LEVEL_UP;   //484
-            d[0x0312] = _dungeonHandler.Handle_ENUM_CMDPACKET_0312;
+            d[0x0312] = _dungeonHandler.Handle_PREMIUM_SERVICE;                    //786
             d[0x03B6] = _dungeonHandler.Handle_ENUM_CMDPACKET_GORGEOUS_CHALLENGE_TOGGLE;
         }
 

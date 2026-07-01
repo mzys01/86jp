@@ -188,25 +188,20 @@ namespace DfoServer.Network.Handlers.Dungeon
             }
         }
 
-        internal static async Task Handle0312Async(EnhancedClientSession session, byte[] body)
+        internal static async Task HandlePremiumServiceQueryAsync(EnhancedClientSession session, byte[] body)
         {
-            FileLogger.Log($"[{ProtocolLogName}] CMD_0312: uid={session?.Player?.UserId ?? 0} body={BitConverter.ToString(body ?? Array.Empty<byte>())}");
+            var aid = session?.Account?.AccountId ?? 0;
+            FileLogger.Log($"[{ProtocolLogName}] CMD_0312: uid={session?.Player?.UserId ?? 0} aid={aid} body={BitConverter.ToString(body ?? Array.Empty<byte>())}");
 
-            byte[] response = null;
-            try
-            {
-                var repo = new SqliteCharacterStateRepository(ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
-                response = repo.LoadGlobalRawPacket(0x10312);
-                if (response != null && response.Length > 0)
-                    FileLogger.Log($"[{ProtocolLogName}] CMD_0312 template response len={response.Length}");
-            }
-            catch (Exception ex)
-            {
-                FileLogger.Log($"[{ProtocolLogName}] CMD_0312 template load failed: {ex.Message}");
-            }
+            var connStr = SqliteDatabaseBootstrap.Initialize(ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
+            var serviceData = Game.Premium.PremiumService.BuildPremiumServiceData(connStr, aid);
 
-            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0312,
-                response != null && response.Length > 0 ? response : CommonPacketBodyBuilder.BuildSuccessAck()));
+            var writer = new GamePacketWriter();
+            writer.WriteByte(1);
+            writer.WriteUInt16(1);
+            writer.WriteBytes(serviceData);
+            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0312, writer.ToArray()));
+            FileLogger.Log($"[{ProtocolLogName}] CMD_0312: responded with dynamic PremiumServiceData account={aid}");
         }
 
         private static void SaveSubtype0Tail(int characterId, UserInfoMinimumTailSnapshot tail)

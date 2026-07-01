@@ -79,8 +79,8 @@ namespace DfoServer.Network.Handlers
         public Task Handle_ENUM_CMDPACKET_TUTORIAL_LEVEL_UP(EnhancedClientSession session, GamePacketHeader header, byte[] body)
             => _tutorial.HandleTutorialLevelUp(session, header, body);
 
-        public Task Handle_ENUM_CMDPACKET_0312(EnhancedClientSession session, GamePacketHeader header, byte[] body)
-            => DungeonSharedServices.Handle0312Async(session, body);
+        public Task Handle_PREMIUM_SERVICE(EnhancedClientSession session, GamePacketHeader header, byte[] body)
+            => DungeonSharedServices.HandlePremiumServiceQueryAsync(session, body);
 
         public Task Handle_BACK_2_VILLAGE(EnhancedClientSession session, GamePacketHeader header, byte[] body)
             => _tutorial.HandleBack2Village(session, header, body);
