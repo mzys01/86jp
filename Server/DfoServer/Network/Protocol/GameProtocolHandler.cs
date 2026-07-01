@@ -175,7 +175,10 @@ namespace DfoServer.Network
             d[0x002C] = _inventoryHandler.Handle_ENUM_CMDPACKET_USE_STACKABLE;
             d[0x00D0] = _inventoryHandler.Handle_OPEN_MAGIC_BOX_SINGLE;
             d[0x0050] = _inventoryHandler.Handle_ENUM_CMDPACKET_UPGRADE_ITEM;      //80
+            d[0x0066] = _inventoryHandler.Handle_HATCH_CREATURE_EGG;                //102
             d[0x00A0] = _inventoryHandler.Handle_OPEN_SELECTABLE_PACKAGE;
+            d[0x00AD] = _inventoryHandler.Handle_HATCH_CREATURE_EGG;                //173
+            d[0x00AE] = _inventoryHandler.Handle_REQUEST_HATCHED_CREATURE;          //174
             d[0x0110] = _inventoryHandler.Handle_ENUM_CMDPACKET_ENCHANT_BY_BEAD;   //272
             d[0x019C] = _inventoryHandler.Handle_TITLE_BOOK;                       //412
             d[0x019D] = _inventoryHandler.Handle_TITLE_BOOK;                       //413

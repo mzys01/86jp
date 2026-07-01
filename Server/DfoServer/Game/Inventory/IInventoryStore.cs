@@ -34,6 +34,8 @@ namespace DfoServer.Game.Inventory
 
         bool TryOpenPackage0207(short slotIndex, IReadOnlyList<int> selectedItemTemplateIds, out BoosterUseResult result);
 
+        bool TryHatchCreatureEgg(InventoryListType listType, short slotIndex, int expectedItemTemplateId, out CreatureHatchResult result);
+
         bool TryBuyItem(int itemTemplateId, int buyCount, out InventoryMutationResult result);
 
         bool TryPickupRentalWeapon(

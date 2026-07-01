@@ -248,11 +248,7 @@ ORDER BY slot;";
 
                 int wantId = request.SourceInstanceValue;
                 var existing = entries.Find(e => e.Slot == equipSlot);
-                var isEquippableKind = mainSource != null
-                    && (mainSource.ItemKind == "equipment"
-                        || mainSource.ItemKind == "avatar"
-                        || (mainSource.ItemKind == "special" && RentalWeaponInventoryMapper.IsValidInventoryTemplate(mainSource.ItemTemplateId)));
-                if (mainSource == null || !isEquippableKind || mainSource.ItemTemplateId != wantId)
+                if (!IsValidEquipSource(mainSource, dbSrcList, wantId))
                 {
                     if (equipSlot == 12)
                     {
@@ -517,13 +513,41 @@ VALUES (@accountId, @selectionKey, @value32, @itemCount, CURRENT_TIMESTAMP);";
             }
         }
 
+        private static bool IsValidEquipSource(SqliteInventoryStore.ItemRecord source, InventoryListType sourceListType, int expectedItemId)
+        {
+            if (source == null || source.ItemTemplateId != expectedItemId)
+                return false;
+
+            if (source.ItemKind == "equipment" || source.ItemKind == "avatar")
+                return true;
+
+            if (source.ItemKind == "special" && RentalWeaponInventoryMapper.IsValidInventoryTemplate(source.ItemTemplateId))
+                return true;
+
+            return sourceListType == InventoryListType.Pet
+                && source.ItemKind == "pet"
+                && TryIsPetInventoryEquipment(expectedItemId);
+        }
+
+        private static bool TryIsPetInventoryEquipment(int itemTemplateId)
+        {
+            try
+            {
+                return ItemMetadataResolver.IsPetInventoryEquipment(itemTemplateId);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
         private MakeEquipListCodec.DisplayFields? LoadDisplayFieldsFromCharacterItem(
             SqliteConnection connection, SqliteTransaction transaction, int characterId, InventoryListType listType, short slotIndex)
         {
             using (var cmd = connection.CreateCommand())
             {
                 cmd.Transaction = transaction;
-                cmd.CommandText = @"SELECT item_template_id, stack_count, durability, extra_json, item_kind, option_value
+                cmd.CommandText = @"SELECT item_template_id, stack_count, durability, extra_json, item_kind, option_value, pet_serial_or_handle
                                     FROM character_items WHERE character_id=@cid AND list_type=@lt AND slot_index=@si";
                 cmd.Parameters.AddWithValue("@cid", characterId);
                 cmd.Parameters.AddWithValue("@lt", (int)listType);
@@ -531,6 +555,7 @@ VALUES (@accountId, @selectionKey, @value32, @itemCount, CURRENT_TIMESTAMP);";
                 using (var reader = cmd.ExecuteReader())
                 {
                     if (!reader.Read()) return null;
+                    var itemTemplateId = reader.GetInt32(0);
                     var extraJson = reader.IsDBNull(3) ? "{}" : reader.GetString(3);
                     var itemKind = reader.IsDBNull(4) ? "" : reader.GetString(4);
                     var prefix = InventoryItemCodec.ReadHexValue(extraJson, "prefixData0E", 8);
@@ -538,10 +563,12 @@ VALUES (@accountId, @selectionKey, @value32, @itemCount, CURRENT_TIMESTAMP);";
                     var jewelHex = InventoryItemCodec.ReadRawStringValue(extraJson, "jewelSocket");
                     var durabilityFromDb = (ushort)reader.GetInt32(2);
                     var isAvatar = string.Equals(itemKind, "avatar", StringComparison.Ordinal);
+                    var isPet = listType == InventoryListType.Pet && string.Equals(itemKind, "pet", StringComparison.Ordinal);
+                    var petSerialOrHandle = reader.GetInt32(6);
                     var optionValue = Convert.ToByte(reader.GetInt32(5), CultureInfo.InvariantCulture);
                     var f = new MakeEquipListCodec.DisplayFields
                     {
-                        InstanceValue = unchecked((uint)reader.GetInt32(1)),
+                        InstanceValue = unchecked((uint)(isPet ? petSerialOrHandle : reader.GetInt32(1))),
                         Durability = listType == InventoryListType.Avatar ? optionValue : durabilityFromDb,
                         Reinforce = (byte)InventoryItemCodec.ReadIntValue(extraJson, "extData0"),
                         Enchant = prefix.Length >= 4 ? BitConverter.ToUInt32(prefix, 0) : 0,
@@ -549,6 +576,8 @@ VALUES (@accountId, @selectionKey, @value32, @itemCount, CURRENT_TIMESTAMP);";
                         AmplifyType = prefix.Length >= 6 ? prefix[5] : (byte)0,
                         AmplifyValue = prefix.Length >= 8 ? BitConverter.ToUInt16(prefix, 6) : (ushort)0,
                     };
+                    if (isPet && petSerialOrHandle != 0 && CreatureExtraResolver.HasCreatureExtra(itemTemplateId))
+                        f.CreatureExtra = unchecked((uint)petSerialOrHandle);
                     // emblem from tail[0..8]
                     if (tail.Length > 0)
                     {
