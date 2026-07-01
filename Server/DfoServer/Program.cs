@@ -77,18 +77,6 @@ namespace DfoServer
                 return;
             }
 
-            if (Array.IndexOf(args, "--selftest-pet-equipment") >= 0)
-            {
-                Environment.Exit(SelfTests.PetEquipmentSelfTest.Run());
-                return;
-            }
-
-            if (Array.IndexOf(args, "--selftest-pet-hatch") >= 0)
-            {
-                Environment.Exit(SelfTests.PetHatchSelfTest.Run());
-                return;
-            }
-
             GameNetworkConfig.Configure(args);
 
             PacketFileLogger.Initialize();
