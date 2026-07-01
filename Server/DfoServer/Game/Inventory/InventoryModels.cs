@@ -153,6 +153,8 @@ namespace DfoServer.Game.Inventory
     {
         public AvatarInventoryItem TargetItem { get; set; }
 
+        public bool TargetEquipped { get; set; }
+
         public List<InventoryMutationResult> ConsumedEmblems { get; } = new List<InventoryMutationResult>();
     }
 }

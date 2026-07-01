@@ -476,7 +476,7 @@ VALUES (@accountId, @selectionKey, @value32, @itemCount, CURRENT_TIMESTAMP);";
             using (var cmd = connection.CreateCommand())
             {
                 cmd.Transaction = transaction;
-                cmd.CommandText = @"SELECT item_template_id, stack_count, durability, option_value, extra_json
+                cmd.CommandText = @"SELECT item_template_id, stack_count, durability, extra_json, item_kind, option_value
                                     FROM character_items WHERE character_id=@cid AND list_type=@lt AND slot_index=@si";
                 cmd.Parameters.AddWithValue("@cid", characterId);
                 cmd.Parameters.AddWithValue("@lt", (int)listType);
@@ -484,12 +484,14 @@ VALUES (@accountId, @selectionKey, @value32, @itemCount, CURRENT_TIMESTAMP);";
                 using (var reader = cmd.ExecuteReader())
                 {
                     if (!reader.Read()) return null;
-                    var extraJson = reader.IsDBNull(4) ? "{}" : reader.GetString(4);
+                    var extraJson = reader.IsDBNull(3) ? "{}" : reader.GetString(3);
+                    var itemKind = reader.IsDBNull(4) ? "" : reader.GetString(4);
                     var prefix = InventoryItemCodec.ReadHexValue(extraJson, "prefixData0E", 8);
                     var tail = InventoryItemCodec.ReadHexValue(extraJson, "tailData2F", 37);
                     var jewelHex = InventoryItemCodec.ReadRawStringValue(extraJson, "jewelSocket");
                     var durabilityFromDb = (ushort)reader.GetInt32(2);
-                    var optionValue = (byte)reader.GetInt32(3);
+                    var isAvatar = string.Equals(itemKind, "avatar", StringComparison.Ordinal);
+                    var optionValue = Convert.ToByte(reader.GetInt32(5), CultureInfo.InvariantCulture);
                     var f = new MakeEquipListCodec.DisplayFields
                     {
                         InstanceValue = unchecked((uint)reader.GetInt32(1)),
@@ -540,7 +542,12 @@ VALUES (@accountId, @selectionKey, @value32, @itemCount, CURRENT_TIMESTAMP);";
                     if (tail.Length > 27)
                         f.Forging = tail[27];
                     // jewelSocket
-                    if (!string.IsNullOrEmpty(jewelHex))
+                    if (isAvatar)
+                    {
+                        f.JewelSocket = SqliteInventoryStore.AvatarReservedToEquippedJewel(
+                            InventoryItemCodec.ReadHexValue(extraJson, "reserved2", 30));
+                    }
+                    else if (!string.IsNullOrEmpty(jewelHex))
                     {
                         f.JewelSocket = new byte[jewelHex.Length / 2];
                         for (int i = 0; i < f.JewelSocket.Length; i++)
@@ -575,6 +582,25 @@ VALUES (@accountId, @selectionKey, @value32, @itemCount, CURRENT_TIMESTAMP);";
                 var f = MakeEquipListCodec.ParseDisplayFields(entryRaw);
                 dur = f.Durability;
                 countOrIv = unchecked((int)f.InstanceValue);
+                if (listType == InventoryListType.Avatar)
+                {
+                    var avatar = new AvatarInventoryItem
+                    {
+                        SlotIndex = slot,
+                        AvatarItemId = itemId,
+                        OptionValue = ResolveAvatarOptionValue(f),
+                        UnknownFixed30 = SqliteInventoryStore.DefaultAvatarUnknownFixed30,
+                        UnknownFixed4 = SqliteInventoryStore.DefaultAvatarUnknownFixed4,
+                        Reserved2 = SqliteInventoryStore.EquippedJewelToAvatarReserved(f.JewelSocket),
+                    };
+                    _db.InsertCharacterItem(
+                        connection, transaction, characterId, listType, slot, itemId, "avatar",
+                        stackCount: 0, instanceValue: 0, durability: 0, sealFlag: 0, optionValue: avatar.OptionValue,
+                        expireTime: 0, marker16: avatar.UnknownFixed30, petSerialOrHandle: 0,
+                        extraJson: InventoryItemCodec.SerializeAvatar(avatar));
+                    return;
+                }
+
                 var prefix = new byte[8];
                 BitConverter.GetBytes(f.Enchant).CopyTo(prefix, 0);
                 prefix[4] = f.EnchantUpgradeCount;
@@ -612,6 +638,12 @@ VALUES (@accountId, @selectionKey, @value32, @itemCount, CURRENT_TIMESTAMP);";
                 stackCount: countOrIv, instanceValue: 0, durability: dur, sealFlag: 0, optionValue: ov,
                 expireTime: expireTime, marker16: -1, petSerialOrHandle: 0, extraJson: extraJson);
             FileLogger.Log($"  [InsertEquipToContainer] listType={listType} slot={slot} itemId=0x{itemId:X8} durability={dur} optionValue={ov}");
+        }
+
+        private static byte ResolveAvatarOptionValue(MakeEquipListCodec.DisplayFields fields)
+        {
+            var durabilityOption = unchecked((byte)(fields.Durability & 0xFF));
+            return durabilityOption != 0 ? durabilityOption : fields.Reinforce;
         }
 
         private static bool IsRentalRecord(int itemTemplateId, int expireTime, string seriesKey)

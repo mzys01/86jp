@@ -377,7 +377,7 @@ namespace DfoServer.Game.Inventory
             {
                 var target = _db.LoadItemRecord(connection, transaction, _context.CharacterId, InventoryListType.Avatar, targetSlotIndex);
                 if (target == null || target.ItemKind != "avatar" || target.ItemTemplateId != targetItemTemplateId)
-                    return false;
+                    return TrySetEquippedAvatarEmblems(connection, transaction, targetSlotIndex, targetItemTemplateId, emblems, out result);
 
                 var avatar = _db.LoadAvatarItem(connection, transaction, _context.CharacterId, targetSlotIndex);
                 if (avatar == null)
@@ -445,6 +445,93 @@ namespace DfoServer.Game.Inventory
             }
         }
 
+        private bool TrySetEquippedAvatarEmblems(SqliteConnection connection, SqliteTransaction transaction, short targetSlotIndex, int targetItemTemplateId, IReadOnlyList<EquipmentEmblemApplyRequest> emblems, out AvatarEmblemMutationResult result)
+        {
+            result = null;
+            var entry = LoadEquippedEntry(connection, transaction, _context.CharacterId, targetSlotIndex);
+            if (entry == null || entry.ItemId != targetItemTemplateId || entry.Raw == null || entry.Raw.Length == 0)
+                return false;
+
+            InvenItem item;
+            try
+            {
+                item = InvenItem.Parse(entry.Raw);
+            }
+            catch (Exception ex)
+            {
+                FileLogger.Log($"  [AvatarEmblemAttach] REJECT equipped: parse failed slot={targetSlotIndex} item=0x{targetItemTemplateId:X8} {ex.Message}");
+                return false;
+            }
+
+            if (item.Slot > 10)
+                return false;
+
+            item.JewelSocket = NormalizeBytes(item.JewelSocket, 30);
+            var openCount = CountOpenEquippedAvatarSockets(item.JewelSocket);
+            if (openCount <= 0)
+            {
+                FileLogger.Log($"  [AvatarEmblemAttach] REJECT equipped: no open sockets slot={targetSlotIndex} item=0x{targetItemTemplateId:X8}");
+                return false;
+            }
+
+            var socketTypes = ItemMetadataResolver.ResolveAvatarSocketTypes(targetItemTemplateId);
+            var consumed = new List<InventoryMutationResult>();
+            foreach (var request in emblems)
+            {
+                if (request.SocketIndex >= openCount || request.SocketIndex >= 5)
+                    return false;
+
+                var socketType = GetEquippedAvatarSocketType(item.JewelSocket, request.SocketIndex, socketTypes);
+                var emblemType = ItemMetadataResolver.ResolveEmblemSocketType(request.EmblemItemTemplateId);
+                if (!CanAttachEmblemToJewelSocket(socketType, emblemType))
+                {
+                    FileLogger.Log($"  [AvatarEmblemAttach] REJECT equipped: socketType=0x{socketType:X2} emblemType=0x{emblemType:X2} emblem=0x{request.EmblemItemTemplateId:X8}");
+                    return false;
+                }
+
+                var emblem = _db.LoadItemRecord(connection, transaction, _context.CharacterId, InventoryListType.Main, request.EmblemSlot);
+                if (emblem == null || emblem.ItemTemplateId != request.EmblemItemTemplateId || emblem.StackCount <= 0)
+                    return false;
+
+                WriteEmblemToEquippedAvatarJewelSocket(item.JewelSocket, request.SocketIndex, request.EmblemItemTemplateId);
+
+                var remaining = Math.Max(0, emblem.StackCount - 1);
+                if (remaining > 0)
+                    _db.UpdateStackCount(connection, transaction, emblem.ItemUid, remaining);
+                else
+                {
+                    _db.DeleteItem(connection, transaction, emblem.ItemUid);
+                    DeleteSortItemLock(connection, transaction, emblem.ListType, emblem.SlotIndex);
+                }
+
+                _auditLogger.WriteDeleteAuditLog(connection, transaction, _context.CharacterId, emblem, 1);
+                consumed.Add(new InventoryMutationResult
+                {
+                    ListType = emblem.ListType,
+                    SlotIndex = emblem.SlotIndex,
+                    ItemTemplateId = emblem.ItemTemplateId,
+                    RemainingStackCount = remaining,
+                    InstanceValue = remaining,
+                    Durability = emblem.Durability,
+                    RequestedCount = 1,
+                    AppliedCount = 1,
+                });
+            }
+
+            entry.Raw = item.ToBytes();
+            UpdateEquippedEntryRaw(connection, transaction, _context.CharacterId, targetSlotIndex, targetItemTemplateId, entry.Raw);
+            FileLogger.Log($"  [AvatarEmblemAttach] equipped OK slot={targetSlotIndex} item=0x{targetItemTemplateId:X8} emblems={emblems.Count}");
+            transaction.Commit();
+
+            result = new AvatarEmblemMutationResult
+            {
+                TargetItem = BuildEquippedAvatarItem(targetSlotIndex, targetItemTemplateId, item),
+                TargetEquipped = true,
+            };
+            result.ConsumedEmblems.AddRange(consumed);
+            return true;
+        }
+
         private static void SetEquipmentSocketOpenFields(CommonInventoryItem item)
         {
             if (item == null)
@@ -482,6 +569,35 @@ namespace DfoServer.Game.Inventory
                 data[offset + 2] = socketTypes[i] == 0xEF ? (byte)0xFF : (byte)0;
             }
             return data;
+        }
+
+        internal static byte[] AvatarReservedToEquippedJewel(byte[] reserved2)
+        {
+            var data = NormalizeBytes(reserved2, 30);
+            var equipped = new byte[30];
+            for (var i = 0; i < 5; i++)
+            {
+                var offset = i * 6;
+                equipped[offset] = data[offset + 1];
+                equipped[offset + 1] = data[offset + 2];
+                Buffer.BlockCopy(data, offset + 3, equipped, offset + 2, 3);
+            }
+            return equipped;
+        }
+
+        internal static byte[] EquippedJewelToAvatarReserved(byte[] jewelSocket)
+        {
+            var data = NormalizeBytes(jewelSocket, 30);
+            var reserved = new byte[30];
+            for (var i = 0; i < 5; i++)
+            {
+                var offset = i * 6;
+                reserved[offset] = 0;
+                reserved[offset + 1] = data[offset];
+                reserved[offset + 2] = data[offset + 1];
+                Buffer.BlockCopy(data, offset + 2, reserved, offset + 3, 3);
+            }
+            return reserved;
         }
 
         private static byte[] BuildJewelSocketData(int itemTemplateId)
@@ -634,6 +750,56 @@ namespace DfoServer.Game.Inventory
                 && (data[offset + 1] != 0xEF || data[offset + 2] == 0xFF);
         }
 
+        private static bool IsEquippedAvatarSocketOpen(byte[] data, int offset)
+        {
+            return data != null
+                && offset >= 0
+                && offset + 5 < data.Length
+                && data[offset] != 0
+                && (data[offset] != 0xEF || data[offset + 1] == 0xFF);
+        }
+
+        private static int CountOpenEquippedAvatarSockets(byte[] data)
+        {
+            if (data == null || data.Length < 6)
+                return 0;
+
+            var count = 0;
+            for (var i = 0; i < 5; i++)
+            {
+                var offset = i * 6;
+                if (IsEquippedAvatarSocketOpen(data, offset))
+                    count++;
+            }
+            return count;
+        }
+
+        private static byte GetEquippedAvatarSocketType(byte[] jewelSocket, byte socketIndex, IReadOnlyList<byte> fallbackTypes)
+        {
+            var data = NormalizeBytes(jewelSocket, 30);
+            var offset = socketIndex * 6;
+            if (offset < data.Length && data[offset] != 0)
+                return data[offset];
+
+            return fallbackTypes != null && socketIndex < fallbackTypes.Count ? fallbackTypes[socketIndex] : (byte)0;
+        }
+
+        private static AvatarInventoryItem BuildEquippedAvatarItem(short slotIndex, int itemTemplateId, InvenItem item)
+        {
+            return new AvatarInventoryItem
+            {
+                SlotIndex = slotIndex,
+                AvatarItemId = itemTemplateId,
+                Reserved0 = new byte[5],
+                OptionValue = item != null ? unchecked((byte)(item.Durability & 0xFF)) : (byte)0,
+                Reserved1 = new byte[71],
+                UnknownFixed30 = DefaultAvatarUnknownFixed30,
+                Reserved2 = EquippedJewelToAvatarReserved(item?.JewelSocket),
+                UnknownFixed4 = DefaultAvatarUnknownFixed4,
+                TailData = new byte[7],
+            };
+        }
+
         private static bool AvatarSocketLayoutMatches(byte[] data, IReadOnlyList<byte> socketTypes)
         {
             if (socketTypes == null || socketTypes.Count == 0)
@@ -687,6 +853,19 @@ namespace DfoServer.Game.Inventory
             BitConverter.GetBytes(emblemItemTemplateId).CopyTo(emblemData, 1 + socketIndex * 4);
         }
 
+        private static void WriteEmblemToEquippedAvatarJewelSocket(byte[] jewelSocket, byte socketIndex, int emblemItemTemplateId)
+        {
+            if (jewelSocket == null || jewelSocket.Length < 30)
+                return;
+
+            var offset = socketIndex * 6 + 2;
+            if (offset + 3 <= jewelSocket.Length)
+            {
+                var bytes = BitConverter.GetBytes(emblemItemTemplateId);
+                Buffer.BlockCopy(bytes, 0, jewelSocket, offset, 3);
+            }
+        }
+
         private static MakeEquipListCodec.Entry LoadEquippedEntry(SqliteConnection connection, SqliteTransaction transaction, int characterId, short slotIndex)
         {
             using (var command = connection.CreateCommand())
@@ -729,6 +908,69 @@ WHERE character_id = @cid AND slot = @slot AND item_id = @itemId;";
                 command.Parameters.AddWithValue("@slot", (int)slotIndex);
                 command.Parameters.AddWithValue("@itemId", itemTemplateId);
                 command.ExecuteNonQuery();
+            }
+
+            SyncEquipListBlob(connection, transaction, characterId);
+        }
+
+        private static void SyncEquipListBlob(SqliteConnection connection, SqliteTransaction transaction, int characterId)
+        {
+            byte[] oldBlob = null;
+            using (var command = connection.CreateCommand())
+            {
+                command.Transaction = transaction;
+                command.CommandText = "SELECT equip_list_blob FROM equipped_items WHERE character_id = @cid";
+                command.Parameters.AddWithValue("@cid", characterId);
+                var value = command.ExecuteScalar();
+                if (value != null && value != DBNull.Value)
+                    oldBlob = (byte[])value;
+            }
+
+            if (oldBlob == null || oldBlob.Length < 93)
+                return;
+
+            try
+            {
+                var parsed = MakeEquipListCodec.Parse(oldBlob);
+                var entries = new List<MakeEquipListCodec.Entry>();
+                using (var command = connection.CreateCommand())
+                {
+                    command.Transaction = transaction;
+                    command.CommandText = @"
+SELECT slot, item_id, expire_time, raw_entry
+FROM character_equipped_entries
+WHERE character_id = @cid
+ORDER BY slot;";
+                    command.Parameters.AddWithValue("@cid", characterId);
+                    using (var reader = command.ExecuteReader())
+                    {
+                        while (reader.Read())
+                        {
+                            entries.Add(new MakeEquipListCodec.Entry
+                            {
+                                Slot = reader.GetInt32(0),
+                                ItemId = reader.GetInt32(1),
+                                ExpireTime = reader.GetInt32(2),
+                                Raw = (byte[])reader.GetValue(3),
+                            });
+                        }
+                    }
+                }
+
+                parsed.Entries = entries;
+                var newBlob = MakeEquipListCodec.Build(parsed);
+                using (var command = connection.CreateCommand())
+                {
+                    command.Transaction = transaction;
+                    command.CommandText = "INSERT OR REPLACE INTO equipped_items (character_id, equip_list_blob) VALUES (@cid, @blob)";
+                    command.Parameters.AddWithValue("@cid", characterId);
+                    command.Parameters.AddWithValue("@blob", newBlob);
+                    command.ExecuteNonQuery();
+                }
+            }
+            catch (Exception ex)
+            {
+                FileLogger.Log($"[EquipListBlob] sync skipped char={characterId}: {ex.Message}");
             }
         }
 

@@ -124,16 +124,16 @@ namespace DfoServer.Network.Handlers
             }
 
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x031D, BuildSocketOpenAck(targetSlot, targetItemId, materialSlot)));
-            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
-                0x00,
-                0x000E,
-                ItemListUpdateBuilder.BuildCommonUpdates(new[] { result.TargetItem })));
-
-            if (result.MaterialConsumed && result.MaterialItem != null)
+            if (result.TargetItem != null)
+            {
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
                     0x00,
                     0x000E,
-                    ItemListUpdateBuilder.BuildCompactCommonUpdates(new[] { result.MaterialItem })));
+                    ItemListUpdateBuilder.BuildCommonUpdates(new[] { result.TargetItem })));
+            }
+
+            if (result.MaterialConsumed && result.MaterialItem != null)
+                await SendCommonMaterialRefresh(session, result.MaterialItem);
 
             await SendSortItemLockRefresh(session, InventoryListType.Main);
             if (result.MaterialConsumed && result.MaterialItem != null)
@@ -194,10 +194,7 @@ namespace DfoServer.Network.Handlers
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x00CE, BuildSocketOpenAck(targetSlot, targetItemId, materialSlot)));
 
             if (result.MaterialConsumed && result.MaterialItem != null)
-                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
-                    0x00,
-                    0x000E,
-                    ItemListUpdateBuilder.BuildCompactCommonUpdates(new[] { result.MaterialItem })));
+                await SendCommonMaterialRefresh(session, result.MaterialItem);
 
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
                 0x00,
@@ -232,15 +229,46 @@ namespace DfoServer.Network.Handlers
                 return false;
 
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, ackType, BuildEmblemAttachAck(targetSlot, targetItemId, emblems.Count)));
+            if (!result.TargetEquipped && result.TargetItem != null)
+            {
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
+                    0x00,
+                    0x000E,
+                    ItemListUpdateBuilder.BuildAvatarUpdates(new[] { result.TargetItem })));
+            }
+
+            await SendSortItemLockRefresh(session, InventoryListType.Main);
+            if (!result.TargetEquipped)
+                await SendSortItemLockRefresh(session, InventoryListType.Avatar);
+            FileLogger.Log($"[{ProtocolName}] AVATAR_EMBLEM_ATTACH: OK targetSlot={targetSlot} item=0x{targetItemId:X8} emblems={emblems.Count} ack=0x{ackType:X4}");
+            return true;
+        }
+
+        private async Task SendCommonMaterialRefresh(EnhancedClientSession session, InventoryMutationResult material)
+        {
+            if (material == null)
+                return;
+
+            var (cid, aid) = ResolveOwner(session);
+            var item = _sqliteSelectCharacterDataSource.LoadCommonItemForRefresh(cid, aid, material.ListType, material.SlotIndex);
+            if (item == null)
+            {
+                item = new CommonInventoryItem
+                {
+                    SlotIndex = material.SlotIndex,
+                    ItemTemplateId = -1,
+                    CountOrInstanceValue = 0,
+                    Marker16 = 0,
+                    PrefixData0E = new byte[8],
+                    MiddleData1A = new byte[17],
+                    TailData2F = new byte[37],
+                };
+            }
+
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
                 0x00,
                 0x000E,
-                ItemListUpdateBuilder.BuildAvatarUpdates(new[] { result.TargetItem })));
-
-            await SendSortItemLockRefresh(session, InventoryListType.Main);
-            await SendSortItemLockRefresh(session, InventoryListType.Avatar);
-            FileLogger.Log($"[{ProtocolName}] AVATAR_EMBLEM_ATTACH: OK targetSlot={targetSlot} item=0x{targetItemId:X8} emblems={emblems.Count} ack=0x{ackType:X4}");
-            return true;
+                ItemListUpdateBuilder.BuildCommonUpdates(new[] { item })));
         }
 
         private static bool TryParseSocketOpenBody(byte[] body, out short targetSlot, out int targetItemId, out short materialSlot)
