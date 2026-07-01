@@ -41,9 +41,9 @@ namespace DfoServer.Game.Inventory
                     using (_store.BeginScope(scope.CharacterId, scope.AccountId))
                     {
                         return _store.TryPickupItemCore(
-                            scope.Connection, scope.Transaction,
-                            scope.CharacterId, scope.AccountId,
-                            itemTemplateId, count, out assignedSlot);
+                        scope.Connection, scope.Transaction,
+                        scope.CharacterId, scope.AccountId,
+                        itemTemplateId, count, out assignedSlot);
                     }
 
                 default:

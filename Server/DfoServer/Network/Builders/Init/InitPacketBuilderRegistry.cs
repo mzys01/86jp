@@ -1,4 +1,6 @@
+using DfoServer.Game.Inventory;
 using DfoServer.Game.SelectCharacter;
+using DfoServer.Infrastructure;
 using System.Collections.Generic;
 
 namespace DfoServer.Network.Builders
@@ -9,7 +11,8 @@ namespace DfoServer.Network.Builders
 
         public InitPacketBuilderRegistry()
         {
-            
+            var collectBoxProgressRepository = new CollectBoxProgressRepository(ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
+
             Register(new SkillInfoBodyBuilder());              
             Register(new QuestListBodyBuilder());              
             Register(new UserInfoBodyBuilder());               
@@ -52,7 +55,7 @@ namespace DfoServer.Network.Builders
 
             
             Register(new SkillPointSlotBodyBuilder());                                  
-            Register(new CollectionBoxBodyBuilder());                                   
+            Register(new CollectionBoxBodyBuilder(collectBoxProgressRepository));
             Register(new RentalInfoBodyBuilder());                                      
             Register(new LotteryBufferBodyBuilder());                                   
             Register(new CubeInfoBodyBuilder());                                        
