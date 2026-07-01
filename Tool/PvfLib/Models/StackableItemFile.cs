@@ -104,6 +104,7 @@ namespace PvfLib
         public int ExpirationDate { get; set; } = -1;
         public int UsablePeriod { get; set; } = -1;
         public int TradeLimit { get; set; } = -1;
+        public int PortableDisjoint { get; set; } = -1;
 
         #endregion
 
@@ -217,6 +218,7 @@ namespace PvfLib
                     case "expiration date": stk.ExpirationDate = ParseInt(data); break;
                     case "usable period": stk.UsablePeriod = ParseInt(data); break;
                     case "trade limit max": stk.TradeLimit = ParseInt(data); break;
+                    case "portable disjoint": stk.PortableDisjoint = ParseInt(data); break;
 
                     
                     case "enchant index": stk.EnchantIndex = ParseInt(data); break;

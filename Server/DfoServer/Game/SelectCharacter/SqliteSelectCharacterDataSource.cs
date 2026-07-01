@@ -327,6 +327,12 @@ namespace DfoServer.Game.SelectCharacter
                 return _inventoryStore.TrySellItem(listType, slotIndex, sellCount, out result);
         }
 
+        public bool TryDisjointItem(int characterId, int accountId, DisjointItemRequest request, out DisjointItemResult result)
+        {
+            using (_inventoryStore.BeginScope(characterId, accountId))
+                return _inventoryStore.TryDisjointItem(request, out result);
+        }
+
         public bool TryEnchantByBead(int characterId, int accountId, EnchantByBeadCommand command, out EnchantByBeadResult result)
         {
             using (_inventoryStore.BeginScope(characterId, accountId))

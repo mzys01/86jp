@@ -46,6 +46,8 @@ namespace DfoServer.Game.Inventory
 
         bool TrySellItem(InventoryListType listType, short slotIndex, short sellCount, out InventoryMutationResult result);
 
+        bool TryDisjointItem(DisjointItemRequest request, out DisjointItemResult result);
+
         bool TryEnchantByBead(EnchantByBeadCommand command, out EnchantByBeadResult result);
 
         bool TryUpgradeItem(ItemUpgradeCommand command, out ItemUpgradeResult result);
