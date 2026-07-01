@@ -37,6 +37,8 @@ namespace DfoServer.Game.Inventory
 
         public string EquipmentType { get; set; }
 
+        public string AttachType { get; set; }
+
         public IReadOnlyList<string> ImpossibleContents { get; set; } = Array.Empty<string>();
 
         public bool IsStackable => string.Equals(ItemKind, "stackable", StringComparison.Ordinal);
@@ -134,6 +136,7 @@ namespace DfoServer.Game.Inventory
                     MinimumLevel = equipment.MinimumLevel,
                     Rarity = equipment.Rarity,
                     EquipmentType = NormalizeEquipmentType(equipment.EquipmentType),
+                    AttachType = equipment.AttachType,
                     ImpossibleContents = equipment.ImpossibleContentItems,
                 };
             }

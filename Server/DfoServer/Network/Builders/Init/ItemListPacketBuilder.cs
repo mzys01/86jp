@@ -64,8 +64,16 @@ namespace DfoServer.Network.Builders
 
             // 普通物品 entry 是初始化 ITEM_LIST 和 NOTI 14 增量刷新共用的 84 字节布局。
             writer.WriteInt16(item.SlotIndex);
-            writer.WriteInt32(item.ItemTemplateId);
-            writer.WriteInt32(item.CountOrInstanceValue);
+            if (item.ItemTemplateId < 0)
+            {
+                writer.WriteInt32(0);
+                writer.WriteInt32(0);
+            }
+            else
+            {
+                writer.WriteInt32(item.ItemTemplateId);
+                writer.WriteInt32(item.CountOrInstanceValue);
+            }
             writer.WriteByte(item.ExtData0);
             writer.WriteUInt16(item.Durability);
             writer.WriteByte(item.SealFlag);
@@ -74,6 +82,20 @@ namespace DfoServer.Network.Builders
             WriteFixedBytes(writer, item.MiddleData1A, 17);
             writer.WriteInt32(item.ExpireTime);
             WriteFixedBytes(writer, item.TailData2F, 37);
+        }
+
+        public static void WriteCommonUpdateEntry(GamePacketWriter writer, CommonInventoryItem item)
+        {
+            if (writer == null) throw new ArgumentNullException(nameof(writer));
+            if (item == null) throw new ArgumentNullException(nameof(item));
+
+            if (item.CountOrInstanceValue <= 0)
+            {
+                WriteCommonEntry(writer, new CommonInventoryItem { SlotIndex = item.SlotIndex });
+                return;
+            }
+
+            WriteCommonEntry(writer, item);
         }
 
         private static void WriteFixedBytes(GamePacketWriter writer, byte[] value, int length)
