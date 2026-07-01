@@ -29,12 +29,6 @@ namespace DfoServer
                 return;
             }
 
-            if (Array.IndexOf(args, "--selftest-premium-contract-account-scope") >= 0)
-            {
-                Environment.Exit(SelfTests.PremiumContractAccountScopeSelfTest.Run());
-                return;
-            }
-
             if (Array.IndexOf(args, "--selftest-dungeon-map-fallback") >= 0)
             {
                 Environment.Exit(SelfTests.DungeonMapFallbackSelfTest.Run());
@@ -56,6 +50,12 @@ namespace DfoServer
             if (Array.IndexOf(args, "--selftest-character-slot-policy") >= 0)
             {
                 Environment.Exit(SelfTests.CharacterSlotPolicySelfTest.Run());
+                return;
+            }
+
+            if (Array.IndexOf(args, "--selftest-clear-map-quest") >= 0)
+            {
+                Environment.Exit(SelfTests.ClearMapQuestSelfTest.Run());
                 return;
             }
 

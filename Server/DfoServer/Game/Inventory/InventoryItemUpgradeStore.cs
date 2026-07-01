@@ -1,3 +1,4 @@
+using DfoServer.Game.Currency;
 using DfoServer.Game.ItemUpgrade;
 using Microsoft.Data.Sqlite;
 using PvfLib;

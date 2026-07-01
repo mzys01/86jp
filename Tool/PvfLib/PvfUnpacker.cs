@@ -30,6 +30,17 @@ namespace PvfLib
         
         public static UnpackResult Unpack(PvfArchive archive, string outputDir, Action<Progress> onProgress = null)
         {
+            return UnpackCore(archive, outputDir, false, onProgress);
+        }
+
+        // Export Type=1/3 as editable text for PackText() round-trip.
+        public static UnpackResult UnpackText(PvfArchive archive, string outputDir, Action<Progress> onProgress = null)
+        {
+            return UnpackCore(archive, outputDir, true, onProgress);
+        }
+
+        private static UnpackResult UnpackCore(PvfArchive archive, string outputDir, bool decompileText, Action<Progress> onProgress)
+        {
             if (archive == null) throw new ArgumentNullException(nameof(archive));
             if (string.IsNullOrEmpty(outputDir)) throw new ArgumentException("输出目录不能为空", nameof(outputDir));
 
@@ -82,7 +93,10 @@ namespace PvfLib
                     
                     if (file.Entry.DataSize <= 0)
                     {
-                        File.WriteAllBytes(fullPath, Array.Empty<byte>());
+                        if (decompileText && (file.Entry.DataType == 1 || file.Entry.DataType == 3))
+                            File.WriteAllText(fullPath, string.Empty, new UTF8Encoding(false));
+                        else
+                            File.WriteAllBytes(fullPath, Array.Empty<byte>());
                         result.Extracted++;
                         continue;
                     }
@@ -95,18 +109,25 @@ namespace PvfLib
                     }
 
                     
-                    switch (file.Entry.DataType)
+                    // Text mode writes decoded script/string content, not raw bytes.
+                    if (decompileText && (file.Entry.DataType == 1 || file.Entry.DataType == 3))
                     {
-                        case 1: 
-                            WriteType1(fullPath, currentChunk, file.Entry);
-                            break;
-                        case 3: 
-                            WriteType3(fullPath, currentChunk, file.Entry);
-                            break;
-                        default:
-                            
-                            WriteBinary(fullPath, currentChunk, file.Entry);
-                            break;
+                        File.WriteAllText(fullPath, archive.GetFileContent(i), new UTF8Encoding(false));
+                    }
+                    else
+                    {
+                        switch (file.Entry.DataType)
+                        {
+                            case 1:
+                                WriteType1(fullPath, currentChunk, file.Entry);
+                                break;
+                            case 3:
+                                WriteType3(fullPath, currentChunk, file.Entry);
+                                break;
+                            default:
+                                WriteBinary(fullPath, currentChunk, file.Entry);
+                                break;
+                        }
                     }
                     result.Extracted++;
                 }

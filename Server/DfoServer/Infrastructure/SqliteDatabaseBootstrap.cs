@@ -1,3 +1,4 @@
+using DfoServer.Game.Currency;
 using Microsoft.Data.Sqlite;
 using System.IO;
 
@@ -38,7 +39,7 @@ namespace DfoServer.Infrastructure
                 {
                     ("character_option_blob", "BLOB"),
                 });
-                DfoServer.Game.Inventory.CurrencyService.MigrateCeraFromPacketTemplates(conn);
+                DfoServer.Game.Currency.CurrencyService.MigrateCeraFromPacketTemplates(conn);
 
                 // 晶块账号化: 旧库补列 + 从 character_items slot 354-359 迁移到 accounts 表
                 DfoServer.Sqlite.SqliteSchemaMigrator.EnsureColumns(conn, "accounts", new[]
@@ -50,7 +51,7 @@ namespace DfoServer.Infrastructure
                     ("cube_clear", "INTEGER NOT NULL DEFAULT 0"),
                     ("cube_gold", "INTEGER NOT NULL DEFAULT 0"),
                 });
-                DfoServer.Game.Inventory.CurrencyService.MigrateCubeFragmentsFromCharacterItems(conn);
+                DfoServer.Game.Currency.CurrencyService.MigrateCubeFragmentsFromCharacterItems(conn);
             }
             return connectionString;
         }

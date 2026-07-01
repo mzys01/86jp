@@ -1,0 +1,148 @@
+using DfoServer.Game.Inventory;
+using DfoServer.Network.Builders;
+using System;
+using System.Threading.Tasks;
+
+namespace DfoServer.Network.Handlers
+{
+    public sealed partial class InventoryHandler
+    {
+        public async Task Handle_ENUM_CMDPACKET_MOVE_ITEMSPACE(EnhancedClientSession session, GamePacketHeader header, byte[] body)
+        {
+
+
+            if (body == null || body.Length < 14)
+            {
+                if (body != null && body.Length >= 4)
+                    await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0013,
+                        MoveItemSpaceAckBuilder.BuildError(0x04, body[0], body.Length > 11 ? body[11] : body[0])));
+                return;
+            }
+
+            var request = new InventoryMoveRequest
+            {
+                SourceListType = (InventoryListType)body[0],
+                SourceSlotIndex = BitConverter.ToInt16(body, 1),
+                SourceInstanceValue = BitConverter.ToInt32(body, 3),
+                MoveCount = BitConverter.ToInt32(body, 7),
+                DestinationListType = (InventoryListType)body[11],
+                DestinationSlotIndex = BitConverter.ToInt16(body, 12),
+                DestinationInstanceValue = body.Length >= 18 ? BitConverter.ToInt32(body, 14) : 0,
+            };
+
+            var srcIV = BitConverter.ToInt32(body, 3);
+            var srcStack = BitConverter.ToInt32(body, 7);
+            var dstStack = body.Length >= 22 ? BitConverter.ToInt32(body, 18) : 0;
+            FileLogger.Log($"[{ProtocolName}] MOVE raw({body.Length}B): {BitConverter.ToString(body)}");
+            FileLogger.Log($"[{ProtocolName}] MOVE fields: src=({request.SourceListType},slot{request.SourceSlotIndex},IV=0x{srcIV:X8},stk{srcStack}) dst=({request.DestinationListType},slot{request.DestinationSlotIndex},IV=0x{request.DestinationInstanceValue:X8},stk{dstStack})");
+
+            var (cid, aid) = ResolveOwner(session);
+            if (!_sqliteSelectCharacterDataSource.TryMoveItem(cid, aid, request, out var result))
+            {
+                FileLogger.Log($"[{ProtocolName}] MOVE_ITEMSPACE: FAILED src=({request.SourceListType},{request.SourceSlotIndex}) dst=({request.DestinationListType},{request.DestinationSlotIndex})");
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0013,
+                    MoveItemSpaceAckBuilder.BuildError(0x04, (byte)request.SourceListType, (byte)request.DestinationListType)));
+                return;
+            }
+
+
+
+
+
+            if (result.AckError)
+            {
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0013,
+                    MoveItemSpaceAckBuilder.BuildError(0x02, (byte)request.SourceListType, (byte)request.DestinationListType)));
+                FileLogger.Log($"[{ProtocolName}] MOVE_ITEMSPACE: ReverseError -> ERROR ACK (撤销反转包, 不卡住)");
+                return;
+            }
+
+            FileLogger.Log($"[{ProtocolName}] MOVE_ITEMSPACE: OK src=({result.SourceListType},{result.SourceSlotIndex}) dst=({result.DestinationListType},{result.DestinationSlotIndex}) moveVal={result.MoveValue32}");
+            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0013, MoveItemSpaceAckBuilder.Build(result)));
+            await SendSortItemLockRefresh(session, request.SourceListType);
+            if (MapToSortLockListType(request.SourceListType) != MapToSortLockListType(request.DestinationListType))
+                await SendSortItemLockRefresh(session, request.DestinationListType);
+
+
+            if (result.Mutated && (request.SourceListType == InventoryListType.Equipment || request.DestinationListType == InventoryListType.Equipment))
+                await SendNoti2AppearanceUpdate(session);
+        }
+
+        public async Task Handle_ENUM_CMDPACKET_SORT_ITEM(EnhancedClientSession session, GamePacketHeader header, byte[] body)
+        {
+            if (body == null || body.Length < 2)
+                return;
+
+            var listType = (InventoryListType)body[0];
+            byte category = body[1];
+            byte condition = body.Length > 2 ? body[2] : (byte)0;
+            FileLogger.Log($"[{ProtocolName}] SORT_ITEM raw({body.Length}B): {BitConverter.ToString(body)}  listType={listType} category={category} condition={condition}(ignored)");
+
+            var (cid, aid) = ResolveOwner(session);
+            try
+            {
+                var ok = _sqliteSelectCharacterDataSource.TrySortItems(cid, aid, listType, category);
+                FileLogger.Log($"[{ProtocolName}] SORT: TrySortItems({listType}, cat={category})={ok}");
+                if (!ok)
+                    return;
+
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0014, SortItemAckBuilder.Build(listType)));
+                await SendItemListRefresh(session, listType);
+                await SendSortItemLockRefresh(session, listType);
+                FileLogger.Log($"[{ProtocolName}] SORT: ack + ITEM_LIST sent, done");
+            }
+            catch (Exception ex)
+            {
+                FileLogger.Log($"[{ProtocolName}] SORT EXCEPTION: {ex}");
+                throw;
+            }
+        }
+
+        public async Task Handle_ENUM_CMDPACKET_TOGGLE_SORT_ITEM_LOCK(EnhancedClientSession session, GamePacketHeader header, byte[] body)
+        {
+            if (body == null || body.Length < 3)
+                return;
+
+            var listType = (InventoryListType)body[0];
+            var slotIndex = BitConverter.ToInt16(body, 1);
+            var (cid, aid) = ResolveOwner(session);
+
+            if (!_sqliteSelectCharacterDataSource.TryToggleSortItemLock(cid, aid, listType, slotIndex, out var entry))
+                return;
+
+            if (entry.State == 0)
+            {
+                await SendSortItemUnlockAckAndRefresh(session, listType, slotIndex);
+                return;
+            }
+
+            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x02CA, SortItemLockBuilder.BuildLock(entry)));
+        }
+
+        public async Task Handle_ENUM_CMDPACKET_UNLOCK_SORT_ITEM_LOCK(EnhancedClientSession session, GamePacketHeader header, byte[] body)
+        {
+            if (body == null || body.Length < 3)
+                return;
+
+            var listType = (InventoryListType)body[0];
+            var slotIndex = BitConverter.ToInt16(body, 1);
+            var (cid, aid) = ResolveOwner(session);
+
+            if (!_sqliteSelectCharacterDataSource.TryUnlockSortItemLock(cid, aid, listType, slotIndex))
+                return;
+
+            await SendSortItemUnlockAckAndRefresh(session, listType, slotIndex);
+        }
+
+        private async Task SendSortItemUnlockAckAndRefresh(EnhancedClientSession session, InventoryListType listType, short slotIndex)
+        {
+            var notiListType = MapToSortLockListType(listType);
+            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x02CB, SortItemLockBuilder.BuildUnlock(notiListType, slotIndex)));
+
+            if (listType != InventoryListType.Equipment)
+                await SendItemListRefresh(session, notiListType);
+
+            await SendSortItemLockRefresh(session, notiListType);
+        }
+    }
+}

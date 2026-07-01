@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using Microsoft.Data.Sqlite;
 
-namespace DfoServer.Game.Inventory
+namespace DfoServer.Game.Currency
 {
     public static class CurrencyService
     {
@@ -233,36 +233,6 @@ WHERE c.character_id = @cid;";
             return w;
         }
 
-        public static ushort LoadLuckyStar(string connectionString, int accountId)
-        {
-            if (accountId <= 0)
-                return 0;
-
-            using (var conn = new SqliteConnection(connectionString))
-            {
-                conn.Open();
-                return LoadLuckyStar(conn, null, accountId);
-            }
-        }
-
-        public static ushort LoadLuckyStar(SqliteConnection connection, SqliteTransaction transaction, int accountId)
-        {
-            if (connection == null || accountId <= 0)
-                return 0;
-
-            using (var cmd = connection.CreateCommand())
-            {
-                cmd.Transaction = transaction;
-                cmd.CommandText = "SELECT lucky_star FROM accounts WHERE account_id = @aid;";
-                cmd.Parameters.AddWithValue("@aid", accountId);
-                var result = cmd.ExecuteScalar();
-                if (result == null || result == DBNull.Value)
-                    return 0;
-
-                return NormalizeLuckyStar(Convert.ToInt32(result));
-            }
-        }
-
         public static void UpdateLuckyStar(SqliteConnection connection, SqliteTransaction transaction, int accountId, ushort luckyStar)
         {
             if (connection == null || transaction == null || accountId <= 0)
@@ -384,23 +354,6 @@ VALUES ('character', @cid, @cid, 0, @slot, 0, 'special', @val, @val, 0, 0, 0, 0,
                 cmd.Parameters.AddWithValue("@slot", slot);
                 cmd.Parameters.AddWithValue("@cid", characterId);
                 cmd.ExecuteNonQuery();
-            }
-        }
-
-        public static int LoadCera(SqliteConnection connection, int characterId)
-        {
-            using (var cmd = connection.CreateCommand())
-            {
-                cmd.CommandText = @"
-SELECT a.cera
-FROM accounts a
-JOIN characters c ON c.account_id = a.account_id
-WHERE c.character_id = @cid;";
-                cmd.Parameters.AddWithValue("@cid", characterId);
-                var result = cmd.ExecuteScalar();
-                if (result != null && result != DBNull.Value)
-                    return Convert.ToInt32(result);
-                return 0;
             }
         }
 

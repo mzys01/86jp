@@ -1,3 +1,5 @@
+using DfoServer.Game.Shop;
+using DfoServer.Game.Currency;
 using DfoServer.Infrastructure;
 using System;
 using System.Collections.Generic;
@@ -616,6 +618,27 @@ namespace DfoServer.Game.Inventory
                 return false;
             }
             var goldSpent = totalGoldCost > 0;
+
+            if (Premium.PremiumCatalog.Load().TryGetValue(itemTemplateId, out _, out _))
+            {
+                ApplyCeraShopPayment(connection, transaction, characterId, plan);
+                _auditLogger.WriteBuyAuditLog(connection, transaction, characterId, itemTemplateId, 0, totalGoldCost, totalCeraCost);
+                result = new InventoryMutationResult
+                {
+                    ItemTemplateId = itemTemplateId,
+                    ConsumedOnPurchase = true,
+                    UpdatedGold = plan.NewGold,
+                    UpdatedSp = wallet.Sp,
+                    UpdatedCoin = plan.NewCera,
+                    UpdatedTokenCera = plan.NewTokenCera,
+                    UpdatedHappyTokenCera = plan.NewHappyTokenCera,
+                    GoldSpent = goldSpent,
+                    RequestedCount = 1,
+                    AppliedCount = 1,
+                };
+                FileLogger.Log($"  [CeraShopBuy] premium item consumed on purchase: item=0x{itemTemplateId:X8}");
+                return true;
+            }
 
             if (InventoryPackageStore.TryResolveMallAutoOpenRewards(itemTemplateId, out var autoOpenRewards))
             {
