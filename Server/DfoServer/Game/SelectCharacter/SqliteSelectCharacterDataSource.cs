@@ -319,6 +319,12 @@ namespace DfoServer.Game.SelectCharacter
                 return _inventoryStore.TryUseBoosterItem(request, out result);
         }
 
+        public bool TryHatchCreatureEgg(int characterId, int accountId, InventoryListType listType, short slotIndex, int expectedItemTemplateId, out CreatureHatchResult result)
+        {
+            using (_inventoryStore.BeginScope(characterId, accountId))
+                return _inventoryStore.TryHatchCreatureEgg(listType, slotIndex, expectedItemTemplateId, out result);
+        }
+
         public bool TryOpenPackage0207(int characterId, int accountId, short slotIndex, IReadOnlyList<int> selectedItemTemplateIds, out BoosterUseResult result)
         {
             using (_inventoryStore.BeginScope(characterId, accountId))

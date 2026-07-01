@@ -277,9 +277,14 @@ ORDER BY slot_index;";
                     return false;
 
                 var appliedCount = NormalizeRemovalCount(item, deleteCount);
-                if (item.ItemKind == "stackable" && appliedCount < item.StackCount)
+                var isStackCountedRecord = IsStackCountedRecord(item);
+                var remainingStackCount = Math.Max(0, item.StackCount - appliedCount);
+                if (isStackCountedRecord && appliedCount < item.StackCount)
                 {
-                    _db.UpdateStackCount(connection, transaction, item.ItemUid, item.StackCount - appliedCount);
+                    if (IsPetConsumableRecord(item))
+                        _db.UpdatePetStackCount(connection, transaction, item.ItemUid, remainingStackCount);
+                    else
+                        _db.UpdateStackCount(connection, transaction, item.ItemUid, remainingStackCount);
                 }
                 else
                 {
@@ -295,8 +300,8 @@ ORDER BY slot_index;";
                     ListType = listType,
                     SlotIndex = slotIndex,
                     ItemTemplateId = item.ItemTemplateId,
-                    RemainingStackCount = Math.Max(0, item.StackCount - appliedCount),
-                    InstanceValue = item.InstanceValue,
+                    RemainingStackCount = remainingStackCount,
+                    InstanceValue = isStackCountedRecord ? remainingStackCount : item.InstanceValue,
                     Durability = item.Durability,
                     UpdatedGold = wallet.Gold,
                     UpdatedSp = wallet.Sp,
@@ -395,13 +400,29 @@ ORDER BY slot_index;";
 
         internal static int NormalizeRemovalCount(ItemRecord source, short requestedCount)
         {
-            if (source.ItemKind != "stackable")
+            if (!IsStackCountedRecord(source))
                 return 1;
 
             if (requestedCount <= 0 || requestedCount >= source.StackCount)
                 return source.StackCount;
 
             return requestedCount;
+        }
+
+        internal static bool IsStackCountedRecord(ItemRecord source)
+        {
+            return source != null
+                && (source.ItemKind == "stackable" || IsPetConsumableRecord(source));
+        }
+
+        internal static bool IsPetConsumableRecord(ItemRecord source)
+        {
+            return source != null
+                && source.ListType == InventoryListType.Pet
+                && source.ItemKind == "pet"
+                && source.SlotIndex >= PetConsumableSlotStart
+                && source.SlotIndex <= PetConsumableSlotEnd
+                && source.StackCount > 0;
         }
 
 

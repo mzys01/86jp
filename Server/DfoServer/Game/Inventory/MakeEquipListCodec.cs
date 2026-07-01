@@ -94,6 +94,7 @@ namespace DfoServer.Game.Inventory
             public byte Forging;        
             public byte[] Emblem;       
             public byte[] JewelSocket;  
+            public uint CreatureExtra;
             public byte SealCount;      
             public byte[] SealTypes;    
             public byte[] SealVal1s;    
@@ -133,7 +134,11 @@ namespace DfoServer.Game.Inventory
                     int el = BitConverter.ToInt32(raw, off); off += 4 + el;
                 }
                 if (slot >= 24 && CreatureExtraResolver.HasCreatureExtra(BitConverter.ToInt32(raw, 1)))
+                {
+                    if (off + 4 <= raw.Length)
+                        f.CreatureExtra = BitConverter.ToUInt32(raw, off);
                     off += 4; 
+                }
                 int cc = raw[off]; off += 1 + cc * 8; 
                 off += 4;                              
                 int ecOff = off;
@@ -262,7 +267,10 @@ namespace DfoServer.Game.Inventory
                     bw.Write((int)0);        
                 }
                 if (slot >= 24 && CreatureExtraResolver.HasCreatureExtra(itemId))
-                    bw.Write((int)0);        
+                {
+                    var creatureExtra = f.CreatureExtra != 0 ? f.CreatureExtra : f.InstanceValue;
+                    bw.Write(creatureExtra);
+                }
                 
                 bw.Write((byte)0);           
                 

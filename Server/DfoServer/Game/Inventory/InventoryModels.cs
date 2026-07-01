@@ -88,6 +88,19 @@ namespace DfoServer.Game.Inventory
         public List<InventoryMutationResult> ExtraResults { get; } = new List<InventoryMutationResult>();
     }
 
+    public sealed class CreatureHatchResult
+    {
+        public InventoryListType ListType { get; set; }
+
+        public short SlotIndex { get; set; }
+
+        public int EggItemTemplateId { get; set; }
+
+        public int HatchedItemTemplateId { get; set; }
+
+        public int PetSerialOrHandle { get; set; }
+    }
+
     public sealed class BoosterRewardResult
     {
         public InventoryListType ListType { get; set; } = InventoryListType.Main;

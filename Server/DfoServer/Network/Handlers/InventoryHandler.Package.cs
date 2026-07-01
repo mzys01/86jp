@@ -36,7 +36,59 @@ namespace DfoServer.Network.Handlers
             var ackBody = UseStackableAckBuilder.BuildSuccess(slotIndex, (byte)listType, instanceValue, itemCode);
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x002C, ackBody));
 
+            if (result.ListType == InventoryListType.Pet)
+            {
+                var snapshot = _sqliteSelectCharacterDataSource.LoadItemListSnapshot(cid, aid);
+                var petUpdateBody = BuildPetItemUpdates(snapshot, new HashSet<short> { result.SlotIndex });
+                if (petUpdateBody != null)
+                    await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000E, petUpdateBody));
+            }
+
             FileLogger.Log($"[{ProtocolName}] USE_STACKABLE: consumed 1x item 0x{itemCode:X8} from slot {slotIndex}, remaining={result.RemainingStackCount}");
+        }
+
+        public async Task Handle_HATCH_CREATURE_EGG(EnhancedClientSession session, GamePacketHeader header, byte[] body)
+        {
+            if (!TryParseCreatureEggHatchRequest(body, out var listType, out var slotIndex, out var expectedItemTemplateId))
+            {
+                FileLogger.Log($"[{ProtocolName}] HATCH_CREATURE_EGG: parse failed type=0x{header.type:X4} body({body?.Length ?? 0}B): {(body != null ? BitConverter.ToString(body) : "null")}");
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, header.type, new byte[] { 0x00 }));
+                return;
+            }
+
+            var (cid, aid) = ResolveOwner(session);
+            if (!_sqliteSelectCharacterDataSource.TryHatchCreatureEgg(cid, aid, listType, slotIndex, expectedItemTemplateId, out var result))
+            {
+                FileLogger.Log($"[{ProtocolName}] HATCH_CREATURE_EGG: failed type=0x{header.type:X4} list={listType} slot={slotIndex} expected=0x{expectedItemTemplateId:X8}");
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, header.type, new byte[] { 0x00 }));
+                return;
+            }
+
+            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, header.type, CommonPacketBodyBuilder.BuildSuccessAck()));
+
+            var snapshot = _sqliteSelectCharacterDataSource.LoadItemListSnapshot(cid, aid);
+            var petUpdateBody = BuildPetItemUpdates(snapshot, new HashSet<short> { result.SlotIndex });
+            if (petUpdateBody != null)
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000E, petUpdateBody));
+            await SendCreatureListRefresh(session);
+
+            FileLogger.Log($"[{ProtocolName}] HATCH_CREATURE_EGG: OK type=0x{header.type:X4} slot={result.SlotIndex} egg=0x{result.EggItemTemplateId:X8} -> pet=0x{result.HatchedItemTemplateId:X8} serial={result.PetSerialOrHandle}");
+        }
+
+        public async Task Handle_REQUEST_HATCHED_CREATURE(EnhancedClientSession session, GamePacketHeader header, byte[] body)
+        {
+            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, header.type, CommonPacketBodyBuilder.BuildSuccessAck()));
+            await SendCreatureListRefresh(session);
+            FileLogger.Log($"[{ProtocolName}] REQUEST_HATCHED_CREATURE: refreshed creature list type=0x{header.type:X4} body({body?.Length ?? 0}B)");
+        }
+
+        private async Task SendCreatureListRefresh(EnhancedClientSession session)
+        {
+            var (cid, aid) = ResolveOwner(session);
+            var snapshot = _sqliteSelectCharacterDataSource.Load(cid, aid);
+            var builder = new CreatureListBodyBuilder();
+            if (builder.TryBuild(snapshot, 0, out var creatureListBody))
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0069, creatureListBody));
         }
 
         public async Task Handle_OPEN_AVATAR_PACKAGE(EnhancedClientSession session, GamePacketHeader header, byte[] body)
@@ -527,6 +579,42 @@ namespace DfoServer.Network.Handlers
                 return null;
 
             return ItemListUpdateBuilder.BuildAvatarUpdates(updates);
+        }
+
+        private static bool TryParseCreatureEggHatchRequest(byte[] body, out InventoryListType listType, out short slotIndex, out int expectedItemTemplateId)
+        {
+            listType = InventoryListType.Pet;
+            slotIndex = 0;
+            expectedItemTemplateId = 0;
+
+            if (body == null || body.Length < 2)
+                return false;
+
+            if (body[0] == (byte)InventoryListType.Pet && body.Length >= 3)
+            {
+                slotIndex = BitConverter.ToInt16(body, 1);
+            }
+            else
+            {
+                slotIndex = BitConverter.ToInt16(body, 0);
+                if (body.Length >= 3 && body[2] == (byte)InventoryListType.Pet)
+                    listType = InventoryListType.Pet;
+            }
+
+            foreach (var offset in new[] { 7, 2, 3 })
+            {
+                if (body.Length < offset + 4)
+                    continue;
+
+                var candidate = BitConverter.ToInt32(body, offset);
+                if (candidate > 0 && CreatureEggResolver.TryResolveHatchedCreatureItemId(candidate, out _))
+                {
+                    expectedItemTemplateId = candidate;
+                    break;
+                }
+            }
+
+            return slotIndex >= 0;
         }
 
         private static CommonInventoryItem CreateConsumedSourceItem(BoosterUseResult result)
