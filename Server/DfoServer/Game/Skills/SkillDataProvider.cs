@@ -22,6 +22,7 @@ namespace DfoServer.Game.Skills
         public int RawGroup;            
         public bool IsSpecial;
         public bool IsTpSkill;
+        public int[] PreRequiredSkills;
         public int[] SpCostPerLevel;
         public int[] TpCostPerLevel;
 
@@ -120,6 +121,7 @@ namespace DfoServer.Game.Skills
                 RawGroup = skl.SkillClass >= 0 ? skl.SkillClass : 0,
                 IsSpecial = skillIndex >= 200 && skillIndex <= 208,
                 IsTpSkill = !string.IsNullOrWhiteSpace(skl.FeatureSkillType) && skl.FeatureSkillType.Trim() != "0",
+                PreRequiredSkills = ParseInts(skl.PreRequiredSkill),
                 SpCostPerLevel = ParseInts(skl.PurchaseCost),
                 TpCostPerLevel = ParseInts(skl.SpecialPurchaseCost),
             };

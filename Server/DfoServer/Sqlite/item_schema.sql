@@ -176,6 +176,18 @@ CREATE TABLE IF NOT EXISTS character_skill_points (
     FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS character_mercenary_support (
+    owner_character_id INTEGER NOT NULL,
+    slot INTEGER NOT NULL,
+    support_character_id INTEGER NOT NULL,
+    skill_id INTEGER NOT NULL,
+    striker_skill_id INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (owner_character_id, slot),
+    FOREIGN KEY (owner_character_id) REFERENCES characters(character_id) ON DELETE CASCADE,
+    FOREIGN KEY (support_character_id) REFERENCES characters(character_id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS character_creatures (
     character_id INTEGER NOT NULL,
     sort_order INTEGER NOT NULL,
