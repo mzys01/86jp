@@ -102,6 +102,7 @@ namespace DfoServer.Game.Inventory
             return new CommonInventoryItem
             {
                 SlotIndex = slotIndex,
+                ItemTemplateId = -1,
             };
         }
 

@@ -71,7 +71,7 @@ namespace DfoServer.Network.Handlers
 
             var item = _sqliteSelectCharacterDataSource.LoadCommonItemForRefresh(cid, aid, listType, slotIndex);
             if (item == null)
-                item = new CommonInventoryItem { SlotIndex = slotIndex };
+                item = new CommonInventoryItem { SlotIndex = slotIndex, ItemTemplateId = -1 };
 
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
                 0x00,
