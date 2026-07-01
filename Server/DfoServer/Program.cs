@@ -101,6 +101,19 @@ namespace DfoServer
                 return;
             }
 
+            // 启动时一次性按当前等级重算所有角色战斗属性, 修复历史"升级未重算属性"的存量数据。
+            // 必须在 PVF 加载后: 属性表来自 Script.pvf。幂等, 重复执行结果一致, 正常时静默, 仅出错时提示。
+            try
+            {
+                new Game.CharacterData.SqliteSubtype1Repository(
+                    Infrastructure.ServerPaths.DatabasePath, Infrastructure.ServerPaths.SchemaFilePath)
+                    .RecomputeAllCombatStats();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[Startup] combat stats recompute skipped: {ex.Message}");
+            }
+
             var server = new MultiStructureTcpServer();
 
             int channelPort = GameNetworkConfig.ProxyMode ? 7002 : 7001;
