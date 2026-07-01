@@ -89,12 +89,6 @@ namespace DfoServer.Network.Builders
             if (writer == null) throw new ArgumentNullException(nameof(writer));
             if (item == null) throw new ArgumentNullException(nameof(item));
 
-            if (item.CountOrInstanceValue <= 0)
-            {
-                WriteCommonEntry(writer, new CommonInventoryItem { SlotIndex = item.SlotIndex });
-                return;
-            }
-
             WriteCommonEntry(writer, item);
         }
 
