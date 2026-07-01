@@ -472,14 +472,6 @@ CREATE TABLE IF NOT EXISTS equipped_items (
     FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
 );
 
-CREATE TABLE IF NOT EXISTS unequipped_entries (
-    character_id INTEGER NOT NULL,
-    item_template_id INTEGER NOT NULL,
-    raw_entry BLOB NOT NULL,
-    PRIMARY KEY (character_id, item_template_id),
-    FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
-);
-
 CREATE TABLE IF NOT EXISTS global_server_event_phase (
     id INTEGER PRIMARY KEY,
     event_phase_bitmap BLOB NOT NULL,
