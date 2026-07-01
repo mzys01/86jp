@@ -254,6 +254,10 @@ ORDER BY slot;";
             }
             else
             {
+                if (IsPetCreatureEquipSlotMove(request, mainSource, dbSrcList))
+                    return HandlePetCreatureEquipSlotMove(
+                        connection, transaction, characterId, request, mainSource, dbSrcList, entries);
+
                 int wantId = request.SourceInstanceValue;
                 var existing = entries.Find(e => e.Slot == equipSlot);
                 if (mainSource == null || (mainSource.ItemKind != "equipment" && mainSource.ItemKind != "avatar") || mainSource.ItemTemplateId != wantId)
@@ -312,6 +316,52 @@ ORDER BY slot;";
                 FileLogger.Log($"  [EquipMove] EQUIP: slot {equipSlot} itemId=0x{wantId:X8}");
                 return EquipOutcome.Equipped;
             }
+        }
+
+        private EquipOutcome HandlePetCreatureEquipSlotMove(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            int characterId,
+            InventoryMoveRequest request,
+            SqliteInventoryStore.ItemRecord source,
+            InventoryListType dbSrcList,
+            List<MakeEquipListCodec.Entry> entries)
+        {
+            var creatureKey = source.PetSerialOrHandle;
+            if (creatureKey <= 0)
+            {
+                FileLogger.Log($"  [EquipMove] PET EQUIP blocked: source slot={request.SourceSlotIndex} item=0x{source.ItemTemplateId:X8} has no creature key");
+                return EquipOutcome.NoOp;
+            }
+
+            var existing = entries.Find(e => e.Slot == request.DestinationSlotIndex);
+            if (existing != null)
+                entries.Remove(existing);
+
+            _db.DeleteItem(connection, transaction, source.ItemUid);
+
+            if (existing != null)
+            {
+                InsertEquipToContainer(
+                    connection, transaction, characterId, dbSrcList, request.SourceSlotIndex,
+                    existing.ItemId, existing.Raw, existing.ExpireTime);
+            }
+
+            var raw = BuildPetCreatureEquipEntry(request.DestinationSlotIndex, source.ItemTemplateId, creatureKey);
+            var newEntry = new MakeEquipListCodec.Entry
+            {
+                Slot = request.DestinationSlotIndex,
+                ItemId = source.ItemTemplateId,
+                Raw = raw,
+                ExpireTime = source.ExpireTime,
+            };
+
+            int insertAt = entries.FindIndex(e => e.Slot > request.DestinationSlotIndex);
+            if (insertAt < 0) entries.Add(newEntry); else entries.Insert(insertAt, newEntry);
+            SaveEquipEntriesTx(connection, transaction, characterId, entries);
+
+            FileLogger.Log($"  [EquipMove] PET EQUIP: slot {request.DestinationSlotIndex} itemId=0x{source.ItemTemplateId:X8} key={creatureKey} from {dbSrcList} slot {request.SourceSlotIndex}");
+            return EquipOutcome.Equipped;
         }
 
         internal bool HandleUnequipFromSlot(SqliteConnection connection, SqliteTransaction transaction, int characterId, int accountId, int equipSlot)
@@ -567,7 +617,7 @@ VALUES (@accountId, @selectionKey, @value32, @itemCount, CURRENT_TIMESTAMP);";
         {
             if (listType == InventoryListType.Pet)
             {
-                int serial = entryRaw != null && entryRaw.Length >= 28 ? BitConverter.ToInt32(entryRaw, 24) : 0;
+                int serial = ResolvePetSerialOrHandleFromEquippedRaw(entryRaw);
                 _db.InsertCharacterItem(connection, transaction, characterId, InventoryListType.Pet, slot, itemId, "pet",
                     stackCount: 0, instanceValue: 0, durability: 0, sealFlag: 0, optionValue: 0,
                     expireTime: 0, marker16: 0, petSerialOrHandle: serial, extraJson: "{}");
@@ -663,6 +713,42 @@ VALUES (@accountId, @selectionKey, @value32, @itemCount, CURRENT_TIMESTAMP);";
                 return false;
 
             return true;
+        }
+
+        private static bool IsPetCreatureEquipSlotMove(
+            InventoryMoveRequest request,
+            SqliteInventoryStore.ItemRecord source,
+            InventoryListType dbSrcList)
+        {
+            return request.DestinationSlotIndex == 24
+                && dbSrcList == InventoryListType.Pet
+                && source != null
+                && string.Equals(source.ItemKind, "pet", StringComparison.Ordinal)
+                && source.SlotIndex >= SqliteInventoryStore.PetInventorySlotStart
+                && source.SlotIndex <= SqliteInventoryStore.PetInventorySlotEnd
+                && source.PetSerialOrHandle > 0
+                && (request.SourceInstanceValue == 0 || request.SourceInstanceValue == source.ItemTemplateId);
+        }
+
+        private static byte[] BuildPetCreatureEquipEntry(short slot, int itemTemplateId, int creatureKey)
+        {
+            var fields = new MakeEquipListCodec.DisplayFields
+            {
+                InstanceValue = unchecked((uint)creatureKey),
+            };
+            return MakeEquipListCodec.BuildEntryFromDisplayFields(slot, itemTemplateId, fields);
+        }
+
+        private static int ResolvePetSerialOrHandleFromEquippedRaw(byte[] entryRaw)
+        {
+            if (entryRaw != null && entryRaw.Length >= 9)
+            {
+                var creatureKey = BitConverter.ToInt32(entryRaw, 5);
+                if (creatureKey > 0 && creatureKey < 1000000)
+                    return creatureKey;
+            }
+
+            return entryRaw != null && entryRaw.Length >= 28 ? BitConverter.ToInt32(entryRaw, 24) : 0;
         }
 
         private MakeEquipListCodec.Entry FindEquippedRentalBySeriesKey(
