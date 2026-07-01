@@ -274,8 +274,9 @@ namespace DfoServer.Network.Handlers.Dungeon
                 session.Player.CurDungeon,
                 session.Player.CurDungeonDifficulty,
                 session.Player.CurMazeIndex,
-                DungeonSharedServices.SeedGen);
-            DungeonData.PromoteChampions(monsters, champCount, DungeonSharedServices.SeedGen);
+                DungeonSharedServices.SeedGen,
+                out var namedMonsters);
+            DungeonData.PromoteChampions(monsters, champCount, DungeonSharedServices.SeedGen, namedMonsters);
         }
 
         private static int AppendHellPartyTemplateRows(List<DungeonData.MonsterSumInfo> monsters, DungeonData.HellPartyRoomInfo hellRoomInfo)

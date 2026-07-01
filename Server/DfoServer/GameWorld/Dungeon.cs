@@ -157,13 +157,16 @@ namespace DfoServer.GameWorld
             catch { return 0; }
         }
 
-        public static int GetChampionCount(int dungeonId, int difficulty, int mazeIndex, Random rng)
+        public static int GetChampionCount(int dungeonId, int difficulty, int mazeIndex, Random rng, out int[] namedMonsterCodes)
         {
+            namedMonsterCodes = null;
             try
             {
                 var dgnlst = LoadLstFile(Path.Combine("dungeon", "dungeon.lst"));
                 var dgnFilePath = ResolveFilePath(dgnlst, dungeonId, "地下城");
                 var dngFile = DungeonFile.Parse(PvfArchiveAccessor.ReadText(Path.Combine("dungeon", dgnFilePath)));
+                namedMonsterCodes = dngFile.NamedMonster;
+
                 if (dngFile.Champion == null || dngFile.Champion.Length == 0)
                     return 0;
 
@@ -194,13 +197,17 @@ namespace DfoServer.GameWorld
             catch { return 0; }
         }
 
-        public static void PromoteChampions(List<MonsterSumInfo> monsters, int count, Random rng)
+        public static void PromoteChampions(List<MonsterSumInfo> monsters, int count, Random rng, int[] namedMonsterCodes = null)
         {
             if (count <= 0) return;
 
+            var namedSet = namedMonsterCodes != null && namedMonsterCodes.Length > 0
+                ? new HashSet<int>(namedMonsterCodes) : null;
+
             var normalIndices = new List<int>();
             for (int i = 0; i < monsters.Count; i++)
-                if (monsters[i].Type == 0) normalIndices.Add(i);
+                if (monsters[i].Type == 0 && (namedSet == null || !namedSet.Contains(monsters[i].Code)))
+                    normalIndices.Add(i);
 
             for (int i = 0; i < count && normalIndices.Count > 0; i++)
             {
