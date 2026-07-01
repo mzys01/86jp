@@ -117,23 +117,7 @@ namespace DfoServer.Game.CharacterData
                     }
                 }
 
-                snapshot.ShowEffects.Clear();
-                using (var cmd = new SqliteCommand(
-                    "SELECT effect_index, duration_seconds FROM character_show_effects WHERE character_id = @cid ORDER BY sort_order", conn))
-                {
-                    cmd.Parameters.AddWithValue("@cid", characterId);
-                    using (var reader = cmd.ExecuteReader())
-                    {
-                        while (reader.Read())
-                        {
-                            snapshot.ShowEffects.Add(new ShowEffectEntrySnapshot
-                            {
-                                EffectIndex = (byte)reader.GetInt32(0),
-                                DurationSeconds = (uint)reader.GetInt64(1),
-                            });
-                        }
-                    }
-                }
+
 
                 snapshot.PvpMissions.Clear();
                 using (var cmd = new SqliteCommand(
@@ -433,26 +417,6 @@ VALUES (@cid, (SELECT COALESCE(MAX(sort_order),0)+1 FROM character_dungeon_permi
                             cmd.Parameters.AddWithValue("@cid", characterId);
                             cmd.Parameters.AddWithValue("@ord", i);
                             cmd.Parameters.AddWithValue("@sid", (int)stages[i]);
-                            cmd.ExecuteNonQuery();
-                        }
-                    }
-
-                    using (var cmd = new SqliteCommand("DELETE FROM character_show_effects WHERE character_id = @cid", conn, tx))
-                    {
-                        cmd.Parameters.AddWithValue("@cid", characterId);
-                        cmd.ExecuteNonQuery();
-                    }
-
-                    var effects = snapshot.ShowEffects;
-                    for (int i = 0; i < effects.Count; i++)
-                    {
-                        using (var cmd = new SqliteCommand(
-                            "INSERT INTO character_show_effects (character_id, sort_order, effect_index, duration_seconds) VALUES (@cid, @ord, @ei, @ds)", conn, tx))
-                        {
-                            cmd.Parameters.AddWithValue("@cid", characterId);
-                            cmd.Parameters.AddWithValue("@ord", i);
-                            cmd.Parameters.AddWithValue("@ei", (int)effects[i].EffectIndex);
-                            cmd.Parameters.AddWithValue("@ds", (long)effects[i].DurationSeconds);
                             cmd.ExecuteNonQuery();
                         }
                     }

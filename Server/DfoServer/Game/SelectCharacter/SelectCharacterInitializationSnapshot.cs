@@ -28,9 +28,6 @@ namespace DfoServer.Game.SelectCharacter
         public List<byte> GrowthWeaponStageIds { get; } = new List<byte>();
 
         
-        public List<ShowEffectEntrySnapshot> ShowEffects { get; } = new List<ShowEffectEntrySnapshot>();
-
-        
         public List<PvpMissionEntrySnapshot> PvpMissions { get; } = new List<PvpMissionEntrySnapshot>();
 
         

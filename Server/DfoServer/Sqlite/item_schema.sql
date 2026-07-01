@@ -258,15 +258,6 @@ CREATE TABLE IF NOT EXISTS character_growth_weapon_stages (
     FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
 );
 
-CREATE TABLE IF NOT EXISTS character_show_effects (
-    character_id INTEGER NOT NULL,
-    sort_order INTEGER NOT NULL,
-    effect_index INTEGER NOT NULL,
-    duration_seconds INTEGER NOT NULL,
-    PRIMARY KEY (character_id, sort_order),
-    FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
-);
-
 CREATE TABLE IF NOT EXISTS character_pvp_missions (
     character_id INTEGER NOT NULL,
     sort_order INTEGER NOT NULL,

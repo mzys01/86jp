@@ -1,4 +1,3 @@
-using System;
 using DfoServer.Game.SelectCharacter;
 
 namespace DfoServer.Network.Builders
@@ -7,18 +6,12 @@ namespace DfoServer.Network.Builders
     {
         public ushort NotiType => 0x017B;
 
+        // 真机全样本固定: count=2, (type=0,value=0), (type=2,value=0)。
+        private static readonly byte[] FixedBody = { 2, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0 };
+
         public bool TryBuild(SelectCharacterDataSnapshot snapshot, int occurrenceIndex, out byte[] body)
         {
-            var effects = snapshot.InitializationSnapshot.ShowEffects;
-            var count = effects?.Count ?? 0;
-            body = new byte[1 + count * 5];
-            body[0] = (byte)count;
-            for (var i = 0; i < count; i++)
-            {
-                var off = 1 + i * 5;
-                body[off] = effects[i].EffectIndex;
-                Buffer.BlockCopy(BitConverter.GetBytes(effects[i].DurationSeconds), 0, body, off + 1, 4);
-            }
+            body = FixedBody;
             return true;
         }
     }
