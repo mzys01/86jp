@@ -80,6 +80,18 @@ namespace DfoServer.Network.Handlers.Dungeon
                 var repo = new SqliteCharacterRepository(
                     ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
                 repo.UpdateLevelAndExp(characterId, level, exp);
+
+                // 升级后按新等级重算战斗属性并持久化到 subtype1, 否则属性停留在旧等级。
+                // growType 决定成长表选择(15-49 转职 / 50+ 觉醒), 必须从角色记录取, 默认 0 会算成未转职属性。
+                var rec = repo.GetById(characterId);
+                if (rec != null)
+                {
+                    CharacterStatComputer.DecodeGrowType(rec.GrowType, out int first, out int second);
+                    var blob = CharacterStatComputer.BuildAdditionalInfo(rec.Job, level, first, second);
+                    new SqliteSubtype1Repository(
+                        ServerPaths.DatabasePath, ServerPaths.SchemaFilePath)
+                        .UpdateCombatStats(characterId, blob);
+                }
             }
             catch (Exception ex)
             {
