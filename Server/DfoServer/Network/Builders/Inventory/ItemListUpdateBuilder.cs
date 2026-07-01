@@ -34,9 +34,11 @@ namespace DfoServer.Network.Builders
             {
                 foreach (var item in items)
                 {
+                    var itemTemplateId = item.RemainingStackCount > 0 || item.ItemTemplateId <= 0 ? item.ItemTemplateId : -1;
+                    var remainingStackCount = item.RemainingStackCount > 0 ? item.RemainingStackCount : 0;
                     writer.WriteInt16(item.SlotIndex);
-                    writer.WriteInt32(item.ItemTemplateId);
-                    writer.WriteInt32(item.RemainingStackCount);
+                    writer.WriteInt32(itemTemplateId);
+                    writer.WriteInt32(remainingStackCount);
                     writer.WriteZeroBytes(0x4A);
                 }
             }

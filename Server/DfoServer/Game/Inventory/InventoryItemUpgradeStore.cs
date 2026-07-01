@@ -1187,11 +1187,12 @@ WHERE character_id = @cid
 
         private static CommonInventoryItem CreateCountOnlyItem(short slotIndex, int itemTemplateId, int count)
         {
+            var normalizedCount = Math.Max(0, count);
             return new CommonInventoryItem
             {
                 SlotIndex = slotIndex,
-                ItemTemplateId = itemTemplateId,
-                CountOrInstanceValue = Math.Max(0, count),
+                ItemTemplateId = normalizedCount > 0 ? itemTemplateId : -1,
+                CountOrInstanceValue = normalizedCount,
             };
         }
 
