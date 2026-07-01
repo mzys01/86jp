@@ -1,4 +1,5 @@
 using DfoServer.Game.Dungeon;
+using DfoServer.Game.Skills;
 using DfoServer.GameWorld;
 using DfoServer.Infrastructure;
 using DfoServer.Network.Builders;
@@ -139,11 +140,12 @@ namespace DfoServer.Network.Handlers.Dungeon
                 ushort remainSp = 0, remainTp = 0;
                 try
                 {
-                    var points = _svc.LoadSyncedSkillState(session.Player.CharacterId, session.Player.Level, persist: leveledUp).Points;
-                    if (points != null)
+                    var synced = _svc.LoadSyncedSkillState(session.Player.CharacterId, session.Player.Level, persist: leveledUp);
+                    if (synced.Points != null)
                     {
-                        remainSp = (ushort)points.RemainingSp;
-                        remainTp = (ushort)points.RemainingTp;
+                        var pageIndex = session.Player.Subtype0Tail?.SkillTreeIndex == 1 ? 1 : 0;
+                        remainSp = SkillStateService.GetPageRemainingSp(synced.Skills, synced.Points, pageIndex);
+                        remainTp = (ushort)synced.Points.RemainingTp;
                     }
                 }
                 catch { }
@@ -203,7 +205,21 @@ namespace DfoServer.Network.Handlers.Dungeon
                 if (ccType1 || endPoint)
                     await _settlement.TryClearDungeon(session, $"prepare_dungeon_clear ccType1={ccType1} endPoint={endPoint}", killedMonsterCode);
 
-                FileLogger.Log($"[DungeonHandler] ROOM CLEARED: dungeon={session.Player.CurDungeon} killed={session.Player.CurRoomKilledSeqIds.Count}/{blockingCount}");
+                FileLogger.Log($"[DungeonHandler] ROOM CLEARED: dungeon={session.Player.CurDungeon} room=({session.Player.CurRoomKey.X},{session.Player.CurRoomKey.Y}) map={currentMapId} killed={session.Player.CurRoomKilledSeqIds.Count}/{blockingCount}");
+                if (currentMapId > 0 && session.GameSession?.QuestManager != null)
+                {
+                    if (ShouldDeferQuestConnectedStartMapSync(session, currentMapId)
+                        && session.GameSession.QuestManager.HasDeferredQuestConnectedStartMapClearQuest(
+                            session.Player.CharacterId,
+                            currentMapId))
+                    {
+                        FileLogger.Log($"[DungeonHandler] CLEAR_MAP deferred for quest-connected start room: dungeon={session.Player.CurDungeon} maze={session.Player.CurMazeIndex} map={currentMapId}");
+                    }
+                    else
+                    {
+                        await session.GameSession.QuestManager.SyncClearMapQuestProgressAsync(0, currentMapId);
+                    }
+                }
             }
 
             if (roomCleared
@@ -228,6 +244,17 @@ namespace DfoServer.Network.Handlers.Dungeon
         private static bool TryGetCurrentRoomState(EnhancedClientSession session, out RoomState roomState)
         {
             return session.Player.DungeonRoomStates.TryGetValue(session.Player.CurRoomKey, out roomState);
+        }
+
+        private static bool ShouldDeferQuestConnectedStartMapSync(EnhancedClientSession session, int currentMapId)
+        {
+            var player = session?.Player;
+            if (player == null || !player.CurMazeQuestConnected)
+                return false;
+            if (player.CurMazeStartMapId <= 0 || player.CurMazeStartMapId != currentMapId)
+                return false;
+            return player.CurRoomKey.X == player.CurMazeStartX
+                && player.CurRoomKey.Y == player.CurMazeStartY;
         }
 
         private static List<DropInfo> GenerateHellPartyActorDrops(

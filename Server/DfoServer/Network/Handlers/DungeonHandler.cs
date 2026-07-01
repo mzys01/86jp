@@ -55,8 +55,17 @@ namespace DfoServer.Network.Handlers
         public Task Handle_ENUM_CMDPACKET_GET_ITEM(EnhancedClientSession session, GamePacketHeader header, byte[] body)
             => _combat.HandleGetItem(session, header, body);
 
+        public Task Handle_ENUM_CMDPACKET_RECOVER_STAMINA(EnhancedClientSession session, GamePacketHeader header, byte[] body)
+            => _services.HandleRecoverStaminaAsync(session, body);
+
         public Task Handle_ENUM_CMDPACKET_SELECT_CARD(EnhancedClientSession session, GamePacketHeader header, byte[] body)
             => _settlement.HandleSelectCard(session, header, body);
+
+        public Task Handle_ENUM_CMDPACKET_EPLP_COMMAND(EnhancedClientSession session, GamePacketHeader header, byte[] body)
+            => _settlement.HandleEplpCommand(session, header, body);
+
+        public Task Handle_CARD_START_REQUEST(EnhancedClientSession session, GamePacketHeader header, byte[] body)
+            => _settlement.HandleCardStartRequest(session, header, body);
 
         public Task Handle_SET_PLAY_RESULT(EnhancedClientSession session, GamePacketHeader header, byte[] body)
             => _settlement.HandleSetPlayResult(session, header, body);
@@ -69,6 +78,9 @@ namespace DfoServer.Network.Handlers
 
         public Task Handle_ENUM_CMDPACKET_TUTORIAL_LEVEL_UP(EnhancedClientSession session, GamePacketHeader header, byte[] body)
             => _tutorial.HandleTutorialLevelUp(session, header, body);
+
+        public Task Handle_PREMIUM_SERVICE(EnhancedClientSession session, GamePacketHeader header, byte[] body)
+            => DungeonSharedServices.HandlePremiumServiceQueryAsync(session, body);
 
         public Task Handle_BACK_2_VILLAGE(EnhancedClientSession session, GamePacketHeader header, byte[] body)
             => _tutorial.HandleBack2Village(session, header, body);

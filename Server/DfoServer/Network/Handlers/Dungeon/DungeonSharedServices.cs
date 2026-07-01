@@ -35,6 +35,10 @@ namespace DfoServer.Network.Handlers.Dungeon
             session.Player.CurDungeonDifficulty = 0;
             session.Player.CurDungeonFlag1 = 0;
             session.Player.CurDungeonFlag2 = 0;
+            session.Player.CurMazeQuestConnected = false;
+            session.Player.CurMazeStartMapId = 0;
+            session.Player.CurMazeStartX = -1;
+            session.Player.CurMazeStartY = -1;
             session.Player.CurDungeonHellMode = false;
             session.Player.CurDungeonHellPartyMode = 0;
             session.Player.CurDungeonVeryDifficultHell = false;
@@ -76,6 +80,18 @@ namespace DfoServer.Network.Handlers.Dungeon
                 var repo = new SqliteCharacterRepository(
                     ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
                 repo.UpdateLevelAndExp(characterId, level, exp);
+
+                // 升级后按新等级重算战斗属性并持久化到 subtype1, 否则属性停留在旧等级。
+                // growType 决定成长表选择(15-49 转职 / 50+ 觉醒), 必须从角色记录取, 默认 0 会算成未转职属性。
+                var rec = repo.GetById(characterId);
+                if (rec != null)
+                {
+                    CharacterStatComputer.DecodeGrowType(rec.GrowType, out int first, out int second);
+                    var blob = CharacterStatComputer.BuildAdditionalInfo(rec.Job, level, first, second);
+                    new SqliteSubtype1Repository(
+                        ServerPaths.DatabasePath, ServerPaths.SchemaFilePath)
+                        .UpdateCombatStats(characterId, blob);
+                }
             }
             catch (Exception ex)
             {
@@ -111,6 +127,111 @@ namespace DfoServer.Network.Handlers.Dungeon
                 }
             }
             catch { return 0; }
+        }
+
+        internal async Task HandleRecoverStaminaAsync(EnhancedClientSession session, byte[] body)
+        {
+            FileLogger.Log($"[{ProtocolLogName}] RECOVER_STAMINA: uid={session?.Player?.UserId ?? 0} body={BitConverter.ToString(body ?? Array.Empty<byte>())}");
+
+            var characterId = session?.Player?.CharacterId ?? 0;
+            if (characterId <= 0)
+                return;
+
+            var accountId = session?.Account?.AccountId ?? 1;
+            if (accountId <= 0)
+                accountId = 1;
+
+            try
+            {
+                var repo = new SqliteSubtype0FieldsRepository(ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
+                var tail = repo.Load(characterId) ?? session.Player.Subtype0Tail;
+                if (tail == null || tail.Stamina == 0)
+                {
+                    await SendRecoverStaminaErrorAsync(session, 18);
+                    FileLogger.Log($"[{ProtocolLogName}] RECOVER_STAMINA: no weakness state cid={characterId}");
+                    return;
+                }
+
+                var cost = CalculateRecoverStaminaGoldCost(session.Player.Level, tail.Stamina);
+                int updatedGold;
+                using (var scope = _assetService.OpenScope(characterId, accountId))
+                {
+                    var wallet = _assetService.LoadWallet(scope);
+                    if (wallet.Gold < cost)
+                    {
+                        await SendRecoverStaminaErrorAsync(session, 22);
+                        FileLogger.Log($"[{ProtocolLogName}] RECOVER_STAMINA: insufficient gold cid={characterId} need={cost} have={wallet.Gold} stamina={tail.Stamina}");
+                        return;
+                    }
+
+                    updatedGold = wallet.Gold - cost;
+                    if (cost > 0)
+                        _assetService.AddGold(scope, -cost);
+                    scope.Commit();
+                }
+
+                tail.Stamina = 0;
+                tail.FatiguePenalty = 0;
+                SaveSubtype0Tail(characterId, tail);
+                session.Player.Subtype0Tail = tail;
+
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0021, new[] { (byte)100 }));
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000E,
+                    TeleportPacketBuilder.BuildItemListUpdate(0, 0, updatedGold)));
+
+                FileLogger.Log($"[{ProtocolLogName}] RECOVER_STAMINA: success cid={characterId} cost={cost} gold={updatedGold}");
+            }
+            catch (Exception ex)
+            {
+                FileLogger.Log($"[{ProtocolLogName}] RECOVER_STAMINA ERROR: cid={characterId} {ex}");
+                await SendRecoverStaminaErrorAsync(session, 4);
+            }
+        }
+
+        internal static async Task HandlePremiumServiceQueryAsync(EnhancedClientSession session, byte[] body)
+        {
+            var aid = session?.Account?.AccountId ?? 0;
+            FileLogger.Log($"[{ProtocolLogName}] CMD_0312: uid={session?.Player?.UserId ?? 0} aid={aid} body={BitConverter.ToString(body ?? Array.Empty<byte>())}");
+
+            var connStr = SqliteDatabaseBootstrap.Initialize(ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
+            var serviceData = Game.Premium.PremiumService.BuildPremiumServiceData(connStr, aid);
+
+            var writer = new GamePacketWriter();
+            writer.WriteByte(1);
+            writer.WriteUInt16(1);
+            writer.WriteBytes(serviceData);
+            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0312, writer.ToArray()));
+            FileLogger.Log($"[{ProtocolLogName}] CMD_0312: responded with dynamic PremiumServiceData account={aid}");
+        }
+
+        private static void SaveSubtype0Tail(int characterId, UserInfoMinimumTailSnapshot tail)
+        {
+            var connStr = SqliteDatabaseBootstrap.Initialize(ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
+            using (var conn = new Microsoft.Data.Sqlite.SqliteConnection(connStr))
+            {
+                conn.Open();
+                SqliteSubtype0FieldsRepository.Save(conn, characterId, tail);
+            }
+        }
+
+        private static Task SendRecoverStaminaErrorAsync(EnhancedClientSession session, byte errorCode)
+        {
+            if (session == null || session.TcpClient == null || !session.TcpClient.Connected)
+                return Task.CompletedTask;
+
+            return session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0009, new[] { (byte)0, errorCode, (byte)0 }));
+        }
+
+        internal static int CalculateRecoverStaminaGoldCost(byte level, byte stamina)
+        {
+            if (stamina == 0)
+                return 0;
+
+            var basePrice = RecoverStaminaPriceProvider.GetBasePrice(level);
+            var normalizedStamina = Math.Min((byte)10, stamina);
+            var officialCurrentStamina = Math.Max(0, 100 - normalizedStamina * 9);
+            var cost = basePrice * (100 - officialCurrentStamina) / 90;
+            return Math.Max(0, cost);
         }
 
         internal bool TrySpendGold(int characterId, int accountId, int goldCost, out int currentGold, out int updatedGold)

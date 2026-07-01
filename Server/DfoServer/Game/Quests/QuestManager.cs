@@ -5,6 +5,7 @@ using DfoServer.Game.Characters;
 using DfoServer.Game.CharacterData;
 using DfoServer.Game.Dungeon;
 using DfoServer.Game.Inventory;
+using DfoServer.Game.SelectCharacter;
 using DfoServer.Game.Session;
 using DfoServer.Game.Skills;
 using DfoServer.Infrastructure;
@@ -39,7 +40,7 @@ namespace DfoServer.Game.Quests
             FileLogger.Log($"[GameProtocol] ACCEPT_QUEST payload: {(qBody != null ? BitConverter.ToString(qBody) : "null")} ({qBody?.Length ?? 0}B)");
             int cid = _sender.CharacterId;
             if (cid <= 0) return;
-            var ack = QuestService.HandleAcceptQuest(_connStr, cid, qBody);
+            var ack = QuestService.HandleAcceptQuest(_connStr, cid, qBody, _assetService, _sender.AccountId);
             await _sender.SendCmdAckAsync(wireType, ack);
         }
 
@@ -57,6 +58,14 @@ namespace DfoServer.Game.Quests
             var qBody = StripEcho(body);
             int cid = _sender.CharacterId;
             if (cid <= 0) return;
+
+            byte[] deferredAck;
+            if (TryBuildDeferredClearMapSetTriggerAck(cid, qBody, out deferredAck))
+            {
+                await _sender.SendCmdAckAsync(wireType, deferredAck);
+                return;
+            }
+
             var ack = QuestService.HandleSetTrigger(_connStr, cid, qBody);
             await _sender.SendCmdAckAsync(wireType, ack);
         }
@@ -106,7 +115,11 @@ namespace DfoServer.Game.Quests
                     {
                         var synced = SkillStateService.LoadAndSync(
                             skillRepo, cid, rec.Job, player.Level, rec.BonusSp, rec.BonusTp, persist: player.Level > prevLevel);
-                        remainSp = (ushort)synced.Points.RemainingSp;
+                        var skillTreeIndex = player.Subtype0Tail?.SkillTreeIndex
+                            ?? new SqliteSubtype1Repository(ServerPaths.DatabasePath, ServerPaths.SchemaFilePath)
+                                .LoadSkillTreeIndex(cid)
+                            ?? 0;
+                        remainSp = SkillStateService.GetPageRemainingSp(synced.Skills, synced.Points, skillTreeIndex == 1 ? 1 : 0);
                         remainTp = (ushort)synced.Points.RemainingTp;
                     }
                 }
@@ -121,13 +134,29 @@ namespace DfoServer.Game.Quests
                     await SendUserInfoBroadcast(cid);
                 }
 
-                if (ack.Length >= 14)
+                if (ack.Length >= 13)
                 {
-                    int chainType = ack[13];
-                    if (chainType == 1 || chainType == 2)
+                    int consumedCount = ack[12];
+                    int chainTypeOffset = 13 + consumedCount * 7;
+                    if (ack.Length >= chainTypeOffset + 1)
                     {
-                        await SendJobChangeNotification(cid);
-                        await SendUserInfoBroadcast(cid);
+                        int chainType = ack[chainTypeOffset];
+                        if (chainType == 1 || chainType == 2)
+                        {
+                            await SendJobChangeNotification(cid);
+                            await SendUserInfoBroadcast(cid);
+                        }
+                        else if (chainType == 20 && ack.Length >= chainTypeOffset + 2)
+                        {
+                            int expertJobType = ack[chainTypeOffset + 1];
+                            await SendExpertJobChangeNotification(cid, expertJobType);
+                            await SendUserInfoBroadcast(cid);
+                        }
+                        else if (chainType == GameWorld.QuestData.ChainTypeSlotExpansion)
+                        {
+                            // The ACK completes the quest, but the client opens the visual slot from refreshed subtype1 data.
+                            await SendUserInfoBroadcast(cid);
+                        }
                     }
                 }
 
@@ -157,6 +186,94 @@ namespace DfoServer.Game.Quests
 
             var noti = BuildAcceptedQuestNoti(cid);
             await _sender.SendNotiAsync(0x023F, noti);
+        }
+
+        public async Task SyncClearMapQuestProgressAsync(int dungeonId, int mapId)
+        {
+            int cid = _sender.CharacterId;
+            if (cid <= 0) return;
+
+            bool changed = QuestService.SyncClearMapQuestProgress(
+                _connStr, cid, dungeonId, mapId);
+            if (!changed)
+                return;
+
+            var noti = BuildAcceptedQuestNoti(cid);
+            await _sender.SendNotiAsync(0x023F, noti);
+        }
+
+        private bool TryBuildDeferredClearMapSetTriggerAck(int characterId, byte[] qBody, out byte[] ack)
+        {
+            ack = null;
+            if (qBody == null || qBody.Length < 3)
+                return false;
+
+            var player = _sender.Player;
+            if (player == null || player.CurDungeon <= 0)
+                return false;
+
+            ushort questId = BitConverter.ToUInt16(qBody, 0);
+            byte triggerType = qBody[2];
+            bool isIncrement = qBody.Length >= 4 && qBody[3] != 0;
+            if (!ShouldDeferQuestConnectedStartMapSetTrigger(
+                    questId,
+                    triggerType,
+                    isIncrement,
+                    player.CurDungeonCleared,
+                    player.CurMazeQuestConnected,
+                    player.CurMazeStartMapId))
+                return false;
+
+            var active = QuestService.LoadActiveQuests(_connStr, characterId);
+            var quest = QuestService.FindByQuestId(active, questId);
+            if (quest == null || quest.TriggerValue == 0)
+                return false;
+
+            ack = BuildSetTriggerAck(questId, quest.TriggerValue);
+            FileLogger.Log($"[QuestManager] SET_TRIGGER deferred clear-map start target: cid={characterId} quest={questId} trigger={quest.TriggerValue} dungeon={player.CurDungeon} maze={player.CurMazeIndex} map={player.CurMazeStartMapId}");
+            return true;
+        }
+
+        internal static bool ShouldDeferQuestConnectedStartMapSetTrigger(
+            ushort questId,
+            byte triggerType,
+            bool isIncrement,
+            bool dungeonCleared,
+            bool mazeQuestConnected,
+            int mazeStartMapId)
+        {
+            if (questId == 0 || dungeonCleared || !mazeQuestConnected || mazeStartMapId <= 0)
+                return false;
+            if (triggerType != 0 || isIncrement)
+                return false;
+
+            return ShouldDeferQuestConnectedStartMapQuest(questId, mazeStartMapId);
+        }
+
+        internal bool HasDeferredQuestConnectedStartMapClearQuest(int characterId, int mazeStartMapId)
+        {
+            if (characterId <= 0 || mazeStartMapId <= 0)
+                return false;
+
+            var active = QuestService.LoadActiveQuests(_connStr, characterId);
+            foreach (var quest in active)
+            {
+                if (quest.TriggerValue == 0)
+                    continue;
+                if (ShouldDeferQuestConnectedStartMapQuest(quest.QuestId, mazeStartMapId))
+                    return true;
+            }
+
+            return false;
+        }
+
+        private static bool ShouldDeferQuestConnectedStartMapQuest(ushort questId, int mazeStartMapId)
+        {
+            var qst = GameWorld.QuestData.GetQuestFile(questId);
+            if (qst == null || qst.CompleteNpcIndex < 0)
+                return false;
+
+            return GameWorld.QuestData.MatchesClearMapTarget(qst, dungeonId: 0, mapId: mazeStartMapId);
         }
 
         private async Task SendAcceptableQuestListAsync()
@@ -248,6 +365,44 @@ namespace DfoServer.Game.Quests
             }
         }
 
+        private async Task SendExpertJobChangeNotification(int characterId, int expertJobType)
+        {
+            try
+            {
+                var charRepo = new SqliteCharacterRepository(ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
+                var record = charRepo.GetById(characterId);
+                if (record == null || _sender.Player == null) return;
+
+                var tail = _sender.Player.Subtype0Tail ?? new UserInfoMinimumTailSnapshot();
+                tail.ExpertJobType = (byte)expertJobType;
+                _sender.Player.Subtype0Tail = tail;
+                record.Subtype0Tail = tail;
+
+                // NOTI 0x00CD ExpertJobInfo
+                var ejw = new Network.GamePacketWriter();
+                ejw.WriteByte(1);          // State0
+                ejw.WriteByte(1);          // Mode
+                ejw.WriteByte(1);          // Count
+                ejw.WriteInt32(expertJobType);
+                await _sender.SendNotiAsync(0x00CD, ejw.ToArray());
+
+                // NOTI 0x0002 subtype 0 USERINFO Minimum
+                var w = new Network.GamePacketWriter();
+                w.WriteByte(0);
+                w.WriteUInt16(1);
+                w.WriteUInt16((ushort)record.CharacterId);
+                w.WriteDstr(record.Name);
+                w.WriteBytes(UserInfoSubtype0Builder.BuildRemainingBytes(record));
+                await _sender.SendNotiAsync(0x0002, w.ToArray());
+
+                FileLogger.Log($"[QuestManager] ExpertJobChange NOTI sent: cid={characterId} expertJobType={expertJobType}");
+            }
+            catch (Exception ex)
+            {
+                FileLogger.Log($"[QuestManager] SendExpertJobChangeNotification ERROR: {ex.Message}");
+            }
+        }
+
         private byte[] BuildAcceptedQuestNoti(int characterId)
         {
             var active = QuestService.LoadActiveQuests(_connStr, characterId);
@@ -258,6 +413,15 @@ namespace DfoServer.Game.Quests
                 w.WriteUInt16(q.QuestId);
                 w.WriteUInt32(q.TriggerValue);
             }
+            return w.ToArray();
+        }
+
+        private static byte[] BuildSetTriggerAck(ushort questId, uint triggerValue)
+        {
+            var w = new Network.GamePacketWriter();
+            w.WriteByte(0x01);
+            w.WriteUInt16(questId);
+            w.WriteUInt32(triggerValue);
             return w.ToArray();
         }
     }

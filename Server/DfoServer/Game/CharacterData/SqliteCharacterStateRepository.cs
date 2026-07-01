@@ -38,6 +38,7 @@ namespace DfoServer.Game.CharacterData
                              event_info_tail_byte, hotkey_key_type,
                              main_game_option_blob, quickchat_bank0, quickchat_bank1, charac_invisible_falgs_payload_len,
                              racing_dungeon_current_enter_count, racing_dungeon_group_flags,
+                             character_option_blob,
                              ack_account_reg_time, ack_premium_blob, ack_quest_display_ids,
                              ack_char_slot_index, ack_fatigue_battery, ack_fatigue_grownup_buff,
                              ack_trade_punish_flag, ack_extra_field_86jp, ack_reserved_8b,
@@ -85,20 +86,22 @@ namespace DfoServer.Game.CharacterData
                         }
 
 
-                        snapshot.AckAccountRegTime = reader.IsDBNull(18) ? 0 : (int)reader.GetInt64(18);
-                        var premBlob = reader.IsDBNull(19) ? null : (byte[])reader[19];
+                        snapshot.CharacterOptionBlob = reader.IsDBNull(18) ? null : (byte[])reader[18];
+
+                        snapshot.AckAccountRegTime = reader.IsDBNull(19) ? 0 : (int)reader.GetInt64(19);
+                        var premBlob = reader.IsDBNull(20) ? null : (byte[])reader[20];
                         if (premBlob != null)
                             DeserializeAckPremiums(premBlob, snapshot.AckPremiums);
-                        snapshot.AckQuestDisplayIds = reader.IsDBNull(20) ? null : (byte[])reader[20];
-                        snapshot.AckCharSlotIndex = reader.IsDBNull(21) ? (byte)0 : (byte)reader.GetInt32(21);
-                        snapshot.AckFatigueBattery = reader.IsDBNull(22) ? (ushort)0 : (ushort)reader.GetInt32(22);
-                        snapshot.AckFatigueGrownUpBuff = reader.IsDBNull(23) ? (ushort)0 : (ushort)reader.GetInt32(23);
-                        snapshot.AckTradePunishFlag = reader.IsDBNull(24) ? (byte)0 : (byte)reader.GetInt32(24);
-                        snapshot.AckExtraField86JP = reader.IsDBNull(25) ? (ushort)0 : (ushort)reader.GetInt32(25);
-                        snapshot.AckReserved8B = reader.IsDBNull(26) ? null : (byte[])reader[26];
-                        snapshot.AckTutorialSkipable = reader.IsDBNull(27) ? (byte)0 : (byte)reader.GetInt32(27);
-                        snapshot.AckPostTutorialU16 = reader.IsDBNull(28) ? (ushort)0 : (ushort)reader.GetInt32(28);
-                        snapshot.AckUnreadTail = reader.IsDBNull(29) ? null : (byte[])reader[29];
+                        snapshot.AckQuestDisplayIds = reader.IsDBNull(21) ? null : (byte[])reader[21];
+                        snapshot.AckCharSlotIndex = reader.IsDBNull(22) ? (byte)0 : (byte)reader.GetInt32(22);
+                        snapshot.AckFatigueBattery = reader.IsDBNull(23) ? (ushort)0 : (ushort)reader.GetInt32(23);
+                        snapshot.AckFatigueGrownUpBuff = reader.IsDBNull(24) ? (ushort)0 : (ushort)reader.GetInt32(24);
+                        snapshot.AckTradePunishFlag = reader.IsDBNull(25) ? (byte)0 : (byte)reader.GetInt32(25);
+                        snapshot.AckExtraField86JP = reader.IsDBNull(26) ? (ushort)0 : (ushort)reader.GetInt32(26);
+                        snapshot.AckReserved8B = reader.IsDBNull(27) ? null : (byte[])reader[27];
+                        snapshot.AckTutorialSkipable = reader.IsDBNull(28) ? (byte)0 : (byte)reader.GetInt32(28);
+                        snapshot.AckPostTutorialU16 = reader.IsDBNull(29) ? (ushort)0 : (ushort)reader.GetInt32(29);
+                        snapshot.AckUnreadTail = reader.IsDBNull(30) ? null : (byte[])reader[30];
                     }
                 }
 
@@ -325,12 +328,13 @@ VALUES (@cid, (SELECT COALESCE(MAX(sort_order),0)+1 FROM character_dungeon_permi
                 using (var tx = conn.BeginTransaction())
                 {
                     using (var cmd = new SqliteCommand(
-                        @"INSERT OR REPLACE INTO character_init_flags
+                        @"INSERT INTO character_init_flags
                           (character_id, shop_coin_event_flag, level60_ui_state, pc_room_state, expert_job_blob, champion_break_blob,
                            boss_tower_placeholder, mailbox_loaded_count, mailbox_mode, mailbox_not_loaded_count, mailbox_unknown_count_c,
                            event_info_tail_byte, hotkey_key_type,
                            main_game_option_blob, quickchat_bank0, quickchat_bank1, charac_invisible_falgs_payload_len,
                            racing_dungeon_current_enter_count, racing_dungeon_group_flags,
+                           character_option_blob,
                            ack_account_reg_time, ack_premium_blob, ack_quest_display_ids,
                            ack_char_slot_index, ack_fatigue_battery, ack_fatigue_grownup_buff,
                            ack_trade_punish_flag, ack_extra_field_86jp, ack_reserved_8b,
@@ -340,10 +344,43 @@ VALUES (@cid, (SELECT COALESCE(MAX(sort_order),0)+1 FROM character_dungeon_permi
                                   @eitb, @hkt,
                                   @mgo, @qb0, @qb1, @ciplen,
                                   @rdcc, @rdgf,
+                                  @charOpt,
                                   @ackRegTime, @ackPremBlob, @ackQuestDisp,
                                   @ackSlot, @ackFatBat, @ackFatGrown,
                                   @ackTrade, @ackExtra86, @ackRes8b,
-                                  @ackTutSkip, @ackPostTut, @ackTail)", conn, tx))
+                                  @ackTutSkip, @ackPostTut, @ackTail)
+                          ON CONFLICT(character_id) DO UPDATE SET
+                            shop_coin_event_flag=excluded.shop_coin_event_flag,
+                            level60_ui_state=excluded.level60_ui_state,
+                            pc_room_state=excluded.pc_room_state,
+                            expert_job_blob=excluded.expert_job_blob,
+                            champion_break_blob=excluded.champion_break_blob,
+                            boss_tower_placeholder=excluded.boss_tower_placeholder,
+                            mailbox_loaded_count=excluded.mailbox_loaded_count,
+                            mailbox_mode=excluded.mailbox_mode,
+                            mailbox_not_loaded_count=excluded.mailbox_not_loaded_count,
+                            mailbox_unknown_count_c=excluded.mailbox_unknown_count_c,
+                            event_info_tail_byte=excluded.event_info_tail_byte,
+                            hotkey_key_type=excluded.hotkey_key_type,
+                            main_game_option_blob=excluded.main_game_option_blob,
+                            quickchat_bank0=excluded.quickchat_bank0,
+                            quickchat_bank1=excluded.quickchat_bank1,
+                            charac_invisible_falgs_payload_len=excluded.charac_invisible_falgs_payload_len,
+                            racing_dungeon_current_enter_count=excluded.racing_dungeon_current_enter_count,
+                            racing_dungeon_group_flags=excluded.racing_dungeon_group_flags,
+                            character_option_blob=COALESCE(excluded.character_option_blob, character_init_flags.character_option_blob),
+                            ack_account_reg_time=excluded.ack_account_reg_time,
+                            ack_premium_blob=excluded.ack_premium_blob,
+                            ack_quest_display_ids=excluded.ack_quest_display_ids,
+                            ack_char_slot_index=excluded.ack_char_slot_index,
+                            ack_fatigue_battery=excluded.ack_fatigue_battery,
+                            ack_fatigue_grownup_buff=excluded.ack_fatigue_grownup_buff,
+                            ack_trade_punish_flag=excluded.ack_trade_punish_flag,
+                            ack_extra_field_86jp=excluded.ack_extra_field_86jp,
+                            ack_reserved_8b=excluded.ack_reserved_8b,
+                            ack_tutorial_skipable=excluded.ack_tutorial_skipable,
+                            ack_post_tutorial_u16=excluded.ack_post_tutorial_u16,
+                            ack_unread_tail=excluded.ack_unread_tail", conn, tx))
                     {
                         cmd.Parameters.AddWithValue("@cid", characterId);
                         cmd.Parameters.AddWithValue("@scef", (int)snapshot.ShopCoinEventFlag);
@@ -364,6 +401,7 @@ VALUES (@cid, (SELECT COALESCE(MAX(sort_order),0)+1 FROM character_dungeon_permi
                         cmd.Parameters.AddWithValue("@ciplen", (long)snapshot.CharacInvisibleFalgsPayloadLen);
                         cmd.Parameters.AddWithValue("@rdcc", (long)snapshot.RacingDungeonCurrentEnterCount);
                         cmd.Parameters.AddWithValue("@rdgf", (object)snapshot.RacingDungeonGroupFlags ?? DBNull.Value);
+                        cmd.Parameters.AddWithValue("@charOpt", (object)snapshot.CharacterOptionBlob ?? DBNull.Value);
 
                         cmd.Parameters.AddWithValue("@ackRegTime", (long)snapshot.AckAccountRegTime);
                         cmd.Parameters.AddWithValue("@ackPremBlob", (object)SerializeAckPremiums(snapshot.AckPremiums) ?? DBNull.Value);
@@ -572,6 +610,29 @@ VALUES (@cid, (SELECT COALESCE(MAX(sort_order),0)+1 FROM character_dungeon_permi
                     }
 
                     tx.Commit();
+                }
+            }
+        }
+
+        public void SaveCharacterOption(int characterId, byte[] body)
+        {
+            if (characterId <= 0 || body == null)
+                return;
+
+            var copy = new byte[body.Length];
+            Buffer.BlockCopy(body, 0, copy, 0, body.Length);
+
+            using (var conn = new SqliteConnection(_connectionString))
+            {
+                conn.Open();
+                using (var cmd = new SqliteCommand(@"
+INSERT INTO character_init_flags (character_id, character_option_blob)
+VALUES (@cid, @body)
+ON CONFLICT(character_id) DO UPDATE SET character_option_blob = @body", conn))
+                {
+                    cmd.Parameters.AddWithValue("@cid", characterId);
+                    cmd.Parameters.AddWithValue("@body", copy);
+                    cmd.ExecuteNonQuery();
                 }
             }
         }

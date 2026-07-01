@@ -77,13 +77,13 @@ namespace DfoServer.Network.Builders
             w.WriteUInt16(srcSlot);            
             w.WriteUInt16(pickerActorId);      
 
-            
+            // Valid gold slots carry the pickup effect flag and extra/tax gold fields.
             w.WriteByte(1);                    
             w.WriteUInt32((uint)goldAmount);   
-            w.WriteByte(0);                    
-            w.WriteUInt32(0);                  
+            w.WriteByte(1);
+            w.WriteUInt32(0);
+            w.WriteUInt32(0);
 
-            
             for (int i = 1; i < 8; i++)
             {
                 w.WriteByte(0);                

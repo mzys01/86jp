@@ -82,7 +82,12 @@ namespace DfoServer.Game.Quests
             return -1;
         }
 
-        public static byte[] HandleAcceptQuest(string connStr, int characterId, byte[] body)
+        public static byte[] HandleAcceptQuest(
+            string connStr,
+            int characterId,
+            byte[] body,
+            IAssetService assetService = null,
+            int accountId = 0)
         {
             if (body == null || body.Length < 2) return BuildFailAck(23);
             ushort questId = BitConverter.ToUInt16(body, 0);
@@ -108,32 +113,63 @@ namespace DfoServer.Game.Quests
             if (slot < 0) return BuildFailAck(4);
 
             uint initTrigger = GameWorld.QuestData.GetInitTrigger(questId);
+            var eventItems = GameWorld.QuestData.GetEventItems(questId);
+            var seekItems = GameWorld.QuestData.GetSeekingConsumeItems(questId);
+            var eventSlots = new List<ushort>(eventItems.Count);
 
-            using (var conn = new SqliteConnection(connStr))
+            if (assetService != null && (eventItems.Count > 0 || seekItems.Count > 0))
             {
-                conn.Open();
-                using (var cmd = new SqliteCommand(
-                    "INSERT OR REPLACE INTO character_active_quests (character_id, slot, quest_id, trigger_value) VALUES (@cid, @s, @qid, @tv)", conn))
+                if (accountId <= 0)
+                    accountId = GetAccountIdByConnStr(connStr, characterId);
+
+                using (var scope = assetService.OpenScope(characterId, accountId))
                 {
-                    cmd.Parameters.AddWithValue("@cid", characterId);
-                    cmd.Parameters.AddWithValue("@s", slot);
-                    cmd.Parameters.AddWithValue("@qid", (int)questId);
-                    cmd.Parameters.AddWithValue("@tv", (long)initTrigger);
-                    cmd.ExecuteNonQuery();
-                }
-                if (repeatable)
-                {
-                    using (var cmd = new SqliteCommand(
-                        "DELETE FROM character_invisible_falgs WHERE character_id=@cid AND slot_index=@idx", conn))
+                    EnsureActiveQuestTable(scope.Connection, scope.Transaction);
+                    // The accept ACK advertises event items; persist them so later quest checks see the same state.
+                    foreach (var item in eventItems)
                     {
-                        cmd.Parameters.AddWithValue("@cid", characterId);
-                        cmd.Parameters.AddWithValue("@idx", (int)questId);
-                        cmd.ExecuteNonQuery();
+                        if (item.ItemId <= 0 || item.Count <= 0)
+                        {
+                            eventSlots.Add(0);
+                            continue;
+                        }
+
+                        short assignedSlot;
+                        if (!assetService.TryAddItem(scope, item.ItemId, item.Count, out assignedSlot))
+                            return BuildFailAck(4);
+
+                        eventSlots.Add((ushort)assignedSlot);
                     }
+
+                    // A quest can be accepted after its seek item already exists in inventory.
+                    if (seekItems.Count > 0)
+                        initTrigger = ApplySeekingItemProgress(
+                            initTrigger,
+                            seekItems,
+                            itemId => assetService.CountItem(scope, itemId));
+
+                    InsertActiveQuest(scope.Connection, scope.Transaction, characterId, slot, questId, initTrigger);
+                    if (repeatable)
+                        DeleteQuestClearedFlag(scope.Connection, scope.Transaction, characterId, questId);
+                    scope.Commit();
                 }
             }
+            else
+            {
+                using (var conn = new SqliteConnection(connStr))
+                {
+                    conn.Open();
+                    EnsureActiveQuestTable(conn, null);
+                    InsertActiveQuest(conn, null, characterId, slot, questId, initTrigger);
+                    if (repeatable)
+                    {
+                        DeleteQuestClearedFlag(conn, null, characterId, questId);
+                    }
+                }
 
-            var eventItems = GameWorld.QuestData.GetEventItems(questId);
+                for (int i = 0; i < eventItems.Count; i++)
+                    eventSlots.Add(0);
+            }
 
             var w = new Network.GamePacketWriter();
             w.WriteByte(0x01);
@@ -142,7 +178,7 @@ namespace DfoServer.Game.Quests
             w.WriteByte((byte)eventItems.Count);
             for (int i = 0; i < eventItems.Count; i++)
             {
-                w.WriteUInt16(0);                       // slotIndex
+                w.WriteUInt16(i < eventSlots.Count ? eventSlots[i] : (ushort)0);
                 w.WriteUInt32((uint)eventItems[i].ItemId);
                 w.WriteUInt32((uint)eventItems[i].Count);
             }
@@ -298,16 +334,7 @@ namespace DfoServer.Game.Quests
                     continue;
 
                 matchedQuestItem = true;
-                long missingHeld = 0;
-                foreach (var si in relevantItems)
-                {
-                    int required = Math.Max(1, si.Count);
-                    int held = Math.Max(0, getHeldCount(si.ItemId));
-
-                    missingHeld += Math.Max(0, required - held);
-                }
-
-                var persistTrigger = ToTriggerValue(missingHeld);
+                var persistTrigger = ApplySeekingItemProgress(q.TriggerValue, relevantItems, getHeldCount);
 
                 if (q.TriggerValue != persistTrigger)
                 {
@@ -342,11 +369,221 @@ namespace DfoServer.Game.Quests
             return matchedQuestItem;
         }
 
-        private static uint ToTriggerValue(long missingCount)
+        public static bool SyncClearMapQuestProgress(
+            string connStr,
+            int characterId,
+            int dungeonId,
+            int mapId)
         {
-            if (missingCount <= 0) return 0;
-            if (missingCount > uint.MaxValue) return uint.MaxValue;
-            return (uint)missingCount;
+            var changed = SyncClearMapQuestProgressCore(
+                connStr,
+                characterId,
+                dungeonId,
+                mapId,
+                (questId, targetDungeonId, targetMapId) =>
+                    GameWorld.QuestData.MatchesClearMapTarget(questId, targetDungeonId, targetMapId));
+
+            if (changed > 0)
+                FileLogger.Log($"[QuestService] CLEAR_MAP progress: cid={characterId} dungeon={dungeonId} map={mapId} changed={changed}");
+            return changed > 0;
+        }
+
+        internal static int SyncClearMapQuestProgressCore(
+            string connStr,
+            int characterId,
+            int dungeonId,
+            int mapId,
+            Func<ushort, int, int, bool> matchesClearMapQuest)
+        {
+            if (string.IsNullOrWhiteSpace(connStr) || characterId <= 0 || matchesClearMapQuest == null)
+                return 0;
+
+            var active = LoadActiveQuests(connStr, characterId);
+            if (active.Count == 0)
+                return 0;
+
+            var changed = new List<ActiveQuest>();
+            foreach (var q in active)
+            {
+                if (q.TriggerValue == 0)
+                    continue;
+
+                bool matched;
+                try
+                {
+                    matched = matchesClearMapQuest(q.QuestId, dungeonId, mapId);
+                }
+                catch
+                {
+                    matched = false;
+                }
+
+                if (!matched)
+                    continue;
+
+                q.TriggerValue = 0;
+                changed.Add(q);
+            }
+
+            if (changed.Count == 0)
+                return 0;
+
+            using (var conn = new SqliteConnection(connStr))
+            {
+                conn.Open();
+                using (var tx = conn.BeginTransaction())
+                {
+                    foreach (var q in changed)
+                    {
+                        using (var cmd = new SqliteCommand(
+                            "UPDATE character_active_quests SET trigger_value=0 WHERE character_id=@cid AND slot=@s", conn, tx))
+                        {
+                            cmd.Parameters.AddWithValue("@cid", characterId);
+                            cmd.Parameters.AddWithValue("@s", q.Slot);
+                            cmd.ExecuteNonQuery();
+                        }
+                    }
+                    tx.Commit();
+                }
+            }
+
+            return changed.Count;
+        }
+
+        private static uint ApplySeekingItemProgress(
+            uint trigger,
+            List<GameWorld.QuestRewardItem> seekItems,
+            Func<int, int> getHeldCount)
+        {
+            if (seekItems == null || seekItems.Count == 0 || getHeldCount == null)
+                return trigger;
+
+            long missingHeld = 0;
+            foreach (var si in seekItems)
+            {
+                if (si.ItemId <= 0 || si.Count <= 0)
+                    continue;
+
+                int required = Math.Max(1, si.Count);
+                int held = Math.Max(0, getHeldCount(si.ItemId));
+                missingHeld += Math.Max(0, required - held);
+            }
+
+            return GameWorld.QuestData.ReplaceTriggerChannel(trigger, 0, missingHeld);
+        }
+
+        private static void EnsureMissingCarryForwardEventItems(
+            IAssetService assetService,
+            DbScope scope,
+            List<GameWorld.QuestRewardItem> eventItems,
+            List<InsertedItemEntry> insertedEntries)
+        {
+            if (assetService == null || scope == null || eventItems == null || eventItems.Count == 0)
+                return;
+
+            // Repair old active quests that missed the accept-time grant, but only for carry-forward items.
+            foreach (var eventItem in eventItems)
+            {
+                if (eventItem.ItemId <= 0 || eventItem.Count <= 0)
+                    continue;
+
+                int held = Math.Max(0, assetService.CountItem(scope, eventItem.ItemId));
+                int missing = Math.Max(0, eventItem.Count - held);
+                if (missing <= 0)
+                    continue;
+
+                short assignedSlot;
+                if (!assetService.TryAddItem(scope, eventItem.ItemId, missing, out assignedSlot))
+                    continue;
+
+                var meta = ItemMetadataResolver.Resolve(eventItem.ItemId);
+                insertedEntries.Add(meta.IsStackable
+                    ? new InsertedItemEntry { SlotIndex = (ushort)assignedSlot, ItemId = eventItem.ItemId, CountOrSeed = (uint)missing }
+                    : new InsertedItemEntry { SlotIndex = (ushort)assignedSlot, ItemId = eventItem.ItemId, IsEquipment = true, CountOrSeed = 999999998u, EquipDurability = (ushort)meta.Durability });
+            }
+        }
+
+        private static void ConsumeNonCarryForwardEventItems(
+            IAssetService assetService,
+            DbScope scope,
+            List<GameWorld.QuestRewardItem> eventItems,
+            List<GameWorld.QuestRewardItem> seekItems,
+            List<GameWorld.QuestRewardItem> carryForwardEventItems,
+            List<ConsumedItemEntry> consumedEntries)
+        {
+            if (assetService == null || scope == null || eventItems == null || eventItems.Count == 0)
+                return;
+
+            // Event items that are neither seek requirements nor carry-forward items should not remain after finish.
+            var seekItemIds = new HashSet<int>();
+            if (seekItems != null)
+            {
+                foreach (var seekItem in seekItems)
+                {
+                    if (seekItem.ItemId > 0 && seekItem.Count > 0)
+                        seekItemIds.Add(seekItem.ItemId);
+                }
+            }
+
+            var carryForwardItemIds = new HashSet<int>();
+            if (carryForwardEventItems != null)
+            {
+                foreach (var carryForwardItem in carryForwardEventItems)
+                {
+                    if (carryForwardItem.ItemId > 0 && carryForwardItem.Count > 0)
+                        carryForwardItemIds.Add(carryForwardItem.ItemId);
+                }
+            }
+
+            foreach (var eventItem in eventItems)
+            {
+                if (eventItem.ItemId <= 0 || eventItem.Count <= 0)
+                    continue;
+                if (seekItemIds.Contains(eventItem.ItemId) || carryForwardItemIds.Contains(eventItem.ItemId))
+                    continue;
+
+                short slot;
+                int remaining;
+                if (assetService.TryRemoveItem(scope, eventItem.ItemId, eventItem.Count, out slot, out remaining))
+                    consumedEntries.Add(new ConsumedItemEntry { UpdateType = 0, SlotIndex = (ushort)slot, RemainingCount = (uint)remaining });
+            }
+        }
+
+        private static void EnsureActiveQuestTable(SqliteConnection conn, SqliteTransaction tx)
+        {
+            using (var tc = new SqliteCommand(
+                "CREATE TABLE IF NOT EXISTS character_active_quests (character_id INTEGER NOT NULL, slot INTEGER NOT NULL, quest_id INTEGER NOT NULL, trigger_value INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (character_id, slot))",
+                conn,
+                tx))
+                tc.ExecuteNonQuery();
+        }
+
+        private static void InsertActiveQuest(SqliteConnection conn, SqliteTransaction tx, int characterId, int slot, ushort questId, uint triggerValue)
+        {
+            using (var cmd = new SqliteCommand(
+                "INSERT OR REPLACE INTO character_active_quests (character_id, slot, quest_id, trigger_value) VALUES (@cid, @s, @qid, @tv)",
+                conn,
+                tx))
+            {
+                cmd.Parameters.AddWithValue("@cid", characterId);
+                cmd.Parameters.AddWithValue("@s", slot);
+                cmd.Parameters.AddWithValue("@qid", (int)questId);
+                cmd.Parameters.AddWithValue("@tv", (long)triggerValue);
+                cmd.ExecuteNonQuery();
+            }
+        }
+
+        private static void DeleteQuestClearedFlag(SqliteConnection conn, SqliteTransaction tx, int characterId, ushort questId)
+        {
+            using (var cmd = new SqliteCommand(
+                "DELETE FROM character_invisible_falgs WHERE character_id=@cid AND slot_index=@idx",
+                conn,
+                tx))
+            {
+                cmd.Parameters.AddWithValue("@cid", characterId);
+                cmd.Parameters.AddWithValue("@idx", (int)questId);
+                cmd.ExecuteNonQuery();
+            }
         }
 
         private static uint DecrementTriggerChannel(uint trigger, byte triggerType)
@@ -423,6 +660,8 @@ namespace DfoServer.Game.Quests
                 }
 
                 var seekItems = GameWorld.QuestData.GetSeekingConsumeItems(questId);
+                var eventItems = GameWorld.QuestData.GetEventItems(questId);
+                var carryForwardEventItems = GameWorld.QuestData.GetCarryForwardEventItems(questId);
                 foreach (var si in seekItems)
                 {
                     if (si.ItemId <= 0 || si.Count <= 0) continue;
@@ -431,6 +670,20 @@ namespace DfoServer.Game.Quests
                     if (assetService.TryRemoveItem(scope, si.ItemId, si.Count, out slot, out remaining))
                         consumedEntries.Add(new ConsumedItemEntry { UpdateType = 0, SlotIndex = (ushort)slot, RemainingCount = (uint)remaining });
                 }
+
+                ConsumeNonCarryForwardEventItems(
+                    assetService,
+                    scope,
+                    eventItems,
+                    seekItems,
+                    carryForwardEventItems,
+                    consumedEntries);
+
+                EnsureMissingCarryForwardEventItems(
+                    assetService,
+                    scope,
+                    carryForwardEventItems,
+                    insertedEntries);
 
                 goldReward = reward.Gold * multiplier;
                 if (goldReward > 0)
@@ -461,6 +714,14 @@ namespace DfoServer.Game.Quests
                 else if (reward.ChainType == 1 || reward.ChainType == 2)
                 {
                     UpdateGrowType(scope.Connection, scope.Transaction, characterId, reward.ChainType, reward.GrowNumber);
+                }
+                else if (reward.ChainType == 20)
+                {
+                    UpdateExpertJob(scope.Connection, scope.Transaction, characterId, reward.GrowNumber);
+                }
+                else if (reward.ChainType == GameWorld.QuestData.ChainTypeSlotExpansion)
+                {
+                    UpdateSlotExpansion(scope.Connection, scope.Transaction, characterId, reward.GrowNumber);
                 }
 
                 if (!GameWorld.QuestData.IsRepeatableQuest(questId))
@@ -504,6 +765,18 @@ namespace DfoServer.Game.Quests
             else if (reward.ChainType == 1 || reward.ChainType == 2)
             {
                 w.WriteByte((byte)reward.GrowNumber);
+                w.WriteByte(0); // npcCount layer 1
+                w.WriteByte(0); // npcCount layer 2
+            }
+            else if (reward.ChainType == 20)
+            {
+                w.WriteByte((byte)reward.GrowNumber); // expert job type
+                w.WriteByte(0); // npcCount layer 1
+                w.WriteByte(0); // npcCount layer 2
+            }
+            else if (reward.ChainType == GameWorld.QuestData.ChainTypeSlotExpansion)
+            {
+                w.WriteByte((byte)reward.GrowNumber); // expanded equipment slot id (21=support, 22=magic stone)
                 w.WriteByte(0); // npcCount layer 1
                 w.WriteByte(0); // npcCount layer 2
             }
@@ -663,6 +936,73 @@ namespace DfoServer.Game.Quests
             }
 
             FileLogger.Log($"[QuestService] UpdateGrowType: cid={characterId} chain={chainType} growNumber={growNumber} old=0x{currentGrowType:X2} new=0x{newGrowType:X2}");
+        }
+
+        private static void UpdateExpertJob(SqliteConnection conn, SqliteTransaction tx, int characterId, int expertJobType)
+        {
+            byte[] expertJobBlob = BuildExpertJobBlob(1, 1, expertJobType);
+
+            using (var cmd = conn.CreateCommand())
+            {
+                cmd.Transaction = tx;
+                cmd.CommandText = @"
+                    INSERT INTO character_subtype0_fields (character_id, expert_job_type) VALUES (@cid, @ejt)
+                    ON CONFLICT(character_id) DO UPDATE SET expert_job_type=@ejt;
+                    INSERT INTO character_init_flags (character_id, expert_job_blob) VALUES (@cid, @blob)
+                    ON CONFLICT(character_id) DO UPDATE SET expert_job_blob=@blob;";
+                cmd.Parameters.AddWithValue("@cid", characterId);
+                cmd.Parameters.AddWithValue("@ejt", expertJobType);
+                cmd.Parameters.AddWithValue("@blob", expertJobBlob);
+                cmd.ExecuteNonQuery();
+            }
+
+            FileLogger.Log($"[QuestService] UpdateExpertJob: cid={characterId} expertJobType={expertJobType}");
+        }
+
+        private static void UpdateSlotExpansion(SqliteConnection conn, SqliteTransaction tx, int characterId, int slotId)
+        {
+            // Special equipment slots are stored as bits in ex_equip_slot_stat: 21=support, 22=magic stone, 23=earring.
+            var flag = ResolveSlotExpansionFlag(slotId);
+            if (flag == 0)
+            {
+                FileLogger.Log($"[QuestService] UpdateSlotExpansion skipped: cid={characterId} unsupported slotId={slotId}");
+                return;
+            }
+
+            using (var cmd = conn.CreateCommand())
+            {
+                cmd.Transaction = tx;
+                cmd.CommandText = @"
+                    UPDATE characters
+                    SET ex_equip_slot_stat = (ex_equip_slot_stat | @flag),
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE character_id = @cid;";
+                cmd.Parameters.AddWithValue("@flag", flag);
+                cmd.Parameters.AddWithValue("@cid", characterId);
+                cmd.ExecuteNonQuery();
+            }
+
+            FileLogger.Log($"[QuestService] UpdateSlotExpansion: cid={characterId} slotId={slotId} flag=0x{flag:X2}");
+        }
+
+        private static int ResolveSlotExpansionFlag(int slotId)
+        {
+            // Slot ids follow the client equipment index; the persisted flag is zero-based from support equipment.
+            if (slotId < 21 || slotId > 23)
+                return 0;
+            return 1 << (slotId - 21);
+        }
+
+        private static byte[] BuildExpertJobBlob(byte state0, byte mode, int expertJobType)
+        {
+            var list = new List<byte>();
+            list.Add(state0);
+            list.Add(mode);
+            list.AddRange(BitConverter.GetBytes(0));
+            list.AddRange(BitConverter.GetBytes(0));
+            list.Add((byte)1);
+            list.AddRange(BitConverter.GetBytes(expertJobType));
+            return list.ToArray();
         }
 
         private static int GetAccountIdByConnStr(string connStr, int characterId)

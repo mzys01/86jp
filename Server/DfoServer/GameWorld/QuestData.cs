@@ -22,6 +22,9 @@ namespace DfoServer.GameWorld
 
     internal static class QuestData
     {
+        // PVF [slot expansion] rewards use reward int data as an equipment slot id, not an item id.
+        internal const int ChainTypeSlotExpansion = 21;
+
         private static readonly Lazy<QuestIndex> Index = new Lazy<QuestIndex>(BuildQuestIndex);
         private static readonly Lazy<QuestParameterTable> Parameters = new Lazy<QuestParameterTable>(LoadParameters);
         private static readonly Lazy<Dictionary<int, HashSet<int>>> TrainingQuestNpcs = new Lazy<Dictionary<int, HashSet<int>>>(LoadTrainingQuestNpcs);
@@ -397,10 +400,134 @@ namespace DfoServer.GameWorld
             return qst != null ? ComputeInitTrigger(qst) : 1;
         }
 
+        internal static bool IsClearMapQuest(int questId)
+        {
+            return IsClearMapQuest(GetQuestFile(questId));
+        }
+
+        internal static bool MatchesClearMapTarget(int questId, int dungeonId, int mapId)
+        {
+            return MatchesClearMapTarget(GetQuestFile(questId), dungeonId, mapId);
+        }
+
+        internal static bool MatchesClearMapTarget(QuestFile qst, int dungeonId, int mapId)
+        {
+            return IsClearMapQuest(qst) && MatchesClearMapTargetData(qst.IntData, dungeonId, mapId);
+        }
+
+        internal static bool MatchesClearMapTargetData(string intData, int dungeonId, int mapId)
+        {
+            var values = ParseIntList(intData);
+            for (int i = 0; i < values.Count; i++)
+            {
+                var target = values[i];
+                if (target <= 0)
+                    continue;
+                if (dungeonId > 0 && target == dungeonId)
+                    return true;
+                if (mapId > 0 && target == mapId)
+                    return true;
+            }
+            return false;
+        }
+
+        private static bool IsClearMapQuest(QuestFile qst)
+        {
+            return qst != null && NormalizeQuestTag(qst.Type) == "clear map";
+        }
+
+        private static string NormalizeQuestTag(string value)
+        {
+            var tag = (value ?? "").Trim().ToLowerInvariant();
+            if (tag.Length >= 2 && tag[0] == '[' && tag[tag.Length - 1] == ']')
+                tag = tag.Substring(1, tag.Length - 2).Trim();
+            return tag;
+        }
+
         public static List<QuestRewardItem> GetEventItems(int questId)
         {
             var qst = GetQuestFile(questId);
             return qst != null ? ParseItemPairs(qst.DependGiveItem) : new List<QuestRewardItem>();
+        }
+
+        public static List<QuestRewardItem> GetCarryForwardEventItems(int questId)
+        {
+            var eventItems = GetEventItems(questId);
+            if (eventItems.Count == 0)
+                return new List<QuestRewardItem>();
+
+            var carryForward = new Dictionary<int, int>();
+            var eventItemIds = new HashSet<int>();
+            foreach (var eventItem in eventItems)
+            {
+                if (eventItem.ItemId > 0 && eventItem.Count > 0)
+                    eventItemIds.Add(eventItem.ItemId);
+            }
+
+            if (eventItemIds.Count == 0)
+                return new List<QuestRewardItem>();
+
+            // Some [depend give item] entries seed the next quest instead of ending with this one.
+            // Keep only items required by a direct follow-up quest that does not give the item again.
+            foreach (var nextQuestId in Index.Value.OrderedIds)
+            {
+                if (nextQuestId == questId)
+                    continue;
+
+                var nextQuest = GetQuestFile(nextQuestId);
+                if (nextQuest == null)
+                    continue;
+
+                var preRequired = ParseIntList(nextQuest.PreRequiredQuest);
+                if (!preRequired.Contains(questId))
+                    continue;
+
+                var nextSeekItems = GetSeekingConsumeItems(nextQuestId);
+                if (nextSeekItems.Count == 0)
+                    continue;
+
+                var nextEventItems = GetEventItems(nextQuestId);
+                foreach (var eventItem in eventItems)
+                {
+                    if (eventItem.ItemId <= 0 || eventItem.Count <= 0)
+                        continue;
+
+                    bool nextNeedsItem = false;
+                    foreach (var nextSeekItem in nextSeekItems)
+                    {
+                        if (nextSeekItem.ItemId == eventItem.ItemId && nextSeekItem.Count > 0)
+                        {
+                            nextNeedsItem = true;
+                            break;
+                        }
+                    }
+
+                    if (!nextNeedsItem)
+                        continue;
+
+                    bool nextGivesItem = false;
+                    foreach (var nextEventItem in nextEventItems)
+                    {
+                        if (nextEventItem.ItemId == eventItem.ItemId && nextEventItem.Count > 0)
+                        {
+                            nextGivesItem = true;
+                            break;
+                        }
+                    }
+
+                    if (nextGivesItem)
+                        continue;
+
+                    int currentCount;
+                    if (!carryForward.TryGetValue(eventItem.ItemId, out currentCount) || currentCount < eventItem.Count)
+                        carryForward[eventItem.ItemId] = eventItem.Count;
+                }
+            }
+
+            var result = new List<QuestRewardItem>();
+            foreach (var pair in carryForward)
+                result.Add(new QuestRewardItem { ItemId = pair.Key, Count = pair.Value });
+            return result;
         }
 
         public static List<QuestRewardItem> GetSeekingConsumeItems(int questId)
@@ -409,7 +536,11 @@ namespace DfoServer.GameWorld
             if (qst == null) return new List<QuestRewardItem>();
             int typeCode = MapTypeString(qst.Type);
             if (typeCode != 0 && typeCode != 1) return new List<QuestRewardItem>();
-            return ParseItemPairs(qst.IntData);
+            if (IsSeekAndMeetNpcQuest(qst))
+                return ParseSeekAndMeetNpcItems(qst.IntData);
+            var items = ParseItemPairs(qst.IntData);
+            items.RemoveAll(item => item.ItemId <= 0 || item.Count <= 0);
+            return items;
         }
 
 
@@ -460,10 +591,10 @@ namespace DfoServer.GameWorld
                     }
                 }
 
-                var consumeItems = ParseItemPairs(qst.DependGiveItem);
+                var consumeItems = new List<QuestRewardItem>();
 
                 int growNumber = 0;
-                if (chainType == 1 || chainType == 2)
+                if (chainType == 1 || chainType == 2 || chainType == 20 || chainType == ChainTypeSlotExpansion)
                 {
                     var rewardValues = ParseIntList(qst.RewardIntData);
                     if (rewardValues.Count > 0)
@@ -487,6 +618,7 @@ namespace DfoServer.GameWorld
                 case "[grow type]": return 1;
                 case "[creature evolution]": return 10;
                 case "[expert job]": return 20;
+                case "[slot expansion]": return ChainTypeSlotExpansion;
                 case "[event creature evolution]": return 25;
                 default: return 0;
             }
@@ -536,6 +668,9 @@ namespace DfoServer.GameWorld
             int typeCode = MapTypeString(qst.Type);
             string typeStr = (qst.Type ?? "").Trim().ToLowerInvariant();
 
+            if (IsSeekAndMeetNpcQuest(qst))
+                return ComputeSeekAndMeetNpcInitTrigger(qst.IntData);
+
             if (typeCode == 2 || typeCode == 6)
                 return ComputeTriggerFromIntData(qst.IntData, typeCode);
 
@@ -556,6 +691,53 @@ namespace DfoServer.GameWorld
             }
 
             return 1;
+        }
+
+        internal static uint ReplaceTriggerChannel(uint trigger, int channelIndex, long value)
+        {
+            int shift = channelIndex * 9;
+            if (shift < 0 || shift > 18)
+                return trigger;
+
+            uint channelValue;
+            if (value <= 0)
+                channelValue = 0;
+            else if (value > 0x1FF)
+                channelValue = 0x1FF;
+            else
+                channelValue = (uint)value;
+
+            return (trigger & ~(0x1FFu << shift)) | (channelValue << shift);
+        }
+
+        internal static bool IsSeekAndMeetNpcQuest(int questId)
+        {
+            return IsSeekAndMeetNpcQuest(GetQuestFile(questId));
+        }
+
+        private static bool IsSeekAndMeetNpcQuest(QuestFile qst)
+        {
+            return NormalizeQuestTag(qst?.Type) == "seek n meet npc";
+        }
+
+        private static uint ComputeSeekAndMeetNpcInitTrigger(string intData)
+        {
+            var values = ParseIntList(intData);
+            if (values.Count < 3)
+                return 1;
+
+            int itemCount = values[1] > 0 ? values[1] : 1;
+            int meetNpcCount = values[2] > 0 ? 1 : 0;
+            return PackTrigger(itemCount, meetNpcCount, 0);
+        }
+
+        private static List<QuestRewardItem> ParseSeekAndMeetNpcItems(string intData)
+        {
+            var values = ParseIntList(intData);
+            var result = new List<QuestRewardItem>();
+            if (values.Count >= 2 && values[0] > 0 && values[1] > 0)
+                result.Add(new QuestRewardItem { ItemId = values[0], Count = values[1] });
+            return result;
         }
 
         private static uint ComputeTriggerFromIntData(string intData, int typeCode)

@@ -35,7 +35,7 @@ namespace DfoServer.Network
 
         public override string ProtocolName => "GameProtocol";
 
-        public GameProtocolHandler()
+        public GameProtocolHandler(Func<byte[], Task> broadcastGamePacket = null)
         {
             var databasePath = ServerPaths.DatabasePath;
             var schemaFilePath = ServerPaths.SchemaFilePath;
@@ -58,7 +58,7 @@ namespace DfoServer.Network
             _selectCharacterDataSource = sqliteSelectCharacterDataSource;
             _loginHandler = new LoginHandler(accountRepository);
             _characterSelectHandler = new CharacterSelectHandler(sqliteSelectCharacterDataSource, characterRepository, getUserInfoTemplate);
-            _inventoryHandler = new InventoryHandler(sqliteSelectCharacterDataSource, characterRepository);
+            _inventoryHandler = new InventoryHandler(sqliteSelectCharacterDataSource, characterRepository, broadcastGamePacket);
             _townHandler = new TownHandler(characterRepository, sqliteSelectCharacterDataSource);
             _dungeonHandler = new DungeonHandler(_assetService);
             _skillHandler = new SkillHandler(characterRepository);
@@ -75,6 +75,10 @@ namespace DfoServer.Network
             RegisterCharacterHandlers(_cmdDispatch);
             RegisterInventoryHandlers(_cmdDispatch);
             RegisterSortItemLockHandlers(_cmdDispatch);
+            RegisterEquipmentSocketHandlers(_cmdDispatch);
+            RegisterEquipmentEmblemHandlers(_cmdDispatch);
+            RegisterAvatarSocketHandlers(_cmdDispatch);
+            RegisterAvatarEmblemHandlers(_cmdDispatch);
             RegisterDungeonHandlers(_cmdDispatch);
             RegisterSkillHandlers(_cmdDispatch);
             RegisterTownHandlers(_cmdDispatch);
@@ -128,7 +132,7 @@ namespace DfoServer.Network
                 if (_cmdDispatch.TryGetValue(header.type, out var handler))
                     await handler(session, header, body);
                 else
-                    FileLogger.Log($"[GameProtocol] Unhandled CMD type=0x{header.type:X4}");
+                    FileLogger.Log($"[GameProtocol] Unhandled CMD type=0x{header.type:X4} body({body?.Length ?? 0}B): {(body != null ? BitConverter.ToString(body) : "null")}");
             }
         }
 
@@ -156,6 +160,7 @@ namespace DfoServer.Network
             d[0x0006] = _characterSelectHandler.Handle_ENUM_CMDPACKET_DELETE_CHARACTER;
             d[0x0007] = _characterSelectHandler.Handle_ENUM_CMDPACKET_RETURN_SELECT_CHARACTER;
             d[0x0008] = _characterSelectHandler.Handle_ENUM_CMDPACKET_GET_USERINFO;
+            d[0x0009] = _dungeonHandler.Handle_ENUM_CMDPACKET_RECOVER_STAMINA;
             d[0x02B5] = _characterSelectHandler.Handle_ENUM_CMDPACKET_CHECK_DOUBLE_CHARACTER_NAME;
         }
 
@@ -166,7 +171,10 @@ namespace DfoServer.Network
             d[0x0014] = _inventoryHandler.Handle_ENUM_CMDPACKET_SORT_ITEM;         //20
             d[0x0015] = _inventoryHandler.Handle_ENUM_CMDPACKET_BUY_ITEM;          //21
             d[0x0016] = _inventoryHandler.Handle_ENUM_CMDPACKET_SELL_ITEM;         //22
+            d[0x001A] = _inventoryHandler.Handle_ENUM_CMDPACKET_DISJOINT_ITEM;     //26 系统分解
             d[0x002C] = _inventoryHandler.Handle_ENUM_CMDPACKET_USE_STACKABLE;
+            d[0x00D0] = _inventoryHandler.Handle_OPEN_MAGIC_BOX_SINGLE;
+            d[0x0050] = _inventoryHandler.Handle_ENUM_CMDPACKET_UPGRADE_ITEM;      //80
             d[0x00A0] = _inventoryHandler.Handle_OPEN_SELECTABLE_PACKAGE;
             d[0x0110] = _inventoryHandler.Handle_ENUM_CMDPACKET_ENCHANT_BY_BEAD;   //272
             d[0x019C] = _inventoryHandler.Handle_TITLE_BOOK;                       //412
@@ -174,14 +182,39 @@ namespace DfoServer.Network
             d[0x0207] = _inventoryHandler.Handle_OPEN_AVATAR_PACKAGE;
             d[0x0218] = _inventoryHandler.Handle_USE_BOOSTER_ITEM;
             d[0x0239] = _inventoryHandler.Handle_SET_CLONE_TITLE;                  //569
+            d[0x03F3] = _inventoryHandler.Handle_OPEN_MAGIC_BOX;
             d[0x0063] = _inventoryHandler.Handle_COMPOUND_AVATAR;                  //99 合并装扮(时装合成)
             d[0x03EA] = _inventoryHandler.Handle_COMPOUND_AVATAR_SET;              //1002 8件高级装扮100%合成稀有装扮(克隆装扮合成器)
+            d[0x0131] = _inventoryHandler.Handle_CREATE_ACCOUNT_CARGO;               //305 开通金库
+            d[0x0132] = _inventoryHandler.Handle_UPGRADE_ACCOUNT_CARGO;             //306 扩容金库
+            d[0x0133] = _inventoryHandler.Handle_DEPOSIT_MONEY;                    //307 金库存金币
+            d[0x0134] = _inventoryHandler.Handle_WITHDRAW_MONEY;                   //308 金库取金币
         }
 
         private void RegisterSortItemLockHandlers(Dictionary<ushort, Func<EnhancedClientSession, GamePacketHeader, byte[], Task>> d)
         {
             d[0x02CA] = _inventoryHandler.Handle_ENUM_CMDPACKET_TOGGLE_SORT_ITEM_LOCK;
             d[0x02CB] = _inventoryHandler.Handle_ENUM_CMDPACKET_UNLOCK_SORT_ITEM_LOCK;
+        }
+
+        private void RegisterEquipmentSocketHandlers(Dictionary<ushort, Func<EnhancedClientSession, GamePacketHeader, byte[], Task>> d)
+        {
+            d[0x031D] = _inventoryHandler.Handle_EQUIPMENT_SOCKET_OPEN;
+        }
+
+        private void RegisterEquipmentEmblemHandlers(Dictionary<ushort, Func<EnhancedClientSession, GamePacketHeader, byte[], Task>> d)
+        {
+            d[0x031C] = _inventoryHandler.Handle_EQUIPMENT_EMBLEM_ATTACH;
+        }
+
+        private void RegisterAvatarSocketHandlers(Dictionary<ushort, Func<EnhancedClientSession, GamePacketHeader, byte[], Task>> d)
+        {
+            d[0x00CE] = _inventoryHandler.Handle_AVATAR_SOCKET_OPEN;
+        }
+
+        private void RegisterAvatarEmblemHandlers(Dictionary<ushort, Func<EnhancedClientSession, GamePacketHeader, byte[], Task>> d)
+        {
+            d[0x00C9] = _inventoryHandler.Handle_AVATAR_EMBLEM_ATTACH;
         }
 
         private void RegisterDungeonHandlers(Dictionary<ushort, Func<EnhancedClientSession, GamePacketHeader, byte[], Task>> d)
@@ -194,12 +227,14 @@ namespace DfoServer.Network
             d[0x002B] = _dungeonHandler.Handle_ENUM_CMDPACKET_GET_ITEM;
             d[0x002D] = _dungeonHandler.Handle_ENUM_CMDPACKET_MOVE_MAP;
             d[0x002E] = _dungeonHandler.Handle_SET_PLAY_RESULT;                    //46
+            d[0x0045] = _dungeonHandler.Handle_CARD_START_REQUEST;
             d[0x0047] = _dungeonHandler.Handle_ENUM_CMDPACKET_SELECT_CARD;
-            d[0x0048] = _dungeonHandler.Handle_ENUM_CMDPACKET_SELECT_CARD;
+            d[0x0048] = _dungeonHandler.Handle_ENUM_CMDPACKET_EPLP_COMMAND;
             d[0x00EB] = _dungeonHandler.Handle_ENUM_CMDPACKET_HELLPARTY_START;     //235
             d[0x008F] = _dungeonHandler.Handle_ENUM_CMDPACKET_CHANGE_TUTORIAL_FLAG; //143
             d[0x00BF] = _dungeonHandler.Handle_ENUM_CMDPACKET_DUNGEON_EVENT_STORY_PAUSE; //191
             d[0x01E4] = _dungeonHandler.Handle_ENUM_CMDPACKET_TUTORIAL_LEVEL_UP;   //484
+            d[0x0312] = _dungeonHandler.Handle_PREMIUM_SERVICE;                    //786
             d[0x03B6] = _dungeonHandler.Handle_ENUM_CMDPACKET_GORGEOUS_CHALLENGE_TOGGLE;
         }
 
@@ -207,6 +242,7 @@ namespace DfoServer.Network
         {
             d[0x001C] = _skillHandler.Handle_CHANGE_SKILLSLOT;                     //28
             d[0x001D] = _skillHandler.Handle_BUY_SKILL;                            //29
+            d[0x0104] = _skillHandler.Handle_CHANGE_ANOTHER_SKILL_TREE;            //260
             d[0x014B] = _skillHandler.Handle_CHANGE_SKILL_COMMAND;                 //331
             d[0x014C] = _skillHandler.Handle_RESET_ALL_SKILL_COMMANDS;             //332
             d[0x01EC] = _skillHandler.Handle_SKILL_INIT;                           //492
@@ -227,6 +263,7 @@ namespace DfoServer.Network
             d[0x00C5] = (s, h, b) => { _settingsHandler.Handle_SAVE_GAME_OPTION_1(s, h, b); return Task.CompletedTask; };
             d[0x00C6] = (s, h, b) => { _settingsHandler.Handle_SAVE_GAME_OPTION_2(s, h, b); return Task.CompletedTask; };
             d[0x0170] = (s, h, b) => { _settingsHandler.Handle_SAVE_QUICKCHAT(s, h, b); return Task.CompletedTask; };
+            d[0x01C0] = (s, h, b) => { _settingsHandler.Handle_SAVE_CHARACTER_OPTION(s, h, b); return Task.CompletedTask; };
         }
 
         private void RegisterQuestHandlers(Dictionary<ushort, Func<EnhancedClientSession, GamePacketHeader, byte[], Task>> d)

@@ -1,8 +1,9 @@
 using DfoServer.Game.CharacterData;
 using DfoServer.Game.Characters;
+using DfoServer.Game.Currency;
 using DfoServer.Game.ExpertJob;
 using DfoServer.Game.Inventory;
-using DfoServer.Game.Premium;
+using DfoServer.Game.ItemUpgrade;
 using DfoServer.Game.Settings;
 using System;
 using System.Collections.Generic;
@@ -87,12 +88,18 @@ namespace DfoServer.Game.SelectCharacter
             {
                 using (var assetScope = _assetService.OpenScope(characterId, accountId))
                 {
-                    initSnapshot.LuckyStar = _assetService.LoadWallet(assetScope).LuckyStar;
+                    var wallet = _assetService.LoadWallet(assetScope);
+                    ApplyWallet(initSnapshot, wallet);
                 }
             }
             else
             {
-                initSnapshot.LuckyStar = CurrencyService.LoadLuckyStar(_connectionString, accountId);
+                using (var conn = new SqliteConnection(_connectionString))
+                {
+                    conn.Open();
+                    var wallet = CurrencyService.LoadWallet(conn, null, characterId);
+                    ApplyWallet(initSnapshot, wallet);
+                }
             }
 
             var acctSettings = _accountSettingsRepository.Load(accountId);
@@ -111,23 +118,10 @@ namespace DfoServer.Game.SelectCharacter
 
             initSnapshot.ServerEventPhaseBitmap = _initFlagsRepository.LoadServerEventPhaseBitmap();
 
-            var premiumBody = _initFlagsRepository.LoadGlobalRawPacket(0x10312);
-            if (premiumBody != null && premiumBody.Length >= 3)
-            {
-                initSnapshot.PremiumServiceType = BitConverter.ToUInt16(premiumBody, 1);
-                var dataLen = premiumBody.Length - 3;
-                if (dataLen > 0)
-                {
-                    initSnapshot.PremiumServiceData = new byte[dataLen];
-                    Buffer.BlockCopy(premiumBody, 3, initSnapshot.PremiumServiceData, 0, dataLen);
-                }
-            }
-
-            PremiumContractService.ApplyAccountPremiums(
-                _databasePath,
-                _schemaFilePath,
-                accountId,
-                initSnapshot);
+            initSnapshot.PremiumServiceType = 1;
+            initSnapshot.PremiumServiceData = Premium.PremiumService.BuildPremiumServiceData(
+                _connectionString, accountId);
+            LoadAccountPremiums(accountId, initSnapshot);
 
             
             
@@ -206,6 +200,66 @@ namespace DfoServer.Game.SelectCharacter
             });
         }
 
+        private static void ApplyWallet(SelectCharacterInitializationSnapshot initSnapshot, WalletSnapshot wallet)
+        {
+            if (initSnapshot == null || wallet == null)
+                return;
+
+            initSnapshot.AckCera = wallet.Cera;
+            initSnapshot.AckTokenCera = wallet.TokenCera;
+            initSnapshot.AckHappyTokenCera = wallet.HappyTokenCera;
+            initSnapshot.LuckyStar = wallet.LuckyStar;
+        }
+
+        private void LoadAccountPremiums(int accountId, SelectCharacterInitializationSnapshot initSnapshot)
+        {
+            initSnapshot.AckPremiums.Clear();
+            var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            long devilContractMaxExpire = 0;
+
+            using (var conn = new SqliteConnection(_connectionString))
+            {
+                conn.Open();
+                using (var cmd = conn.CreateCommand())
+                {
+                    cmd.CommandText = "SELECT premium_type, end_time FROM account_premiums WHERE account_id=@aid AND end_time>@now ORDER BY premium_type;";
+                    cmd.Parameters.AddWithValue("@aid", accountId);
+                    cmd.Parameters.AddWithValue("@now", now);
+                    using (var reader = cmd.ExecuteReader())
+                    {
+                        while (reader.Read())
+                        {
+                            var pt = reader.GetInt32(0);
+                            var endTime = reader.GetInt64(1);
+
+                            if (Premium.DevilContractCatalog.IsDevilContractSlotType(pt))
+                            {
+                                if (endTime > devilContractMaxExpire)
+                                    devilContractMaxExpire = endTime;
+                                continue;
+                            }
+
+                            var remaining = Math.Max(0, endTime - now);
+                            initSnapshot.AckPremiums.Add(new AckPremiumEntrySnapshot
+                            {
+                                PremiumType = (byte)pt,
+                                EndTime = BitConverter.GetBytes(remaining),
+                            });
+                        }
+                    }
+                }
+            }
+
+            if (devilContractMaxExpire > now)
+            {
+                initSnapshot.AckPremiums.Add(new AckPremiumEntrySnapshot
+                {
+                    PremiumType = (byte)Premium.DevilContractCatalog.ActivationPremiumType,
+                    EndTime = BitConverter.GetBytes(devilContractMaxExpire - now),
+                });
+            }
+        }
+
         public CharacterItemListSnapshot LoadItemListSnapshot(int characterId, int accountId)
         {
             if (_assetService != null)
@@ -259,10 +313,10 @@ namespace DfoServer.Game.SelectCharacter
                 return _inventoryStore.TryOpenSelectablePackage(request, out result);
         }
 
-        public bool TryUseBoosterItem(int characterId, int accountId, short? slotIndex, IReadOnlyList<int> selectedItemTemplateIds, out BoosterUseResult result)
+        public bool TryUseBoosterItem(int characterId, int accountId, BoosterUseRequest request, out BoosterUseResult result)
         {
             using (_inventoryStore.BeginScope(characterId, accountId))
-                return _inventoryStore.TryUseBoosterItem(slotIndex, selectedItemTemplateIds, out result);
+                return _inventoryStore.TryUseBoosterItem(request, out result);
         }
 
         public bool TryOpenPackage0207(int characterId, int accountId, short slotIndex, IReadOnlyList<int> selectedItemTemplateIds, out BoosterUseResult result)
@@ -277,10 +331,12 @@ namespace DfoServer.Game.SelectCharacter
                 return _inventoryStore.TryBuyItem(itemTemplateId, buyCount, out result);
         }
 
-        public bool TryBuyCeraShopItem(int characterId, int accountId, int productId, int buyCount, out InventoryMutationResult result)
+        // 透传 paymentMode 与 attributeValue 到下层 InventoryStore。
+        // 此方法仅做 Scope 管理，实际逻辑在 InventoryShopStore.TryBuyCeraShopItem。
+        public bool TryBuyCeraShopItem(int characterId, int accountId, int productId, int buyCount, int paymentMode, byte attributeValue, out InventoryMutationResult result)
         {
             using (_inventoryStore.BeginScope(characterId, accountId))
-                return _inventoryStore.TryBuyCeraShopItem(productId, buyCount, out result);
+                return _inventoryStore.TryBuyCeraShopItem(productId, buyCount, paymentMode, attributeValue, out result);
         }
 
         public bool TrySellItem(int characterId, int accountId, InventoryListType listType, short slotIndex, short sellCount, out InventoryMutationResult result)
@@ -289,10 +345,22 @@ namespace DfoServer.Game.SelectCharacter
                 return _inventoryStore.TrySellItem(listType, slotIndex, sellCount, out result);
         }
 
+        public bool TryDisjointItem(int characterId, int accountId, DisjointItemRequest request, out DisjointItemResult result)
+        {
+            using (_inventoryStore.BeginScope(characterId, accountId))
+                return _inventoryStore.TryDisjointItem(request, out result);
+        }
+
         public bool TryEnchantByBead(int characterId, int accountId, EnchantByBeadCommand command, out EnchantByBeadResult result)
         {
             using (_inventoryStore.BeginScope(characterId, accountId))
                 return _inventoryStore.TryEnchantByBead(command, out result);
+        }
+
+        public bool TryUpgradeItem(int characterId, int accountId, ItemUpgradeCommand command, out ItemUpgradeResult result)
+        {
+            using (_inventoryStore.BeginScope(characterId, accountId))
+                return _inventoryStore.TryUpgradeItem(command, out result);
         }
 
         public bool TryCompoundAvatar(int characterId, int accountId, short slot1, short slot2, short consumeSlot,
@@ -311,6 +379,30 @@ namespace DfoServer.Game.SelectCharacter
         {
             using (_inventoryStore.BeginScope(characterId, accountId))
                 return _inventoryStore.TryCompoundAvatarSet(consumeSlots, expectedItemIds, resolveNewItemId, newOption, consumeStackableSlot, out newSlot, out oldItemIds, out newItemId, out consumedItemTemplateId, out consumedItemRemainingCount);
+        }
+
+        public bool TryOpenEquipmentSocket(int characterId, int accountId, short targetSlotIndex, int targetItemTemplateId, short materialSlotIndex, out EquipmentSocketMutationResult result)
+        {
+            using (_inventoryStore.BeginScope(characterId, accountId))
+                return _inventoryStore.TryOpenEquipmentSocket(targetSlotIndex, targetItemTemplateId, materialSlotIndex, out result);
+        }
+
+        public bool TrySetEquipmentEmblems(int characterId, int accountId, short targetSlotIndex, int targetItemTemplateId, IReadOnlyList<EquipmentEmblemApplyRequest> emblems, out EquipmentEmblemMutationResult result)
+        {
+            using (_inventoryStore.BeginScope(characterId, accountId))
+                return _inventoryStore.TrySetEquipmentEmblems(targetSlotIndex, targetItemTemplateId, emblems, out result);
+        }
+
+        public bool TryOpenAvatarSocket(int characterId, int accountId, short targetSlotIndex, int targetItemTemplateId, short materialSlotIndex, out AvatarSocketMutationResult result)
+        {
+            using (_inventoryStore.BeginScope(characterId, accountId))
+                return _inventoryStore.TryOpenAvatarSocket(targetSlotIndex, targetItemTemplateId, materialSlotIndex, out result);
+        }
+
+        public bool TrySetAvatarEmblems(int characterId, int accountId, short targetSlotIndex, int targetItemTemplateId, IReadOnlyList<EquipmentEmblemApplyRequest> emblems, out AvatarEmblemMutationResult result)
+        {
+            using (_inventoryStore.BeginScope(characterId, accountId))
+                return _inventoryStore.TrySetAvatarEmblems(targetSlotIndex, targetItemTemplateId, emblems, out result);
         }
 
         public bool TrySortItems(int characterId, int accountId, InventoryListType listType, byte category)

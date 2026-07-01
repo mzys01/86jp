@@ -74,6 +74,7 @@ namespace DfoServer.Network.Handlers.Dungeon
 
             var roomKey = new RoomKey(maze.X, maze.Y, effectiveOverrideMapId);
             session.Player.CurRoomKey = roomKey;
+            CacheQuestConnectedStartMapId(session, maze);
 
             byte[] startMapBody;
             List<KeyValuePair<int, int>> hellPartyMonsterInfoAfterStartMap = null;
@@ -185,6 +186,17 @@ namespace DfoServer.Network.Handlers.Dungeon
                     DungeonNotificationBuilder.BuildHellPartyMonsterInfo(hellPartyMonsterInfoAfterStartMap)));
                 FileLogger.Log($"[DungeonHandler] HELLPARTY monster info sent after hell START_MAP: entries={hellPartyMonsterInfoAfterStartMap.Count} actorLevels={string.Join(",", hellPartyMonsterInfoAfterStartMap.Select(x => $"{x.Key}:{x.Value}"))}");
             }
+        }
+
+        private static void CacheQuestConnectedStartMapId(EnhancedClientSession session, DungeonData.MazeSumInfo maze)
+        {
+            var player = session?.Player;
+            if (player == null || !player.CurMazeQuestConnected)
+                return;
+            if (maze.X != player.CurMazeStartX || maze.Y != player.CurMazeStartY || maze.Index <= 0)
+                return;
+
+            player.CurMazeStartMapId = maze.Index;
         }
 
         private static List<KeyValuePair<int, int>> BuildHellPartyMonsterInfoEntries(DungeonData.HellPartyRoomInfo hellRoomInfo)

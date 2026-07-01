@@ -8,7 +8,7 @@
 
 ## 社区交流
 
-Discord 社区: https://discord.gg/3wct6SZp
+Discord 社区: https://discord.gg/xdd2HGkQnd (永久邀请链接)
 
 ## 补丁源码
 

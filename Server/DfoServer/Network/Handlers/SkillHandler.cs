@@ -89,10 +89,45 @@ namespace DfoServer.Network.Handlers
             }
         }
 
+        public async Task Handle_CHANGE_ANOTHER_SKILL_TREE(EnhancedClientSession session, GamePacketHeader header, byte[] body)
+        {
+            var currentSkillTreeIndex = ResolveClientCurrentSkillTreeIndex(session, body);
+            var skillTreeIndex = ToggleSkillTreeIndex(currentSkillTreeIndex);
+            int cid = session.Player != null ? session.Player.CharacterId : 0;
+
+            if (cid > 0)
+            {
+                try
+                {
+                    var repo = new Game.CharacterData.SqliteSubtype1Repository(
+                        Infrastructure.ServerPaths.DatabasePath, Infrastructure.ServerPaths.SchemaFilePath);
+                    var rows = repo.UpdateSkillTreeIndex(cid, skillTreeIndex);
+
+                    var tail = session.Player.Subtype0Tail ?? new UserInfoMinimumTailSnapshot();
+                    tail.SkillTreeIndex = skillTreeIndex;
+                    session.Player.Subtype0Tail = tail;
+
+                    FileLogger.Log($"[SkillHandler] CHANGE_ANOTHER_SKILL_TREE char={cid} current={currentSkillTreeIndex} applied={skillTreeIndex} rows={rows} body={(body != null ? BitConverter.ToString(body) : "null")}");
+                }
+                catch (Exception ex)
+                {
+                    FileLogger.Log($"[SkillHandler] CHANGE_ANOTHER_SKILL_TREE persist failed: {ex.Message}");
+                    skillTreeIndex = session.Player.Subtype0Tail?.SkillTreeIndex <= 1
+                        ? session.Player.Subtype0Tail.SkillTreeIndex
+                        : (byte)0;
+                }
+            }
+
+            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, header.type,
+                BuildChangeAnotherSkillTreeAck(skillTreeIndex, body)));
+        }
+
         public async Task Handle_BUY_SKILL(EnhancedClientSession session, GamePacketHeader header, byte[] body)
         {
             if (body == null || body.Length < 6) return;
-            byte skillTree = body[0];
+            byte requestSkillTree = NormalizeSkillTreeIndexForBuy(body[0]);
+            byte currentSkillTree = session?.Player?.Subtype0Tail?.SkillTreeIndex ?? requestSkillTree;
+            byte skillTree = currentSkillTree <= 1 ? currentSkillTree : requestSkillTree;
             int count = body[1];
             var entries = new List<Game.Skills.BuySkillEntry>();
             for (int i = 0; i < count; i++)
@@ -191,6 +226,67 @@ namespace DfoServer.Network.Handlers
             }
 
             return records;
+        }
+
+        private static byte[] BuildChangeAnotherSkillTreeAck(byte skillTreeIndex, byte[] body)
+        {
+            if (body == null || body.Length == 0)
+                return new[] { (byte)0x01, skillTreeIndex };
+
+            var ack = new byte[body.Length + 1];
+            ack[0] = 0x01;
+            Buffer.BlockCopy(body, 0, ack, 1, body.Length);
+            ack[1] = skillTreeIndex;
+            return ack;
+        }
+
+        private static byte ResolveClientCurrentSkillTreeIndex(EnhancedClientSession session, byte[] body)
+        {
+            if (body != null && body.Length == 1)
+            {
+                byte value;
+                if (TryNormalizeSkillTreeIndex(body[0], out value))
+                    return value;
+            }
+
+            if (body != null && body.Length == 2)
+            {
+                byte value;
+                if (TryNormalizeSkillTreeIndex(body[1], out value))
+                    return value;
+            }
+
+            var current = session?.Player?.Subtype0Tail?.SkillTreeIndex ?? 0;
+            return current <= 1 ? current : (byte)0;
+        }
+
+        private static byte ToggleSkillTreeIndex(byte currentSkillTreeIndex)
+        {
+            return currentSkillTreeIndex == 0 ? (byte)1 : (byte)0;
+        }
+
+        private static bool TryNormalizeSkillTreeIndex(byte raw, out byte value)
+        {
+            if (raw <= 1)
+            {
+                value = raw;
+                return true;
+            }
+
+            if (raw == 2)
+            {
+                value = 1;
+                return true;
+            }
+
+            value = 0;
+            return false;
+        }
+
+        private static byte NormalizeSkillTreeIndexForBuy(byte raw)
+        {
+            byte value;
+            return TryNormalizeSkillTreeIndex(raw, out value) ? value : (byte)0;
         }
     }
 }

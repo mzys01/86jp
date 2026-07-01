@@ -1,6 +1,7 @@
 using DfoServer.Network;
 using System;
 using System.Collections.Generic;
+using System.Threading;
 
 namespace DfoServer
 {
@@ -28,9 +29,39 @@ namespace DfoServer
                 return;
             }
 
-            if (Array.IndexOf(args, "--selftest-premium-contract-account-scope") >= 0)
+            if (Array.IndexOf(args, "--selftest-dungeon-map-fallback") >= 0)
             {
-                Environment.Exit(SelfTests.PremiumContractAccountScopeSelfTest.Run());
+                Environment.Exit(SelfTests.DungeonMapFallbackSelfTest.Run());
+                return;
+            }
+
+            if (Array.IndexOf(args, "--selftest-character-option") >= 0)
+            {
+                Environment.Exit(SelfTests.CharacterOptionSelfTest.Run());
+                return;
+            }
+
+            if (Array.IndexOf(args, "--selftest-slot-expansion-quest") >= 0)
+            {
+                Environment.Exit(SelfTests.SlotExpansionQuestSelfTest.Run());
+                return;
+            }
+
+            if (Array.IndexOf(args, "--selftest-character-slot-policy") >= 0)
+            {
+                Environment.Exit(SelfTests.CharacterSlotPolicySelfTest.Run());
+                return;
+            }
+
+            if (Array.IndexOf(args, "--selftest-clear-map-quest") >= 0)
+            {
+                Environment.Exit(SelfTests.ClearMapQuestSelfTest.Run());
+                return;
+            }
+
+            if (Array.IndexOf(args, "--selftest-quest-item-flow") >= 0)
+            {
+                Environment.Exit(SelfTests.QuestItemFlowSelfTest.Run());
                 return;
             }
 
@@ -70,6 +101,19 @@ namespace DfoServer
                 return;
             }
 
+            // 启动时一次性按当前等级重算所有角色战斗属性, 修复历史"升级未重算属性"的存量数据。
+            // 必须在 PVF 加载后: 属性表来自 Script.pvf。幂等, 重复执行结果一致, 正常时静默, 仅出错时提示。
+            try
+            {
+                new Game.CharacterData.SqliteSubtype1Repository(
+                    Infrastructure.ServerPaths.DatabasePath, Infrastructure.ServerPaths.SchemaFilePath)
+                    .RecomputeAllCombatStats();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[Startup] combat stats recompute skipped: {ex.Message}");
+            }
+
             var server = new MultiStructureTcpServer();
 
             int channelPort = GameNetworkConfig.ProxyMode ? 7002 : 7001;
@@ -78,7 +122,7 @@ namespace DfoServer
             var portConfigs = new Dictionary<int, (IProtocolHandler handler, IPacketHeader structure)>
             {
                 { channelPort, (new ChannelProtocolHandler(), new ChannelPacketHeader()) },
-                { gamePort, (new GameProtocolHandler(), new GamePacketHeader()) }
+                { gamePort, (new GameProtocolHandler(packet => server.BroadcastToPortAsync(gamePort, packet)), new GamePacketHeader()) }
             };
 
             server.Start(portConfigs);
@@ -88,27 +132,44 @@ namespace DfoServer
 
             Console.WriteLine("Multi-structure TCP server started!");
             Console.WriteLine($"Advertised server IP: {GameNetworkConfig.ServerIp} (ports 7001 channel, 10011 game)");
-            Console.WriteLine("Press 's' for statistics, 'q' to quit.");
+            var interactiveConsole = Environment.UserInteractive && !Console.IsInputRedirected;
+            Console.WriteLine(interactiveConsole
+                ? "Press 's' for statistics, 'q' to quit."
+                : "Running without interactive console. Stop the service to quit.");
 
-            while (true)
+            if (!interactiveConsole)
             {
-                var key = Console.ReadKey(intercept: true);
+                var stopped = new ManualResetEventSlim(false);
+                Console.CancelKeyPress += (sender, e) =>
+                {
+                    e.Cancel = true;
+                    stopped.Set();
+                };
+                AppDomain.CurrentDomain.ProcessExit += (sender, e) => stopped.Set();
+                stopped.Wait();
+            }
+            else
+            {
+                while (true)
+                {
+                    var key = Console.ReadKey(intercept: true);
 
-                if (key.KeyChar == 's' || key.KeyChar == 'S')
-                {
-                    var stats = server.GetStatistics();
-                    Console.WriteLine("\n=== Server Statistics ===");
-                    Console.WriteLine($"Total Clients: {stats.TotalClients}");
-                    foreach (var stat in stats.PortStats)
+                    if (key.KeyChar == 's' || key.KeyChar == 'S')
                     {
-                        var config = portConfigs[stat.Key];
-                        Console.WriteLine($"Port {stat.Key} ({config.structure.GetType().Name}): {stat.Value} clients");
+                        var stats = server.GetStatistics();
+                        Console.WriteLine("\n=== Server Statistics ===");
+                        Console.WriteLine($"Total Clients: {stats.TotalClients}");
+                        foreach (var stat in stats.PortStats)
+                        {
+                            var config = portConfigs[stat.Key];
+                            Console.WriteLine($"Port {stat.Key} ({config.structure.GetType().Name}): {stat.Value} clients");
+                        }
+                        Console.WriteLine("=========================\n");
                     }
-                    Console.WriteLine("=========================\n");
-                }
-                else if (key.KeyChar == 'q' || key.KeyChar == 'Q')
-                {
-                    break;
+                    else if (key.KeyChar == 'q' || key.KeyChar == 'Q')
+                    {
+                        break;
+                    }
                 }
             }
 

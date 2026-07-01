@@ -3,6 +3,7 @@ using PvfLib;
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Text.RegularExpressions;
 
 namespace DfoServer.Game.Inventory
 {
@@ -31,6 +32,14 @@ namespace DfoServer.Game.Inventory
         public int Grade { get; set; }
 
         public int MinimumLevel { get; set; }
+
+        public int Rarity { get; set; }
+
+        public string EquipmentType { get; set; }
+
+        public string AttachType { get; set; }
+
+        public IReadOnlyList<string> ImpossibleContents { get; set; } = Array.Empty<string>();
 
         public bool IsStackable => string.Equals(ItemKind, "stackable", StringComparison.Ordinal);
 
@@ -92,6 +101,12 @@ namespace DfoServer.Game.Inventory
         internal static readonly Lazy<LstFile> EquipmentList = new Lazy<LstFile>(() => LstFile.Parse(PvfArchiveAccessor.ReadText("equipment/equipment.lst")));
         private static readonly Lazy<LstFile> StackableList = new Lazy<LstFile>(() => LstFile.Parse(PvfArchiveAccessor.ReadText("stackable/stackable.lst")));
         private static readonly Lazy<ItemSellRates> SellRates = new Lazy<ItemSellRates>(() => ItemSellRates.Parse(PvfArchiveAccessor.ReadText("equipment/pricetable.tbl")));
+        private static readonly Regex AvatarSocketRegex = new Regex(@"\[\s*([ABCDSM])\s+socket\s*\]", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+        private const string AvatarTypeSelectTag = "[avatar type select]";
+        private const string AvatarTypeSelectEndTag = "[/avatar type select]";
+        private const string EmblemSocketDefaultTag = "[emblem socket default]";
+        private const string EmblemSocketDefaultEndTag = "[/emblem socket default]";
+        private const string AvatarEmblemSocketNumTag = "[avatar emblem socket num]";
 
         public static ItemMetadata Resolve(int itemTemplateId)
         {
@@ -104,7 +119,10 @@ namespace DfoServer.Game.Inventory
                 
                 var baseSellPrice = equipment.Value >= 0 ? equipment.Value : buyGold;
                 var sellGold = Math.Max(1, baseSellPrice * SellRates.Value.Equipment / 1000);
-                var durability = equipment.Durability > 0 ? equipment.Durability : 45;
+                // 只有武器和防具有耐久度，其他装备类型（首饰/魔法石/称号/装扮/宠物等）无耐久。
+                var eqType = NormalizeEquipmentType(equipment.EquipmentType);
+                var hasDurability = equipment.Durability > 0 && HasDurabilityByType(eqType);
+                var durability = hasDurability ? equipment.Durability : 0;
 
                 return new ItemMetadata
                 {
@@ -116,6 +134,10 @@ namespace DfoServer.Game.Inventory
                     StackLimit = 1,
                     Grade = equipment.Grade,
                     MinimumLevel = equipment.MinimumLevel,
+                    Rarity = equipment.Rarity,
+                    EquipmentType = NormalizeEquipmentType(equipment.EquipmentType),
+                    AttachType = equipment.AttachType,
+                    ImpossibleContents = equipment.ImpossibleContentItems,
                 };
             }
 
@@ -150,12 +172,16 @@ namespace DfoServer.Game.Inventory
                     ItemKind = "stackable",
                     StackableType = stackable.StackableType,
                     PvfFilePath = stackableEntry.FilePath,
-                    BuyGold = hasMaterialCost ? 0 : buyGold,
+                    BuyGold = buyGold,
                     SellGold = sellGold,
                     Durability = 0,
                     StackLimit = stackable.StackLimit,
                     NeedMaterialId = needMatId,
                     NeedMaterialCount = needMatCount,
+                    Grade = stackable.Grade,
+                    MinimumLevel = stackable.MinimumLevel,
+                    Rarity = stackable.Rarity,
+                    ImpossibleContents = stackable.ImpossibleContentItems,
                 };
             }
 
@@ -172,6 +198,213 @@ namespace DfoServer.Game.Inventory
         public static LstEntry GetStackableEntry(int itemTemplateId)
         {
             return StackableList.Value.GetById(itemTemplateId);
+        }
+
+        public static LstEntry GetEquipmentEntry(int itemTemplateId)
+        {
+            return EquipmentList.Value.GetById(itemTemplateId);
+        }
+
+        public static bool TryLoadEquipmentFile(int itemTemplateId, out EquipmentFile equipment)
+        {
+            equipment = null;
+            var equipmentEntry = EquipmentList.Value.GetById(itemTemplateId);
+            if (equipmentEntry == null)
+                return false;
+
+            equipment = EquipmentFile.Parse(PvfArchiveAccessor.ReadText(Path.Combine("equipment", equipmentEntry.FilePath)));
+            return true;
+        }
+
+        public static bool TryLoadStackableFile(int itemTemplateId, out StackableItemFile stackable)
+        {
+            return TryLoadStackable(itemTemplateId, out stackable);
+        }
+
+        public static string ResolveEquipmentType(int itemTemplateId)
+        {
+            return TryGetEquipmentType(itemTemplateId, out var equipmentType)
+                ? equipmentType
+                : null;
+        }
+
+        public static byte ResolveEmblemSocketType(int itemTemplateId)
+        {
+            var stackableEntry = StackableList.Value.GetById(itemTemplateId);
+            if (stackableEntry == null)
+                return 0;
+
+            StackableItemFile stackable;
+            try
+            {
+                stackable = StackableItemFile.Parse(PvfArchiveAccessor.ReadText(Path.Combine("stackable", stackableEntry.FilePath)));
+            }
+            catch (Exception ex)
+            {
+                FileLogger.Log($"  [EmblemAttach] ResolveEmblemSocketType(0x{itemTemplateId:X8}) failed: {ex.Message}");
+                return 0;
+            }
+
+            var stackableType = stackable.StackableType != null
+                ? stackable.StackableType.Replace("`", "").Trim()
+                : string.Empty;
+            if (!stackableType.StartsWith("[avatar emblem]", StringComparison.OrdinalIgnoreCase))
+                return 0;
+
+            var text = string.Join(" ", new[]
+            {
+                stackableEntry.FilePath,
+                stackable.Name,
+                stackable.ItemCategory,
+                stackable.ItemGroupName,
+                stackable.AttachType,
+                stackable.StringData,
+                stackable.IntData,
+                stackable.Equipment,
+                string.Join(" ", stackable.StringDataItems ?? new List<string>()),
+            }).ToLowerInvariant();
+
+            byte socketType = 0;
+            if (text.Contains("red") || text.Contains("[red]"))
+                socketType |= 0x01;
+            if (text.Contains("yellow") || text.Contains("[yellow]"))
+                socketType |= 0x02;
+            if (text.Contains("green") || text.Contains("[green]"))
+                socketType |= 0x04;
+            if (text.Contains("blue") || text.Contains("[blue]"))
+                socketType |= 0x08;
+            if (text.Contains("platinum") || text.Contains("[platinum]"))
+                socketType |= 0x10;
+            if (text.Contains("multi") || text.Contains("all color") || text.Contains("rainbow") || text.Contains("colorful"))
+                socketType |= 0x0F;
+
+            return socketType;
+        }
+
+        public static IReadOnlyList<byte> ResolveAvatarSocketTypes(int itemTemplateId)
+        {
+            var result = new List<byte>();
+            var equipmentEntry = EquipmentList.Value.GetById(itemTemplateId);
+            if (equipmentEntry == null)
+                return result;
+
+            try
+            {
+                var text = PvfArchiveAccessor.ReadText(Path.Combine("equipment", equipmentEntry.FilePath));
+                var section = ExtractAvatarTypeSelectSection(text);
+                AddAvatarSocketMatches(result, section, 5);
+
+                if (result.Count == 0)
+                    AddAvatarSocketMatches(result, ExtractEmblemSocketDefaultSection(text), ResolveAvatarEmblemSocketNum(text));
+            }
+            catch (Exception ex)
+            {
+                FileLogger.Log($"  [AvatarSocket] ResolveAvatarSocketTypes(0x{itemTemplateId:X8}) failed: {ex.Message}");
+            }
+
+            return result;
+        }
+
+        private static void AddAvatarSocketMatches(List<byte> result, string section, int maxCount)
+        {
+            if (result == null || string.IsNullOrEmpty(section) || maxCount <= 0)
+                return;
+
+            foreach (Match match in AvatarSocketRegex.Matches(section))
+            {
+                if (!match.Success || match.Groups.Count < 2)
+                    continue;
+
+                if (TryMapAvatarSocketCode(match.Groups[1].Value[0], out var socketType))
+                {
+                    result.Add(socketType);
+                    if (result.Count >= maxCount)
+                        break;
+                }
+            }
+        }
+
+        public static byte ResolveAvatarSocketType(int itemTemplateId)
+        {
+            var socketTypes = ResolveAvatarSocketTypes(itemTemplateId);
+            return socketTypes != null && socketTypes.Count > 0 ? socketTypes[0] : (byte)0;
+        }
+
+        private static string ExtractAvatarTypeSelectSection(string text)
+        {
+            if (string.IsNullOrEmpty(text))
+                return string.Empty;
+
+            var start = text.IndexOf(AvatarTypeSelectTag, StringComparison.OrdinalIgnoreCase);
+            if (start < 0)
+                return string.Empty;
+
+            start += AvatarTypeSelectTag.Length;
+            var end = text.IndexOf(AvatarTypeSelectEndTag, start, StringComparison.OrdinalIgnoreCase);
+            return end > start ? text.Substring(start, end - start) : text.Substring(start);
+        }
+
+        private static string ExtractEmblemSocketDefaultSection(string text)
+        {
+            if (string.IsNullOrEmpty(text))
+                return string.Empty;
+
+            var start = text.IndexOf(EmblemSocketDefaultTag, StringComparison.OrdinalIgnoreCase);
+            if (start < 0)
+                return string.Empty;
+
+            start += EmblemSocketDefaultTag.Length;
+            var end = text.IndexOf(EmblemSocketDefaultEndTag, start, StringComparison.OrdinalIgnoreCase);
+            return end > start ? text.Substring(start, end - start) : text.Substring(start);
+        }
+
+        private static int ResolveAvatarEmblemSocketNum(string text)
+        {
+            if (string.IsNullOrEmpty(text))
+                return 5;
+
+            var start = text.IndexOf(AvatarEmblemSocketNumTag, StringComparison.OrdinalIgnoreCase);
+            if (start < 0)
+                return 5;
+
+            start += AvatarEmblemSocketNumTag.Length;
+            var end = text.IndexOf('[', start);
+            var section = end > start ? text.Substring(start, end - start) : text.Substring(start);
+            foreach (var token in section.Split(new[] { ' ', '\t', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                if (int.TryParse(token, out var count))
+                    return Math.Max(0, Math.Min(5, count));
+            }
+
+            return 5;
+        }
+
+        private static bool TryMapAvatarSocketCode(char code, out byte socketType)
+        {
+            switch (char.ToUpperInvariant(code))
+            {
+                case 'A':
+                    socketType = 0x01;
+                    return true;
+                case 'B':
+                    socketType = 0x02;
+                    return true;
+                case 'C':
+                    socketType = 0x04;
+                    return true;
+                case 'D':
+                    socketType = 0x08;
+                    return true;
+                case 'S':
+                    socketType = 0x10;
+                    return true;
+                case 'M':
+                    socketType = 0xEF;
+                    return true;
+                default:
+                    socketType = 0;
+                    return false;
+            }
         }
 
         public static bool TryValidateEnchantByBeadTarget(int beadItemTemplateId, int targetItemTemplateId, byte enchantUpgradeCount, out int enchantCardItemId, out string rejectReason)
@@ -291,6 +524,21 @@ namespace DfoServer.Game.Inventory
             }
 
             return result;
+        }
+
+        private static bool HasDurabilityByType(string normalizedType)
+        {
+            if (string.IsNullOrEmpty(normalizedType))
+                return false;
+            // 武器
+            if (normalizedType == "[weapon]" || normalizedType == "[support weapon]")
+                return true;
+            // 防具
+            if (normalizedType == "[coat]" || normalizedType == "[pants]"
+                || normalizedType == "[shoulder]" || normalizedType == "[shoes]"
+                || normalizedType == "[waist]")
+                return true;
+            return false;
         }
 
         private static string NormalizeEquipmentType(string raw)

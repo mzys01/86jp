@@ -1,4 +1,5 @@
 using DfoServer.Game.ExpertJob;
+using DfoServer.Game.ItemUpgrade;
 using Microsoft.Data.Sqlite;
 using System;
 using System.Collections.Generic;
@@ -29,7 +30,7 @@ namespace DfoServer.Game.Inventory
 
         bool TryOpenSelectablePackage(SelectablePackageOpenRequest request, out SelectablePackageOpenResult result);
 
-        bool TryUseBoosterItem(short? slotIndex, IReadOnlyList<int> selectedItemTemplateIds, out BoosterUseResult result);
+        bool TryUseBoosterItem(BoosterUseRequest request, out BoosterUseResult result);
 
         bool TryOpenPackage0207(short slotIndex, IReadOnlyList<int> selectedItemTemplateIds, out BoosterUseResult result);
 
@@ -47,7 +48,19 @@ namespace DfoServer.Game.Inventory
 
         bool TrySellItem(InventoryListType listType, short slotIndex, short sellCount, out InventoryMutationResult result);
 
+        bool TryDisjointItem(DisjointItemRequest request, out DisjointItemResult result);
+
         bool TryEnchantByBead(EnchantByBeadCommand command, out EnchantByBeadResult result);
+
+        bool TryUpgradeItem(ItemUpgradeCommand command, out ItemUpgradeResult result);
+
+        bool TryOpenEquipmentSocket(short targetSlotIndex, int targetItemTemplateId, short materialSlotIndex, out EquipmentSocketMutationResult result);
+
+        bool TrySetEquipmentEmblems(short targetSlotIndex, int targetItemTemplateId, IReadOnlyList<EquipmentEmblemApplyRequest> emblems, out EquipmentEmblemMutationResult result);
+
+        bool TryOpenAvatarSocket(short targetSlotIndex, int targetItemTemplateId, short materialSlotIndex, out AvatarSocketMutationResult result);
+
+        bool TrySetAvatarEmblems(short targetSlotIndex, int targetItemTemplateId, IReadOnlyList<EquipmentEmblemApplyRequest> emblems, out AvatarEmblemMutationResult result);
 
         bool TryCompoundAvatar(short slot1, short slot2, short consumeSlot,
             Func<int, int, int, List<int>> resolveNewItemIds, byte newOption,
@@ -76,6 +89,7 @@ namespace DfoServer.Game.Inventory
 
         void SeedNewCharacterEquipment((short slot, int itemId)[] equipment);
 
-        bool TryBuyCeraShopItem(int productId, int buyCount, out InventoryMutationResult result);
+        // 商城购买: paymentMode=0 走点券瀑布扣减, paymentMode=1 走装扮兑换券抵扣(不扣Cera)。
+        bool TryBuyCeraShopItem(int productId, int buyCount, int paymentMode, byte attributeValue, out InventoryMutationResult result);
     }
 }

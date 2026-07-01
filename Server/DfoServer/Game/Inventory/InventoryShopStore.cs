@@ -1,3 +1,5 @@
+using DfoServer.Game.Shop;
+using DfoServer.Game.Currency;
 using DfoServer.Infrastructure;
 using System;
 using System.Collections.Generic;
@@ -24,6 +26,24 @@ namespace DfoServer.Game.Inventory
             OnlyCera,
             OnlyCeraPoint,
         }
+
+        // ============================================================
+        // 装扮兑换券对照表 [grade][durIndex] = couponId
+        // ============================================================
+        // grade: 来自装备 PVF [grade] 字段，1=普通, 2=高级, 3=稀有。
+        // durIndex: 商城档位 (product.Count), 1=7天, 2=30天, 3=永久(无期限)。
+        // couponId: PVF stackable 物品 ID, 对应客户端背包中的兑换券道具, 需与客户端约定一致。
+        //
+        // 设计要点:
+        //   稀有装扮(grade=3)仅开放永久兑换(durIndex=3), 因为稀有兑换券只有一种;
+        //   TryGetAvatarCouponId 中对 grade=3 且 durIndex≠3 的情况会显式拒绝。
+        //   此表为静态只读, 兑换券 ID 固定不变, 无运行时并发写入风险。
+        private static readonly Dictionary<int, Dictionary<int, int>> AvatarCouponTable = new()
+        {
+            { 1, new() { { 1, 2681588 }, { 2, 2681589 }, { 3, 2681590 } } }, // 普通
+            { 2, new() { { 1, 2681591 }, { 2, 2681592 }, { 3, 2681593 } } }, // 高级
+            { 3, new() { { 3, 2681594 } } },                                   // 稀有(仅永久)
+        };
 
         private struct CeraShopPaymentPlan
         {
@@ -98,6 +118,60 @@ namespace DfoServer.Game.Inventory
             CurrencyService.UpdateCera(connection, transaction, characterId, plan.NewCera);
             CurrencyService.UpdateTokenCera(connection, transaction, characterId, plan.NewTokenCera);
             CurrencyService.UpdateHappyTokenCera(connection, transaction, characterId, plan.NewHappyTokenCera);
+        }
+
+        // ============================================================
+        // 兑换券扣减: 与 ApplyCeraShopPayment 在同一事务内执行
+        // ============================================================
+        // 若 couponItemUid>0, 则扣减1个兑换券:
+        //   - 扣后栈数>0 → UpdateStackCount
+        //   - 扣后栈数=0 → DeleteItem (整行删除)
+        // 此方法必须在 ApplyCeraShopPayment 之后调用, 确保事务内顺序为:
+        //   1) ComputeCeraShopPayment (计算不扣费)
+        //   2) ApplyCeraShopPayment (扣点券, 若 paymentMode=0)
+        //   3) DeductCouponIfNeeded (扣兑换券, 若 paymentMode=1)
+        // 若任意步骤失败, 事务回滚, 已扣点券/已扣兑换券均回滚。
+        private void DeductCouponIfNeeded(SqliteConnection connection, SqliteTransaction transaction, long couponItemUid, int couponNewStackCount)
+        {
+            if (couponItemUid <= 0)
+                return;
+            if (couponNewStackCount > 0)
+                _db.UpdateStackCount(connection, transaction, couponItemUid, couponNewStackCount);
+            else
+                _db.DeleteItem(connection, transaction, couponItemUid);
+        }
+
+        // ============================================================
+        // 根据装扮等级+期限查找对应兑换券 ID
+        // ============================================================
+        // grade: 物品 PVF [grade] 字段值 (1=普通, 2=高级, 3=稀有)
+        // durIndex: 商城档位 (product.Count, 1=7天, 2=30天, 3=永久)
+        //
+        // 安全约束:
+        //   - 稀有装扮(grade=3)仅允许永久兑换券(durIndex=3), 因为稀有兑换券只有一种 ID(2681594)。
+        //   - 若 AvatarCouponTable 中无对应映射, 返回 false 并记录日志, 购买流程终止。
+        //   - 此映射表为静态只读, 无并发写入风险。
+        private static bool TryGetAvatarCouponId(int grade, int durIndex, out int couponId)
+        {
+            couponId = 0;
+
+            // 稀有装扮(durIndex 非 3/永久时报错)
+            if (grade == 3)
+            {
+                if (durIndex != 3)
+                {
+                    FileLogger.Log($"  [CeraShopBuy] REJECT: rare avatar only supports permanent coupon, grade={grade} durIndex={durIndex}");
+                    return false;
+                }
+                couponId = 2681594;
+                return true;
+            }
+
+            if (AvatarCouponTable.TryGetValue(grade, out var durMap) && durMap.TryGetValue(durIndex, out couponId))
+                return true;
+
+            FileLogger.Log($"  [CeraShopBuy] REJECT: no coupon for grade={grade} durIndex={durIndex}");
+            return false;
         }
 
         public bool TryBuyItem(SqliteConnection connection, SqliteTransaction transaction, int characterId, int accountId, int itemTemplateId, int buyCount, out InventoryMutationResult result)
@@ -281,7 +355,7 @@ namespace DfoServer.Game.Inventory
                         SlotIndex = existingItem.SlotIndex,
                         ItemTemplateId = itemTemplateId,
                         RemainingStackCount = newStackCount,
-                        InstanceValue = newStackCount,
+                        InstanceValue = buyCount,
                         Durability = 0,
                         UpdatedGold = updGold,
                         UpdatedSp = walletCheck.Sp,
@@ -422,7 +496,7 @@ namespace DfoServer.Game.Inventory
             return true;
         }
 
-        public bool TryBuyCeraShopItem(SqliteConnection connection, SqliteTransaction transaction, int characterId, int accountId, int productId, int buyCount, out InventoryMutationResult result)
+       public bool TryBuyCeraShopItem(SqliteConnection connection, SqliteTransaction transaction, int characterId, int accountId, int productId, int buyCount, int paymentMode, int attributeValue, out InventoryMutationResult result)
         {
             result = null;
             FileLogger.Log($"  [CeraShopBuy] clientProductId=0x{productId:X8} ({productId}) buyCount={buyCount}");
@@ -496,15 +570,75 @@ namespace DfoServer.Game.Inventory
                 : CeraShopProductCatalog.IsBuyOnlyCeraPoint(itemTemplateId) ? CeraPayMode.OnlyCeraPoint
                 : CeraPayMode.Default;
 
+            // ============================================================
+            // 兑换券支付分支 (paymentMode == 1)
+            // ============================================================
+            // 与点券支付互斥:
+            //   - 通过 TryGetAvatarCouponId 根据装扮等级+期限查到兑换券 ID。
+            //   - 在角色背包中查找该兑换券是否存在, 不存在则拒绝交易。
+            //   - 将 totalCeraCost 和 ceraPrice 置零, 后续 ComputeCeraShopPayment
+            //     传入 ceraCost=0, 因此不会扣任何点券, ComputeCeraShopPayment 必然 Ok。
+            //     这样保证了兑换券支付与点券支付走同一套 ComputeCeraShopPayment + ApplyCeraShopPayment
+            //     流程, 仅在兑换券扣减时走 DeductCouponIfNeeded, 两条路径互不干扰。
+            //   - 兑换券扣减 (DeductCouponIfNeeded) 与 ApplyCeraShopPayment 在同一事务内,
+            //     任一步骤失败整体回滚, 不会出现"券已扣但装扮未发"。
+            var couponItemUid = 0L;
+            var couponSlotIndex = (short)0;
+            var couponNewStackCount = 0;
+            var couponId = 0;
+            if (paymentMode == 1)
+            {
+                var durIndex = product.Count;
+                if (!TryGetAvatarCouponId(metadata.Grade, durIndex, out couponId))
+                {
+                    FileLogger.Log($"  [CeraShopBuy] REJECT: couponId not resolved, grade={metadata.Grade} durIndex={durIndex} product=0x{productId:X8}");
+                    return false;
+                }
+                // 置零点券消耗, 兑换券抵扣不涉及 Cera 扣减。后文 ComputeCeraShopPayment 收到 ceraCost=0 必然 Ok。
+                totalCeraCost = 0;
+                ceraPrice = 0;
+                // 在主背包中查找兑换券道具。兑换券是可堆叠的 stackable 物品, 栈数>0 即存在。
+                var couponItem = _db.FindItemByTemplateId(connection, transaction, characterId, InventoryListType.Main, couponId);
+                if (couponItem == null)
+                {
+                    FileLogger.Log($"  [CeraShopBuy] REJECT: no avatar coupon (0x{couponId:X8}) in inventory, product=0x{productId:X8}");
+                    return false;
+                }
+                couponItemUid = couponItem.ItemUid;
+                couponSlotIndex = couponItem.SlotIndex;
+                couponNewStackCount = couponItem.StackCount - 1;
+            }
+
             var wallet = _db.LoadWallet(connection, transaction, characterId);
             var plan = ComputeCeraShopPayment(wallet, totalGoldCost, totalCeraCost, ceraMode);
-            FileLogger.Log($"  [CeraShopBuy] product=0x{productId:X8} -> item=0x{itemTemplateId:X8} section={product.Section} kind={itemKind} count={effectiveCount} gold={totalGoldCost} cera={totalCeraCost} mode={ceraMode} wallet(g={wallet.Gold},c={wallet.Coin},t={wallet.TokenCera},h={wallet.HappyTokenCera}) ok={plan.Ok}");
+            FileLogger.Log($"  [CeraShopBuy] product=0x{productId:X8} -> item=0x{itemTemplateId:X8} section={product.Section} kind={itemKind} count={effectiveCount} gold={totalGoldCost} cera={totalCeraCost} mode={ceraMode} payMode={paymentMode} wallet(g={wallet.Gold},c={wallet.Coin},t={wallet.TokenCera},h={wallet.HappyTokenCera}) ok={plan.Ok}");
             if (!plan.Ok)
             {
                 FileLogger.Log($"  [CeraShopBuy] REJECT: insufficient funds gold={totalGoldCost} cera={totalCeraCost} mode={ceraMode}");
                 return false;
             }
             var goldSpent = totalGoldCost > 0;
+
+            if (Premium.PremiumCatalog.Load().TryGetValue(itemTemplateId, out _, out _))
+            {
+                ApplyCeraShopPayment(connection, transaction, characterId, plan);
+                _auditLogger.WriteBuyAuditLog(connection, transaction, characterId, itemTemplateId, 0, totalGoldCost, totalCeraCost);
+                result = new InventoryMutationResult
+                {
+                    ItemTemplateId = itemTemplateId,
+                    ConsumedOnPurchase = true,
+                    UpdatedGold = plan.NewGold,
+                    UpdatedSp = wallet.Sp,
+                    UpdatedCoin = plan.NewCera,
+                    UpdatedTokenCera = plan.NewTokenCera,
+                    UpdatedHappyTokenCera = plan.NewHappyTokenCera,
+                    GoldSpent = goldSpent,
+                    RequestedCount = 1,
+                    AppliedCount = 1,
+                };
+                FileLogger.Log($"  [CeraShopBuy] premium item consumed on purchase: item=0x{itemTemplateId:X8}");
+                return true;
+            }
 
             if (InventoryPackageStore.TryResolveMallAutoOpenRewards(itemTemplateId, out var autoOpenRewards))
             {
@@ -527,19 +661,29 @@ namespace DfoServer.Game.Inventory
                     return false;
 
                 ApplyCeraShopPayment(connection, transaction, characterId, plan);
+                DeductCouponIfNeeded(connection, transaction, couponItemUid, couponNewStackCount);
                 _auditLogger.WriteBuyAuditLog(connection, transaction, characterId, itemTemplateId, 0, totalGoldCost, totalCeraCost);
                 foreach (var rewardResult in openedResults)
                     _auditLogger.WriteBuyAuditLog(connection, transaction, characterId, rewardResult.ItemTemplateId, rewardResult.SlotIndex, 0, 0);
 
                 result = openedResults[0];
+                if (couponItemUid > 0)
+                {
+                    result.ExtraResults.Add(new InventoryMutationResult
+                    {
+                        ListType = InventoryListType.Main,
+                        SlotIndex = couponSlotIndex,
+                        ItemTemplateId = couponId,
+                        RemainingStackCount = couponNewStackCount,
+                        InstanceValue = couponNewStackCount,
+                    });
+                }
                 result.UpdatedGold = plan.NewGold;
                 result.UpdatedSp = wallet.Sp;
                 result.UpdatedCoin = plan.NewCera;
                 result.UpdatedTokenCera = plan.NewTokenCera;
                 result.UpdatedHappyTokenCera = plan.NewHappyTokenCera;
                 result.GoldSpent = goldSpent;
-                result.RequestedCount = (short)Math.Min(short.MaxValue, effectiveCount);
-                result.AppliedCount = (short)Math.Min(short.MaxValue, effectiveCount);
                 for (var i = 1; i < openedResults.Count; i++)
                     result.ExtraResults.Add(openedResults[i]);
 
@@ -565,6 +709,7 @@ namespace DfoServer.Game.Inventory
                     else
                         _db.UpdateStackCount(connection, transaction, existingItem.ItemUid, newStackCount);
                     ApplyCeraShopPayment(connection, transaction, characterId, plan);
+                    DeductCouponIfNeeded(connection, transaction, couponItemUid, couponNewStackCount);
                     _auditLogger.WriteBuyAuditLog(connection, transaction, characterId, itemTemplateId, existingItem.SlotIndex, totalGoldCost, totalCeraCost);
 
                     result = new InventoryMutationResult
@@ -584,6 +729,17 @@ namespace DfoServer.Game.Inventory
                         RequestedCount = (short)effectiveCount,
                         AppliedCount = (short)effectiveCount,
                     };
+                    if (couponItemUid > 0)
+                    {
+                        result.ExtraResults.Add(new InventoryMutationResult
+                        {
+                            ListType = InventoryListType.Main,
+                            SlotIndex = couponSlotIndex,
+                            ItemTemplateId = couponId,
+                            RemainingStackCount = couponNewStackCount,
+                            InstanceValue = couponNewStackCount,
+                        });
+                    }
                     return true;
                 }
             }
@@ -654,7 +810,7 @@ namespace DfoServer.Game.Inventory
             var durability = (isAvatar || usesPetInventory) ? (ushort)0 : metadata.Durability;
             if (isAvatar)
             {
-                var avatarItem = SqliteInventoryStore.CreateDefaultAvatarItem((short)targetSlot, itemTemplateId, 0);
+                var avatarItem = SqliteInventoryStore.CreateDefaultAvatarItem((short)targetSlot, itemTemplateId, (byte)attributeValue);
                 _db.InsertCharacterItem(
                     connection,
                     transaction,
@@ -695,6 +851,7 @@ namespace DfoServer.Game.Inventory
             }
 
             ApplyCeraShopPayment(connection, transaction, characterId, plan);
+            DeductCouponIfNeeded(connection, transaction, couponItemUid, couponNewStackCount);
             _auditLogger.WriteBuyAuditLog(connection, transaction, characterId, itemTemplateId, (short)targetSlot, totalGoldCost, totalCeraCost);
 
             result = new InventoryMutationResult
@@ -714,6 +871,17 @@ namespace DfoServer.Game.Inventory
                 RequestedCount = (short)effectiveCount,
                 AppliedCount = (short)effectiveCount,
             };
+            if (couponItemUid > 0)
+            {
+                result.ExtraResults.Add(new InventoryMutationResult
+                {
+                    ListType = InventoryListType.Main,
+                    SlotIndex = couponSlotIndex,
+                    ItemTemplateId = couponId,
+                    RemainingStackCount = couponNewStackCount,
+                    InstanceValue = couponNewStackCount,
+                });
+            }
             return true;
         }
 

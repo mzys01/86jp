@@ -240,6 +240,12 @@ ORDER BY slot;";
                 // 卸下克隆装扮时清零 raw[12..15] 克隆目标
                 if (ItemMetadataResolver.IsCloneAvatarItem(removed.ItemId))
                   Array.Clear(removed.Raw, 12, 4);
+                var occupiedTarget = _db.LoadItemRecord(connection, transaction, characterId, dbSrcList, request.SourceSlotIndex);
+                if (occupiedTarget != null)
+                {
+                    FileLogger.Log($"  [EquipMove] UNEQUIP blocked: target container slot occupied list={dbSrcList} slot={request.SourceSlotIndex} item=0x{occupiedTarget.ItemTemplateId:X8} kind={occupiedTarget.ItemKind}");
+                    return EquipOutcome.NoOp;
+                }
                 entries.Remove(removed);
                 SaveEquipEntriesTx(connection, transaction, characterId, entries);
                 InsertEquipToContainer(connection, transaction, characterId, dbSrcList, request.SourceSlotIndex, removed.ItemId, removed.Raw, removed.ExpireTime);
@@ -250,6 +256,16 @@ ORDER BY slot;";
             {
                 int wantId = request.SourceInstanceValue;
                 var existing = entries.Find(e => e.Slot == equipSlot);
+                if (mainSource == null || (mainSource.ItemKind != "equipment" && mainSource.ItemKind != "avatar") || mainSource.ItemTemplateId != wantId)
+                {
+                    if (equipSlot == 12)
+                    {
+                        FileLogger.Log($"  [EquipMove] slot {equipSlot} source mismatch (称号 P2 反转包) want=0x{wantId:X8} found=0x{mainSource?.ItemTemplateId ?? 0:X8} -> ReverseError");
+                        return EquipOutcome.ReverseError;
+                    }
+                    FileLogger.Log($"  [EquipMove] EQUIP blocked: invalid source slot={request.SourceSlotIndex} want=0x{wantId:X8} found={(mainSource != null ? $"0x{mainSource.ItemTemplateId:X8}/{mainSource.ItemKind}" : "null")}");
+                    return EquipOutcome.NoOp;
+                }
                 if (equipSlot == 12 && existing != null && existing.ItemId == wantId)
                 {
                     FileLogger.Log($"  [EquipMove] slot {equipSlot} 已是 0x{wantId:X8} (称号 P2 反转包) -> ReverseError");
@@ -398,17 +414,13 @@ VALUES (@accountId, @selectionKey, @value32, @itemCount, CURRENT_TIMESTAMP);";
             }
         }
 
-        internal ushort CountAccountCargoItems(SqliteConnection connection, SqliteTransaction transaction, int characterId, int accountId)
+        internal ushort CountAccountCargoItems(SqliteConnection connection, SqliteTransaction transaction, int accountId)
         {
             using (var command = connection.CreateCommand())
             {
                 command.Transaction = transaction;
-                command.CommandText = @"
-SELECT COUNT(1)
-FROM character_items
-WHERE owner_scope = 'account' AND owner_id = @accountId AND list_type = @listType;";
+                command.CommandText = "SELECT COUNT(1) FROM account_cargo_items WHERE account_id = @accountId;";
                 command.Parameters.AddWithValue("@accountId", accountId);
-                command.Parameters.AddWithValue("@listType", (int)InventoryListType.AccountCargo);
                 return Convert.ToUInt16(Convert.ToInt32(command.ExecuteScalar(), CultureInfo.InvariantCulture), CultureInfo.InvariantCulture);
             }
         }
@@ -469,7 +481,7 @@ WHERE owner_scope = 'account' AND owner_id = @accountId AND list_type = @listTyp
             using (var cmd = connection.CreateCommand())
             {
                 cmd.Transaction = transaction;
-                cmd.CommandText = @"SELECT item_template_id, stack_count, durability, extra_json
+                cmd.CommandText = @"SELECT item_template_id, stack_count, durability, extra_json, item_kind, option_value
                                     FROM character_items WHERE character_id=@cid AND list_type=@lt AND slot_index=@si";
                 cmd.Parameters.AddWithValue("@cid", characterId);
                 cmd.Parameters.AddWithValue("@lt", (int)listType);
@@ -478,13 +490,17 @@ WHERE owner_scope = 'account' AND owner_id = @accountId AND list_type = @listTyp
                 {
                     if (!reader.Read()) return null;
                     var extraJson = reader.IsDBNull(3) ? "{}" : reader.GetString(3);
+                    var itemKind = reader.IsDBNull(4) ? "" : reader.GetString(4);
                     var prefix = InventoryItemCodec.ReadHexValue(extraJson, "prefixData0E", 8);
                     var tail = InventoryItemCodec.ReadHexValue(extraJson, "tailData2F", 37);
                     var jewelHex = InventoryItemCodec.ReadRawStringValue(extraJson, "jewelSocket");
+                    var durabilityFromDb = (ushort)reader.GetInt32(2);
+                    var isAvatar = string.Equals(itemKind, "avatar", StringComparison.Ordinal);
+                    var optionValue = Convert.ToByte(reader.GetInt32(5), CultureInfo.InvariantCulture);
                     var f = new MakeEquipListCodec.DisplayFields
                     {
                         InstanceValue = unchecked((uint)reader.GetInt32(1)),
-                        Durability = (ushort)reader.GetInt32(2),
+                        Durability = listType == InventoryListType.Avatar ? optionValue : durabilityFromDb,
                         Reinforce = (byte)InventoryItemCodec.ReadIntValue(extraJson, "extData0"),
                         Enchant = prefix.Length >= 4 ? BitConverter.ToUInt32(prefix, 0) : 0,
                         EnchantUpgradeCount = prefix.Length >= 5 ? prefix[4] : (byte)0,
@@ -531,7 +547,12 @@ WHERE owner_scope = 'account' AND owner_id = @accountId AND list_type = @listTyp
                     if (tail.Length > 27)
                         f.Forging = tail[27];
                     // jewelSocket
-                    if (!string.IsNullOrEmpty(jewelHex))
+                    if (isAvatar)
+                    {
+                        f.JewelSocket = SqliteInventoryStore.AvatarReservedToEquippedJewel(
+                            InventoryItemCodec.ReadHexValue(extraJson, "reserved2", 30));
+                    }
+                    else if (!string.IsNullOrEmpty(jewelHex))
                     {
                         f.JewelSocket = new byte[jewelHex.Length / 2];
                         for (int i = 0; i < f.JewelSocket.Length; i++)
@@ -566,6 +587,25 @@ WHERE owner_scope = 'account' AND owner_id = @accountId AND list_type = @listTyp
                 var f = MakeEquipListCodec.ParseDisplayFields(entryRaw);
                 dur = f.Durability;
                 countOrIv = unchecked((int)f.InstanceValue);
+                if (listType == InventoryListType.Avatar)
+                {
+                    var avatar = new AvatarInventoryItem
+                    {
+                        SlotIndex = slot,
+                        AvatarItemId = itemId,
+                        OptionValue = ResolveAvatarOptionValue(f),
+                        UnknownFixed30 = SqliteInventoryStore.DefaultAvatarUnknownFixed30,
+                        UnknownFixed4 = SqliteInventoryStore.DefaultAvatarUnknownFixed4,
+                        Reserved2 = SqliteInventoryStore.EquippedJewelToAvatarReserved(f.JewelSocket),
+                    };
+                    _db.InsertCharacterItem(
+                        connection, transaction, characterId, listType, slot, itemId, "avatar",
+                        stackCount: 0, instanceValue: 0, durability: 0, sealFlag: 0, optionValue: avatar.OptionValue,
+                        expireTime: 0, marker16: avatar.UnknownFixed30, petSerialOrHandle: 0,
+                        extraJson: InventoryItemCodec.SerializeAvatar(avatar));
+                    return;
+                }
+
                 var prefix = new byte[8];
                 BitConverter.GetBytes(f.Enchant).CopyTo(prefix, 0);
                 prefix[4] = f.EnchantUpgradeCount;
@@ -598,9 +638,17 @@ WHERE owner_scope = 'account' AND owner_id = @accountId AND list_type = @listTyp
                     + "\",\"tailData2F\":\"" + BitConverter.ToString(tail).Replace("-", "") + "\""
                     + jewelJson + "}";
             }
+            byte ov = (byte)(listType == InventoryListType.Avatar ? dur : 0);
             _db.InsertCharacterItem(connection, transaction, characterId, listType, slot, itemId, "equipment",
-                stackCount: countOrIv, instanceValue: 0, durability: dur, sealFlag: 0, optionValue: 0,
+                stackCount: countOrIv, instanceValue: 0, durability: dur, sealFlag: 0, optionValue: ov,
                 expireTime: expireTime, marker16: -1, petSerialOrHandle: 0, extraJson: extraJson);
+            FileLogger.Log($"  [InsertEquipToContainer] listType={listType} slot={slot} itemId=0x{itemId:X8} durability={dur} optionValue={ov}");
+        }
+
+        private static byte ResolveAvatarOptionValue(MakeEquipListCodec.DisplayFields fields)
+        {
+            var durabilityOption = unchecked((byte)(fields.Durability & 0xFF));
+            return durabilityOption != 0 ? durabilityOption : fields.Reinforce;
         }
 
         private static bool IsRentalRecord(int itemTemplateId, int expireTime, string seriesKey)

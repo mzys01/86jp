@@ -5,7 +5,7 @@ using System.IO;
 using DfoServer.GameWorld;
 using PvfLib;
 
-namespace DfoServer.Game.Inventory
+namespace DfoServer.Game.Shop
 {
     // 限时时装(avatar)的时长/价格档位, 取自时装 .equ 的 [avatar type select]:
     //   每档 7 个 token: 时长(0=无限) ? ? 点券价 ? ? ?

@@ -61,6 +61,8 @@ namespace DfoServer.Network
 
             if (string.IsNullOrWhiteSpace(serverIp))
                 serverIp = Environment.GetEnvironmentVariable("SERVER_IP");
+            if (string.IsNullOrWhiteSpace(serverIp))
+                serverIp = Environment.GetEnvironmentVariable("DFO_PUBLIC_SERVER_IP");
 
             if (!string.IsNullOrWhiteSpace(serverIp))
                 ServerIp = serverIp.Trim();

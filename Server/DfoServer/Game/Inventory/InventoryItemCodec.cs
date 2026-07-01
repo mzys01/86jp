@@ -25,6 +25,7 @@ namespace DfoServer.Game.Inventory
                 PrefixData0E = ReadHexValue(extraJson, "prefixData0E", 8),
                 MiddleData1A = ReadHexValue(extraJson, "middleData1A", 17),
                 TailData2F = ReadHexValue(extraJson, "tailData2F", 37),
+                JewelSocket = ReadHexValue(extraJson, "jewelSocket", 30),
             };
         }
 
@@ -74,6 +75,7 @@ namespace DfoServer.Game.Inventory
             buf[46] = (byte)((common.ExpireTime >> 24) & 0xFF);
             Array.Copy(common.TailData2F, 0, buf, 47, 37);
 
+            byte optionValue = buf[11];
             Array.Clear(buf, 6, 78);
             buf[84] = 0x1E;
             buf[118] = 0x04;
@@ -86,7 +88,7 @@ namespace DfoServer.Game.Inventory
                 SlotIndex = BitConverter.ToInt16(buf, 0),
                 AvatarItemId = BitConverter.ToInt32(buf, 2),
                 Reserved0 = CharacterItemListSnapshot.Slice(buf, 6, 5),
-                OptionValue = buf[11],
+                OptionValue = optionValue,
                 Reserved1 = CharacterItemListSnapshot.Slice(buf, 12, 71),
                 UnknownFixed30 = BitConverter.ToInt32(buf, 83),
                 Reserved2 = CharacterItemListSnapshot.Slice(buf, 87, 30),
@@ -124,6 +126,7 @@ namespace DfoServer.Game.Inventory
                 + ",\"prefixData0E\":\"" + ToHex(item.PrefixData0E) + "\""
                 + ",\"middleData1A\":\"" + ToHex(item.MiddleData1A) + "\""
                 + ",\"tailData2F\":\"" + ToHex(item.TailData2F) + "\""
+                + ",\"jewelSocket\":\"" + ToHex(item.JewelSocket) + "\""
                 + "}";
         }
 

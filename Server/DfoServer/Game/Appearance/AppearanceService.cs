@@ -42,7 +42,8 @@ namespace DfoServer.Game.Appearance
 
             foreach (var entry in addition.EquippedEntries)
             {
-                if (entry.Slot > 11) continue;
+                // 外观广播包含 slot 0-12（含称号 [title name]），真机抓包+PVF验证确认。
+                if (entry.Slot > 12) continue;
                 if (entry.ItemId == 0) continue;
 
                 int displayItemId = entry.ItemId;

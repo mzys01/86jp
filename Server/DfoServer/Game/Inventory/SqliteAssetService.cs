@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using Microsoft.Data.Sqlite;
+using DfoServer.Game.Currency;
 using DfoServer.Infrastructure;
 
 namespace DfoServer.Game.Inventory
@@ -42,7 +43,7 @@ namespace DfoServer.Game.Inventory
                         return _store.TryPickupItemCore(
                         scope.Connection, scope.Transaction,
                         scope.CharacterId, scope.AccountId,
-                        itemTemplateId, count, out assignedSlot, out int _);
+                        itemTemplateId, count, out assignedSlot);
                     }
 
                 default:

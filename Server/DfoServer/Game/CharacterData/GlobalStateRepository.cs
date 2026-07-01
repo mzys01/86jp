@@ -70,13 +70,13 @@ namespace DfoServer.Game.CharacterData
 
                         if (t.Command == 0x00 && t.Type == 0x0187)
                         {
-                            if (body.Length < 4)
-                                continue;
-                            var bitmap = new byte[body.Length - 4];
-                            Buffer.BlockCopy(body, 4, bitmap, 0, bitmap.Length);
-                            using (var cmd = new SqliteCommand("INSERT OR IGNORE INTO global_server_event_phase (id, event_phase_bitmap) VALUES (1, @b)", conn, tx))
+                            using (var cmd = new SqliteCommand(@"
+INSERT INTO character_init_flags (character_id, character_option_blob)
+VALUES (@cid, @body)
+ON CONFLICT(character_id) DO UPDATE SET character_option_blob = COALESCE(character_option_blob, @body)", conn, tx))
                             {
-                                cmd.Parameters.AddWithValue("@b", bitmap);
+                                cmd.Parameters.AddWithValue("@cid", characterId);
+                                cmd.Parameters.AddWithValue("@body", body);
                                 cmd.ExecuteNonQuery();
                             }
                         }

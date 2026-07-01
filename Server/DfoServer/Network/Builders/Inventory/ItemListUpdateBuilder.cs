@@ -17,7 +17,30 @@ namespace DfoServer.Network.Builders
             if (items != null)
             {
                 foreach (var item in items)
-                    ItemListPacketBuilder.WriteCommonEntry(writer, item);
+                    ItemListPacketBuilder.WriteCommonUpdateEntry(writer, item);
+            }
+
+            return writer.ToArray();
+        }
+
+        public static byte[] BuildCompactCommonUpdates(IReadOnlyList<InventoryMutationResult> items)
+        {
+            var writer = new GamePacketWriter();
+
+            writer.WriteByte(0x00);
+            writer.WriteUInt16((ushort)(items != null ? items.Count : 0));
+
+            if (items != null)
+            {
+                foreach (var item in items)
+                {
+                    var itemTemplateId = item.RemainingStackCount > 0 ? item.ItemTemplateId : 0;
+                    var remainingStackCount = item.RemainingStackCount > 0 ? item.RemainingStackCount : 0;
+                    writer.WriteInt16(item.SlotIndex);
+                    writer.WriteInt32(itemTemplateId);
+                    writer.WriteInt32(remainingStackCount);
+                    writer.WriteZeroBytes(0x4A);
+                }
             }
 
             return writer.ToArray();

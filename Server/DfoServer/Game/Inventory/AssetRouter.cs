@@ -1,3 +1,5 @@
+using DfoServer.Game.Currency;
+
 namespace DfoServer.Game.Inventory
 {
     public enum AssetStorage
