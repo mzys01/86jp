@@ -117,8 +117,10 @@ namespace DfoServer.Game.Inventory
                 
                 var baseSellPrice = equipment.Value >= 0 ? equipment.Value : buyGold;
                 var sellGold = Math.Max(1, baseSellPrice * SellRates.Value.Equipment / 1000);
-                // PVF 未声明 [durability] 的装备按无耐久处理。
-                var durability = equipment.Durability > 0 ? equipment.Durability : 0;
+                // 只有武器和防具有耐久度，其他装备类型（首饰/魔法石/称号/装扮/宠物等）无耐久。
+                var eqType = NormalizeEquipmentType(equipment.EquipmentType);
+                var hasDurability = equipment.Durability > 0 && HasDurabilityByType(eqType);
+                var durability = hasDurability ? equipment.Durability : 0;
 
                 return new ItemMetadata
                 {
@@ -519,6 +521,21 @@ namespace DfoServer.Game.Inventory
             }
 
             return result;
+        }
+
+        private static bool HasDurabilityByType(string normalizedType)
+        {
+            if (string.IsNullOrEmpty(normalizedType))
+                return false;
+            // 武器
+            if (normalizedType == "[weapon]" || normalizedType == "[support weapon]")
+                return true;
+            // 防具
+            if (normalizedType == "[coat]" || normalizedType == "[pants]"
+                || normalizedType == "[shoulder]" || normalizedType == "[shoes]"
+                || normalizedType == "[waist]")
+                return true;
+            return false;
         }
 
         private static string NormalizeEquipmentType(string raw)
