@@ -59,6 +59,12 @@ namespace DfoServer
                 return;
             }
 
+            if (Array.IndexOf(args, "--selftest-quest-item-flow") >= 0)
+            {
+                Environment.Exit(SelfTests.QuestItemFlowSelfTest.Run());
+                return;
+            }
+
             GameNetworkConfig.Configure(args);
 
             PacketFileLogger.Initialize();

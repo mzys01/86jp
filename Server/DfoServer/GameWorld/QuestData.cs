@@ -450,13 +450,97 @@ namespace DfoServer.GameWorld
             return qst != null ? ParseItemPairs(qst.DependGiveItem) : new List<QuestRewardItem>();
         }
 
+        public static List<QuestRewardItem> GetCarryForwardEventItems(int questId)
+        {
+            var eventItems = GetEventItems(questId);
+            if (eventItems.Count == 0)
+                return new List<QuestRewardItem>();
+
+            var carryForward = new Dictionary<int, int>();
+            var eventItemIds = new HashSet<int>();
+            foreach (var eventItem in eventItems)
+            {
+                if (eventItem.ItemId > 0 && eventItem.Count > 0)
+                    eventItemIds.Add(eventItem.ItemId);
+            }
+
+            if (eventItemIds.Count == 0)
+                return new List<QuestRewardItem>();
+
+            // Some [depend give item] entries seed the next quest instead of ending with this one.
+            // Keep only items required by a direct follow-up quest that does not give the item again.
+            foreach (var nextQuestId in Index.Value.OrderedIds)
+            {
+                if (nextQuestId == questId)
+                    continue;
+
+                var nextQuest = GetQuestFile(nextQuestId);
+                if (nextQuest == null)
+                    continue;
+
+                var preRequired = ParseIntList(nextQuest.PreRequiredQuest);
+                if (!preRequired.Contains(questId))
+                    continue;
+
+                var nextSeekItems = GetSeekingConsumeItems(nextQuestId);
+                if (nextSeekItems.Count == 0)
+                    continue;
+
+                var nextEventItems = GetEventItems(nextQuestId);
+                foreach (var eventItem in eventItems)
+                {
+                    if (eventItem.ItemId <= 0 || eventItem.Count <= 0)
+                        continue;
+
+                    bool nextNeedsItem = false;
+                    foreach (var nextSeekItem in nextSeekItems)
+                    {
+                        if (nextSeekItem.ItemId == eventItem.ItemId && nextSeekItem.Count > 0)
+                        {
+                            nextNeedsItem = true;
+                            break;
+                        }
+                    }
+
+                    if (!nextNeedsItem)
+                        continue;
+
+                    bool nextGivesItem = false;
+                    foreach (var nextEventItem in nextEventItems)
+                    {
+                        if (nextEventItem.ItemId == eventItem.ItemId && nextEventItem.Count > 0)
+                        {
+                            nextGivesItem = true;
+                            break;
+                        }
+                    }
+
+                    if (nextGivesItem)
+                        continue;
+
+                    int currentCount;
+                    if (!carryForward.TryGetValue(eventItem.ItemId, out currentCount) || currentCount < eventItem.Count)
+                        carryForward[eventItem.ItemId] = eventItem.Count;
+                }
+            }
+
+            var result = new List<QuestRewardItem>();
+            foreach (var pair in carryForward)
+                result.Add(new QuestRewardItem { ItemId = pair.Key, Count = pair.Value });
+            return result;
+        }
+
         public static List<QuestRewardItem> GetSeekingConsumeItems(int questId)
         {
             var qst = GetQuestFile(questId);
             if (qst == null) return new List<QuestRewardItem>();
             int typeCode = MapTypeString(qst.Type);
             if (typeCode != 0 && typeCode != 1) return new List<QuestRewardItem>();
-            return ParseItemPairs(qst.IntData);
+            if (IsSeekAndMeetNpcQuest(qst))
+                return ParseSeekAndMeetNpcItems(qst.IntData);
+            var items = ParseItemPairs(qst.IntData);
+            items.RemoveAll(item => item.ItemId <= 0 || item.Count <= 0);
+            return items;
         }
 
 
@@ -507,7 +591,7 @@ namespace DfoServer.GameWorld
                     }
                 }
 
-                var consumeItems = ParseItemPairs(qst.DependGiveItem);
+                var consumeItems = new List<QuestRewardItem>();
 
                 int growNumber = 0;
                 if (chainType == 1 || chainType == 2 || chainType == 20 || chainType == ChainTypeSlotExpansion)
@@ -584,6 +668,9 @@ namespace DfoServer.GameWorld
             int typeCode = MapTypeString(qst.Type);
             string typeStr = (qst.Type ?? "").Trim().ToLowerInvariant();
 
+            if (IsSeekAndMeetNpcQuest(qst))
+                return ComputeSeekAndMeetNpcInitTrigger(qst.IntData);
+
             if (typeCode == 2 || typeCode == 6)
                 return ComputeTriggerFromIntData(qst.IntData, typeCode);
 
@@ -604,6 +691,53 @@ namespace DfoServer.GameWorld
             }
 
             return 1;
+        }
+
+        internal static uint ReplaceTriggerChannel(uint trigger, int channelIndex, long value)
+        {
+            int shift = channelIndex * 9;
+            if (shift < 0 || shift > 18)
+                return trigger;
+
+            uint channelValue;
+            if (value <= 0)
+                channelValue = 0;
+            else if (value > 0x1FF)
+                channelValue = 0x1FF;
+            else
+                channelValue = (uint)value;
+
+            return (trigger & ~(0x1FFu << shift)) | (channelValue << shift);
+        }
+
+        internal static bool IsSeekAndMeetNpcQuest(int questId)
+        {
+            return IsSeekAndMeetNpcQuest(GetQuestFile(questId));
+        }
+
+        private static bool IsSeekAndMeetNpcQuest(QuestFile qst)
+        {
+            return NormalizeQuestTag(qst?.Type) == "seek n meet npc";
+        }
+
+        private static uint ComputeSeekAndMeetNpcInitTrigger(string intData)
+        {
+            var values = ParseIntList(intData);
+            if (values.Count < 3)
+                return 1;
+
+            int itemCount = values[1] > 0 ? values[1] : 1;
+            int meetNpcCount = values[2] > 0 ? 1 : 0;
+            return PackTrigger(itemCount, meetNpcCount, 0);
+        }
+
+        private static List<QuestRewardItem> ParseSeekAndMeetNpcItems(string intData)
+        {
+            var values = ParseIntList(intData);
+            var result = new List<QuestRewardItem>();
+            if (values.Count >= 2 && values[0] > 0 && values[1] > 0)
+                result.Add(new QuestRewardItem { ItemId = values[0], Count = values[1] });
+            return result;
         }
 
         private static uint ComputeTriggerFromIntData(string intData, int typeCode)
