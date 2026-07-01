@@ -1,4 +1,5 @@
 using DfoServer.Game.Inventory;
+using DfoServer.Game.SelectCharacter;
 using DfoServer.Network.Builders;
 using DfoServer.Network.Parsers.Inventory;
 using System;
@@ -24,19 +25,90 @@ namespace DfoServer.Network.Handlers
 
             var (cid, aid) = ResolveOwner(session);
 
-            if (!_sqliteSelectCharacterDataSource.TryDeleteItem(cid, aid, listType, slotIndex, 1, out var result))
+            var consumed = _sqliteSelectCharacterDataSource.TryDeleteItem(cid, aid, listType, slotIndex, 1, out var result);
+            var responsePlan = BuildUseStackableResponsePlan(consumed, result, listType, slotIndex, instanceValue, itemCode);
+            if (!consumed)
             {
-                FileLogger.Log($"[{ProtocolName}] USE_STACKABLE: failed to consume item 0x{itemCode:X8} at listType={listType} slot={slotIndex}");
-                var errBody = UseStackableAckBuilder.BuildError((byte)listType, itemCode, instanceValue);
-                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x002C, errBody));
+                FileLogger.Log(responsePlan.StalePetConsumable
+                    ? $"[{ProtocolName}] USE_STACKABLE: stale pet consumable use acknowledged item 0x{itemCode:X8} at listType={listType} slot={slotIndex}"
+                    : $"[{ProtocolName}] USE_STACKABLE: failed to consume item 0x{itemCode:X8} at listType={listType} slot={slotIndex}");
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x002C, responsePlan.AckBody));
                 return;
             }
 
+            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x002C, responsePlan.AckBody));
+            if (responsePlan.ItemListUpdateBody != null)
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000E, responsePlan.ItemListUpdateBody));
 
-            var ackBody = UseStackableAckBuilder.BuildSuccess(slotIndex, (byte)listType, instanceValue, itemCode);
-            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x002C, ackBody));
+            if (result.PetSatietyChanged)
+            {
+                var creatureStateBody = BuildCreatureStateRefreshBody(cid, result.PetCreatureKey);
+                if (creatureStateBody != null)
+                    await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0067, creatureStateBody));
 
-            FileLogger.Log($"[{ProtocolName}] USE_STACKABLE: consumed 1x item 0x{itemCode:X8} from slot {slotIndex}, remaining={result.RemainingStackCount}");
+                var creatureListBody = BuildCreatureListRefreshBody(cid);
+                if (creatureListBody != null)
+                    await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0069, creatureListBody));
+            }
+
+            var petSatietyLog = result.PetSatietyChanged
+                ? $" petSatiety key={result.PetCreatureKey} {result.PetSatietyBefore}->{result.PetSatietyAfter}"
+                : string.Empty;
+            FileLogger.Log($"[{ProtocolName}] USE_STACKABLE: consumed 1x item 0x{itemCode:X8} from slot {slotIndex}, remaining={result.RemainingStackCount}{petSatietyLog}");
+        }
+
+        internal static UseStackableResponsePlan BuildUseStackableResponsePlan(
+            bool consumed,
+            InventoryMutationResult result,
+            InventoryListType listType,
+            short slotIndex,
+            int instanceValue,
+            int itemCode)
+        {
+            var stalePetConsumable = !consumed && IsPetConsumableSlot(listType, slotIndex);
+            var ackBody = consumed || stalePetConsumable
+                ? UseStackableAckBuilder.BuildSuccess(slotIndex, (byte)listType, instanceValue, itemCode)
+                : UseStackableAckBuilder.BuildError((byte)listType, itemCode, instanceValue);
+
+            return new UseStackableResponsePlan
+            {
+                AckBody = ackBody,
+                ItemListUpdateBody = null,
+                StalePetConsumable = stalePetConsumable,
+            };
+        }
+
+        internal byte[] BuildCreatureListRefreshBody(int characterId)
+        {
+            var snapshot = new SelectCharacterDataSnapshot();
+            snapshot.InitializationSnapshot.CreatureItemList = _sqliteSelectCharacterDataSource.LoadCreatureItemListSnapshot(characterId);
+            return new CreatureListBodyBuilder().TryBuild(snapshot, 0, out var body) ? body : null;
+        }
+
+        internal byte[] BuildCreatureStateRefreshBody(int characterId, int creatureKey)
+        {
+            if (creatureKey <= 0)
+                return null;
+
+            var snapshot = _sqliteSelectCharacterDataSource.LoadCreatureItemListSnapshot(characterId);
+            var entry = snapshot.Entries.FirstOrDefault(x => x.CreatureKey == creatureKey);
+            return entry != null ? CreatureListBodyBuilder.BuildCreatureStateBody(entry) : null;
+        }
+
+        private static bool IsPetConsumableSlot(InventoryListType listType, short slotIndex)
+        {
+            return listType == InventoryListType.Pet
+                && slotIndex >= SqliteInventoryStore.PetConsumableSlotStart
+                && slotIndex <= SqliteInventoryStore.PetConsumableSlotEnd;
+        }
+
+        internal sealed class UseStackableResponsePlan
+        {
+            public byte[] AckBody { get; set; }
+
+            public byte[] ItemListUpdateBody { get; set; }
+
+            public bool StalePetConsumable { get; set; }
         }
 
         public async Task Handle_OPEN_AVATAR_PACKAGE(EnhancedClientSession session, GamePacketHeader header, byte[] body)

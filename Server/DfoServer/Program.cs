@@ -29,6 +29,12 @@ namespace DfoServer
                 return;
             }
 
+            if (Array.IndexOf(args, "--selftest-pet-consumable") >= 0)
+            {
+                Environment.Exit(SelfTests.PetConsumableSelfTest.Run());
+                return;
+            }
+
             if (Array.IndexOf(args, "--selftest-dungeon-map-fallback") >= 0)
             {
                 Environment.Exit(SelfTests.DungeonMapFallbackSelfTest.Run());
