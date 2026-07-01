@@ -5,6 +5,7 @@ using DfoServer.Network.Builders.CeraShop;
 using DfoServer.Network.Handlers;
 using DfoServer.Network.Parsers.Inventory;
 using Microsoft.Data.Sqlite;
+using PvfLib;
 using System;
 using System.Globalization;
 using System.IO;
@@ -25,6 +26,7 @@ namespace DfoServer.SelfTests
         private const short MagicBoxSlot = 106;
         private const short MagicHammerSlot = 173;
         private const short RelocatedSeriaLuckSlot = 112;
+        private const short LegacyNoExpireTimedRewardSlot = 119;
         // These are PVF sample IDs used only to exercise generic package paths.
         // Production logic resolves package/reward data from PVF, not from these constants.
         private const int SampleTitleSelectablePackageId = 10007993;
@@ -209,6 +211,59 @@ namespace DfoServer.SelfTests
 
             var store = new SqliteInventoryStore(tempDb, ServerPaths.SchemaFilePath);
             SeedCharacterAndPackages(tempDb);
+
+            var seriaLuckTimedRewardId = FindTimedSeriaLuckRewardId(out var timedRewardUsablePeriod);
+            Check("Seria luck PVF contains a usable-period reward", seriaLuckTimedRewardId > 0 && timedRewardUsablePeriod > 0);
+            if (seriaLuckTimedRewardId > 0 && timedRewardUsablePeriod > 0)
+            {
+                InsertLegacyNoExpireTimedReward(tempDb, seriaLuckTimedRewardId, LegacyNoExpireTimedRewardSlot);
+                var nowBefore = DateTimeOffset.Now.ToUnixTimeSeconds();
+                BoosterRewardResult timedRewardResult = null;
+                using (var connection = new SqliteConnection(SqliteDatabaseBootstrap.BuildConnectionString(tempDb)))
+                {
+                    connection.Open();
+                    using (var transaction = connection.BeginTransaction())
+                    {
+                        var db = new InventoryDbPrimitives();
+                        Check("add Seria luck timed booster reward succeeds",
+                            db.TryAddBoosterRewardItem(
+                                connection,
+                                transaction,
+                                CharacterId,
+                                AccountId,
+                                seriaLuckTimedRewardId,
+                                1,
+                                out timedRewardResult));
+                        transaction.Commit();
+                    }
+                }
+
+                using (store.BeginScope(CharacterId, AccountId))
+                {
+                    var snapshot = store.LoadCharacterItemListSnapshot();
+                    var expectedMinExpire = nowBefore + (long)timedRewardUsablePeriod * 86400L - 5;
+                    var expectedMaxExpire = DateTimeOffset.Now.ToUnixTimeSeconds() + (long)timedRewardUsablePeriod * 86400L + 5;
+                    var legacyRow = snapshot.MainItems.Find(x =>
+                        x.SlotIndex == LegacyNoExpireTimedRewardSlot &&
+                        x.ItemTemplateId == seriaLuckTimedRewardId);
+                    var futureRow = snapshot.MainItems.Find(x =>
+                        x.ItemTemplateId == seriaLuckTimedRewardId &&
+                        x.ExpireTime >= expectedMinExpire &&
+                        x.ExpireTime <= expectedMaxExpire);
+
+                    Check("legacy no-expire Seria luck reward stack remains separate",
+                        legacyRow != null &&
+                        legacyRow.CountOrInstanceValue == 1 &&
+                        legacyRow.ExpireTime == 0);
+                    Check("Seria luck timed reward stores future expire_time",
+                        futureRow != null &&
+                        futureRow.CountOrInstanceValue == 1);
+                    Check("Seria luck timed reward result points to future stack",
+                        timedRewardResult != null &&
+                        futureRow != null &&
+                        timedRewardResult.SlotIndex == futureRow.SlotIndex);
+                }
+            }
 
             SelectablePackageOpenResult result = null;
             using (store.BeginScope(CharacterId, AccountId))
@@ -676,6 +731,63 @@ VALUES
                 CultureInfo.InvariantCulture);
             var offset = new DateTimeOffset(localDateTime, TimeZoneInfo.Local.GetUtcOffset(localDateTime));
             return (int)offset.ToUnixTimeSeconds();
+        }
+
+        private static int FindTimedSeriaLuckRewardId(out int usablePeriod)
+        {
+            usablePeriod = 0;
+            var seriaLuck = InventoryDbPrimitives.LoadStackableItem(SeriaLuckItemTemplateId);
+            if (seriaLuck == null)
+                return 0;
+
+            var pools = new[]
+            {
+                seriaLuck.RandomBoxRewards,
+                seriaLuck.BoosterRewards,
+                seriaLuck.PackageRewards,
+                seriaLuck.BoosterSelectionRewards,
+            };
+
+            foreach (var pool in pools)
+            {
+                foreach (var reward in pool)
+                {
+                    if (reward == null || reward.ItemId <= 0)
+                        continue;
+
+                    var rewardStackable = InventoryDbPrimitives.LoadStackableItem(reward.ItemId);
+                    if (rewardStackable == null || rewardStackable.UsablePeriod <= 0)
+                        continue;
+
+                    usablePeriod = rewardStackable.UsablePeriod;
+                    return reward.ItemId;
+                }
+            }
+
+            return 0;
+        }
+
+        private static void InsertLegacyNoExpireTimedReward(string databasePath, int itemTemplateId, short slotIndex)
+        {
+            using (var connection = new SqliteConnection(SqliteDatabaseBootstrap.BuildConnectionString(databasePath)))
+            {
+                connection.Open();
+                using (var command = connection.CreateCommand())
+                {
+                    command.CommandText = @"
+INSERT OR REPLACE INTO character_items (
+    owner_scope, owner_id, character_id, list_type, slot_index, item_template_id, item_kind,
+    stack_count, instance_value, durability, seal_flag, option_value, expire_time, marker_16,
+    pet_serial_or_handle, extra_json)
+VALUES (
+    'character', @characterId, @characterId, 0, @slotIndex, @itemTemplateId, 'stackable',
+    1, 1, 0, 0, 0, 0, 0, 0, '{}');";
+                    command.Parameters.AddWithValue("@characterId", CharacterId);
+                    command.Parameters.AddWithValue("@slotIndex", slotIndex);
+                    command.Parameters.AddWithValue("@itemTemplateId", itemTemplateId);
+                    command.ExecuteNonQuery();
+                }
+            }
         }
 
         private static (bool Exists, string ItemKind, int Marker16) LoadItemRow(SqliteConnection connection, int itemTemplateId)
