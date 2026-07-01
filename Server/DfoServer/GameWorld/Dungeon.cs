@@ -261,6 +261,8 @@ namespace DfoServer.GameWorld
         }
 
         private static readonly Random _mazeRng = new Random();
+        private static readonly Regex MapCoordinateFileNameRegex =
+            new Regex(@"\((?<x>-?\d+)[,.](?<y>-?\d+)\)", RegexOptions.Compiled);
         private static readonly Lazy<Dictionary<int, bool>> _monsterHellFlags =
             new Lazy<Dictionary<int, bool>>(() => LoadHellMonsterFlags("monster/monster.lst", "monster"));
         private static readonly Lazy<Dictionary<int, bool>> _aiCharacterHellFlags =
@@ -1325,6 +1327,42 @@ namespace DfoServer.GameWorld
                 }
             }
 
+            // Some PVFs omit ordinary rooms from [map specification] and keep a
+            // generic maze(x,y) map in the same directory. Use that PVF template
+            // before unrelated specs so a boss-only spec cannot fill normal rooms.
+            var mazeTemplateMapId = FindNearestCoordinateMapId(
+                mapEntries,
+                mapDirCandidates,
+                x,
+                y,
+                requireMazeTemplateName: true,
+                allowBossVariant: false,
+                allowQuestVariant: false,
+                out var mazeTemplateReason);
+            if (mazeTemplateMapId > 0)
+            {
+                reason = mazeTemplateReason;
+                return mazeTemplateMapId;
+            }
+
+            // Without a shared maze template, use nearby ordinary coordinate maps
+            // by filename. This stays below exact map-spec/name matches, but above
+            // the old "first map spec" fallback that can point at an unrelated room.
+            var coordinateMapId = FindNearestCoordinateMapId(
+                mapEntries,
+                mapDirCandidates,
+                x,
+                y,
+                requireMazeTemplateName: false,
+                allowBossVariant: false,
+                allowQuestVariant: false,
+                out var coordinateReason);
+            if (coordinateMapId > 0)
+            {
+                reason = coordinateReason;
+                return coordinateMapId;
+            }
+
             if (mapSpecifications != null)
             {
                 for (var i = 0; i < mapSpecifications.Count; i++)
@@ -1358,6 +1396,68 @@ namespace DfoServer.GameWorld
             }
 
             return -1;
+        }
+
+        private static int FindNearestCoordinateMapId(
+            IReadOnlyList<LstEntry> mapEntries,
+            IReadOnlyList<string> mapDirCandidates,
+            int x,
+            int y,
+            bool requireMazeTemplateName,
+            bool allowBossVariant,
+            bool allowQuestVariant,
+            out string reason)
+        {
+            reason = string.Empty;
+            if (mapEntries == null)
+                return -1;
+
+            var bestId = -1;
+            var bestX = 0;
+            var bestY = 0;
+            var bestDistance = int.MaxValue;
+            var bestAxisScore = int.MinValue;
+
+            for (var i = 0; i < mapEntries.Count; i++)
+            {
+                var entry = mapEntries[i];
+                if (entry == null || !InMapDirCandidate(entry.FilePath, mapDirCandidates))
+                    continue;
+
+                var fileName = Path.GetFileName(entry.FilePath);
+                if (!allowQuestVariant && IsQuestVariantFileName(fileName))
+                    continue;
+                if (!allowBossVariant && IsBossVariantFileName(fileName))
+                    continue;
+                if (requireMazeTemplateName && !IsMazeTemplateFileName(fileName))
+                    continue;
+                if (!TryParseMapFileCoordinate(fileName, out var mapX, out var mapY))
+                    continue;
+
+                // Prefer closer PVF coordinates, then same-row/same-column matches,
+                // then the smaller map id so repeated fallback is deterministic.
+                var distance = Math.Abs(mapX - x) + Math.Abs(mapY - y);
+                var axisScore = (mapX == x ? 1 : 0) + (mapY == y ? 1 : 0);
+                if (bestId > 0
+                    && (distance > bestDistance
+                        || (distance == bestDistance && axisScore < bestAxisScore)
+                        || (distance == bestDistance && axisScore == bestAxisScore && entry.Id >= bestId)))
+                    continue;
+
+                bestId = entry.Id;
+                bestX = mapX;
+                bestY = mapY;
+                bestDistance = distance;
+                bestAxisScore = axisScore;
+            }
+
+            if (bestId <= 0)
+                return -1;
+
+            reason = requireMazeTemplateName
+                ? $"nearest maze coordinate map ({bestX},{bestY})"
+                : $"nearest coordinate map ({bestX},{bestY})";
+            return bestId;
         }
 
         private static int FindCandidateMapId(
@@ -1454,6 +1554,49 @@ namespace DfoServer.GameWorld
                 || (stem.Length > 1
                     && char.ToLowerInvariant(stem[0]) == 'q'
                     && char.IsDigit(stem[1]));
+        }
+
+        // Only unresolved ordinary-room fallback uses this filter. Real BOSS rooms
+        // are resolved earlier through map specs, boss coordinates, and actor checks.
+        private static bool IsBossVariantFileName(string fileName)
+        {
+            if (string.IsNullOrEmpty(fileName)) return false;
+
+            var stem = Path.GetFileNameWithoutExtension(fileName) ?? string.Empty;
+            if (stem.IndexOf("boss", StringComparison.OrdinalIgnoreCase) >= 0)
+                return true;
+
+            if (stem.EndsWith("B", StringComparison.OrdinalIgnoreCase))
+            {
+                var prev = stem.Length >= 2 ? stem[stem.Length - 2] : '\0';
+                return char.IsDigit(prev) || prev == ')';
+            }
+
+            return false;
+        }
+
+        private static bool IsMazeTemplateFileName(string fileName)
+        {
+            if (string.IsNullOrEmpty(fileName)) return false;
+
+            var stem = Path.GetFileNameWithoutExtension(fileName) ?? string.Empty;
+            return stem.IndexOf("maze(", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        // PVF map filenames commonly encode room coordinates as "(x,y)" or "(x.y)".
+        // The parser is filename-only to avoid opening map contents on this fallback path.
+        private static bool TryParseMapFileCoordinate(string fileName, out int x, out int y)
+        {
+            x = 0;
+            y = 0;
+            if (string.IsNullOrEmpty(fileName))
+                return false;
+
+            var stem = Path.GetFileNameWithoutExtension(fileName) ?? string.Empty;
+            var match = MapCoordinateFileNameRegex.Match(stem);
+            return match.Success
+                && int.TryParse(match.Groups["x"].Value, out x)
+                && int.TryParse(match.Groups["y"].Value, out y);
         }
 
         private static bool InMapDirCandidate(string filePath, IReadOnlyList<string> mapDirCandidates)
