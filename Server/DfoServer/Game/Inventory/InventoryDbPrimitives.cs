@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Text.RegularExpressions;
 using Microsoft.Data.Sqlite;
 
 namespace DfoServer.Game.Inventory
@@ -169,7 +170,7 @@ LIMIT 1;";
             return null;
         }
 
-        internal SqliteInventoryStore.ItemRecord FindStackableItemByTemplateIdAndExpireTime(SqliteConnection connection, SqliteTransaction transaction, int characterId, InventoryListType listType, int templateId, int expireTime, int stackLimit)
+        internal SqliteInventoryStore.ItemRecord FindStackableItemByTemplateIdAndExpireTime(SqliteConnection connection, SqliteTransaction transaction, int characterId, InventoryListType listType, int templateId, int expireTime, int stackLimit, int slotStart = int.MinValue, int slotEnd = int.MaxValue)
         {
             using (var command = connection.CreateCommand())
             {
@@ -178,6 +179,7 @@ LIMIT 1;";
 SELECT item_uid, list_type, slot_index, item_template_id, item_kind, stack_count, instance_value, durability
 FROM character_items
 WHERE character_id = @characterId AND list_type = @listType AND item_template_id = @templateId AND expire_time = @expireTime
+  AND slot_index >= @slotStart AND slot_index <= @slotEnd
   AND (@stackLimit <= 0 OR stack_count < @stackLimit)
 ORDER BY stack_count DESC, slot_index ASC
 LIMIT 1;";
@@ -186,6 +188,8 @@ LIMIT 1;";
                 command.Parameters.AddWithValue("@templateId", templateId);
                 command.Parameters.AddWithValue("@expireTime", expireTime);
                 command.Parameters.AddWithValue("@stackLimit", stackLimit);
+                command.Parameters.AddWithValue("@slotStart", slotStart);
+                command.Parameters.AddWithValue("@slotEnd", slotEnd);
                 using (var reader = command.ExecuteReader())
                 {
                     if (reader.Read())
@@ -743,8 +747,8 @@ WHERE character_id = @characterId AND list_type = @listType;";
             int slotStart;
             int slotEnd;
             var insertListType = InventoryListType.Main;
-            var insertKind = metadata.ItemKind;
-            var expireTime = metadata.IsStackable ? 0 : -1;
+            var expireTime = ResolveBoosterRewardExpireTime(itemTemplateId, metadata);
+            var insertKind = metadata.IsStackable && expireTime > 0 ? "special" : metadata.ItemKind;
             var marker16 = metadata.IsStackable ? 0 : -1;
             var petSerial = 0;
             var isPetEquipment = string.Equals(metadata.ItemKind, "equipment", StringComparison.Ordinal) &&
@@ -796,7 +800,16 @@ WHERE character_id = @characterId AND list_type = @listType;";
 
             if (metadata.IsStackable && !isAvatarReward)
             {
-                var existing = FindItemByTemplateIdInRange(connection, transaction, characterId, insertListType, itemTemplateId, slotStart, slotEnd);
+                var existing = FindStackableItemByTemplateIdAndExpireTime(
+                    connection,
+                    transaction,
+                    characterId,
+                    insertListType,
+                    itemTemplateId,
+                    expireTime,
+                    metadata.StackLimit,
+                    slotStart,
+                    slotEnd);
                 if (existing != null && (metadata.StackLimit <= 0 || existing.StackCount + effectiveCount <= metadata.StackLimit))
                 {
                     var newStackCount = existing.StackCount + effectiveCount;
@@ -867,6 +880,105 @@ WHERE character_id = @characterId AND list_type = @listType;";
                 GrantedCount = effectiveCount,
             };
             return true;
+        }
+
+        private static int ResolveBoosterRewardExpireTime(int itemTemplateId, ItemMetadata metadata)
+        {
+            if (metadata == null)
+                return 0;
+
+            if (metadata.IsStackable)
+            {
+                var stackable = LoadStackableItem(itemTemplateId);
+                if (stackable == null)
+                    return 0;
+
+                if (stackable.UsablePeriod > 0)
+                    return AddDaysFromNow(stackable.UsablePeriod);
+
+                if (TryParsePvfExpirationUnixTime(
+                        stackable.GetStringValue("expiration date"),
+                        stackable.ExpirationDate,
+                        out var stackableExpire) &&
+                    stackableExpire > DateTimeOffset.Now.ToUnixTimeSeconds())
+                    return stackableExpire;
+
+                return 0;
+            }
+
+            if (string.Equals(metadata.ItemKind, "equipment", StringComparison.Ordinal) &&
+                ItemMetadataResolver.TryLoadEquipmentFile(itemTemplateId, out var equipment) &&
+                TryParsePvfExpirationUnixTime(
+                    equipment.GetStringValue("expiration date"),
+                    -1,
+                    out var equipmentExpire) &&
+                equipmentExpire > DateTimeOffset.Now.ToUnixTimeSeconds())
+                return equipmentExpire;
+
+            return -1;
+        }
+
+        private static int AddDaysFromNow(int days)
+        {
+            var now = DateTimeOffset.Now.ToUnixTimeSeconds();
+            var expire = now + (long)days * 86400L;
+            return (int)Math.Min(int.MaxValue, expire);
+        }
+
+        private static bool TryParsePvfExpirationUnixTime(string value, int numericValue, out int expirationUnixTime)
+        {
+            expirationUnixTime = 0;
+            if (!string.IsNullOrWhiteSpace(value))
+            {
+                var normalized = value.Trim().Trim('`');
+                var match = Regex.Match(normalized, @"\d{4}-\d{2}-\d{2}(?:\s+\d{2}:\d{2}:\d{2})?");
+                if (match.Success)
+                {
+                    var format = match.Value.Length > 10 ? "yyyy-MM-dd HH:mm:ss" : "yyyy-MM-dd";
+                    if (DateTime.TryParseExact(
+                            match.Value,
+                            format,
+                            CultureInfo.InvariantCulture,
+                            DateTimeStyles.None,
+                            out var localDateTime))
+                    {
+                        var offset = new DateTimeOffset(localDateTime, TimeZoneInfo.Local.GetUtcOffset(localDateTime));
+                        var unixTime = offset.ToUnixTimeSeconds();
+                        if (unixTime > 0 && unixTime <= int.MaxValue)
+                        {
+                            expirationUnixTime = (int)unixTime;
+                            return true;
+                        }
+                    }
+                }
+            }
+
+            if (numericValue <= 0)
+                return false;
+
+            if (numericValue >= 1000000000)
+            {
+                expirationUnixTime = numericValue;
+                return true;
+            }
+
+            if (DateTime.TryParseExact(
+                    numericValue.ToString(CultureInfo.InvariantCulture),
+                    "yyyyMMdd",
+                    CultureInfo.InvariantCulture,
+                    DateTimeStyles.None,
+                    out var numericLocalDate))
+            {
+                var offset = new DateTimeOffset(numericLocalDate, TimeZoneInfo.Local.GetUtcOffset(numericLocalDate));
+                var unixTime = offset.ToUnixTimeSeconds();
+                if (unixTime > 0 && unixTime <= int.MaxValue)
+                {
+                    expirationUnixTime = (int)unixTime;
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         internal static PvfLib.StackableItemFile LoadStackableItem(int itemTemplateId)

@@ -378,19 +378,6 @@ CREATE TABLE IF NOT EXISTS character_unknown730 (
     FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
 );
 
-CREATE TABLE IF NOT EXISTS character_userinfo_blobs (
-    character_id INTEGER NOT NULL,
-    blob_kind TEXT NOT NULL,
-    subtype INTEGER NOT NULL,
-    user_info_type INTEGER NOT NULL DEFAULT 0,
-    gate_or_count INTEGER NOT NULL DEFAULT 0,
-    user_id INTEGER NOT NULL DEFAULT 0,
-    name_bytes BLOB,
-    remaining_bytes BLOB,
-    PRIMARY KEY (character_id, blob_kind, subtype),
-    FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
-);
-
 CREATE TABLE IF NOT EXISTS get_userinfo_template (
     id INTEGER PRIMARY KEY DEFAULT 1,
     seed_character_id INTEGER NOT NULL DEFAULT 1000,
@@ -440,20 +427,11 @@ CREATE TABLE IF NOT EXISTS packet_sequence (
     FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
 );
 
-CREATE TABLE IF NOT EXISTS equipped_items (
-    character_id INTEGER NOT NULL,
-    equip_list_blob BLOB NOT NULL,
-    PRIMARY KEY (character_id),
-    FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
-);
-
 CREATE TABLE IF NOT EXISTS global_server_event_phase (
     id INTEGER PRIMARY KEY,
     event_phase_bitmap BLOB NOT NULL,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
-
--- USERINFO subtype1 动态化: 结构化字段表(替代 equipped_items.equip_list_blob 整块 blob)
 
 -- 进游戏 init 流的每包独立存储
 -- 新角色按需 INSERT 默认值
@@ -534,7 +512,7 @@ CREATE TABLE IF NOT EXISTS character_subtype1_fields (
     stat_dark_resistance INTEGER NOT NULL DEFAULT 0,
     stat_light_resistance INTEGER NOT NULL DEFAULT 0,
     -- u16[17] 状态异常抗性(slow/freeze/poison/stun 等, ACTIVESTATUS_TAG) 不入表:
-    -- .chr 不配置+十角色样本全零 → builder 直写 34B 零, 迁移遇非零大声抛(见 Subtype1BlobMigrator)
+    -- .chr 不配置+十角色样本全零 → builder 直写 34B 零
     stat_inventory_limit INTEGER NOT NULL DEFAULT 0,
     stat_hp_regen_speed INTEGER NOT NULL DEFAULT 0,
     stat_mp_regen_speed INTEGER NOT NULL DEFAULT 0,

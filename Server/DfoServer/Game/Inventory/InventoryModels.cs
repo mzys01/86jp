@@ -86,6 +86,14 @@ namespace DfoServer.Game.Inventory
         public short CostItemSlotIndex { get; set; }
 
         public List<InventoryMutationResult> ExtraResults { get; } = new List<InventoryMutationResult>();
+
+        public int PetCreatureKey { get; set; }
+
+        public int PetSatietyBefore { get; set; }
+
+        public int PetSatietyAfter { get; set; }
+
+        public bool PetSatietyChanged { get; set; }
     }
 
     public sealed class CreatureHatchResult

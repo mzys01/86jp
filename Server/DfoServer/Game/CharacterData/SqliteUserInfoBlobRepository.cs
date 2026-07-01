@@ -15,55 +15,6 @@ namespace DfoServer.Game.CharacterData
             _connectionString = SqliteDatabaseBootstrap.Initialize(databasePath, schemaFilePath);
         }
 
-        
-        
-
-        public void SaveUserInfoPackets(int characterId, List<SelectCharacterUserInfoPacketSnapshot> packets)
-        {
-            using (var conn = new SqliteConnection(_connectionString))
-            {
-                conn.Open();
-                using (var tx = conn.BeginTransaction())
-                {
-                    using (var cmd = new SqliteCommand("DELETE FROM character_userinfo_blobs WHERE character_id = @cid AND blob_kind = 'init'", conn, tx))
-                    {
-                        cmd.Parameters.AddWithValue("@cid", characterId);
-                        cmd.ExecuteNonQuery();
-                    }
-                    for (int i = 0; i < packets.Count; i++)
-                    {
-                        var p = packets[i];
-                        using (var cmd = new SqliteCommand(
-                            "INSERT INTO character_userinfo_blobs (character_id, blob_kind, subtype, user_info_type, gate_or_count, user_id, name_bytes, remaining_bytes) VALUES (@cid, 'init', @st, @uit, @goc, @uid, @nb, @rb)", conn, tx))
-                        {
-                            cmd.Parameters.AddWithValue("@cid", characterId);
-                            cmd.Parameters.AddWithValue("@st", i);
-                            cmd.Parameters.AddWithValue("@uit", (int)p.UserInfoType);
-                            cmd.Parameters.AddWithValue("@goc", (int)p.GateOrCount);
-                            cmd.Parameters.AddWithValue("@uid", (int)p.UserId);
-                            cmd.Parameters.AddWithValue("@nb", p.NameBytes != null && p.NameBytes.Length > 0 ? (object)p.NameBytes : DBNull.Value);
-                            cmd.Parameters.AddWithValue("@rb", p.RemainingBytes != null && p.RemainingBytes.Length > 0 ? (object)p.RemainingBytes : DBNull.Value);
-                            cmd.ExecuteNonQuery();
-                        }
-                    }
-                    tx.Commit();
-                }
-            }
-        }
-
-        public bool HasUserInfoPackets(int characterId)
-        {
-            using (var conn = new SqliteConnection(_connectionString))
-            {
-                conn.Open();
-                using (var cmd = new SqliteCommand("SELECT COUNT(*) FROM character_userinfo_blobs WHERE character_id = @cid AND blob_kind = 'init'", conn))
-                {
-                    cmd.Parameters.AddWithValue("@cid", characterId);
-                    return Convert.ToInt32(cmd.ExecuteScalar()) > 0;
-                }
-            }
-        }
-
         public int LoadSeedCharacterId()
         {
             using (var conn = new SqliteConnection(_connectionString))
@@ -112,12 +63,6 @@ namespace DfoServer.Game.CharacterData
                     }
                 }
             }
-        }
-
-        public void SeedFromSnapshot(int characterId, List<SelectCharacterUserInfoPacketSnapshot> userInfoPackets)
-        {
-            if (!HasUserInfoPackets(characterId) && userInfoPackets != null && userInfoPackets.Count > 0)
-                SaveUserInfoPackets(characterId, userInfoPackets);
         }
 
         public Network.Builders.GetUserInfoTemplate LoadGetUserInfoTemplate()

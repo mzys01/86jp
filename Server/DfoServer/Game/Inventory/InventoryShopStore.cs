@@ -27,6 +27,32 @@ namespace DfoServer.Game.Inventory
             OnlyCeraPoint,
         }
 
+        internal static int NormalizeCeraShopEffectiveStackCount(int buyCount, int productCount, int metadataStackLimit)
+        {
+            if (buyCount <= 0)
+                buyCount = 1;
+
+            var unitCount = Math.Max(1, productCount);
+            var stackLimit = ResolveCeraShopStackLimit(unitCount, metadataStackLimit);
+            var requestedCount = (long)buyCount * unitCount;
+            if (requestedCount <= 0)
+                return 1;
+
+            if (stackLimit > 0 && requestedCount > stackLimit)
+                return stackLimit;
+
+            return requestedCount > int.MaxValue ? int.MaxValue : (int)requestedCount;
+        }
+
+        internal static int ResolveCeraShopStackLimit(int productCount, int metadataStackLimit)
+        {
+            var unitCount = Math.Max(1, productCount);
+            if (metadataStackLimit <= 0)
+                return 0;
+
+            return Math.Max(metadataStackLimit, unitCount);
+        }
+
         // ============================================================
         // 装扮兑换券对照表 [grade][durIndex] = couponId
         // ============================================================
@@ -464,9 +490,14 @@ namespace DfoServer.Game.Inventory
 
             var metadata = ItemMetadataResolver.Resolve(item.ItemTemplateId);
             var appliedCount = SqliteInventoryStore.NormalizeRemovalCount(item, sellCount);
-            if (item.ItemKind == "stackable" && appliedCount < item.StackCount)
+            var remainingCount = Math.Max(0, item.StackCount - appliedCount);
+            var isStackCountedRecord = SqliteInventoryStore.IsStackCountedRecord(item);
+            if (isStackCountedRecord && appliedCount < item.StackCount)
             {
-                _db.UpdateStackCount(connection, transaction, item.ItemUid, item.StackCount - appliedCount);
+                if (SqliteInventoryStore.IsPetConsumableRecord(item))
+                    _db.UpdatePetStackCount(connection, transaction, item.ItemUid, remainingCount);
+                else
+                    _db.UpdateStackCount(connection, transaction, item.ItemUid, remainingCount);
             }
             else
             {
@@ -484,8 +515,8 @@ namespace DfoServer.Game.Inventory
                 ListType = listType,
                 SlotIndex = slotIndex,
                 ItemTemplateId = item.ItemTemplateId,
-                RemainingStackCount = Math.Max(0, item.StackCount - appliedCount),
-                InstanceValue = item.InstanceValue,
+                RemainingStackCount = remainingCount,
+                InstanceValue = isStackCountedRecord ? remainingCount : item.InstanceValue,
                 Durability = item.Durability,
                 UpdatedGold = updatedGold,
                 UpdatedSp = wallet.Sp,
@@ -503,8 +534,6 @@ namespace DfoServer.Game.Inventory
 
             if (buyCount <= 0)
                 buyCount = 1;
-            if (buyCount > 999)
-                buyCount = 999;
 
             if (!CeraShopProductCatalog.TryResolve(productId, out var product))
             {
@@ -535,7 +564,10 @@ namespace DfoServer.Game.Inventory
             var stackListType = isPetConsumable ? InventoryListType.Pet : InventoryListType.Main;
             var avatarDurationDays = 0;
             // 发货数量 = 份数 × 每份数量(cerashop count); 价格 = 每份价 × 份数 (avatar 恒为 1)
-            var effectiveCount = (isStackable && !isAvatar) ? Math.Min(999, buyCount * Math.Max(1, product.Count)) : 1;
+            var ceraShopStackLimit = ResolveCeraShopStackLimit(product.Count, metadata.StackLimit);
+            var effectiveCount = (isStackable && !isAvatar)
+                ? NormalizeCeraShopEffectiveStackCount(buyCount, product.Count, metadata.StackLimit)
+                : 1;
             // 价格来自 cerashop 三列: 金币 / 胜点(忽略) / 点券。金币与点券一般互斥(只一个非 0)。
             var goldPrice = Math.Max(0, product.GoldPrice);
             var ceraPrice = Math.Max(0, product.CoinPrice);
@@ -694,7 +726,7 @@ namespace DfoServer.Game.Inventory
             if (isStackable)
             {
                 var existingItem = _db.FindItemByTemplateId(connection, transaction, characterId, stackListType, itemTemplateId);
-                var stackLimit = metadata.StackLimit;
+                var stackLimit = ceraShopStackLimit;
                 if (existingItem != null && stackLimit > 0 && existingItem.StackCount + effectiveCount > stackLimit)
                 {
                     FileLogger.Log($"  [CeraShopBuy] REJECT: stack limit reached product=0x{productId:X8} item=0x{itemTemplateId:X8} slot={existingItem.SlotIndex} current={existingItem.StackCount} add={effectiveCount} limit={stackLimit}");
@@ -744,9 +776,9 @@ namespace DfoServer.Game.Inventory
                 }
             }
 
-            if (isStackable && metadata.StackLimit > 0 && effectiveCount > metadata.StackLimit)
+            if (isStackable && ceraShopStackLimit > 0 && effectiveCount > ceraShopStackLimit)
             {
-                FileLogger.Log($"  [CeraShopBuy] REJECT: stack limit exceeded product=0x{productId:X8} item=0x{itemTemplateId:X8} count={effectiveCount} limit={metadata.StackLimit}");
+                FileLogger.Log($"  [CeraShopBuy] REJECT: stack limit exceeded product=0x{productId:X8} item=0x{itemTemplateId:X8} count={effectiveCount} limit={ceraShopStackLimit}");
                 return false;
             }
 

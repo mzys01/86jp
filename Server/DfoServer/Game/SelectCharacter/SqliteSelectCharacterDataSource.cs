@@ -46,6 +46,11 @@ namespace DfoServer.Game.SelectCharacter
             return dbSeedId > 0 ? dbSeedId : 1000;
         }
 
+        public CreatureItemListSnapshot LoadCreatureItemListSnapshot(int characterId)
+        {
+            return _initDataRepository.LoadCreatures(characterId);
+        }
+
         public SelectCharacterDataSnapshot Load(int characterId, int accountId)
         {
             CharacterItemListSnapshot itemList;
