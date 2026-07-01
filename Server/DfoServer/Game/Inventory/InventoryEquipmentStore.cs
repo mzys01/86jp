@@ -258,6 +258,11 @@ ORDER BY slot;";
                 var existing = entries.Find(e => e.Slot == equipSlot);
                 if (mainSource == null || (mainSource.ItemKind != "equipment" && mainSource.ItemKind != "avatar") || mainSource.ItemTemplateId != wantId)
                 {
+                    if (equipSlot == 12)
+                    {
+                        FileLogger.Log($"  [EquipMove] slot {equipSlot} source mismatch (称号 P2 反转包) want=0x{wantId:X8} found=0x{mainSource?.ItemTemplateId ?? 0:X8} -> ReverseError");
+                        return EquipOutcome.ReverseError;
+                    }
                     FileLogger.Log($"  [EquipMove] EQUIP blocked: invalid source slot={request.SourceSlotIndex} want=0x{wantId:X8} found={(mainSource != null ? $"0x{mainSource.ItemTemplateId:X8}/{mainSource.ItemKind}" : "null")}");
                     return EquipOutcome.NoOp;
                 }
