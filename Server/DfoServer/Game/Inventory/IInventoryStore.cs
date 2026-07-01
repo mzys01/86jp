@@ -11,6 +11,8 @@ namespace DfoServer.Game.Inventory
 
         int CountItem(int itemTemplateId);
 
+        bool TryRemoveItemByTemplateId(int itemTemplateId, out short slotIndex, out InventoryMutationResult result);
+
         void RunMigrations();
 
         void EnsureDatabase(CharacterItemListSnapshot seedSnapshot);
@@ -41,7 +43,7 @@ namespace DfoServer.Game.Inventory
             out short assignedSlot,
             out int instanceValue);
 
-        bool TryPickupItem(int itemTemplateId, int stackCount, out short assignedSlot);
+        bool TryPickupItem(int itemTemplateId, int stackCount, out short assignedSlot, out int newStackCount);
 
         bool TrySellItem(InventoryListType listType, short slotIndex, short sellCount, out InventoryMutationResult result);
 

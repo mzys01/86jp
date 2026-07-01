@@ -166,6 +166,32 @@ namespace DfoServer.Game.Inventory
             }
         }
 
+        // 按道具模板ID在主背包(list_type=0)里找到一个槛位并扣除1个(收集箱放入宝珠用)。
+        // 返回 InventoryMutationResult 供调用方发送 0x0012(DELETE_ITEM ACK)同步客户端背包UI，
+        // 否则数据库虽已扣减，客户端背包格子不会刷新(看起来像"没扣除")。
+        public bool TryRemoveItemByTemplateId(int itemTemplateId, out short slotIndex, out InventoryMutationResult result)
+        {
+            slotIndex = -1;
+            result = null;
+            using (var conn = new Microsoft.Data.Sqlite.SqliteConnection(_context.ConnectionString))
+            {
+                conn.Open();
+                using (var cmd = new Microsoft.Data.Sqlite.SqliteCommand(
+                    "SELECT slot_index FROM character_items WHERE character_id = @cid AND list_type = 0 AND item_template_id = @tid LIMIT 1",
+                    conn))
+                {
+                    cmd.Parameters.AddWithValue("@cid", _context.CharacterId);
+                    cmd.Parameters.AddWithValue("@tid", itemTemplateId);
+                    var found = cmd.ExecuteScalar();
+                    if (found == null)
+                        return false;
+                    slotIndex = Convert.ToInt16(found);
+                }
+            }
+
+            return TryDeleteItem(InventoryListType.Main, slotIndex, 1, out result);
+        }
+
 
         public void RunMigrations()
         {
@@ -665,14 +691,14 @@ ORDER BY slot_index;";
             out int instanceValue)
             => _equipStore.TryPickupRentalWeapon(connection, transaction, _context.CharacterId, _context.AccountId, itemTemplateId, expireTime, out assignedSlot, out instanceValue);
 
-        public bool TryPickupItem(int itemTemplateId, int stackCount, out short assignedSlot)
+        public bool TryPickupItem(int itemTemplateId, int stackCount, out short assignedSlot, out int newStackCount)
         {
             using (var connection = _context.OpenConnection())
             using (var transaction = connection.BeginTransaction())
             {
                 var result = TryPickupItemCore(connection, transaction,
                     _context.CharacterId, _context.AccountId,
-                    itemTemplateId, stackCount, out assignedSlot);
+                    itemTemplateId, stackCount, out assignedSlot, out newStackCount);
                 if (result) transaction.Commit();
                 return result;
             }
@@ -681,9 +707,10 @@ ORDER BY slot_index;";
         internal bool TryPickupItemCore(
             SqliteConnection connection, SqliteTransaction transaction,
             int characterId, int accountId,
-            int itemTemplateId, int stackCount, out short assignedSlot)
+            int itemTemplateId, int stackCount, out short assignedSlot, out int newStackCount)
         {
             assignedSlot = -1;
+            newStackCount = stackCount;
 
             // 晶块走账号级存储, 不进 character_items
             if (CurrencyService.IsCubeFragment(itemTemplateId))
@@ -708,7 +735,8 @@ ORDER BY slot_index;";
                     var existingQuick = _db.FindItemByTemplateIdInRange(connection, transaction, characterId, InventoryListType.Main, itemTemplateId, QuickSlotStart, QuickSlotEnd);
                     if (existingQuick != null && (metadata.StackLimit <= 0 || existingQuick.StackCount + stackCount <= metadata.StackLimit))
                     {
-                        _db.UpdateStackCount(connection, transaction, existingQuick.ItemUid, existingQuick.StackCount + stackCount);
+                        newStackCount = existingQuick.StackCount + stackCount;
+                        _db.UpdateStackCount(connection, transaction, existingQuick.ItemUid, newStackCount);
                         assignedSlot = existingQuick.SlotIndex;
                         return true;
                     }
@@ -717,7 +745,8 @@ ORDER BY slot_index;";
                 var existing = _db.FindItemByTemplateId(connection, transaction, characterId, InventoryListType.Main, itemTemplateId);
                 if (existing != null && (metadata.StackLimit <= 0 || existing.StackCount + stackCount <= metadata.StackLimit))
                 {
-                    _db.UpdateStackCount(connection, transaction, existing.ItemUid, existing.StackCount + stackCount);
+                    newStackCount = existing.StackCount + stackCount;
+                    _db.UpdateStackCount(connection, transaction, existing.ItemUid, newStackCount);
                     assignedSlot = existing.SlotIndex;
                     return true;
                 }
@@ -736,6 +765,7 @@ ORDER BY slot_index;";
                         itemTemplateId, metadata.ItemKind, stackCount, stackCount,
                         metadata.Durability, 0, 0, 0, 0, 0, "{}");
                     assignedSlot = (short)quickSlot;
+                    newStackCount = stackCount;
                     return true;
                 }
             }
@@ -752,6 +782,7 @@ ORDER BY slot_index;";
                 itemTemplateId, metadata.ItemKind, dbStackCount, dbInstanceValue,
                 metadata.Durability, 0, 0, 0, metadata.IsStackable ? 0 : -1, 0, "{}");
             assignedSlot = (short)targetSlot;
+            newStackCount = metadata.IsStackable ? stackCount : 1;
             return true;
         }
 

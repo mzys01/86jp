@@ -27,6 +27,7 @@ namespace DfoServer.Network
         private readonly LuckyStarHandler _luckyStarHandler;
         private readonly RentalHandler _rentalHandler;
         private readonly MailboxHandler _mailboxHandler;
+        private readonly CollectionBoxHandler _collectionBoxHandler;
         private readonly ICharacterRepository _characterRepository;
         private readonly SqliteSelectCharacterDataSource _selectCharacterDataSource;
         private readonly SqliteAssetService _assetService;
@@ -66,6 +67,8 @@ namespace DfoServer.Network
             _luckyStarHandler = new LuckyStarHandler(_assetService, sqliteSelectCharacterDataSource);
             _rentalHandler = new RentalHandler(_assetService, sqliteSelectCharacterDataSource);
             _mailboxHandler = new MailboxHandler();
+            var collectBoxProgressRepository = new Game.Inventory.CollectBoxProgressRepository(databasePath, schemaFilePath);
+            _collectionBoxHandler = new CollectionBoxHandler(sqliteSelectCharacterDataSource, collectBoxProgressRepository);
 
             _cmdDispatch = new Dictionary<ushort, Func<EnhancedClientSession, GamePacketHeader, byte[], Task>>();
             RegisterLoginHandlers(_cmdDispatch);
@@ -78,6 +81,7 @@ namespace DfoServer.Network
             RegisterSettingsHandlers(_cmdDispatch);
             RegisterQuestHandlers(_cmdDispatch);
             RegisterMailboxHandlers(_cmdDispatch);
+            RegisterCollectionBoxHandlers(_cmdDispatch);
             RegisterMiscHandlers(_cmdDispatch);
         }
 
@@ -252,6 +256,13 @@ namespace DfoServer.Network
         private void RegisterMailboxHandlers(Dictionary<ushort, Func<EnhancedClientSession, GamePacketHeader, byte[], Task>> d)
         {
             d[0x0060] = _mailboxHandler.HandleOpenMailbox;
+        }
+
+        private void RegisterCollectionBoxHandlers(Dictionary<ushort, Func<EnhancedClientSession, GamePacketHeader, byte[], Task>> d)
+        {
+            d[0x0388] = _collectionBoxHandler.HandleQueryCollectionBox;            //904 打开收集箱面板查询
+            d[0x0389] = _collectionBoxHandler.HandleInsertCollectBoxItem;          //905 收集箱槛位放入宝珠
+            d[0x038A] = _collectionBoxHandler.HandleRemoveCollectBoxItem;          //906 收集箱槛位取出宝珠
         }
 
         private void RegisterMiscHandlers(Dictionary<ushort, Func<EnhancedClientSession, GamePacketHeader, byte[], Task>> d)

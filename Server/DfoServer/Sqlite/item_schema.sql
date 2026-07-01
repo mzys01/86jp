@@ -621,6 +621,18 @@ CREATE TABLE IF NOT EXISTS character_sort_item_locks (
     FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
 );
 
+-- 收集箱(SAO/生肖之灵等)槛位存档: 记录角色在某个收集箱(box_index=PVF [Index])的某个槛位放了哪个宝珠。
+-- 宝珠本质仍是背包里的道具(character_items), 这里只是"哪个itemId被摆在收集箱槛位里"的状态表,
+-- 放入/取出时需要联动对 character_items 的扣减/归还(见 CollectBoxProgressRepository.cs)。
+CREATE TABLE IF NOT EXISTS character_collectbox_slots (
+    character_id INTEGER NOT NULL,
+    box_index INTEGER NOT NULL,
+    slot_index INTEGER NOT NULL,
+    item_id INTEGER NOT NULL,
+    PRIMARY KEY (character_id, box_index, slot_index),
+    FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS account_settings (
     account_id INTEGER PRIMARY KEY,
     main_game_option BLOB,

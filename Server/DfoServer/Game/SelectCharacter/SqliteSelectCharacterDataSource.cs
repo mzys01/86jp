@@ -229,6 +229,24 @@ namespace DfoServer.Game.SelectCharacter
                 return _inventoryStore.TryDeleteItem(listType, slotIndex, deleteCount, out result);
         }
 
+        public int CountItem(int characterId, int accountId, int itemTemplateId)
+        {
+            using (_inventoryStore.BeginScope(characterId, accountId))
+                return _inventoryStore.CountItem(itemTemplateId);
+        }
+
+        public bool TryRemoveItemByTemplateId(int characterId, int accountId, int itemTemplateId, out short slotIndex, out InventoryMutationResult result)
+        {
+            using (_inventoryStore.BeginScope(characterId, accountId))
+                return _inventoryStore.TryRemoveItemByTemplateId(itemTemplateId, out slotIndex, out result);
+        }
+
+        public bool TryPickupItem(int characterId, int accountId, int itemTemplateId, int stackCount, out short assignedSlot, out int newStackCount)
+        {
+            using (_inventoryStore.BeginScope(characterId, accountId))
+                return _inventoryStore.TryPickupItem(itemTemplateId, stackCount, out assignedSlot, out newStackCount);
+        }
+
         public bool TryOpenAvatarPackage(int characterId, int accountId, AvatarPackageOpenRequest request, out AvatarPackageOpenResult result)
         {
             using (_inventoryStore.BeginScope(characterId, accountId))
