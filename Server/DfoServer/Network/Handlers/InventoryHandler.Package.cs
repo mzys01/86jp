@@ -699,7 +699,7 @@ namespace DfoServer.Network.Handlers
             return new CommonInventoryItem
             {
                 SlotIndex = slotIndex,
-                ItemTemplateId = itemTemplateId,
+                ItemTemplateId = -1,
                 CountOrInstanceValue = 0,
             };
         }

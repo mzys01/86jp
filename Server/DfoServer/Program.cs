@@ -35,6 +35,12 @@ namespace DfoServer
                 return;
             }
 
+            if (Array.IndexOf(args, "--selftest-inventory-sale") >= 0)
+            {
+                Environment.Exit(SelfTests.InventorySaleSelfTest.Run());
+                return;
+            }
+
             if (Array.IndexOf(args, "--selftest-dungeon-map-fallback") >= 0)
             {
                 Environment.Exit(SelfTests.DungeonMapFallbackSelfTest.Run());

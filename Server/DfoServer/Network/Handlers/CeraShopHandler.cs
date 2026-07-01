@@ -292,7 +292,7 @@ namespace DfoServer.Network.Handlers
 
         private static void WriteCompactItemListUpdate(GamePacketWriter writer, InventoryMutationResult update)
         {
-            var itemTemplateId = update.RemainingStackCount > 0 ? update.ItemTemplateId : 0;
+            var itemTemplateId = update.RemainingStackCount > 0 || update.ItemTemplateId <= 0 ? update.ItemTemplateId : -1;
             var remainingStackCount = update.RemainingStackCount > 0 ? update.RemainingStackCount : 0;
             writer.WriteInt16(update.SlotIndex);
             writer.WriteInt32(itemTemplateId);

@@ -489,9 +489,9 @@ namespace DfoServer.Game.Inventory
             }
 
             var metadata = ItemMetadataResolver.Resolve(item.ItemTemplateId);
-            var appliedCount = SqliteInventoryStore.NormalizeRemovalCount(item, sellCount);
+            var isStackCountedRecord = SqliteInventoryStore.IsStackCountedRecord(item) || metadata.IsStackable;
+            var appliedCount = NormalizeSellRemovalCount(item.StackCount, sellCount, isStackCountedRecord);
             var remainingCount = Math.Max(0, item.StackCount - appliedCount);
-            var isStackCountedRecord = SqliteInventoryStore.IsStackCountedRecord(item);
             if (isStackCountedRecord && appliedCount < item.StackCount)
             {
                 if (SqliteInventoryStore.IsPetConsumableRecord(item))
@@ -525,6 +525,17 @@ namespace DfoServer.Game.Inventory
                 AppliedCount = (short)appliedCount,
             };
             return true;
+        }
+
+        private static int NormalizeSellRemovalCount(int stackCount, short requestedCount, bool isStackable)
+        {
+            if (!isStackable)
+                return 1;
+
+            if (requestedCount <= 0 || requestedCount >= stackCount)
+                return stackCount;
+
+            return requestedCount;
         }
 
        public bool TryBuyCeraShopItem(SqliteConnection connection, SqliteTransaction transaction, int characterId, int accountId, int productId, int buyCount, int paymentMode, int attributeValue, out InventoryMutationResult result)
