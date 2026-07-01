@@ -40,7 +40,7 @@ namespace DfoServer.Game.Quests
             FileLogger.Log($"[GameProtocol] ACCEPT_QUEST payload: {(qBody != null ? BitConverter.ToString(qBody) : "null")} ({qBody?.Length ?? 0}B)");
             int cid = _sender.CharacterId;
             if (cid <= 0) return;
-            var ack = QuestService.HandleAcceptQuest(_connStr, cid, qBody);
+            var ack = QuestService.HandleAcceptQuest(_connStr, cid, qBody, _assetService, _sender.AccountId);
             await _sender.SendCmdAckAsync(wireType, ack);
         }
 
