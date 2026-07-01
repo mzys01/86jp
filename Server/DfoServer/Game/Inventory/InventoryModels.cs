@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 
 namespace DfoServer.Game.Inventory
@@ -100,6 +101,21 @@ namespace DfoServer.Game.Inventory
         public int GrantedCount { get; set; }
     }
 
+    public sealed class BoosterUseRequest
+    {
+        public short? SlotIndex { get; set; }
+
+        public IReadOnlyList<int> SelectedItemTemplateIds { get; set; } = Array.Empty<int>();
+
+        public int ExpectedItemTemplateId { get; set; }
+
+        public short? MaterialSlotIndex { get; set; }
+
+        public int ExpectedMaterialItemTemplateId { get; set; }
+
+        public int RequestedCount { get; set; } = 1;
+    }
+
     public sealed class BoosterUseResult
     {
         public short SourceSlotIndex { get; set; }
@@ -109,6 +125,16 @@ namespace DfoServer.Game.Inventory
         public int SourceRemainingStackCount { get; set; }
 
         public int SourceInstanceValue { get; set; }
+
+        public int ConsumedSourceCount { get; set; }
+
+        public int ConsumedMaterialItemTemplateId { get; set; }
+
+        public int ConsumedMaterialCount { get; set; }
+
+        public short ConsumedMaterialSlotIndex { get; set; }
+
+        public int ConsumedMaterialRemainingStackCount { get; set; }
 
         public List<BoosterRewardResult> Rewards { get; } = new List<BoosterRewardResult>();
     }

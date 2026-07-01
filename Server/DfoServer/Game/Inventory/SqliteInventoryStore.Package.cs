@@ -36,12 +36,12 @@ namespace DfoServer.Game.Inventory
             }
         }
 
-        public bool TryUseBoosterItem(short? slotIndex, IReadOnlyList<int> selectedItemTemplateIds, out BoosterUseResult result)
+        public bool TryUseBoosterItem(BoosterUseRequest request, out BoosterUseResult result)
         {
             using (var connection = _context.OpenConnection())
             using (var transaction = connection.BeginTransaction())
             {
-                var ok = _packageStore.TryUseBoosterItem(connection, transaction, _context.CharacterId, _context.AccountId, slotIndex, selectedItemTemplateIds, out result);
+                var ok = _packageStore.TryUseBoosterItem(connection, transaction, _context.CharacterId, _context.AccountId, request, out result);
                 if (ok) transaction.Commit();
                 return ok;
             }

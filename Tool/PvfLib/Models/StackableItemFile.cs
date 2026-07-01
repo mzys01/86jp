@@ -14,6 +14,12 @@ namespace PvfLib
         public int Count { get; set; } = 1;
     }
 
+    public class RandomBoxRemovalItemEntry
+    {
+        public int ItemId { get; set; }
+        public int Count { get; set; }
+    }
+
     public class EquipmentUpgradeTicketInfo
     {
         public int TargetLevel { get; set; } = -1;
@@ -137,6 +143,8 @@ namespace PvfLib
         
         public string PackageData { get; set; }
         public List<BoosterRewardEntry> PackageRewards { get; set; } = new List<BoosterRewardEntry>();
+        public List<BoosterRewardEntry> RandomBoxRewards { get; set; } = new List<BoosterRewardEntry>();
+        public List<RandomBoxRemovalItemEntry> RandomBoxRemovalItems { get; set; } = new List<RandomBoxRemovalItemEntry>();
         public string OutputItem { get; set; }
         public string InputItem { get; set; }
         public string NeedSkill { get; set; }
@@ -250,6 +258,9 @@ namespace PvfLib
             stk.BoosterRewards = ParseBoosterInfo(root.GetChild("booster info"), content);
             stk.BoosterSelectionRewards = ParseBoosterSelection(root.GetChildren("booster select category"), content);
             stk.PackageRewards = ParsePackageRewards(stk.PackageData);
+            var randomBox = root.GetChild("RANDOMBOX");
+            stk.RandomBoxRewards = ParseRandomBoxRewards(randomBox, content);
+            stk.RandomBoxRemovalItems = ParseRandomBoxRemovalItems(randomBox != null ? randomBox.GetChild("sealing removal item") : null, content);
 
             return stk;
         }
@@ -306,6 +317,81 @@ namespace PvfLib
             }
 
             return rewards;
+        }
+
+        private static List<BoosterRewardEntry> ParseRandomBoxRewards(ScriptNode randomBox, string content)
+        {
+            var rewards = new List<BoosterRewardEntry>();
+            if (randomBox == null)
+                return rewards;
+
+            var fallbackGroup = 0;
+            foreach (var node in randomBox.GetChildren("int data"))
+            {
+                fallbackGroup++;
+                var rewardCountBeforeNode = rewards.Count;
+                var ints = new List<int>();
+                foreach (var item in node.DataItems)
+                    ints.AddRange(ParseInts(item.GetContent(content)));
+
+                if (ints.Count >= 7)
+                {
+                    for (var i = 3; i + 3 < ints.Count; i += 4)
+                    {
+                        if (ints[i] <= 0)
+                            continue;
+
+                        rewards.Add(new BoosterRewardEntry
+                        {
+                            RewardKind = "randombox",
+                            Group = fallbackGroup,
+                            ItemId = ints[i],
+                            Weight = Math.Max(0, ints[i + 1]),
+                            Count = Math.Max(1, ints[i + 2]),
+                        });
+                    }
+                }
+
+                if (rewards.Count == rewardCountBeforeNode && ints.Count >= 2 && ints[0] > 0)
+                {
+                    rewards.Add(new BoosterRewardEntry
+                    {
+                        RewardKind = "randombox",
+                        Group = fallbackGroup,
+                        ItemId = ints[0],
+                        Weight = 10000,
+                        Count = Math.Max(1, ints[1]),
+                    });
+                }
+            }
+
+            return rewards;
+        }
+
+        private static List<RandomBoxRemovalItemEntry> ParseRandomBoxRemovalItems(ScriptNode node, string content)
+        {
+            var result = new List<RandomBoxRemovalItemEntry>();
+            if (node == null)
+                return result;
+
+            var ints = new List<int>();
+            foreach (var item in node.DataItems)
+                ints.AddRange(ParseInts(item.GetContent(content)));
+
+            var start = 0;
+            if (ints.Count >= 1 && ints.Count == 1 + ints[0] * 2)
+                start = 1;
+
+            for (var i = start; i + 1 < ints.Count; i += 2)
+            {
+                result.Add(new RandomBoxRemovalItemEntry
+                {
+                    ItemId = ints[i],
+                    Count = Math.Max(0, ints[i + 1]),
+                });
+            }
+
+            return result;
         }
 
         private static void ParseBoosterRewardNode(

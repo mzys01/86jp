@@ -684,8 +684,6 @@ namespace DfoServer.Game.Inventory
                 result.UpdatedTokenCera = plan.NewTokenCera;
                 result.UpdatedHappyTokenCera = plan.NewHappyTokenCera;
                 result.GoldSpent = goldSpent;
-                result.RequestedCount = (short)Math.Min(short.MaxValue, effectiveCount);
-                result.AppliedCount = (short)Math.Min(short.MaxValue, effectiveCount);
                 for (var i = 1; i < openedResults.Count; i++)
                     result.ExtraResults.Add(openedResults[i]);
 

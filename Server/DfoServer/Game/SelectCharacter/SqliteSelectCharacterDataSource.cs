@@ -295,10 +295,10 @@ namespace DfoServer.Game.SelectCharacter
                 return _inventoryStore.TryOpenSelectablePackage(request, out result);
         }
 
-        public bool TryUseBoosterItem(int characterId, int accountId, short? slotIndex, IReadOnlyList<int> selectedItemTemplateIds, out BoosterUseResult result)
+        public bool TryUseBoosterItem(int characterId, int accountId, BoosterUseRequest request, out BoosterUseResult result)
         {
             using (_inventoryStore.BeginScope(characterId, accountId))
-                return _inventoryStore.TryUseBoosterItem(slotIndex, selectedItemTemplateIds, out result);
+                return _inventoryStore.TryUseBoosterItem(request, out result);
         }
 
         public bool TryOpenPackage0207(int characterId, int accountId, short slotIndex, IReadOnlyList<int> selectedItemTemplateIds, out BoosterUseResult result)
