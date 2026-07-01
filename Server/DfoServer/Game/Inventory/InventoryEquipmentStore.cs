@@ -256,7 +256,11 @@ ORDER BY slot;";
             {
                 int wantId = request.SourceInstanceValue;
                 var existing = entries.Find(e => e.Slot == equipSlot);
-                if (mainSource == null || (mainSource.ItemKind != "equipment" && mainSource.ItemKind != "avatar") || mainSource.ItemTemplateId != wantId)
+                var isEquippableKind = mainSource != null
+                    && (mainSource.ItemKind == "equipment"
+                        || mainSource.ItemKind == "avatar"
+                        || (mainSource.ItemKind == "special" && RentalWeaponInventoryMapper.IsValidInventoryTemplate(mainSource.ItemTemplateId)));
+                if (mainSource == null || !isEquippableKind || mainSource.ItemTemplateId != wantId)
                 {
                     if (equipSlot == 12)
                     {
