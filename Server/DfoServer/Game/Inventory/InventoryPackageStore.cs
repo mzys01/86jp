@@ -585,7 +585,7 @@ namespace DfoServer.Game.Inventory
                         stackListType,
                         (short)targetSlot,
                         reward.ItemTemplateId,
-                        isPetConsumable ? "pet" : reward.ExpireTime > 0 ? "special" : metadata.ItemKind,
+                        isPetConsumable ? "pet" : metadata.ItemKind,
                         insertCount,
                         insertCount,
                         0,

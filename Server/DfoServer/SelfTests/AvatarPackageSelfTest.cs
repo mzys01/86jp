@@ -125,6 +125,9 @@ namespace DfoServer.SelfTests
                 CheckExpiringReward(snapshot, SampleExpiringTitlePackageId, 1, "2027-12-29 06:00:00");
                 CheckExpiringReward(snapshot, SampleExpiringEmblemPackageId, 1, "2027-12-29 06:00:00");
                 CheckExpiringReward(snapshot, SampleExpiringConsumableRewardId, 5, "2027-11-19 06:00:00");
+                CheckMainItemKind(tempDb, SampleExpiringTitlePackageId, "stackable");
+                CheckMainItemKind(tempDb, SampleExpiringEmblemPackageId, "stackable");
+                CheckMainItemKind(tempDb, SampleExpiringConsumableRewardId, "stackable");
 
                 var optionByItemId = ToOptionMap(request);
                 foreach (var expectedItemId in ExpectedAvatarItemIds)
@@ -177,6 +180,29 @@ namespace DfoServer.SelfTests
             {
                 Check($"expiring reward {itemTemplateId} count={expectedCount}", item.CountOrInstanceValue == expectedCount);
                 Check($"expiring reward {itemTemplateId} expire={expectedExpireTime}", item.ExpireTime == expectedExpireTime);
+            }
+        }
+
+        private static void CheckMainItemKind(string databasePath, int itemTemplateId, string expectedKind)
+        {
+            using (var connection = new SqliteConnection(SqliteDatabaseBootstrap.BuildConnectionString(databasePath)))
+            {
+                connection.Open();
+                using (var command = connection.CreateCommand())
+                {
+                    command.CommandText = @"
+SELECT item_kind
+FROM character_items
+WHERE character_id = @characterId
+  AND list_type = 0
+  AND item_template_id = @itemTemplateId
+ORDER BY slot_index
+LIMIT 1;";
+                    command.Parameters.AddWithValue("@characterId", CharacterId);
+                    command.Parameters.AddWithValue("@itemTemplateId", itemTemplateId);
+                    var actual = command.ExecuteScalar() as string;
+                    Check($"main reward {itemTemplateId} kind={expectedKind}", string.Equals(actual, expectedKind, StringComparison.Ordinal));
+                }
             }
         }
 
