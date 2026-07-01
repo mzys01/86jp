@@ -34,7 +34,6 @@ namespace DfoServer.Game.Inventory
                 ("happy_token_cera", "INTEGER NOT NULL DEFAULT 0"),
             });
             DfoServer.Sqlite.SqliteSchemaMigrator.MigrateCharacterItemsUniqueConstraint(connection);
-            CurrencyService.MigrateCeraFromPacketTemplates(connection);
             MigrateSubtype1BlobIfNeeded(connection);
             DfoServer.Game.CharacterData.SqliteSubtype0FieldsRepository.MigrateFromBlobIfNeeded(connection);
         }

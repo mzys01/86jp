@@ -454,17 +454,6 @@ CREATE TABLE IF NOT EXISTS packet_sequence (
     FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
 );
 
-CREATE TABLE IF NOT EXISTS packet_templates (
-    character_id INTEGER NOT NULL,
-    command INTEGER NOT NULL,
-    noti_type INTEGER NOT NULL,
-    occurrence_index INTEGER NOT NULL DEFAULT 0,
-    body BLOB NOT NULL,
-    body_length INTEGER NOT NULL,
-    PRIMARY KEY (character_id, command, noti_type, occurrence_index),
-    FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
-);
-
 CREATE TABLE IF NOT EXISTS equipped_items (
     character_id INTEGER NOT NULL,
     equip_list_blob BLOB NOT NULL,
@@ -480,8 +469,8 @@ CREATE TABLE IF NOT EXISTS global_server_event_phase (
 
 -- USERINFO subtype1 动态化: 结构化字段表(替代 equipped_items.equip_list_blob 整块 blob)
 
--- 进游戏 init 流的每包独立存储(替代 packet_templates 的混合大表)
--- 种子从 packet_templates 迁移; 新角色按需 INSERT 默认值
+-- 进游戏 init 流的每包独立存储
+-- 新角色按需 INSERT 默认值
 CREATE TABLE IF NOT EXISTS character_init_bodies (
     character_id INTEGER NOT NULL,
     noti_type INTEGER NOT NULL,
