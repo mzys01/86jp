@@ -910,68 +910,6 @@ WHERE character_id = @cid AND slot = @slot AND item_id = @itemId;";
                 command.ExecuteNonQuery();
             }
 
-            SyncEquipListBlob(connection, transaction, characterId);
-        }
-
-        private static void SyncEquipListBlob(SqliteConnection connection, SqliteTransaction transaction, int characterId)
-        {
-            byte[] oldBlob = null;
-            using (var command = connection.CreateCommand())
-            {
-                command.Transaction = transaction;
-                command.CommandText = "SELECT equip_list_blob FROM equipped_items WHERE character_id = @cid";
-                command.Parameters.AddWithValue("@cid", characterId);
-                var value = command.ExecuteScalar();
-                if (value != null && value != DBNull.Value)
-                    oldBlob = (byte[])value;
-            }
-
-            if (oldBlob == null || oldBlob.Length < 93)
-                return;
-
-            try
-            {
-                var parsed = MakeEquipListCodec.Parse(oldBlob);
-                var entries = new List<MakeEquipListCodec.Entry>();
-                using (var command = connection.CreateCommand())
-                {
-                    command.Transaction = transaction;
-                    command.CommandText = @"
-SELECT slot, item_id, expire_time, raw_entry
-FROM character_equipped_entries
-WHERE character_id = @cid
-ORDER BY slot;";
-                    command.Parameters.AddWithValue("@cid", characterId);
-                    using (var reader = command.ExecuteReader())
-                    {
-                        while (reader.Read())
-                        {
-                            entries.Add(new MakeEquipListCodec.Entry
-                            {
-                                Slot = reader.GetInt32(0),
-                                ItemId = reader.GetInt32(1),
-                                ExpireTime = reader.GetInt32(2),
-                                Raw = (byte[])reader.GetValue(3),
-                            });
-                        }
-                    }
-                }
-
-                parsed.Entries = entries;
-                var newBlob = MakeEquipListCodec.Build(parsed);
-                using (var command = connection.CreateCommand())
-                {
-                    command.Transaction = transaction;
-                    command.CommandText = "INSERT OR REPLACE INTO equipped_items (character_id, equip_list_blob) VALUES (@cid, @blob)";
-                    command.Parameters.AddWithValue("@cid", characterId);
-                    command.Parameters.AddWithValue("@blob", newBlob);
-                    command.ExecuteNonQuery();
-                }
-            }
-            catch (Exception ex)
-            {
-                FileLogger.Log($"[EquipListBlob] sync skipped char={characterId}: {ex.Message}");
-            }
         }
 
         private static void EnsureVisibleSocketCount(CommonInventoryItem item, int openCount)

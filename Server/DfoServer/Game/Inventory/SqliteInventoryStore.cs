@@ -360,16 +360,6 @@ ORDER BY slot_index;";
             }
         }
 
-        public void SaveEquipListBlob(byte[] blob)
-        {
-            using (var connection = _context.OpenConnection())
-            using (var transaction = connection.BeginTransaction())
-            {
-                _equipStore.SaveEquipListBlob(connection, transaction, _context.CharacterId, _context.AccountId, blob);
-                transaction.Commit();
-            }
-        }
-
         public void SeedNewCharacterEquipment((short slot, int itemId)[] equipment)
         {
             using (var connection = _context.OpenConnection())

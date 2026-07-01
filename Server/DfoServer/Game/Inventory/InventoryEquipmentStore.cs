@@ -22,18 +22,6 @@ namespace DfoServer.Game.Inventory
 
         // ── public API (delegated from SqliteInventoryStore) ──
 
-        internal void SaveEquipListBlob(SqliteConnection connection, SqliteTransaction transaction, int characterId, int accountId, byte[] blob)
-        {
-            using (var command = connection.CreateCommand())
-            {
-                command.Transaction = transaction;
-                command.CommandText = "INSERT OR REPLACE INTO equipped_items (character_id, equip_list_blob) VALUES (@cid, @blob)";
-                command.Parameters.AddWithValue("@cid", characterId);
-                command.Parameters.AddWithValue("@blob", blob);
-                command.ExecuteNonQuery();
-            }
-        }
-
         internal void SeedNewCharacterEquipment(SqliteConnection connection, SqliteTransaction transaction, int characterId, int accountId, (short slot, int itemId)[] equipment)
         {
             var entries = LoadEquipEntriesTx(connection, transaction, characterId);

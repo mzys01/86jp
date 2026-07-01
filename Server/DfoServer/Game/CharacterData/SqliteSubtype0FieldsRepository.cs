@@ -176,52 +176,5 @@ namespace DfoServer.Game.CharacterData
         
         
         
-        public static void MigrateFromBlobIfNeeded(SqliteConnection conn)
-        {
-            try
-            {
-                using (var cmd = conn.CreateCommand())
-                {
-                    cmd.CommandText = "SELECT COUNT(*) FROM character_subtype0_fields;";
-                    if (Convert.ToInt32(cmd.ExecuteScalar()) > 0) return;
-                }
-
-                using (var cmd = new SqliteCommand(
-                    "SELECT character_id, remaining_bytes FROM character_userinfo_blobs WHERE user_info_type=0 AND gate_or_count>0", conn))
-                using (var r = cmd.ExecuteReader())
-                {
-                    var pending = new System.Collections.Generic.List<(int cid, byte[] blob)>();
-                    while (r.Read())
-                        pending.Add((r.GetInt32(0), (byte[])r.GetValue(1)));
-                    r.Close();
-
-                    var done = new System.Collections.Generic.HashSet<int>();
-                    foreach (var (cid, blob) in pending)
-                    {
-                        if (done.Contains(cid)) continue; 
-                        const int headerFields = 7, appearEntrySize = 23, tailLength = UserInfoMinimumTailSnapshot.TailLength;
-                        if (blob == null || blob.Length < headerFields + tailLength) continue;
-                        int appearCount = blob[6];
-                        int tailStart = headerFields + appearCount * appearEntrySize;
-                        if (tailStart + tailLength > blob.Length) continue;
-
-                        var tail = new byte[tailLength];
-                        Buffer.BlockCopy(blob, tailStart, tail, 0, tailLength);
-                        Save(conn, cid, UserInfoMinimumTailSnapshot.FromBytes(tail));
-                        done.Add(cid);
-                        FileLogger.Log($"[Subtype0FieldsMigrator] char {cid}: 104B tail → character_subtype0_fields OK");
-
-                        int extraBytes = blob.Length - (tailStart + tailLength);
-                        if (extraBytes > 0)
-                            FileLogger.Log($"[Subtype0FieldsMigrator] WARNING char {cid}: blob 含 {extraBytes}B 多用户城镇广播块 — " +
-                                "运行时不回放(本服无其他在线用户), 该种子 occ0/occ2 验证将与抓包差这部分字节");
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                FileLogger.Log($"[Subtype0FieldsMigrator] ERROR: {ex}");
-            }
-        }
     }
 }
