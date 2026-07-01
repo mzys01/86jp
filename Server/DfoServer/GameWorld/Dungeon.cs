@@ -1032,16 +1032,99 @@ namespace DfoServer.GameWorld
                 }
                 return -1;
             }
+            var bossActorMapCache = new Dictionary<int, bool>();
+            // Use parsed map content instead of map ids so duplicated BOSS coordinates work across PVFs.
+            bool HasBossActor(int mapId)
+            {
+                if (maplst == null || mapId <= 0) return false;
+                bool cached;
+                if (bossActorMapCache.TryGetValue(mapId, out cached))
+                    return cached;
+
+                var found = false;
+                try
+                {
+                    var mapFilePath = ResolveFilePath(maplst, mapId, "map");
+                    var mapFile = MapFile.Parse(PvfArchiveAccessor.ReadText(Path.Combine("map", mapFilePath)));
+                    foreach (var monster in mapFile.Monsters)
+                    {
+                        if (monster.MonsterId.GetValueOrDefault() > 0 && monster.Type == MonsterType.Boss)
+                        {
+                            found = true;
+                            break;
+                        }
+                    }
+                    if (!found)
+                    {
+                        foreach (var apc in mapFile.AICharacters)
+                        {
+                            if (apc.Code > 0 && apc.AIType == ApcAIType.Boss)
+                            {
+                                found = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+                catch { }
+                bossActorMapCache[mapId] = found;
+                return found;
+            }
+            int ChooseBossRoomMapId(List<int> bossActorMapIds, int[] originalCandidates)
+            {
+                if (bossActorMapIds != null && bossActorMapIds.Count > 0)
+                {
+                    return bossActorMapIds.Count > 1
+                        ? bossActorMapIds[_mazeRng.Next(bossActorMapIds.Count)]
+                        : bossActorMapIds[0];
+                }
+
+                if (originalCandidates == null || originalCandidates.Length == 0)
+                    return -1;
+                return originalCandidates.Length > 1
+                    ? originalCandidates[_mazeRng.Next(originalCandidates.Length)]
+                    : originalCandidates[0];
+            }
             int FindMapIdByMapSpecification(bool allowMapTypeForBossRoom)
             {
                 if (defaultMaze.MapSpecifications == null)
                     return -1;
 
+                if (isBossRoom)
+                {
+                    var bossActorMapIds = new List<int>();
+                    int[] originalCandidates = null;
+                    for (var specIndex = 0; specIndex < defaultMaze.MapSpecifications.Count; specIndex++)
+                    {
+                        var item = defaultMaze.MapSpecifications[specIndex];
+                        if (item.X != x || item.Y != y)
+                            continue;
+                        var specType = item.Type ?? string.Empty;
+                        if (!string.Equals(specType, "boss", StringComparison.OrdinalIgnoreCase)
+                            && !(allowMapTypeForBossRoom && string.Equals(specType, "map", StringComparison.OrdinalIgnoreCase)))
+                            continue;
+
+                        var candidates = item.MapCandidates != null && item.MapCandidates.Length > 0
+                            ? item.MapCandidates
+                            : new[] { item.Index };
+                        if (originalCandidates == null)
+                            originalCandidates = candidates;
+                        foreach (var candidate in candidates)
+                        {
+                            if (candidate > 0 && HasBossActor(candidate))
+                                bossActorMapIds.Add(candidate);
+                        }
+                    }
+
+                    // Some PVFs list an ordinary coordinate map before the actual BOSS variant
+                    // for the same room. Prefer maps whose content declares a BOSS actor; otherwise
+                    // keep the original first-match/random-candidate behavior.
+                    return ChooseBossRoomMapId(bossActorMapIds, originalCandidates);
+                }
+
                 foreach (var item in defaultMaze.MapSpecifications)
                 {
                     if (item.X != x || item.Y != y)
-                        continue;
-                    if (isBossRoom && item.Type != "boss" && !allowMapTypeForBossRoom)
                         continue;
                     if (item.MapCandidates != null && item.MapCandidates.Length > 1)
                         return item.MapCandidates[_mazeRng.Next(item.MapCandidates.Length)];

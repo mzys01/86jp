@@ -106,8 +106,55 @@ namespace DfoServer.SelfTests
                 failures++;
             }
 
+            try
+            {
+                var upperBoss = DungeonData.GetDungeonMapMonsterSummaryInformation(
+                    dungeonId: 147,
+                    x: 4,
+                    y: 1,
+                    mazeIndex: 0,
+                    bossPos: new[] { 4, 1 });
+                var middleBoss = DungeonData.GetDungeonMapMonsterSummaryInformation(
+                    dungeonId: 147,
+                    x: 4,
+                    y: 2,
+                    mazeIndex: 0,
+                    bossPos: new[] { 4, 2 });
+                var lowerBoss = DungeonData.GetDungeonMapMonsterSummaryInformation(
+                    dungeonId: 147,
+                    x: 4,
+                    y: 3,
+                    mazeIndex: 0,
+                    bossPos: new[] { 4, 3 });
+
+                Check("issue 180 upper boss room uses boss actor map",
+                    upperBoss.Index == 8179 && ContainsMonster(upperBoss, 65312),
+                    ref failures);
+                Check("issue 180 middle boss room skips duplicate non-boss map",
+                    middleBoss.Index == 8180 && ContainsMonster(middleBoss, 65312),
+                    ref failures);
+                Check("issue 180 lower boss room uses boss actor map",
+                    lowerBoss.Index == 8181 && ContainsMonster(lowerBoss, 65312),
+                    ref failures);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[FAIL] issue 180 boss rooms use boss actor maps: {ex.Message}");
+                failures++;
+            }
+
             Console.WriteLine(failures == 0 ? "PASS" : $"FAIL: {failures}");
             return failures == 0 ? 0 : 1;
+        }
+
+        private static bool ContainsMonster(DungeonData.MazeSumInfo maze, int monsterCode)
+        {
+            if (maze.Monsters == null)
+                return false;
+            foreach (var monster in maze.Monsters)
+                if (monster.Code == monsterCode)
+                    return true;
+            return false;
         }
 
         private static void Check(string name, bool ok, ref int failures)
