@@ -706,9 +706,6 @@ ON CONFLICT(character_id) DO UPDATE SET character_option_blob = @body", conn))
 
 
 
-        public byte[] LoadGlobalRawPacket(int notiType)
-            => _globalState.LoadGlobalRawPacket(notiType);
-
         public byte[] LoadServerEventPhaseBitmap()
             => _globalState.LoadServerEventPhaseBitmap();
 

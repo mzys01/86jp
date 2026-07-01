@@ -17,8 +17,6 @@ namespace DfoServer.Game.CharacterData
 
         void LoadAll(int characterId, SelectCharacterInitializationSnapshot snapshot);
 
-        byte[] LoadGlobalRawPacket(int notiType);
-
         byte[] LoadServerEventPhaseBitmap();
 
         void SeedRawPacketsFromTemplates(int characterId, List<SelectCharacterPacketTemplate> templates);

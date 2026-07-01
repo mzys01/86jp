@@ -400,11 +400,6 @@ CREATE TABLE IF NOT EXISTS character_userinfo_blobs (
     FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
 );
 
-CREATE TABLE IF NOT EXISTS global_raw_packets (
-    noti_type INTEGER PRIMARY KEY,
-    packet_body BLOB NOT NULL
-);
-
 CREATE TABLE IF NOT EXISTS get_userinfo_template (
     id INTEGER PRIMARY KEY DEFAULT 1,
     seed_character_id INTEGER NOT NULL DEFAULT 1000,

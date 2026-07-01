@@ -14,20 +14,6 @@ namespace DfoServer.Game.CharacterData
             _connectionString = connectionString;
         }
 
-        internal byte[] LoadGlobalRawPacket(int notiType)
-        {
-            using (var conn = new SqliteConnection(_connectionString))
-            {
-                conn.Open();
-                using (var cmd = new SqliteCommand("SELECT packet_body FROM global_raw_packets WHERE noti_type = @nt", conn))
-                {
-                    cmd.Parameters.AddWithValue("@nt", notiType);
-                    var result = cmd.ExecuteScalar();
-                    return result == null || result == DBNull.Value ? null : (byte[])result;
-                }
-            }
-        }
-
         internal byte[] LoadServerEventPhaseBitmap()
         {
             using (var conn = new SqliteConnection(_connectionString))
@@ -76,15 +62,6 @@ VALUES (@cid, @body)
 ON CONFLICT(character_id) DO UPDATE SET character_option_blob = COALESCE(character_option_blob, @body)", conn, tx))
                             {
                                 cmd.Parameters.AddWithValue("@cid", characterId);
-                                cmd.Parameters.AddWithValue("@body", body);
-                                cmd.ExecuteNonQuery();
-                            }
-                        }
-                        else if (t.Command == 0x01 && t.Type == 0x0312)
-                        {
-                            using (var cmd = new SqliteCommand("INSERT OR IGNORE INTO global_raw_packets (noti_type, packet_body) VALUES (@nt, @body)", conn, tx))
-                            {
-                                cmd.Parameters.AddWithValue("@nt", 0x10312);
                                 cmd.Parameters.AddWithValue("@body", body);
                                 cmd.ExecuteNonQuery();
                             }
