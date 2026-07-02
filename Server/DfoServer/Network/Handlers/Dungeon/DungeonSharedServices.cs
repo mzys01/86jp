@@ -86,8 +86,8 @@ namespace DfoServer.Network.Handlers.Dungeon
                     ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
                 repo.UpdateLevelAndExp(characterId, level, exp);
 
-                // 升级后按新等级重算战斗属性并持久化到 subtype1, 否则属性停留在旧等级。
-                // growType 决定成长表选择(15-49 转职 / 50+ 觉醒), 必须从角色记录取, 默认 0 会算成未转职属性。
+                // After level-up, recompute combat stats for the new level and persist subtype1.
+                // growType selects the growth table (15-49 advancement / 50+ awakening); it must come from the character record.
                 var rec = repo.GetById(characterId);
                 if (rec != null)
                 {

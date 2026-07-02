@@ -25,8 +25,8 @@ namespace DfoServer.Network.Handlers.Dungeon
 
         internal DungeonSettlementHandler(DungeonSharedServices svc) => _svc = svc;
 
-        // 鈹€鈹€ Settlement result 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
-        // df_game_r CParty::CheckPlayResult 鈫?CParty::SetPlayResult
+        // Settlement result.
+        // df_game_r CParty::CheckPlayResult -> CParty::SetPlayResult
         // Sends 3 NOTI packets (34, 37, 35) to show the settlement screen.
         // Card layout is deferred: a 2 s server timer sends it automatically
         // so the player sees the settlement summary first, then the cards appear.
@@ -116,7 +116,7 @@ namespace DfoServer.Network.Handlers.Dungeon
                 await _svc.SendUserInfoBroadcast(session);
             }
 
-            // Card layout is deferred: 2 s timer 鈫?layout, then 3 s 鈫?auto-flip free card.
+            // Card layout is deferred: 2 s timer -> layout, then 4 s -> auto-flip free card.
             session.Player.CurDungeonClearState = 4;
             session.Player.CurCardFlipCount = 0;
             session.Player.CurFreeCardSlots = new byte[] { 0xFF, 0xFF, 0xFF, 0xFF };
@@ -127,7 +127,7 @@ namespace DfoServer.Network.Handlers.Dungeon
             await _svc.UpdateDungeonPermission(session, session.Player.CurDungeon, session.Player.CurDungeonDifficulty);
         }
 
-        // 鈹€鈹€ Auto-flow timer 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+        // Auto-flow timer.
         // Phase 1: after layoutDelayMs, send the card layout (0x0045 + 0x0046).
         // Phase 2: after autoFlipDelayMs more, flip the free card.
         // If the player presses a key before phase 1 fires, HandleSelectCard (state==4)
@@ -259,7 +259,7 @@ namespace DfoServer.Network.Handlers.Dungeon
             {
                 try
                 {
-                    // Phase 1 鈥?wait, then show card layout
+                    // Phase 1: wait, then show card layout.
                     await Task.Delay(layoutDelayMs, token);
                     if (token.IsCancellationRequested) return;
                     if (session.Player.CurDungeonClearState != 4) return;
@@ -269,7 +269,7 @@ namespace DfoServer.Network.Handlers.Dungeon
                     await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0046, BuildCardLayoutAck()));
                     session.Player.CurDungeonClearState = 5;
 
-                    // Phase 2 鈥?wait, then auto-flip free card
+                    // Phase 2: wait, then auto-flip free card.
                     await Task.Delay(autoFlipDelayMs, token);
                     if (token.IsCancellationRequested) return;
 
@@ -322,7 +322,7 @@ namespace DfoServer.Network.Handlers.Dungeon
 
         // Auto-flips only the free card (never the paid card).
         // Sends ACK 0x0047 with flipped card info, then delivers free card
-        // rewards via NOTI 14. CurCardRewards is NOT cleared 鈥?the paid card
+        // rewards via NOTI 14. CurCardRewards is NOT cleared; the paid card
         // stays available for the player to flip/EPLP.
         private async Task AutoFlipFreeCard(EnhancedClientSession session)
         {
@@ -337,21 +337,21 @@ namespace DfoServer.Network.Handlers.Dungeon
             bool hasPaid = HasPaidCardReward(session.Player.CurCardRewards);
             if (!hasPaid)
             {
-                // No paid card 鈥?deliver free rewards and clear cards so EPLP works.
+                // No paid card: deliver free rewards and clear cards so EPLP works.
                 await DeliverCardRewards(session);
                 session.Player.CurCardRewards = null;
             }
             else
             {
-                // Paid card pending 鈥?only deliver free card rewards; keep cards alive.
+                // Paid card pending: only deliver free card rewards; keep cards alive.
                 await DeliverFreeCardRewardsOnly(session);
             }
         }
 
-        // 鈹€鈹€ SELECT_CARD (CMD 0x0047) 鈥?card flip only 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+        // SELECT_CARD (CMD 0x0047): card flip only.
         // body[0]: 0=free card, 1=paid card
         // body[1]: cardIndex (0-3)
-        // EPLP buttons come via CMD 0x0048 鈫?HandleEplpCommand, never here.
+        // EPLP buttons come via CMD 0x0048 -> HandleEplpCommand, never here.
         internal async Task HandleSelectCard(EnhancedClientSession session, GamePacketHeader header, byte[] body)
         {
             if (body.Length < 2) return;
@@ -372,7 +372,7 @@ namespace DfoServer.Network.Handlers.Dungeon
 
             CancelAutoFlip(session);
 
-            // Only card flips here 鈥?EPLP goes through CMD 0x0048.
+            // Only card flips here; EPLP goes through CMD 0x0048.
             if (cardType > 1 || cardIndex > 3) return;
 
             session.Player.CurCardFlipCount++;
@@ -397,9 +397,9 @@ namespace DfoServer.Network.Handlers.Dungeon
             }
         }
 
-        // 鈹€鈹€ EPLP (CMD 0x0048) 鈥?settlement option buttons 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+        // EPLP (CMD 0x0048): settlement option buttons.
         // body[0]: 1=confirm, 2=status update
-        // body[1]: 0=鍐嶆鎸戞垬, 1=閫夋嫨鍏朵粬鍦颁笅鍩? 2=杩斿洖鍩庨晣
+        // body[1]: 0=retry, 1=select another dungeon, 2=return to town
         // If a paid card is still pending, auto-flip it before returning to town
         // (matches DNF behaviour: clicking any EPLP button auto-pays the card).
         internal async Task HandleEplpCommand(EnhancedClientSession session, GamePacketHeader header, byte[] body)
@@ -533,7 +533,7 @@ namespace DfoServer.Network.Handlers.Dungeon
                 : DungeonSharedServices.BuildItemEntry(slot, (uint)card.ItemId, (uint)card.StackCount));
         }
 
-        // CMD 0x0045 鈥?client requests card layout after settlement screen.
+        // CMD 0x0045: client requests card layout after settlement screen.
         // Send the deferred card layout and start a fresh 3 s auto-flip timer.
         internal async Task HandleCardStartRequest(EnhancedClientSession session, GamePacketHeader header, byte[] body)
         {
@@ -552,7 +552,7 @@ namespace DfoServer.Network.Handlers.Dungeon
         // df_game_r CParty::ClearDungeon (0x85A9330)
         // Preamble: if (!cleared_flag) return; Epilogue: cleared_flag = 1;
         // Normal dungeon sends NOTI 31 (ENABLE_CLEAR_DUNGEON), sets CurBossKilled
-        // + NOTI 279 (0x0117) SECRET_SHOP_NPC 鈥?settlement mystery merchant NPC ID
+        // + NOTI 279 (0x0117) SECRET_SHOP_NPC: settlement mystery merchant NPC ID
         internal async Task TryClearDungeon(EnhancedClientSession session, string reason, int bossCode = 0)
         {
             if (session.Player.CurDungeonCleared) return;
@@ -634,7 +634,7 @@ namespace DfoServer.Network.Handlers.Dungeon
             FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] ReturnToVillage: 4 town packets sent");
         }
 
-        // CMD ACK 71 body 鈥?86JP 8-seat format
+        // CMD ACK 71 body: 86JP 8-seat format
         // seat[0-3]: active seats (solo uses seat0 only)
         // seat[4-7]: 0xFF*4 (hidden/disabled)
         private byte[] BuildCardInfoAck(EnhancedClientSession session)
@@ -696,7 +696,7 @@ namespace DfoServer.Network.Handlers.Dungeon
             return w.ToArray();
         }
 
-        // CMD ACK 70 鈥?card layout: u8 resultCode + u16[8] slotStatus
+        // CMD ACK 70: card layout, u8 resultCode + u16[8] slotStatus
         // Solo: slot[0]=0x0001(flippable) slot[1-7]=0xFFFF(disabled)
         private static byte[] BuildCardLayoutAck()
         {

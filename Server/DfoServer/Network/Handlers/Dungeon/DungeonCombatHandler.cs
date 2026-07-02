@@ -15,7 +15,7 @@ namespace DfoServer.Network.Handlers.Dungeon
 {
     internal sealed class DungeonCombatHandler
     {
-        private const int GrowthContractPremiumType = 84; // PVF premiumlist_new.etc: 成长之契约
+        private const int GrowthContractPremiumType = 84; // PVF premiumlist_new.etc: growth contract
         private const float GrowthContractMonsterBonusRate = 0.20f;
 
         private readonly DungeonSharedServices _svc;
@@ -120,7 +120,7 @@ namespace DfoServer.Network.Handlers.Dungeon
                 {
                     var dropPool = MonsterDropTable.GetDropPool(monster.Code);
 
-                    // 区域材料是服务端补偿到普通怪物 [item] 池里的掉落，深渊 hidden actor 不走这条普通分支。
+                    // Area material is added by the server to the normal monster item pool; hidden hell actors do not use this path.
                     int areaMaterialId = AreaMaterialDropProvider.GetAreaMaterialItem(session.Player.CurDungeon);
                     if (areaMaterialId > 0)
                     {
