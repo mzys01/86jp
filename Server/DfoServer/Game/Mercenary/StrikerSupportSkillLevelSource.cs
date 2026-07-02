@@ -38,7 +38,7 @@ namespace DfoServer.Game.Mercenary
             return result;
         }
 
-        public static byte ResolveBaseLevel(int characterId, ushort skillId, ushort strikerSkillId)
+        public static byte ResolveBaseLevel(int characterId, ushort skillId)
         {
             if (characterId <= 0 || skillId == 0)
                 return 0;

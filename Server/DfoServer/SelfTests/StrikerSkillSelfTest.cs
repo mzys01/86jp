@@ -200,7 +200,7 @@ WHERE character_id=@cid", conn))
                 SkillId = 24,
                 StrikerSkillId = 1,
             });
-            var expectedLevel = StrikerSupportSkillLevelSource.ResolveBaseLevel(1002, 24, 1);
+            var expectedLevel = StrikerSupportSkillLevelSource.ResolveBaseLevel(1002, 24);
 
             Check("0x019F main apply patch keeps record length", patched.Length == raw.Length);
             Check("0x019F main apply patch appends missing support skill",
@@ -220,6 +220,29 @@ WHERE character_id=@cid", conn))
             Check("0x019F main apply patch updates traced selected skill",
                 patched[selectedOffset] == 24 &&
                 patched[selectedOffset + 1] == 0);
+
+            var asuraPatched = StrikerSupportTagCharacterPacketBuilder.PatchSelectedSkillIntoTagRecord(raw, new MercenarySupportState
+            {
+                OwnerCharacterId = 91001,
+                Slot = 0,
+                SupportCharacterId = 1009,
+                SkillId = 74,
+                StrikerSkillId = 43,
+            });
+            var asuraRequiredLevel = StrikerSupportSkillLevelSource.ResolveBaseLevel(1009, 47);
+            var asuraLevel = StrikerSupportSkillLevelSource.ResolveBaseLevel(1009, 74);
+            var asuraRequiredOffset = appendedOffset;
+            var asuraSelectedOffset = appendedOffset + 4;
+            Check("0x019F main apply patch appends striker required skill before selected skill",
+                asuraPatched[tableOffset] == 43 &&
+                asuraPatched[asuraRequiredOffset] == 47 &&
+                asuraPatched[asuraRequiredOffset + 1] == 47 &&
+                asuraPatched[asuraRequiredOffset + 2] == 0 &&
+                asuraPatched[asuraRequiredOffset + 3] == asuraRequiredLevel &&
+                asuraPatched[asuraSelectedOffset] == 43 &&
+                asuraPatched[asuraSelectedOffset + 1] == 74 &&
+                asuraPatched[asuraSelectedOffset + 2] == 0 &&
+                asuraPatched[asuraSelectedOffset + 3] == asuraLevel);
 
             var fallback = StrikerSupportTagCharacterPacketBuilder.CloneTagCharacterRawRecordTemplate();
             var fallbackPatched = StrikerSupportTagCharacterPacketBuilder.PatchSelectedSkillIntoTagRecord(fallback, new MercenarySupportState

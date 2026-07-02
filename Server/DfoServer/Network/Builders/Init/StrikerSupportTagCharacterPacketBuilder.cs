@@ -243,6 +243,7 @@ namespace DfoServer.Network.Builders
             PatchResolverGrowNibble(patched, state);
             PatchDisplayJobContext(patched, state);
             PatchMainApplySelectedSkill(patched, table, state.SkillId);
+            PatchMainApplyRequiredSkillEntry(patched, table, state);
             PatchMainApplySkillEntry(patched, table, state, patchEntryKey: false);
             return patched;
         }
@@ -260,6 +261,7 @@ namespace DfoServer.Network.Builders
             }
 
             PatchMainApplySelectedSkill(patched, table, state.SkillId);
+            PatchMainApplyRequiredSkillEntry(patched, table, state);
             PatchMainApplySkillEntry(patched, table, state, patchEntryKey: false);
             return patched;
         }
@@ -496,19 +498,65 @@ namespace DfoServer.Network.Builders
             rawRecord[table.SelectedOffset + 1] = (byte)((selectedSkill >> 8) & 0xFF);
         }
 
+        private static void PatchMainApplyRequiredSkillEntry(byte[] rawRecord, MainSkillTable table, MercenarySupportState state)
+        {
+            if (state == null || state.SupportCharacterId <= 0 || state.SkillId == 0)
+                return;
+
+            var support = LoadCharacterSummary(state.SupportCharacterId);
+            if (support == null)
+                return;
+
+            var skill = StrikerSkillDataProvider.FindBySkill(
+                support.Job,
+                support.GrowType,
+                state.SkillId,
+                state.StrikerSkillId);
+            if (skill == null || skill.RequiredSkillIndex <= 0 || skill.RequiredSkillIndex == state.SkillId)
+                return;
+
+            var requiredSkillId = (ushort)Math.Min(ushort.MaxValue, skill.RequiredSkillIndex);
+            var requiredEntryKey = (byte)Math.Max(0, Math.Min(byte.MaxValue, skill.RequiredSkillIndex));
+            PatchMainApplySkillEntry(
+                rawRecord,
+                table,
+                requiredSkillId,
+                requiredEntryKey,
+                StrikerSupportSkillLevelSource.ResolveBaseLevel(state.SupportCharacterId, requiredSkillId),
+                patchEntryKey: false);
+        }
+
         private static void PatchMainApplySkillEntry(byte[] rawRecord, MainSkillTable table, MercenarySupportState state, bool patchEntryKey)
         {
+            if (state == null)
+                return;
+
+            PatchMainApplySkillEntry(
+                rawRecord,
+                table,
+                state.SkillId,
+                (byte)Math.Max(0, Math.Min(byte.MaxValue, (int)state.StrikerSkillId)),
+                ResolveBaseSkillLevel(state),
+                patchEntryKey);
+        }
+
+        private static void PatchMainApplySkillEntry(
+            byte[] rawRecord,
+            MainSkillTable table,
+            ushort skillId,
+            byte entryKey,
+            byte levelOrFlag,
+            bool patchEntryKey)
+        {
             var count = rawRecord[table.CountOffset];
-            var levelOrFlag = ResolveBaseSkillLevel(state);
-            var entryKey = (byte)Math.Max(0, Math.Min(byte.MaxValue, (int)state.StrikerSkillId));
-            if (count == 0 || table.EntriesOffset + 3 >= rawRecord.Length)
+            if (skillId == 0 || count == 0 || table.EntriesOffset + 3 >= rawRecord.Length)
                 return;
 
             for (var i = 0; i < count; i++)
             {
                 var entry = table.EntriesOffset + i * 4;
-                var skillId = rawRecord[entry + 1] | (rawRecord[entry + 2] << 8);
-                if (skillId != state.SkillId)
+                var existingSkillId = rawRecord[entry + 1] | (rawRecord[entry + 2] << 8);
+                if (existingSkillId != skillId)
                     continue;
 
                 if (patchEntryKey)
@@ -525,8 +573,8 @@ namespace DfoServer.Network.Builders
                     return;
 
             rawRecord[table.EndOffset] = entryKey;
-            rawRecord[table.EndOffset + 1] = (byte)(state.SkillId & 0xFF);
-            rawRecord[table.EndOffset + 2] = (byte)((state.SkillId >> 8) & 0xFF);
+            rawRecord[table.EndOffset + 1] = (byte)(skillId & 0xFF);
+            rawRecord[table.EndOffset + 2] = (byte)((skillId >> 8) & 0xFF);
             rawRecord[table.EndOffset + 3] = levelOrFlag;
             rawRecord[table.CountOffset] = (byte)(count + 1);
             table.EndOffset += 4;
@@ -539,8 +587,7 @@ namespace DfoServer.Network.Builders
 
             return StrikerSupportSkillLevelSource.ResolveBaseLevel(
                 state.SupportCharacterId,
-                state.SkillId,
-                state.StrikerSkillId);
+                state.SkillId);
         }
 
         private static byte[] PatchSupportEquipmentEntries(byte[] rawRecord, int supportCharacterId, string context)

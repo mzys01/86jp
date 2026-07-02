@@ -194,9 +194,6 @@ namespace DfoServer.Network.Handlers
             foreach (var skill in StrikerSkillDataProvider.GetAvailableSkills(ch.Job, ch.GrowType, ch.Level))
             {
                 var level = StrikerSupportSkillLevelSource.ResolveBaseLevel(learnedLevels, skill);
-                if (level == 0)
-                    continue;
-
                 skills.Add(new StrikerCandidateSkillInfo
                 {
                     Skill = skill,
@@ -256,8 +253,7 @@ namespace DfoServer.Network.Handlers
             writer.WriteUInt16(state.SkillId);
             var level = StrikerSupportSkillLevelSource.ResolveBaseLevel(
                 state.SupportCharacterId,
-                state.SkillId,
-                state.StrikerSkillId);
+                state.SkillId);
             writer.WriteUInt16(level);
             writer.WriteUInt16(state.StrikerSkillId);
             writer.WriteByte(0x01);
