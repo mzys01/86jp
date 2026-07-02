@@ -1,0 +1,233 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Text;
+using DfoServer.Game.Characters;
+using DfoServer.Game.Inventory;
+using DfoServer.Game.Quests;
+using DfoServer.Infrastructure;
+using Microsoft.Data.Sqlite;
+
+namespace DfoServer.SelfTests
+{
+    public static class QuestClearSelfTest
+    {
+        private const int CharacterId = 291001;
+        private const int AccountId = 291001;
+        private const ushort ParentQuestId = 1826;
+        private const ushort SampleQuestId = 1827;
+        private const ushort ToolQuestId = 1828;
+
+        public static int Run()
+        {
+            Console.WriteLine("=== QUEST_CLEAR selftest ===");
+
+            var tempDir = Path.Combine(Path.GetTempPath(), "DfoServerSelfTests");
+            Directory.CreateDirectory(tempDir);
+            var dbPath = Path.Combine(tempDir, "quest-clear.db");
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+
+            var schemaPath = ServerPaths.SchemaFilePath;
+            var characterRepository = new SqliteCharacterRepository(dbPath, schemaPath);
+            SeedAccount(dbPath);
+            characterRepository.Create(new CharacterRecord
+            {
+                CharacterId = CharacterId,
+                AccountId = AccountId,
+                Name = Encoding.UTF8.GetBytes("quest-clear-test"),
+                Job = 0,
+                GrowType = 0,
+                Level = 23,
+                Gold = 0,
+                Coin = 0,
+            });
+
+            var assetService = new SqliteAssetService(dbPath, schemaPath);
+            var connStr = SqliteDatabaseBootstrap.BuildConnectionString(dbPath);
+            var failures = 0;
+
+            Check("1826 is quest-clear parent", GameWorld.QuestData.IsQuestClearQuest(ParentQuestId), ref failures);
+            Check("1826 requires 1827 and 1828",
+                string.Join(",", GameWorld.QuestData.GetQuestClearRequiredQuestIds(ParentQuestId)) == "1827,1828",
+                ref failures);
+
+            MarkQuestCleared(connStr, 1825);
+            var acceptParent = QuestService.HandleAcceptQuest(
+                connStr,
+                CharacterId,
+                BuildQuestBody(ParentQuestId),
+                assetService,
+                AccountId);
+            Check("accept parent succeeds", IsSuccessAck(acceptParent), ref failures);
+            Check("accept parent trigger starts with two missing subquests",
+                TryReadAcceptTrigger(acceptParent, out var initTrigger) && initTrigger == 2,
+                ref failures);
+
+            ResetQuestState(connStr);
+            MarkQuestCleared(connStr, ToolQuestId);
+            QuestService.SaveActiveQuests(connStr, CharacterId, new List<ActiveQuest>
+            {
+                new ActiveQuest { Slot = 0, QuestId = ParentQuestId, TriggerValue = 2 },
+                new ActiveQuest { Slot = 1, QuestId = SampleQuestId, TriggerValue = 0 },
+            });
+            var finishSample = QuestService.HandleFinishQuest(
+                connStr,
+                CharacterId,
+                BuildQuestBody(SampleQuestId),
+                assetService);
+            Check("finishing last missing child succeeds", IsSuccessAck(finishSample), ref failures);
+            Check("parent trigger syncs to zero", LoadTrigger(connStr, ParentQuestId) == 0, ref failures);
+
+            ResetQuestState(connStr);
+            MarkQuestCleared(connStr, ToolQuestId);
+            QuestService.SaveActiveQuests(connStr, CharacterId, new List<ActiveQuest>
+            {
+                new ActiveQuest { Slot = 0, QuestId = ParentQuestId, TriggerValue = 1 },
+            });
+            var blockedParent = QuestService.HandleFinishQuest(
+                connStr,
+                CharacterId,
+                BuildQuestBody(ParentQuestId),
+                assetService);
+            Check("parent finish fails while a subquest is missing", IsFailAck(blockedParent, 22), ref failures);
+
+            ResetQuestState(connStr);
+            MarkQuestCleared(connStr, ToolQuestId);
+            QuestService.SaveActiveQuests(connStr, CharacterId, new List<ActiveQuest>
+            {
+                new ActiveQuest { Slot = 0, QuestId = ParentQuestId, TriggerValue = 0 },
+            });
+            var triggerZeroButMissingChild = QuestService.HandleFinishQuest(
+                connStr,
+                CharacterId,
+                BuildQuestBody(ParentQuestId),
+                assetService);
+            Check("parent finish still checks children when trigger is already zero",
+                IsFailAck(triggerZeroButMissingChild, 22),
+                ref failures);
+
+            ResetQuestState(connStr);
+            MarkQuestCleared(connStr, ToolQuestId);
+            MarkQuestCleared(connStr, SampleQuestId);
+            QuestService.SaveActiveQuests(connStr, CharacterId, new List<ActiveQuest>
+            {
+                new ActiveQuest { Slot = 0, QuestId = ParentQuestId, TriggerValue = 2 },
+            });
+            var staleParent = QuestService.HandleFinishQuest(
+                connStr,
+                CharacterId,
+                BuildQuestBody(ParentQuestId),
+                assetService);
+            Check("stale nonzero parent trigger can finish after all subquests cleared", IsSuccessAck(staleParent), ref failures);
+
+            Console.WriteLine(failures == 0 ? "PASS" : $"FAIL: {failures}");
+            return failures == 0 ? 0 : 1;
+        }
+
+        private static byte[] BuildQuestBody(ushort questId)
+        {
+            var body = new byte[2];
+            BitConverter.GetBytes(questId).CopyTo(body, 0);
+            return body;
+        }
+
+        private static bool IsSuccessAck(byte[] ack)
+        {
+            return ack != null && ack.Length > 0 && ack[0] == 0x01;
+        }
+
+        private static bool IsFailAck(byte[] ack, byte errorCode)
+        {
+            return ack != null && ack.Length >= 2 && ack[0] == 0x00 && ack[1] == errorCode;
+        }
+
+        private static bool TryReadAcceptTrigger(byte[] ack, out uint trigger)
+        {
+            trigger = 0;
+            if (ack == null || ack.Length < 8 || ack[0] != 0x01)
+                return false;
+
+            trigger = BitConverter.ToUInt32(ack, 3);
+            return true;
+        }
+
+        private static uint LoadTrigger(string connStr, ushort questId)
+        {
+            var active = QuestService.LoadActiveQuests(connStr, CharacterId);
+            var quest = QuestService.FindByQuestId(active, questId);
+            return quest != null ? quest.TriggerValue : uint.MaxValue;
+        }
+
+        private static void SeedAccount(string dbPath)
+        {
+            using (var conn = new SqliteConnection(SqliteDatabaseBootstrap.BuildConnectionString(dbPath)))
+            {
+                conn.Open();
+                using (var cmd = conn.CreateCommand())
+                {
+                    cmd.CommandText = @"
+INSERT OR IGNORE INTO accounts (account_id, m_id, password_hash)
+VALUES (@aid, @mid, '');";
+                    cmd.Parameters.AddWithValue("@aid", AccountId);
+                    cmd.Parameters.AddWithValue("@mid", "quest-clear-test");
+                    cmd.ExecuteNonQuery();
+                }
+            }
+        }
+
+        private static void MarkQuestCleared(string connStr, int questId)
+        {
+            using (var conn = new SqliteConnection(connStr))
+            {
+                conn.Open();
+                using (var cmd = conn.CreateCommand())
+                {
+                    cmd.CommandText = @"
+INSERT OR REPLACE INTO character_invisible_falgs (character_id, slot_index, flag_value)
+VALUES (@cid, @qid, 1);";
+                    cmd.Parameters.AddWithValue("@cid", CharacterId);
+                    cmd.Parameters.AddWithValue("@qid", questId);
+                    cmd.ExecuteNonQuery();
+                }
+            }
+        }
+
+        private static void ResetQuestState(string connStr)
+        {
+            using (var conn = new SqliteConnection(connStr))
+            {
+                conn.Open();
+                using (var tx = conn.BeginTransaction())
+                {
+                    using (var cmd = conn.CreateCommand())
+                    {
+                        cmd.Transaction = tx;
+                        cmd.CommandText = "DELETE FROM character_active_quests WHERE character_id=@cid;";
+                        cmd.Parameters.AddWithValue("@cid", CharacterId);
+                        cmd.ExecuteNonQuery();
+                    }
+
+                    using (var cmd = conn.CreateCommand())
+                    {
+                        cmd.Transaction = tx;
+                        cmd.CommandText = @"
+DELETE FROM character_invisible_falgs
+WHERE character_id=@cid AND slot_index IN (1826, 1827, 1828);";
+                        cmd.Parameters.AddWithValue("@cid", CharacterId);
+                        cmd.ExecuteNonQuery();
+                    }
+
+                    tx.Commit();
+                }
+            }
+        }
+
+        private static void Check(string name, bool ok, ref int failures)
+        {
+            Console.WriteLine($"[{(ok ? "OK" : "FAIL")}] {name}");
+            if (!ok)
+                failures++;
+        }
+    }
+}
