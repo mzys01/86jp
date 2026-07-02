@@ -119,6 +119,9 @@ namespace DfoServer.Game.Quests
                 using (var scope = assetService.OpenScope(characterId, accountId))
                 {
                     EnsureActiveQuestTable(scope.Connection, scope.Transaction);
+                    if (GameWorld.QuestData.IsQuestClearQuest(questId))
+                        initTrigger = ComputeQuestClearTrigger(scope.Connection, scope.Transaction, characterId, questId);
+
                     // The accept ACK advertises event items; persist them so later quest checks see the same state.
                     foreach (var item in eventItems)
                     {
@@ -154,6 +157,9 @@ namespace DfoServer.Game.Quests
                 {
                     conn.Open();
                     EnsureActiveQuestTable(conn, null);
+                    if (GameWorld.QuestData.IsQuestClearQuest(questId))
+                        initTrigger = ComputeQuestClearTrigger(conn, null, characterId, questId);
+
                     InsertActiveQuest(conn, null, characterId, slot, questId, initTrigger);
                     if (repeatable)
                     {
@@ -575,6 +581,82 @@ namespace DfoServer.Game.Quests
             }
         }
 
+        private static bool CanFinishQuestClearQuest(string connStr, int characterId, ushort questId)
+        {
+            if (!GameWorld.QuestData.IsQuestClearQuest(questId))
+                return false;
+
+            using (var conn = new SqliteConnection(connStr))
+            {
+                conn.Open();
+                return ComputeQuestClearTrigger(conn, null, characterId, questId) == 0;
+            }
+        }
+
+        private static void SyncQuestClearParentProgress(SqliteConnection conn, SqliteTransaction tx, int characterId)
+        {
+            var parents = new List<ActiveQuest>();
+            using (var cmd = new SqliteCommand(
+                "SELECT slot, quest_id, trigger_value FROM character_active_quests WHERE character_id=@cid ORDER BY slot",
+                conn,
+                tx))
+            {
+                cmd.Parameters.AddWithValue("@cid", characterId);
+                using (var r = cmd.ExecuteReader())
+                {
+                    while (r.Read())
+                    {
+                        var questId = (ushort)r.GetInt32(1);
+                        if (!GameWorld.QuestData.IsQuestClearQuest(questId))
+                            continue;
+
+                        parents.Add(new ActiveQuest
+                        {
+                            Slot = r.GetInt32(0),
+                            QuestId = questId,
+                            TriggerValue = (uint)r.GetInt64(2)
+                        });
+                    }
+                }
+            }
+
+            foreach (var parent in parents)
+            {
+                var nextTrigger = ComputeQuestClearTrigger(conn, tx, characterId, parent.QuestId);
+                if (nextTrigger == parent.TriggerValue)
+                    continue;
+
+                using (var cmd = new SqliteCommand(
+                    "UPDATE character_active_quests SET trigger_value=@tv WHERE character_id=@cid AND slot=@slot",
+                    conn,
+                    tx))
+                {
+                    cmd.Parameters.AddWithValue("@tv", (long)nextTrigger);
+                    cmd.Parameters.AddWithValue("@cid", characterId);
+                    cmd.Parameters.AddWithValue("@slot", parent.Slot);
+                    cmd.ExecuteNonQuery();
+                }
+
+                FileLogger.Log($"[QuestService] QUEST_CLEAR sync parent={parent.QuestId} trigger={parent.TriggerValue}->{nextTrigger}");
+            }
+        }
+
+        private static uint ComputeQuestClearTrigger(SqliteConnection conn, SqliteTransaction tx, int characterId, ushort questId)
+        {
+            var requiredQuestIds = GameWorld.QuestData.GetQuestClearRequiredQuestIds(questId);
+            if (requiredQuestIds.Count == 0)
+                return 1;
+
+            var missing = 0;
+            foreach (var requiredQuestId in requiredQuestIds)
+            {
+                if (!IsQuestCleared(conn, tx, characterId, requiredQuestId))
+                    missing++;
+            }
+
+            return (uint)missing;
+        }
+
         private static uint DecrementTriggerChannel(uint trigger, byte triggerType)
         {
             if (triggerType == 0) return trigger > 0 ? trigger - 1 : 0;
@@ -612,7 +694,18 @@ namespace DfoServer.Game.Quests
 
             var active = LoadActiveQuests(connStr, characterId);
             var q = FindByQuestId(active, questId);
-            if (q != null && q.TriggerValue != 0) return BuildFailAck(22);
+            if (GameWorld.QuestData.IsQuestClearQuest(questId))
+            {
+                if (!CanFinishQuestClearQuest(connStr, characterId, questId))
+                    return BuildFailAck(22);
+
+                if (q != null)
+                    q.TriggerValue = 0;
+            }
+            else if (q != null && q.TriggerValue != 0)
+            {
+                return BuildFailAck(22);
+            }
 
             int playerLevel = GetCharacterLevel(connStr, characterId);
             int playerJob = GetCharacterJob(connStr, characterId);
@@ -715,6 +808,7 @@ namespace DfoServer.Game.Quests
 
                 if (!GameWorld.QuestData.IsRepeatableQuest(questId))
                     MarkQuestCleared(scope.Connection, scope.Transaction, characterId, questId);
+                SyncQuestClearParentProgress(scope.Connection, scope.Transaction, characterId);
                 scope.Commit();
             }
 
@@ -799,14 +893,21 @@ namespace DfoServer.Game.Quests
             using (var conn = new SqliteConnection(connStr))
             {
                 conn.Open();
-                using (var cmd = new SqliteCommand(
-                    "SELECT flag_value FROM character_invisible_falgs WHERE character_id=@cid AND slot_index=@idx", conn))
-                {
-                    cmd.Parameters.AddWithValue("@cid", characterId);
-                    cmd.Parameters.AddWithValue("@idx", (int)questId);
-                    var result = cmd.ExecuteScalar();
-                    return result != null && Convert.ToInt32(result) != 0;
-                }
+                return IsQuestCleared(conn, null, characterId, questId);
+            }
+        }
+
+        private static bool IsQuestCleared(SqliteConnection conn, SqliteTransaction tx, int characterId, int questId)
+        {
+            using (var cmd = new SqliteCommand(
+                "SELECT flag_value FROM character_invisible_falgs WHERE character_id=@cid AND slot_index=@idx",
+                conn,
+                tx))
+            {
+                cmd.Parameters.AddWithValue("@cid", characterId);
+                cmd.Parameters.AddWithValue("@idx", questId);
+                var result = cmd.ExecuteScalar();
+                return result != null && Convert.ToInt32(result) != 0;
             }
         }
 

@@ -400,6 +400,22 @@ namespace DfoServer.GameWorld
             return qst != null ? ComputeInitTrigger(qst) : 1;
         }
 
+        internal static bool IsQuestClearQuest(int questId)
+        {
+            return IsQuestClearQuest(GetQuestFile(questId));
+        }
+
+        internal static List<int> GetQuestClearRequiredQuestIds(int questId)
+        {
+            var qst = GetQuestFile(questId);
+            if (!IsQuestClearQuest(qst))
+                return new List<int>();
+
+            var values = ParseIntList(qst.IntData);
+            values.RemoveAll(id => id <= 0);
+            return values;
+        }
+
         internal static bool IsClearMapQuest(int questId)
         {
             return IsClearMapQuest(GetQuestFile(questId));
@@ -434,6 +450,12 @@ namespace DfoServer.GameWorld
         private static bool IsClearMapQuest(QuestFile qst)
         {
             return qst != null && NormalizeQuestTag(qst.Type) == "clear map";
+        }
+
+        private static bool IsQuestClearQuest(QuestFile qst)
+        {
+            var tag = NormalizeQuestTag(qst?.Type);
+            return tag == "quest clear" || tag == "clear quest";
         }
 
         private static string NormalizeQuestTag(string value)
@@ -534,6 +556,7 @@ namespace DfoServer.GameWorld
         {
             var qst = GetQuestFile(questId);
             if (qst == null) return new List<QuestRewardItem>();
+            if (IsQuestClearQuest(qst)) return new List<QuestRewardItem>();
             int typeCode = MapTypeString(qst.Type);
             if (typeCode != 0 && typeCode != 1) return new List<QuestRewardItem>();
             if (IsSeekAndMeetNpcQuest(qst))
@@ -671,6 +694,13 @@ namespace DfoServer.GameWorld
             if (IsSeekAndMeetNpcQuest(qst))
                 return ComputeSeekAndMeetNpcInitTrigger(qst.IntData);
 
+            if (IsQuestClearQuest(qst))
+            {
+                var requiredQuestIds = ParseIntList(qst.IntData);
+                requiredQuestIds.RemoveAll(id => id <= 0);
+                return requiredQuestIds.Count > 0 ? (uint)requiredQuestIds.Count : 1;
+            }
+
             if (typeCode == 2 || typeCode == 6)
                 return ComputeTriggerFromIntData(qst.IntData, typeCode);
 
@@ -802,6 +832,7 @@ namespace DfoServer.GameWorld
                 case "[get item]": return 1;
                 case "[get score]": return 1;
                 case "[clear quest]": return 1;
+                case "[quest clear]": return 1;
                 case "[custom quest]": return 1;
                 case "[send chatting]": return 1;
                 case "[check life]": return 1;

@@ -71,6 +71,12 @@ namespace DfoServer
                 return;
             }
 
+            if (Array.IndexOf(args, "--selftest-quest-clear") >= 0)
+            {
+                Environment.Exit(SelfTests.QuestClearSelfTest.Run());
+                return;
+            }
+
             if (Array.IndexOf(args, "--selftest-quest-item-flow") >= 0)
             {
                 Environment.Exit(SelfTests.QuestItemFlowSelfTest.Run());
