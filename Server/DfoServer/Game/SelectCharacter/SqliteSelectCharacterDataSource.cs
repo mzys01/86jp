@@ -452,6 +452,18 @@ namespace DfoServer.Game.SelectCharacter
                 return _inventoryStore.LoadCommonItemForRefresh(listType, slotIndex);
         }
 
+        public AvatarInventoryItem LoadAvatarItemForRefresh(int characterId, int accountId, short slotIndex)
+        {
+            using (_inventoryStore.BeginScope(characterId, accountId))
+                return _inventoryStore.LoadAvatarItemForRefresh(slotIndex);
+        }
+
+        public PetInventoryItem LoadPetItemForRefresh(int characterId, int accountId, short slotIndex)
+        {
+            using (_inventoryStore.BeginScope(characterId, accountId))
+                return _inventoryStore.LoadPetItemForRefresh(slotIndex);
+        }
+
         public byte[] LoadCharacterInitBody(int characterId, ushort notiType, int occurrenceIndex = 0)
             => LoadInitBody(characterId, notiType, occurrenceIndex);
 

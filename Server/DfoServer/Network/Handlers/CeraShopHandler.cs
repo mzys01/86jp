@@ -139,29 +139,20 @@ namespace DfoServer.Network.Handlers
             {
                 var snapshot = _sqliteSelectCharacterDataSource.LoadItemListSnapshot(cid, aid);
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000E,
-                    BuildItemListUpdate(itemUpdateResults, snapshot)));
+                    ItemListUpdateBuilder.BuildCommonUpdates(BuildCommonItemUpdates(itemUpdateResults, snapshot))));
             }
 
             if (avatarSlots.Count > 0 || petSlots.Count > 0)
             {
-                var snapshot = _sqliteSelectCharacterDataSource.LoadItemListSnapshot(cid, aid);
                 if (avatarSlots.Count > 0)
                 {
-                    var avatarUpdateBody = BuildAvatarItemListUpdate(snapshot, avatarSlots);
-                    if (avatarUpdateBody != null)
-                    {
-                        await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000E, avatarUpdateBody));
-                        FileLogger.Log($"[{ProtocolName}] CERA_SHOP_BUY: avatar ITEM_LIST update sent count={avatarSlots.Count}");
-                    }
+                    await SendAvatarItemListUpdate(session, cid, aid, avatarSlots);
+                    FileLogger.Log($"[{ProtocolName}] CERA_SHOP_BUY: avatar ITEM_LIST update sent count={avatarSlots.Count}");
                 }
                 if (petSlots.Count > 0)
                 {
-                    var petUpdateBody = BuildPetItemListUpdate(snapshot, petSlots);
-                    if (petUpdateBody != null)
-                    {
-                        await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000E, petUpdateBody));
-                        FileLogger.Log($"[{ProtocolName}] CERA_SHOP_BUY: pet ITEM_LIST update sent count={petSlots.Count}");
-                    }
+                    await SendPetItemListUpdate(session, cid, aid, petSlots);
+                    FileLogger.Log($"[{ProtocolName}] CERA_SHOP_BUY: pet ITEM_LIST update sent count={petSlots.Count}");
                 }
             }
 
@@ -222,23 +213,89 @@ namespace DfoServer.Network.Handlers
             }
         }
 
-        private static byte[] BuildItemListUpdate(System.Collections.Generic.IReadOnlyList<InventoryMutationResult> updates, CharacterItemListSnapshot snapshot)
+        private async Task SendAvatarItemListUpdate(EnhancedClientSession session, int characterId, int accountId, IReadOnlyCollection<short> slots)
         {
-            var writer = new GamePacketWriter();
-            writer.WriteByte(0);
-            writer.WriteUInt16((ushort)updates.Count);
+            var updates = new List<AvatarInventoryItem>();
+            var emptySlots = new List<short>();
+            foreach (var slot in slots)
+            {
+                var item = _sqliteSelectCharacterDataSource.LoadAvatarItemForRefresh(characterId, accountId, slot);
+                if (item != null)
+                    updates.Add(item);
+                else
+                    emptySlots.Add(slot);
+            }
+
+            if (updates.Count > 0)
+            {
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
+                    0x00,
+                    0x000E,
+                    ItemListUpdateBuilder.BuildAvatarUpdates(updates)));
+            }
+
+            if (emptySlots.Count > 0)
+            {
+                // 时装空槽刷新先按通用空 entry 测试。
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
+                    0x00,
+                    0x000E,
+                    ItemListUpdateBuilder.BuildEmptyUpdates(InventoryListType.Avatar, emptySlots)));
+            }
+        }
+
+        private async Task SendPetItemListUpdate(EnhancedClientSession session, int characterId, int accountId, IReadOnlyCollection<short> slots)
+        {
+            var updates = new List<PetInventoryItem>();
+            var emptySlots = new List<short>();
+            foreach (var slot in slots)
+            {
+                var item = _sqliteSelectCharacterDataSource.LoadPetItemForRefresh(characterId, accountId, slot);
+                if (item != null)
+                    updates.Add(item);
+                else
+                    emptySlots.Add(slot);
+            }
+
+            if (updates.Count > 0)
+            {
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
+                    0x00,
+                    0x000E,
+                    ItemListUpdateBuilder.BuildPetUpdates(updates)));
+            }
+
+            if (emptySlots.Count > 0)
+            {
+                // 宠物空槽刷新先按通用空 entry 测试。
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
+                    0x00,
+                    0x000E,
+                    ItemListUpdateBuilder.BuildEmptyUpdates(InventoryListType.Pet, emptySlots)));
+            }
+        }
+
+        private static List<CommonInventoryItem> BuildCommonItemUpdates(System.Collections.Generic.IReadOnlyList<InventoryMutationResult> updates, CharacterItemListSnapshot snapshot)
+        {
+            var items = new List<CommonInventoryItem>();
+            if (updates == null)
+                return items;
+
             foreach (var update in updates)
             {
                 var common = FindUpdatedCommonItem(snapshot, update);
                 if (common != null)
                 {
-                    ItemListPacketBuilder.WriteCommonEntry(writer, common);
+                    items.Add(common);
                     continue;
                 }
 
-                WriteCompactItemListUpdate(writer, update);
+                items.Add(ItemListUpdateBuilder.CreateCommonSlotUpdate(
+                    update.SlotIndex,
+                    update.ItemTemplateId,
+                    update.RemainingStackCount));
             }
-            return writer.ToArray();
+            return items;
         }
 
         private static CommonInventoryItem FindUpdatedCommonItem(CharacterItemListSnapshot snapshot, InventoryMutationResult update)
@@ -250,54 +307,6 @@ namespace DfoServer.Network.Handlers
                 return null;
 
             return snapshot.MainItems.Find(item => item.SlotIndex == update.SlotIndex);
-        }
-
-        private static byte[] BuildAvatarItemListUpdate(CharacterItemListSnapshot snapshot, HashSet<short> slots)
-        {
-            if (snapshot == null || slots == null || slots.Count == 0)
-                return null;
-
-            var updates = new List<AvatarInventoryItem>();
-            foreach (var slot in slots)
-            {
-                var item = snapshot.AvatarItems.Find(x => x.SlotIndex == slot);
-                if (item != null)
-                    updates.Add(item);
-            }
-
-            if (updates.Count == 0)
-                return null;
-
-            return ItemListUpdateBuilder.BuildAvatarUpdates(updates);
-        }
-
-        private static byte[] BuildPetItemListUpdate(CharacterItemListSnapshot snapshot, HashSet<short> slots)
-        {
-            if (snapshot == null || slots == null || slots.Count == 0)
-                return null;
-
-            var updates = new List<PetInventoryItem>();
-            foreach (var slot in slots)
-            {
-                var item = snapshot.PetItems.Find(x => x.SlotIndex == slot);
-                if (item != null)
-                    updates.Add(item);
-            }
-
-            if (updates.Count == 0)
-                return null;
-
-            return ItemListUpdateBuilder.BuildPetUpdates(updates);
-        }
-
-        private static void WriteCompactItemListUpdate(GamePacketWriter writer, InventoryMutationResult update)
-        {
-            var itemTemplateId = update.RemainingStackCount > 0 || update.ItemTemplateId <= 0 ? update.ItemTemplateId : -1;
-            var remainingStackCount = update.RemainingStackCount > 0 ? update.RemainingStackCount : 0;
-            writer.WriteInt16(update.SlotIndex);
-            writer.WriteInt32(itemTemplateId);
-            writer.WriteInt32(remainingStackCount);
-            writer.WriteZeroBytes(0x4A);
         }
 
         private static byte[] BuildCeraUpdate(int cera, int tokenCera, int happyTokenCera)

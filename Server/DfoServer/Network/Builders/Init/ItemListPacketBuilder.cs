@@ -89,7 +89,7 @@ namespace DfoServer.Network.Builders
             if (writer == null) throw new ArgumentNullException(nameof(writer));
             if (item == null) throw new ArgumentNullException(nameof(item));
 
-            WriteCommonEntry(writer, item);
+            ItemListUpdateBuilder.WriteCommonUpdateEntry(writer, item);
         }
 
         private static void WriteFixedBytes(GamePacketWriter writer, byte[] value, int length)

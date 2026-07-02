@@ -316,7 +316,7 @@ namespace DfoServer.Network.Handlers.Dungeon
             if (gorgeousApplied && gorgeousGoldAfter >= 0)
             {
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000E,
-                    TeleportPacketBuilder.BuildItemListUpdate(0, 0, gorgeousGoldAfter)));
+                    ItemListUpdateBuilder.BuildGoldUpdate(gorgeousGoldAfter)));
                 FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] SELECT_DUNGEON: gorgeous challenge applied cost={GorgeousChallengeGoldCost} gold={gorgeousGoldBefore}->{gorgeousGoldAfter}");
             }
         }
@@ -328,7 +328,7 @@ namespace DfoServer.Network.Handlers.Dungeon
             foreach (var update in ticketResult.Updates)
             {
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000E,
-                    TeleportPacketBuilder.BuildItemListUpdate(update.SlotIndex, update.ItemId, update.RemainingCount)));
+                    ItemListUpdateBuilder.BuildCommonSlotUpdate(update.SlotIndex, update.ItemId, update.RemainingCount)));
                 FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] SELECT_DUNGEON: hell ticket consumed item={update.ItemId} count={update.Count} slot={update.SlotIndex} remain={update.RemainingCount}");
             }
         }

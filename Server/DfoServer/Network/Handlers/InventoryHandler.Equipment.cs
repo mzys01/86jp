@@ -73,7 +73,7 @@ namespace DfoServer.Network.Handlers
             if (result.GoldCost > 0)
             {
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000E,
-                    TeleportPacketBuilder.BuildItemListUpdate(0, 0, result.UpdatedGold)));
+                    ItemListUpdateBuilder.BuildGoldUpdate(result.UpdatedGold)));
                 FileLogger.Log($"[{ProtocolName}] UPGRADE_ITEM: gold refresh queued gold={result.UpdatedGold}");
             }
 
@@ -196,10 +196,7 @@ namespace DfoServer.Network.Handlers
             if (result.MaterialConsumed && result.MaterialItem != null)
                 await SendCommonMaterialRefresh(session, result.MaterialItem);
 
-            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
-                0x00,
-                0x000E,
-                ItemListUpdateBuilder.BuildAvatarUpdates(new[] { result.TargetItem })));
+            await SendUpdateItemList(session, InventoryListType.Avatar, targetSlot);
             await SendSortItemLockRefresh(session, InventoryListType.Avatar);
 
             if (result.MaterialConsumed && result.MaterialItem != null)
@@ -231,10 +228,7 @@ namespace DfoServer.Network.Handlers
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, ackType, BuildEmblemAttachAck(targetSlot, targetItemId, emblems.Count)));
             if (!result.TargetEquipped && result.TargetItem != null)
             {
-                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
-                    0x00,
-                    0x000E,
-                    ItemListUpdateBuilder.BuildAvatarUpdates(new[] { result.TargetItem })));
+                await SendUpdateItemList(session, InventoryListType.Avatar, targetSlot);
             }
 
             await SendSortItemLockRefresh(session, InventoryListType.Main);
@@ -249,26 +243,7 @@ namespace DfoServer.Network.Handlers
             if (material == null)
                 return;
 
-            var (cid, aid) = ResolveOwner(session);
-            var item = _sqliteSelectCharacterDataSource.LoadCommonItemForRefresh(cid, aid, material.ListType, material.SlotIndex);
-            if (item == null)
-            {
-                item = new CommonInventoryItem
-                {
-                    SlotIndex = material.SlotIndex,
-                    ItemTemplateId = -1,
-                    CountOrInstanceValue = 0,
-                    Marker16 = 0,
-                    PrefixData0E = new byte[8],
-                    MiddleData1A = new byte[17],
-                    TailData2F = new byte[37],
-                };
-            }
-
-            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
-                0x00,
-                0x000E,
-                ItemListUpdateBuilder.BuildCommonUpdates(new[] { item })));
+            await SendUpdateItemList(session, material.ListType, material.SlotIndex);
         }
 
         private static bool TryParseSocketOpenBody(byte[] body, out short targetSlot, out int targetItemId, out short materialSlot)

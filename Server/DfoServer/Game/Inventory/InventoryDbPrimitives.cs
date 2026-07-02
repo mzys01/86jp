@@ -170,17 +170,19 @@ LIMIT 1;";
             return null;
         }
 
-        internal SqliteInventoryStore.ItemRecord FindStackableItemByTemplateIdAndExpireTime(SqliteConnection connection, SqliteTransaction transaction, int characterId, InventoryListType listType, int templateId, int expireTime, int stackLimit, int slotStart = int.MinValue, int slotEnd = int.MaxValue)
+        internal SqliteInventoryStore.ItemRecord FindStackableItemByTemplateIdAndExpireTime(SqliteConnection connection, SqliteTransaction transaction, int characterId, InventoryListType listType, int templateId, int expireTime, int stackLimit, int slotStart = int.MinValue, int slotEnd = int.MaxValue, int requiredCapacity = 0)
         {
             using (var command = connection.CreateCommand())
             {
                 command.Transaction = transaction;
                 command.CommandText = @"
-SELECT item_uid, list_type, slot_index, item_template_id, item_kind, stack_count, instance_value, durability
+SELECT item_uid, list_type, slot_index, item_template_id, item_kind, stack_count, instance_value,
+       durability, seal_flag, option_value, expire_time, marker_16, pet_serial_or_handle, extra_json
 FROM character_items
 WHERE character_id = @characterId AND list_type = @listType AND item_template_id = @templateId AND expire_time = @expireTime
   AND slot_index >= @slotStart AND slot_index <= @slotEnd
   AND (@stackLimit <= 0 OR stack_count < @stackLimit)
+  AND (@requiredCapacity <= 0 OR @stackLimit <= 0 OR stack_count + @requiredCapacity <= @stackLimit)
 ORDER BY stack_count DESC, slot_index ASC
 LIMIT 1;";
                 command.Parameters.AddWithValue("@characterId", characterId);
@@ -190,25 +192,43 @@ LIMIT 1;";
                 command.Parameters.AddWithValue("@stackLimit", stackLimit);
                 command.Parameters.AddWithValue("@slotStart", slotStart);
                 command.Parameters.AddWithValue("@slotEnd", slotEnd);
+                command.Parameters.AddWithValue("@requiredCapacity", requiredCapacity);
                 using (var reader = command.ExecuteReader())
                 {
                     if (reader.Read())
-                    {
-                        return new SqliteInventoryStore.ItemRecord
-                        {
-                            ItemUid = reader.GetInt64(0),
-                            ListType = (InventoryListType)reader.GetInt32(1),
-                            SlotIndex = (short)reader.GetInt32(2),
-                            ItemTemplateId = reader.GetInt32(3),
-                            ItemKind = reader.GetString(4),
-                            StackCount = reader.GetInt32(5),
-                            InstanceValue = reader.GetInt32(6),
-                            Durability = (ushort)reader.GetInt32(7),
-                        };
-                    }
+                        return SqliteInventoryStore.ReadItemRecord(reader);
                 }
             }
             return null;
+        }
+
+        internal SqliteInventoryStore.ItemRecord FindAccountCargoStackableItemByTemplateIdAndExpireTime(SqliteConnection connection, SqliteTransaction transaction, int accountId, int templateId, int expireTime, int stackLimit, int requiredCapacity = 0)
+        {
+            using (var command = connection.CreateCommand())
+            {
+                command.Transaction = transaction;
+                command.CommandText = @"
+SELECT item_uid, 12 AS list_type, slot_index, item_template_id, item_kind, stack_count, instance_value,
+       durability, seal_flag, option_value, expire_time, marker_16, 0 AS pet_serial_or_handle, extra_json
+FROM account_cargo_items
+WHERE account_id = @accountId AND item_template_id = @templateId AND expire_time = @expireTime
+  AND (@stackLimit <= 0 OR stack_count < @stackLimit)
+  AND (@requiredCapacity <= 0 OR @stackLimit <= 0 OR stack_count + @requiredCapacity <= @stackLimit)
+ORDER BY stack_count DESC, slot_index ASC
+LIMIT 1;";
+                command.Parameters.AddWithValue("@accountId", accountId);
+                command.Parameters.AddWithValue("@templateId", templateId);
+                command.Parameters.AddWithValue("@expireTime", expireTime);
+                command.Parameters.AddWithValue("@stackLimit", stackLimit);
+                command.Parameters.AddWithValue("@requiredCapacity", requiredCapacity);
+                using (var reader = command.ExecuteReader())
+                {
+                    if (!reader.Read())
+                        return null;
+
+                    return SqliteInventoryStore.ReadItemRecord(reader);
+                }
+            }
         }
 
         internal SqliteInventoryStore.ItemRecord LoadItemRecord(SqliteConnection connection, SqliteTransaction transaction, int characterId, InventoryListType listType, short slotIndex)
@@ -286,7 +306,58 @@ LIMIT 1;";
                     if (!reader.Read())
                         return null;
 
-                    return InventoryItemCodec.ReadAvatarItem(reader, reader.IsDBNull(12) ? "{}" : reader.GetString(12));
+                    var itemKind = reader.IsDBNull(3) ? "" : reader.GetString(3);
+                    var extraJson = reader.IsDBNull(12) ? "{}" : reader.GetString(12);
+                    return itemKind == "avatar"
+                        ? InventoryItemCodec.ReadAvatarItem(reader, extraJson)
+                        : InventoryItemCodec.ReadEquipmentAsAvatarItem(reader, extraJson);
+                }
+            }
+        }
+
+        internal PetInventoryItem LoadPetItem(SqliteConnection connection, SqliteTransaction transaction, int characterId, short slotIndex)
+        {
+            using (var command = connection.CreateCommand())
+            {
+                command.Transaction = transaction;
+                command.CommandText = @"
+SELECT list_type, slot_index, item_template_id, item_kind, stack_count, instance_value,
+       durability, seal_flag, option_value, expire_time, marker_16, pet_serial_or_handle, extra_json
+FROM character_items
+WHERE character_id = @characterId AND list_type = @listType AND slot_index = @slotIndex;";
+                command.Parameters.AddWithValue("@characterId", characterId);
+                command.Parameters.AddWithValue("@listType", (int)InventoryListType.Pet);
+                command.Parameters.AddWithValue("@slotIndex", slotIndex);
+
+                using (var reader = command.ExecuteReader())
+                {
+                    if (!reader.Read())
+                        return null;
+
+                    return InventoryItemCodec.ReadPetItem(reader, reader.IsDBNull(12) ? "{}" : reader.GetString(12));
+                }
+            }
+        }
+
+        internal CommonInventoryItem LoadAccountCargoCommonItem(SqliteConnection connection, SqliteTransaction transaction, int accountId, short slotIndex)
+        {
+            using (var command = connection.CreateCommand())
+            {
+                command.Transaction = transaction;
+                command.CommandText = @"
+SELECT 12 AS list_type, slot_index, item_template_id, item_kind, stack_count, instance_value,
+       durability, seal_flag, option_value, expire_time, marker_16, 0 AS pet_serial_or_handle, extra_json
+FROM account_cargo_items
+WHERE account_id = @accountId AND slot_index = @slotIndex;";
+                command.Parameters.AddWithValue("@accountId", accountId);
+                command.Parameters.AddWithValue("@slotIndex", slotIndex);
+
+                using (var reader = command.ExecuteReader())
+                {
+                    if (!reader.Read())
+                        return null;
+
+                    return InventoryItemCodec.ReadCommonItem(reader, reader.IsDBNull(12) ? "{}" : reader.GetString(12));
                 }
             }
         }
@@ -454,20 +525,38 @@ WHERE account_id = @accountId AND slot_index = @slotIndex;";
 
         internal void MoveItemToAccountCargo(SqliteConnection connection, SqliteTransaction transaction, int accountId, SqliteInventoryStore.ItemRecord source, short destSlot)
         {
-            InsertAccountCargoItem(connection, transaction, accountId, new CommonInventoryItem
-            {
-                SlotIndex = destSlot,
-                ItemTemplateId = source.ItemTemplateId,
-                CountOrInstanceValue = source.StackCount,
-                Durability = (ushort)source.Durability,
-                SealFlag = (byte)source.SealFlag,
-                ExpireTime = source.ExpireTime,
-                Marker16 = source.Marker16,
-                PrefixData0E = new byte[8],
-                MiddleData1A = new byte[17],
-                TailData2F = new byte[37],
-            });
+            InsertAccountCargoItemRecord(connection, transaction, accountId, source, destSlot, source.StackCount);
             DeleteItem(connection, transaction, source.ItemUid);
+        }
+
+        internal void InsertAccountCargoItemRecord(SqliteConnection connection, SqliteTransaction transaction, int accountId, SqliteInventoryStore.ItemRecord source, short destSlot, int stackCount)
+        {
+            using (var command = connection.CreateCommand())
+            {
+                command.Transaction = transaction;
+                command.CommandText = @"
+INSERT OR REPLACE INTO account_cargo_items (
+    account_id, slot_index, item_template_id, item_kind,
+    stack_count, instance_value, durability, seal_flag, option_value, expire_time, marker_16,
+    extra_json)
+VALUES (
+    @accountId, @slotIndex, @templateId, @itemKind,
+    @stackCount, @instanceValue, @durability, @sealFlag, @optionValue, @expireTime, @marker16,
+    @extraJson);";
+                command.Parameters.AddWithValue("@accountId", accountId);
+                command.Parameters.AddWithValue("@slotIndex", destSlot);
+                command.Parameters.AddWithValue("@templateId", source.ItemTemplateId);
+                command.Parameters.AddWithValue("@itemKind", source.ItemKind);
+                command.Parameters.AddWithValue("@stackCount", stackCount);
+                command.Parameters.AddWithValue("@instanceValue", LoadStackableItem(source.ItemTemplateId) != null ? stackCount : source.InstanceValue);
+                command.Parameters.AddWithValue("@durability", source.Durability);
+                command.Parameters.AddWithValue("@sealFlag", source.SealFlag);
+                command.Parameters.AddWithValue("@optionValue", source.OptionValue);
+                command.Parameters.AddWithValue("@expireTime", source.ExpireTime);
+                command.Parameters.AddWithValue("@marker16", source.Marker16);
+                command.Parameters.AddWithValue("@extraJson", source.ExtraJson ?? "{}");
+                command.ExecuteNonQuery();
+            }
         }
 
         internal void MoveItemFromAccountCargo(SqliteConnection connection, SqliteTransaction transaction, int characterId, SqliteInventoryStore.ItemRecord source, InventoryListType destList, short destSlot)

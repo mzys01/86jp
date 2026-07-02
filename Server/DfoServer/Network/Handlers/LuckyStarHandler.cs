@@ -82,7 +82,7 @@ namespace DfoServer.Network.Handlers
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0373, Build0373SuccessAck(buyCount, newLuckyStar, purchaseRequestBody)));
             await SyncRentalPanelNoti(session, newLuckyStar, LoadRentalInfo(characterId));
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000E,
-                TeleportPacketBuilder.BuildItemListUpdate(0, 0, newGold)));
+                ItemListUpdateBuilder.BuildGoldUpdate(newGold)));
         }
 
         private async Task SyncRentalPanelNoti(EnhancedClientSession session, ushort luckyStar, RentalInfoSnapshot rental)
