@@ -1,4 +1,5 @@
 using DfoServer.Game.Dungeon;
+using DfoServer.Game.Premium;
 using DfoServer.Game.Skills;
 using DfoServer.GameWorld;
 using DfoServer.Infrastructure;
@@ -14,6 +15,9 @@ namespace DfoServer.Network.Handlers.Dungeon
 {
     internal sealed class DungeonCombatHandler
     {
+        private const int GrowthContractPremiumType = 84; // PVF premiumlist_new.etc: 成长之契约
+        private const float GrowthContractMonsterBonusRate = 0.20f;
+
         private readonly DungeonSharedServices _svc;
         private readonly DungeonSettlementHandler _settlement;
 
@@ -26,6 +30,14 @@ namespace DfoServer.Network.Handlers.Dungeon
         internal async Task HandleDieMonster(EnhancedClientSession session, GamePacketHeader header, byte[] body)
         {
             var req = DieMonsterRequest.Parse(body);
+
+            if (session.Player.CurDungeonCleared)
+            {
+                FileLogger.Log($"[DungeonHandler] DIE_MONSTER: post-clear seqId={req.LocalIndex}, ignored for exp");
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0026,
+                    DungeonNotificationBuilder.BuildMonsterDie(req.LocalIndex, null, session.Player.UserId)));
+                return;
+            }
 
             if (req.IsPassiveObject)
             {
@@ -72,7 +84,19 @@ namespace DfoServer.Network.Handlers.Dungeon
                 }
 
                 var weight = DungeonData.GetExperienceWeight(session.Player.CurDungeon);
-                var gainedExp = (uint)MonsterRewardTable.CalcExp(monsterLevel, weight, session.Player.CurDungeonDifficulty);
+                var isBossMonster = monster.Type == 3;
+                var isChampionMonster = monster.Type == 1;
+                var isNamedMonster = !isBossMonster && DungeonData.IsNamedMonster(session.Player.CurDungeon, monster.Code);
+                var isSuperChampionMonster = monster.Type == 2 && !isNamedMonster;
+                var baseExp = (uint)MonsterRewardTable.CalcBaseExp(monsterLevel, weight);
+                var gainedExp = (uint)MonsterRewardTable.CalcExp(
+                    monsterLevel,
+                    weight,
+                    session.Player.CurDungeonDifficulty,
+                    monster.Type,
+                    isNamedMonster);
+                var growthContractBonusExp = CalculateGrowthContractMonsterBonus(session, gainedExp);
+                var totalGainedExp = AddSaturating(gainedExp, growthContractBonusExp);
 
                 var slotCounter = session.Player.CurSceneSlotCounter;
                 int dungeonBasisLevel = monsterLevel;
@@ -115,9 +139,21 @@ namespace DfoServer.Network.Handlers.Dungeon
 
                 session.Player.CurSceneSlotCounter = slotCounter;
 
-                session.Player.Exp += gainedExp;
+                session.Player.Exp = AddSaturating(session.Player.Exp, totalGainedExp);
                 session.Player.CurDungeonTotalExp += gainedExp;
+                session.Player.CurDungeonMonsterGrowthContractBonusExp =
+                    AddSaturating(session.Player.CurDungeonMonsterGrowthContractBonusExp, growthContractBonusExp);
+                if (isBossMonster)
+                    session.Player.CurDungeonBossTotalExp += gainedExp;
+                if (isChampionMonster)
+                    session.Player.CurDungeonChampionTotalExp += gainedExp;
+                if (isSuperChampionMonster)
+                    session.Player.CurDungeonSuperChampionTotalExp += gainedExp;
+                if (isNamedMonster)
+                    session.Player.CurDungeonNamedMonsterTotalExp += gainedExp;
                 session.Player.CurDungeonTotalGold += goldGained;
+
+                FileLogger.Log($"[DungeonHandler] DIE_MONSTER_EXP: seqId={req.LocalIndex} local={roomLocalIndex} code={monster.Code} type={monster.Type} level={monsterLevel} weight={weight:0.###} baseExp={baseExp} totalExp={gainedExp} growthContract={growthContractBonusExp} awardedExp={totalGainedExp} boss={isBossMonster} champion={isChampionMonster} superChampion={isSuperChampionMonster} named={isNamedMonster} dungeonTotalExp={session.Player.CurDungeonTotalExp} bossTotalExp={session.Player.CurDungeonBossTotalExp} championTotalExp={session.Player.CurDungeonChampionTotalExp} superChampionTotalExp={session.Player.CurDungeonSuperChampionTotalExp} namedTotalExp={session.Player.CurDungeonNamedMonsterTotalExp} monsterGrowthContractTotal={session.Player.CurDungeonMonsterGrowthContractBonusExp}");
 
                 if (generatedDrops.Count > 0)
                 {
@@ -151,7 +187,8 @@ namespace DfoServer.Network.Handlers.Dungeon
                 catch { }
 
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0025,
-                    ExpNotificationBuilder.Build(session.Player.Level, session.Player.Exp, remainSp, remainTp)));
+                    ExpNotificationBuilder.Build(session.Player.Level, session.Player.Exp, remainSp, remainTp,
+                        premiumBonusExp: growthContractBonusExp)));
 
                 if (leveledUp)
                 {
@@ -319,6 +356,31 @@ namespace DfoServer.Network.Handlers.Dungeon
             w.WriteByte(0x00);  // dieType=0 death confirmed
             w.WriteByte(0x00);
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0020, w.ToArray()));
+        }
+
+        private static uint CalculateGrowthContractMonsterBonus(EnhancedClientSession session, uint baseMonsterExp)
+        {
+            if (baseMonsterExp == 0)
+                return 0;
+
+            var accountId = session.Account?.AccountId ?? 1;
+            var connStr = SqliteDatabaseBootstrap.Initialize(ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
+            return PremiumService.HasActivePremium(connStr, accountId, GrowthContractPremiumType)
+                ? ToUInt32Floor(baseMonsterExp * GrowthContractMonsterBonusRate)
+                : 0;
+        }
+
+        private static uint ToUInt32Floor(float value)
+        {
+            if (value <= 0)
+                return 0;
+            return value >= uint.MaxValue ? uint.MaxValue : (uint)value;
+        }
+
+        private static uint AddSaturating(uint current, uint add)
+        {
+            var value = (ulong)current + add;
+            return value > uint.MaxValue ? uint.MaxValue : (uint)value;
         }
 
         internal async Task HandleUseCoin(EnhancedClientSession session, GamePacketHeader header, byte[] body)

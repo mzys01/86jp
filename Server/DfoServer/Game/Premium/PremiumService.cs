@@ -136,6 +136,39 @@ namespace DfoServer.Game.Premium
             return maxExpire;
         }
 
+        public static bool HasActivePremium(string connStr, int accountId, params int[] premiumTypes)
+        {
+            if (accountId <= 0 || premiumTypes == null || premiumTypes.Length == 0)
+                return false;
+
+            var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            using (var conn = new SqliteConnection(connStr))
+            {
+                conn.Open();
+                using (var cmd = conn.CreateCommand())
+                {
+                    var typeParams = new string[premiumTypes.Length];
+                    for (var i = 0; i < premiumTypes.Length; i++)
+                    {
+                        var name = "@type" + i;
+                        typeParams[i] = name;
+                        cmd.Parameters.AddWithValue(name, premiumTypes[i]);
+                    }
+
+                    cmd.CommandText = $@"
+SELECT 1
+FROM account_premiums
+WHERE account_id=@aid
+  AND end_time>@now
+  AND premium_type IN ({string.Join(",", typeParams)})
+LIMIT 1;";
+                    cmd.Parameters.AddWithValue("@aid", accountId);
+                    cmd.Parameters.AddWithValue("@now", now);
+                    return cmd.ExecuteScalar() != null;
+                }
+            }
+        }
+
         private static long UpsertPremiumExpire(string connStr, int accountId, int premiumType, long now, long duration)
         {
             using (var conn = new SqliteConnection(connStr))

@@ -31,6 +31,11 @@ namespace DfoServer.Network.Handlers.Dungeon
             session.Player.CurDungeon = 0;
             session.Player.CurDungeonClearState = 0;
             session.Player.CurDungeonTotalExp = 0;
+            session.Player.CurDungeonBossTotalExp = 0;
+            session.Player.CurDungeonChampionTotalExp = 0;
+            session.Player.CurDungeonSuperChampionTotalExp = 0;
+            session.Player.CurDungeonNamedMonsterTotalExp = 0;
+            session.Player.CurDungeonMonsterGrowthContractBonusExp = 0;
             session.Player.CurDungeonTotalGold = 0;
             session.Player.CurDungeonDifficulty = 0;
             session.Player.CurDungeonFlag1 = 0;

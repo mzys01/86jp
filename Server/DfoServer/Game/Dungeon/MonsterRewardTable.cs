@@ -22,6 +22,9 @@ namespace DfoServer.Game.Dungeon
 
         private static readonly object _lock = new object();
         private static float[] _difficultyExpRate;
+        private static float[] _monsterExpBonusRate;
+        private static float[] _clearRankExpBonusRate;
+        private static int[] _rankGrades;
 
         public static int GetBaseExp(int monsterLevel)
         {
@@ -38,9 +41,62 @@ namespace DfoServer.Game.Dungeon
 
         public static int CalcExp(int monsterLevel, float expWeight, int difficulty = 0)
         {
-            var baseExp = GetBaseExp(monsterLevel);
+            return CalcExp(monsterLevel, expWeight, difficulty, 0, false);
+        }
+
+        public static int CalcExp(int monsterLevel, float expWeight, int difficulty, int monsterType, bool isNamedMonster)
+        {
+            var baseExp = CalcBaseExp(monsterLevel, expWeight);
             var diffRate = GetDifficultyExpRate(difficulty);
-            return (int)(baseExp * expWeight * diffRate);
+            var typeRate = GetMonsterExpBonusRate(monsterType);
+            if (isNamedMonster)
+                typeRate *= 3.0f;
+            return (int)(baseExp * diffRate * typeRate);
+        }
+
+        public static float GetMonsterExpBonusRate(int monsterType)
+        {
+            EnsureMonsterExpBonusRatesLoaded();
+            if (_monsterExpBonusRate.Length == 0) return 1.0f;
+            if (monsterType < 0) return _monsterExpBonusRate[0];
+            if (monsterType >= _monsterExpBonusRate.Length) return _monsterExpBonusRate[0];
+            return _monsterExpBonusRate[monsterType];
+        }
+
+        public static int GetClearRankBonusIndex(int clearScore)
+        {
+            var grades = GetRankGrades();
+            if (grades.Length > 0 && clearScore >= grades[0]) return 4;
+            if (grades.Length > 1 && clearScore >= grades[1]) return 3;
+            if (grades.Length > 2 && clearScore >= grades[2]) return 2;
+            if (grades.Length > 3 && clearScore >= grades[3]) return 1;
+            if (grades.Length > 4 && clearScore >= grades[4]) return 0;
+            return -1;
+        }
+
+        public static int GetClearRankGrade(int clearScore)
+        {
+            var grades = GetRankGrades();
+            for (int i = 0; i < grades.Length; i++)
+            {
+                if (clearScore >= grades[i])
+                    return grades[i];
+            }
+            return 0;
+        }
+
+        public static float GetClearRankExpBonusRate(int rankBonusIndex)
+        {
+            EnsureClearRankExpBonusRatesLoaded();
+            if (rankBonusIndex < 0 || rankBonusIndex >= _clearRankExpBonusRate.Length)
+                return 0.0f;
+            return _clearRankExpBonusRate[rankBonusIndex];
+        }
+
+        public static int CalcBaseExp(int monsterLevel, float expWeight)
+        {
+            var baseExp = GetBaseExp(monsterLevel);
+            return (int)(baseExp * expWeight);
         }
 
         private static void EnsureDifficultyRatesLoaded()
@@ -53,16 +109,51 @@ namespace DfoServer.Game.Dungeon
             }
         }
 
+        private static void EnsureMonsterExpBonusRatesLoaded()
+        {
+            if (_monsterExpBonusRate != null) return;
+            lock (_lock)
+            {
+                if (_monsterExpBonusRate != null) return;
+                _monsterExpBonusRate = ParseFloatRates("[monster exp bonusrate]", new float[] { 1f });
+            }
+        }
+
+        private static void EnsureClearRankExpBonusRatesLoaded()
+        {
+            if (_clearRankExpBonusRate != null) return;
+            lock (_lock)
+            {
+                if (_clearRankExpBonusRate != null) return;
+                _clearRankExpBonusRate = ParseFloatRates("[clear rank exp bonusrate]", new float[] { 0f, 0.01f, 0.02f, 0.03f, 0.05f });
+            }
+        }
+
+        private static int[] GetRankGrades()
+        {
+            if (_rankGrades != null) return _rankGrades;
+            lock (_lock)
+            {
+                if (_rankGrades != null) return _rankGrades;
+                _rankGrades = ParseIntValues("Etc/RankSystemInfo.etc", "[rank grade]", new int[] { 99, 90, 80, 60, 50, 30, 20, 10 });
+                return _rankGrades;
+            }
+        }
+
         private static float[] ParseDifficultyExpRates()
+        {
+            return ParseFloatRates("[dungeon difficulty exp bonusrate]", new float[] { 1f, 1f, 1f, 1f, 1f });
+        }
+
+        private static float[] ParseFloatRates(string tag, float[] fallback)
         {
             try
             {
                 var text = PvfArchiveAccessor.ReadText("Etc/ServerParameter.etc");
-                if (string.IsNullOrEmpty(text)) return new float[] { 1f, 1f, 1f, 1f, 1f };
+                if (string.IsNullOrEmpty(text)) return fallback;
 
-                var tag = "[dungeon difficulty exp bonusrate]";
                 var idx = text.IndexOf(tag, StringComparison.OrdinalIgnoreCase);
-                if (idx < 0) return new float[] { 1f, 1f, 1f, 1f, 1f };
+                if (idx < 0) return fallback;
                 idx += tag.Length;
 
                 var end = text.IndexOf('[', idx);
@@ -78,13 +169,47 @@ namespace DfoServer.Game.Dungeon
                     else
                         rates[i] = 1f;
                 }
-                FileLogger.Log($"[MonsterRewardTable] Loaded difficulty exp rates: {string.Join(", ", rates)}");
+                FileLogger.Log($"[MonsterRewardTable] Loaded {tag}: {string.Join(", ", rates)}");
                 return rates;
             }
             catch (Exception ex)
             {
-                FileLogger.Log($"[MonsterRewardTable] ERROR loading difficulty exp rates: {ex.Message}");
-                return new float[] { 1f, 1f, 1f, 1f, 1f };
+                FileLogger.Log($"[MonsterRewardTable] ERROR loading {tag}: {ex.Message}");
+                return fallback;
+            }
+        }
+
+        private static int[] ParseIntValues(string pvfPath, string tag, int[] fallback)
+        {
+            try
+            {
+                var text = PvfArchiveAccessor.ReadText(pvfPath);
+                if (string.IsNullOrEmpty(text)) return fallback;
+
+                var idx = text.IndexOf(tag, StringComparison.OrdinalIgnoreCase);
+                if (idx < 0) return fallback;
+                idx += tag.Length;
+
+                var end = text.IndexOf('[', idx);
+                if (end < 0) end = text.Length;
+                var content = text.Substring(idx, end - idx).Trim();
+                var tokens = content.Split(new[] { ' ', '\t', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+
+                var values = new int[tokens.Length];
+                for (int i = 0; i < tokens.Length; i++)
+                {
+                    if (int.TryParse(tokens[i], NumberStyles.Integer, CultureInfo.InvariantCulture, out var v))
+                        values[i] = v;
+                    else
+                        values[i] = 0;
+                }
+                FileLogger.Log($"[MonsterRewardTable] Loaded {tag}: {string.Join(", ", values)}");
+                return values;
+            }
+            catch (Exception ex)
+            {
+                FileLogger.Log($"[MonsterRewardTable] ERROR loading {tag}: {ex.Message}");
+                return fallback;
             }
         }
     }
