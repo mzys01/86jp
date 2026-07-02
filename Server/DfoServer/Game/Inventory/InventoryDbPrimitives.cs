@@ -238,7 +238,7 @@ LIMIT 1;";
                 command.Transaction = transaction;
                 command.CommandText = @"
 SELECT item_uid, list_type, slot_index, item_template_id, item_kind, stack_count, instance_value,
-       durability, seal_flag, option_value, expire_time, marker_16, pet_serial_or_handle, extra_json
+       durability, seal_flag, option_value, expire_time, marker_16, pet_serial_or_handle, equipment_lock_id, extra_json
 FROM character_items
 WHERE character_id = @characterId AND list_type = @listType AND slot_index = @slotIndex;";
                 command.Parameters.AddWithValue("@characterId", characterId);
@@ -371,7 +371,7 @@ WHERE account_id = @accountId AND slot_index = @slotIndex;";
                 command.Transaction = transaction;
                 command.CommandText = @"
 SELECT item_uid, list_type, slot_index, item_template_id, item_kind, stack_count, instance_value,
-       durability, seal_flag, option_value, expire_time, marker_16, pet_serial_or_handle, extra_json
+       durability, seal_flag, option_value, expire_time, marker_16, pet_serial_or_handle, equipment_lock_id, extra_json
 FROM character_items
 WHERE character_id = @characterId AND list_type = @listType
 ORDER BY slot_index;";
@@ -390,7 +390,7 @@ ORDER BY slot_index;";
 
         // ── Write ──────────────────────────────────────────────
 
-        internal void InsertCharacterItem(SqliteConnection connection, SqliteTransaction transaction, int characterId, InventoryListType listType, short slotIndex, int templateId, string itemKind, int stackCount, int instanceValue, ushort durability, byte sealFlag, byte optionValue, int expireTime, int marker16, int petSerialOrHandle, string extraJson)
+        internal void InsertCharacterItem(SqliteConnection connection, SqliteTransaction transaction, int characterId, InventoryListType listType, short slotIndex, int templateId, string itemKind, int stackCount, int instanceValue, ushort durability, byte sealFlag, byte optionValue, int expireTime, int marker16, int petSerialOrHandle, string extraJson, byte equipmentLockId = 0)
         {
             using (var command = connection.CreateCommand())
             {
@@ -399,11 +399,11 @@ ORDER BY slot_index;";
 INSERT OR REPLACE INTO character_items (
     owner_scope, owner_id, character_id, list_type, slot_index, item_template_id, item_kind,
     stack_count, instance_value, durability, seal_flag, option_value, expire_time, marker_16,
-    pet_serial_or_handle, extra_json)
+    pet_serial_or_handle, equipment_lock_id, extra_json)
 VALUES (
     'character', @ownerId, @characterId, @listType, @slotIndex, @templateId, @itemKind,
     @stackCount, @instanceValue, @durability, @sealFlag, @optionValue, @expireTime, @marker16,
-    @petSerialOrHandle, @extraJson);";
+    @petSerialOrHandle, @equipmentLockId, @extraJson);";
                 command.Parameters.AddWithValue("@ownerId", characterId);
                 command.Parameters.AddWithValue("@characterId", characterId);
                 command.Parameters.AddWithValue("@listType", (int)listType);
@@ -418,6 +418,7 @@ VALUES (
                 command.Parameters.AddWithValue("@expireTime", expireTime);
                 command.Parameters.AddWithValue("@marker16", marker16);
                 command.Parameters.AddWithValue("@petSerialOrHandle", petSerialOrHandle);
+                command.Parameters.AddWithValue("@equipmentLockId", (int)equipmentLockId);
                 command.Parameters.AddWithValue("@extraJson", extraJson);
                 command.ExecuteNonQuery();
             }
@@ -475,7 +476,7 @@ VALUES (
                 command.Transaction = transaction;
                 command.CommandText = @"
 SELECT item_uid, 12 AS list_type, slot_index, item_template_id, item_kind, stack_count, instance_value,
-       durability, seal_flag, option_value, expire_time, marker_16, 0 AS pet_serial_or_handle, extra_json
+       durability, seal_flag, option_value, expire_time, marker_16, 0 AS pet_serial_or_handle, 0 AS equipment_lock_id, extra_json
 FROM account_cargo_items
 WHERE account_id = @accountId AND slot_index = @slotIndex;";
                 command.Parameters.AddWithValue("@accountId", accountId);

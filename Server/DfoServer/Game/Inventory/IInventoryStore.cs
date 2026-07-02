@@ -85,6 +85,16 @@ namespace DfoServer.Game.Inventory
 
         IReadOnlyList<SortItemLockEntry> LoadSortItemLocks(InventoryListType listType);
 
+        bool TryLockEquipmentItem(InventoryListType listType, short slotIndex, out EquipmentItemLockResult result);
+
+        bool TryUnlockEquipmentItem(InventoryListType listType, short slotIndex, out EquipmentItemLockResult result);
+
+        bool TryCancelEquipmentItemUnlock(InventoryListType listType, short slotIndex, out EquipmentItemLockResult result);
+
+        IReadOnlyList<EquipmentItemLockEntry> LoadEquipmentItemLocks();
+
+        IReadOnlyList<EquipmentItemLockEntry> LoadEquipmentItemLocks(InventoryListType listType);
+
         CommonInventoryItem LoadCommonItemForRefresh(InventoryListType listType, short slotIndex);
 
         AvatarInventoryItem LoadAvatarItemForRefresh(short slotIndex);

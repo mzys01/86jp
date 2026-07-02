@@ -1168,6 +1168,9 @@ namespace DfoServer.Game.Inventory
 
         private static bool IsItemLocked(SqliteConnection connection, SqliteTransaction transaction, int characterId, SqliteInventoryStore.ItemRecord target)
         {
+            if (target == null || target.EquipmentLockId == 0)
+                return false;
+
             using (var cmd = connection.CreateCommand())
             {
                 cmd.Transaction = transaction;
@@ -1176,11 +1179,9 @@ SELECT COUNT(1)
 FROM character_item_locks
 WHERE character_id = @cid
   AND state != 0
-              AND type_or_list = @listType
-              AND item_key_or_slot = @slot;";
+  AND equipment_lock_id = @lockId;";
                 cmd.Parameters.AddWithValue("@cid", characterId);
-                cmd.Parameters.AddWithValue("@listType", (int)InventoryListType.Main);
-                cmd.Parameters.AddWithValue("@slot", target.SlotIndex);
+                cmd.Parameters.AddWithValue("@lockId", (int)target.EquipmentLockId);
                 return Convert.ToInt32(cmd.ExecuteScalar()) > 0;
             }
         }
