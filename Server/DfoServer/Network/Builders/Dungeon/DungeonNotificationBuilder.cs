@@ -267,14 +267,37 @@ namespace DfoServer.Network.Builders
             uint seriaBufBonusExp = 0, uint growthContractBonusExp = 0,
             uint weekendBonusExp = 0, uint premiumBonusExp = 0)
         {
-            return ExpNotificationBuilder.Build(level, totalExp, remainSp, remainTp,
-                partyBonusExp: partyBonusExp,
-                memberBonusExp: memberBonusExp,
-                fatigueBuffBonusExp: fatigueBuffBonusExp,
-                seriaBufBonusExp: seriaBufBonusExp,
-                growthContractBonusExp: growthContractBonusExp,
-                weekendBonusExp: weekendBonusExp,
-                premiumBonusExp: premiumBonusExp);
+            var writer = new GamePacketWriter();
+            writer.WriteByte(level);
+            writer.WriteUInt32(totalExp);
+            writer.WriteUInt32(partyBonusExp);
+            writer.WriteUInt32(memberBonusExp);
+            writer.WriteUInt16(remainSp);
+            writer.WriteUInt16(remainSp);
+            writer.WriteUInt16(remainTp);
+            writer.WriteUInt16(0);
+            writer.WriteUInt32(0);
+            writer.WriteUInt32(fatigueBuffBonusExp);
+            writer.WriteByte(0x00);
+            writer.WriteUInt32(seriaBufBonusExp);
+            writer.WriteUInt32(premiumBonusExp);
+            writer.WriteZeroBytes(3);
+            writer.WriteUInt32(0);
+            writer.WriteUInt32(0);
+            writer.WriteByte(0x00);
+            writer.WriteByte(0x00);
+            writer.WriteUInt32(growthContractBonusExp);
+            writer.WriteUInt32(weekendBonusExp);
+            writer.WriteUInt32(0);
+            writer.WriteUInt32(0);
+            writer.WriteUInt32(0);
+            writer.WriteUInt32(0);
+            writer.WriteUInt32(0);
+            writer.WriteUInt32(0);
+            writer.WriteUInt32(0);
+            writer.WriteUInt32(0);
+            writer.WriteUInt32(0);
+            return writer.ToArray();
         }
 
         //
