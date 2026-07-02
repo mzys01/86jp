@@ -146,7 +146,7 @@ namespace DfoServer.Network.Handlers
             }
 
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0018, TownAreaNotificationBuilder.BuildAreaUsers(TownAreaNotificationBuilder.CreateCurrentSnapshot(session.Player))));
-            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000E, TeleportPacketBuilder.BuildItemListUpdate(type, itemCode, remainingCount)));
+            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000E, ItemListUpdateBuilder.BuildCommonSlotUpdate(type, itemCode, remainingCount)));
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x00ED, TeleportPacketBuilder.BuildTeleportResponse(type, itemCode)));
 
             PersistPosition(session, forceImmediate: true, source: "teleport");

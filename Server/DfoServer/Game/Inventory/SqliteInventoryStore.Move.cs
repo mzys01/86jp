@@ -70,25 +70,12 @@ namespace DfoServer.Game.Inventory
                     return true;
                 }
 
-                if (srcIsCargo != dstIsCargo && source != null && destination == null)
-                {
-                    if (srcIsCargo)
-                        _db.MoveItemFromAccountCargo(connection, transaction, _context.CharacterId, source, dbDstList, request.DestinationSlotIndex);
-                    else
-                        _db.MoveItemToAccountCargo(connection, transaction, _context.AccountId, source, request.DestinationSlotIndex);
-                    transaction.Commit();
-                    result = CreateMoveResult(request, request.MoveCount);
-                    FileLogger.Log($"  [MoveItem] CARGO_MOVE: {(srcIsCargo ? "cargo→bag" : "bag→cargo")} item=0x{source.ItemTemplateId:X8}");
-                    return true;
-                }
-
                 if (source == null)
                 {
                     if (destination != null)
                     {
-                        FileLogger.Log($"  [MoveItem] MOVE(empty-src): dst uid={destination.ItemUid} tmpl=0x{destination.ItemTemplateId:X8} → ({dbSrcList},{request.SourceSlotIndex})");
-                        _db.UpdateItemPosition(connection, transaction, destination.ItemUid, dbSrcList, request.SourceSlotIndex);
-                        MoveSortItemLock(connection, transaction, dbDstList, request.DestinationSlotIndex, dbSrcList, request.SourceSlotIndex);
+                        FileLogger.Log($"  [MoveItem] MOVE(empty-src): dst uid={destination.ItemUid} tmpl=0x{destination.ItemTemplateId:X8} -> ({dbSrcList},{request.SourceSlotIndex})");
+                        MoveRecordTo(connection, transaction, destination, dbSrcList, request.SourceSlotIndex);
                         _auditLogger.WriteAuditLog(connection, transaction, _context.CharacterId, "move_itemspace", destination, dbSrcList, request.SourceSlotIndex, request.MoveCount);
                         transaction.Commit();
                         result = CreateMoveResult(request, request.MoveCount);
@@ -105,29 +92,32 @@ namespace DfoServer.Game.Inventory
                     return false;
                 }
                 var moveCount = NormalizeMoveCount(source, request.MoveCount);
+                destination = ResolveDestinationStackTarget(connection, transaction, source, destination, dbSrcList, dbDstList, moveCount);
 
-                if (CanStack(source, destination) && moveCount > 0)
+                if (CanStack(source, destination, moveCount) && moveCount > 0)
                 {
-                    _db.UpdateStackCount(connection, transaction, destination.ItemUid, destination.StackCount + moveCount);
+                    UpdateRecordStackCount(connection, transaction, destination, destination.StackCount + moveCount);
 
                     if (moveCount == source.StackCount)
                     {
-                        _db.DeleteItem(connection, transaction, source.ItemUid);
+                        DeleteRecord(connection, transaction, source);
                         DeleteSortItemLock(connection, transaction, dbSrcList, request.SourceSlotIndex);
                     }
                     else
-                        _db.UpdateStackCount(connection, transaction, source.ItemUid, source.StackCount - moveCount);
+                        UpdateRecordStackCount(connection, transaction, source, source.StackCount - moveCount);
 
                     _auditLogger.WriteAuditLog(connection, transaction, _context.CharacterId, "move_itemspace", source, dbDstList, request.DestinationSlotIndex, moveCount);
                     transaction.Commit();
                     result = CreateMoveResult(request, request.MoveCount);
+                    result.DestinationListType = destination.ListType;
+                    result.DestinationSlotIndex = destination.SlotIndex;
                     return true;
                 }
 
-                if (source.ItemKind == "stackable" && moveCount > 0 && moveCount < source.StackCount && destination == null)
+                if (IsStackableRecord(source) && moveCount > 0 && moveCount < source.StackCount && destination == null)
                 {
-                    _db.UpdateStackCount(connection, transaction, source.ItemUid, source.StackCount - moveCount);
-                    _db.InsertSplitItem(connection, transaction, _context.CharacterId, source, dbDstList, request.DestinationSlotIndex, moveCount);
+                    UpdateRecordStackCount(connection, transaction, source, source.StackCount - moveCount);
+                    InsertSplitRecord(connection, transaction, source, dbDstList, request.DestinationSlotIndex, moveCount);
                     _auditLogger.WriteAuditLog(connection, transaction, _context.CharacterId, "move_itemspace", source, dbDstList, request.DestinationSlotIndex, moveCount);
                     transaction.Commit();
                     result = CreateMoveResult(request, request.MoveCount);
@@ -136,9 +126,8 @@ namespace DfoServer.Game.Inventory
 
                 if (destination == null)
                 {
-                    FileLogger.Log($"  [MoveItem] MOVE: src uid={source.ItemUid} kind={source.ItemKind} tmpl=0x{source.ItemTemplateId:X8} → ({dbDstList},{request.DestinationSlotIndex})");
-                    _db.UpdateItemPosition(connection, transaction, source.ItemUid, dbDstList, request.DestinationSlotIndex);
-                    MoveSortItemLock(connection, transaction, dbSrcList, request.SourceSlotIndex, dbDstList, request.DestinationSlotIndex);
+                    FileLogger.Log($"  [MoveItem] MOVE: src uid={source.ItemUid} kind={source.ItemKind} tmpl=0x{source.ItemTemplateId:X8} -> ({dbDstList},{request.DestinationSlotIndex})");
+                    MoveRecordTo(connection, transaction, source, dbDstList, request.DestinationSlotIndex);
                     _auditLogger.WriteAuditLog(connection, transaction, _context.CharacterId, "move_itemspace", source, dbDstList, request.DestinationSlotIndex, moveCount);
                     transaction.Commit();
                     result = CreateMoveResult(request, request.MoveCount);
@@ -148,7 +137,10 @@ namespace DfoServer.Game.Inventory
                 if (!CanSwap(source, destination))
                     return false;
 
-                FileLogger.Log($"  [MoveItem] SWAP: src uid={source.ItemUid} kind={source.ItemKind} tmpl=0x{source.ItemTemplateId:X8} ↔ dst uid={destination.ItemUid} kind={destination.ItemKind} tmpl=0x{destination.ItemTemplateId:X8}");
+                if (IsAccountCargoRecord(source) || IsAccountCargoRecord(destination))
+                    return false;
+
+                FileLogger.Log($"  [MoveItem] SWAP: src uid={source.ItemUid} kind={source.ItemKind} tmpl=0x{source.ItemTemplateId:X8} <-> dst uid={destination.ItemUid} kind={destination.ItemKind} tmpl=0x{destination.ItemTemplateId:X8}");
                 _db.SwapItems(connection, transaction, source, destination);
                 SwapSortItemLocks(connection, transaction, source.ListType, source.SlotIndex, destination.ListType, destination.SlotIndex);
                 _auditLogger.WriteAuditLog(connection, transaction, _context.CharacterId, "move_itemspace", source, dbDstList, request.DestinationSlotIndex, moveCount);
@@ -420,7 +412,26 @@ ORDER BY sort_order;";
             var dbListType = MapToDbListType(listType);
             using (var connection = _context.OpenConnection())
             using (var transaction = connection.BeginTransaction())
+            {
+                if (dbListType == InventoryListType.AccountCargo)
+                    return _db.LoadAccountCargoCommonItem(connection, transaction, _context.AccountId, slotIndex);
+
                 return _db.LoadCommonItem(connection, transaction, _context.CharacterId, dbListType, slotIndex);
+            }
+        }
+
+        public AvatarInventoryItem LoadAvatarItemForRefresh(short slotIndex)
+        {
+            using (var connection = _context.OpenConnection())
+            using (var transaction = connection.BeginTransaction())
+                return _db.LoadAvatarItem(connection, transaction, _context.CharacterId, slotIndex);
+        }
+
+        public PetInventoryItem LoadPetItemForRefresh(short slotIndex)
+        {
+            using (var connection = _context.OpenConnection())
+            using (var transaction = connection.BeginTransaction())
+                return _db.LoadPetItem(connection, transaction, _context.CharacterId, slotIndex);
         }
 
         private void UpsertSortItemLock(SqliteConnection connection, SqliteTransaction transaction, InventoryListType listType, short slotIndex, byte state)
@@ -553,6 +564,98 @@ WHERE character_id = @cid AND list_type = @lt
             return true;
         }
 
+        private ItemRecord ResolveDestinationStackTarget(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            ItemRecord source,
+            ItemRecord destination,
+            InventoryListType dbSrcList,
+            InventoryListType dbDstList,
+            int moveCount)
+        {
+            if (destination != null || source == null || !IsStackableRecord(source))
+                return destination;
+
+            if (dbSrcList == dbDstList)
+                return destination;
+
+            var stackLimit = GetStackLimit(source);
+            ItemRecord stackTarget;
+            if (dbDstList == InventoryListType.AccountCargo)
+            {
+                stackTarget = _db.FindAccountCargoStackableItemByTemplateIdAndExpireTime(
+                    connection,
+                    transaction,
+                    _context.AccountId,
+                    source.ItemTemplateId,
+                    source.ExpireTime,
+                    stackLimit,
+                    requiredCapacity: moveCount);
+            }
+            else
+            {
+                stackTarget = _db.FindStackableItemByTemplateIdAndExpireTime(
+                    connection,
+                    transaction,
+                    _context.CharacterId,
+                    dbDstList,
+                    source.ItemTemplateId,
+                    source.ExpireTime,
+                    stackLimit,
+                    requiredCapacity: moveCount);
+            }
+
+            return CanStack(source, stackTarget, moveCount) ? stackTarget : destination;
+        }
+
+        private void UpdateRecordStackCount(SqliteConnection connection, SqliteTransaction transaction, ItemRecord item, int stackCount)
+        {
+            if (IsAccountCargoRecord(item))
+                _db.UpdateAccountCargoStackCount(connection, transaction, item.ItemUid, stackCount);
+            else
+                _db.UpdateStackCount(connection, transaction, item.ItemUid, stackCount);
+        }
+
+        private void DeleteRecord(SqliteConnection connection, SqliteTransaction transaction, ItemRecord item)
+        {
+            if (IsAccountCargoRecord(item))
+                _db.DeleteAccountCargoItem(connection, transaction, item.ItemUid);
+            else
+                _db.DeleteItem(connection, transaction, item.ItemUid);
+        }
+
+        private void InsertSplitRecord(SqliteConnection connection, SqliteTransaction transaction, ItemRecord source, InventoryListType destinationListType, short destinationSlotIndex, int moveCount)
+        {
+            if (destinationListType == InventoryListType.AccountCargo)
+            {
+                _db.InsertAccountCargoItemRecord(connection, transaction, _context.AccountId, source, destinationSlotIndex, moveCount);
+                return;
+            }
+
+            _db.InsertSplitItem(connection, transaction, _context.CharacterId, source, destinationListType, destinationSlotIndex, moveCount);
+        }
+
+        private void MoveRecordTo(SqliteConnection connection, SqliteTransaction transaction, ItemRecord item, InventoryListType destinationListType, short destinationSlotIndex)
+        {
+            if (IsAccountCargoRecord(item))
+            {
+                if (destinationListType == InventoryListType.AccountCargo)
+                    _db.UpdateAccountCargoItemSlot(connection, transaction, item.ItemUid, destinationSlotIndex);
+                else
+                    _db.MoveItemFromAccountCargo(connection, transaction, _context.CharacterId, item, destinationListType, destinationSlotIndex);
+                return;
+            }
+
+            if (destinationListType == InventoryListType.AccountCargo)
+            {
+                _db.MoveItemToAccountCargo(connection, transaction, _context.AccountId, item, destinationSlotIndex);
+                return;
+            }
+
+            _db.UpdateItemPosition(connection, transaction, item.ItemUid, destinationListType, destinationSlotIndex);
+            MoveSortItemLock(connection, transaction, item.ListType, item.SlotIndex, destinationListType, destinationSlotIndex);
+        }
+
         /// <summary>
         /// </summary>
         private static Dictionary<byte, (short start, short end)> GetSortSegmentMap(InventoryListType listType)
@@ -659,24 +762,48 @@ WHERE character_id = @cid AND list_type = @lt
                 && CanMoveToListType(destination.ItemKind, source.ListType);
         }
 
-        private static bool CanStack(ItemRecord source, ItemRecord destination)
+        private static bool CanStack(ItemRecord source, ItemRecord destination, int moveCount)
         {
             return source != null
                 && destination != null
-                && source.ItemKind == "stackable"
-                && destination.ItemKind == "stackable"
-                && source.ItemTemplateId == destination.ItemTemplateId;
+                && IsStackableRecord(source)
+                && IsStackableRecord(destination)
+                && source.ItemTemplateId == destination.ItemTemplateId
+                && source.ExpireTime == destination.ExpireTime
+                && HasStackCapacity(destination, moveCount);
         }
 
         private static int NormalizeMoveCount(ItemRecord source, int requestedMoveCount)
         {
-            if (source.ItemKind != "stackable")
+            if (!IsStackableRecord(source))
                 return 1;
 
             if (requestedMoveCount <= 0 || requestedMoveCount > source.StackCount)
                 return source.StackCount;
 
             return requestedMoveCount;
+        }
+
+        private static bool IsStackableRecord(ItemRecord item)
+        {
+            return item != null && InventoryDbPrimitives.LoadStackableItem(item.ItemTemplateId) != null;
+        }
+
+        private static bool HasStackCapacity(ItemRecord destination, int moveCount)
+        {
+            var stackLimit = GetStackLimit(destination);
+            return stackLimit <= 0 || destination.StackCount + moveCount <= stackLimit;
+        }
+
+        private static int GetStackLimit(ItemRecord item)
+        {
+            var stackable = item != null ? InventoryDbPrimitives.LoadStackableItem(item.ItemTemplateId) : null;
+            return stackable != null ? stackable.StackLimit : 0;
+        }
+
+        private static bool IsAccountCargoRecord(ItemRecord item)
+        {
+            return item != null && item.ListType == InventoryListType.AccountCargo;
         }
 
         private static int GetSortPriority(string itemKind)

@@ -90,20 +90,15 @@ namespace DfoServer.Network.Handlers
 
             if (result.CostItemTemplateId > 0)
             {
-                var updBody = TeleportPacketBuilder.BuildItemListUpdate(result.CostItemSlotIndex, result.CostItemTemplateId, result.CostItemNewStackCount);
+                var updBody = ItemListUpdateBuilder.BuildCommonSlotUpdate(result.CostItemSlotIndex, result.CostItemTemplateId, result.CostItemNewStackCount);
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000E, updBody));
                 FileLogger.Log($"[{ProtocolName}] BUY_ITEM: NOTI 14 cost update slot={result.CostItemSlotIndex} id=0x{result.CostItemTemplateId:X8} newCount={result.CostItemNewStackCount}");
             }
 
             if (result.ListType == InventoryListType.Pet)
             {
-                var snapshot = _sqliteSelectCharacterDataSource.LoadItemListSnapshot(cid, aid);
-                var petUpdateBody = BuildPetItemUpdates(snapshot, new HashSet<short> { result.SlotIndex });
-                if (petUpdateBody != null)
-                {
-                    await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000E, petUpdateBody));
-                    FileLogger.Log($"[{ProtocolName}] BUY_ITEM: pet ITEM_LIST update sent slot={result.SlotIndex}");
-                }
+                await SendUpdateItemList(session, InventoryListType.Pet, result.SlotIndex);
+                FileLogger.Log($"[{ProtocolName}] BUY_ITEM: pet ITEM_LIST update sent slot={result.SlotIndex}");
             }
         }
 
@@ -227,7 +222,7 @@ namespace DfoServer.Network.Handlers
                     await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, wireType, ack.ToArray()));
 
                     await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000E,
-                        Builders.TeleportPacketBuilder.BuildItemListUpdate(0, 0, newCharGold)));
+                        ItemListUpdateBuilder.BuildGoldUpdate(newCharGold)));
 
                     FileLogger.Log($"[{ProtocolName}] {(isDeposit ? "DEPOSIT" : "WITHDRAW")}_MONEY: amount={amount} charGold={newCharGold} cargoGold={newCargoGold}");
                 }

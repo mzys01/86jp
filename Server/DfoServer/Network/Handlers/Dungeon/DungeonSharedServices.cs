@@ -177,7 +177,7 @@ namespace DfoServer.Network.Handlers.Dungeon
 
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0021, new[] { (byte)100 }));
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000E,
-                    TeleportPacketBuilder.BuildItemListUpdate(0, 0, updatedGold)));
+                    ItemListUpdateBuilder.BuildGoldUpdate(updatedGold)));
 
                 FileLogger.Log($"[{ProtocolLogName}] RECOVER_STAMINA: success cid={characterId} cost={cost} gold={updatedGold}");
             }
