@@ -69,7 +69,7 @@ ON CONFLICT(character_id) DO UPDATE SET character_option_blob = COALESCE(charact
                     }
 
                     const int hdrLen = 15;
-                    var initBodyTypes = new System.Collections.Generic.HashSet<int> { 0x0035, 0x0077, 0x0111, 0x019F, 0x015F, 0x0381, 0x0357, 0x03D8 };
+                    var initBodyTypes = new System.Collections.Generic.HashSet<int> { 0x0035, 0x0077, 0x0111, 0x019F, 0x015F, 0x0381, 0x0357, 0x0300, 0x03D8 };
                     foreach (var t in templates)
                     {
                         if (t.Command != 0x00 || !initBodyTypes.Contains(t.Type))

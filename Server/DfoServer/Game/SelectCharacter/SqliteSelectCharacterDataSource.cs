@@ -466,6 +466,29 @@ namespace DfoServer.Game.SelectCharacter
         public byte[] LoadCharacterInitBody(int characterId, ushort notiType, int occurrenceIndex = 0)
             => LoadInitBody(characterId, notiType, occurrenceIndex);
 
+        public bool TrySaveCrystalContractSelection(int characterId, byte[] body)
+        {
+            if (characterId <= 0 || body == null || body.Length < 2)
+                return false;
+
+            var storage = new byte[] { body[0], body[1] };
+            using (var conn = new SqliteConnection(_connectionString))
+            {
+                conn.Open();
+                using (var cmd = new SqliteCommand(
+                    @"INSERT INTO character_init_bodies (character_id, noti_type, occurrence_index, body)
+                      VALUES (@cid, @nt, 0, @body)
+                      ON CONFLICT(character_id, noti_type, occurrence_index)
+                      DO UPDATE SET body=@body", conn))
+                {
+                    cmd.Parameters.AddWithValue("@cid", characterId);
+                    cmd.Parameters.AddWithValue("@nt", 0x0300);
+                    cmd.Parameters.AddWithValue("@body", storage);
+                    return cmd.ExecuteNonQuery() > 0;
+                }
+            }
+        }
+
         public byte[] LoadAccountMainOption(int accountId)
             => _accountSettingsRepository.Load(accountId)?.MainGameOption;
 
@@ -512,7 +535,7 @@ namespace DfoServer.Game.SelectCharacter
         {
             using (var conn = new SqliteConnection(
                 Infrastructure.SqliteDatabaseBootstrap.Initialize(
-                    Infrastructure.ServerPaths.DatabasePath, Infrastructure.ServerPaths.SchemaFilePath)))
+                    _databasePath, _schemaFilePath)))
             {
                 conn.Open();
                 using (var cmd = new SqliteCommand(
@@ -613,6 +636,7 @@ namespace DfoServer.Game.SelectCharacter
                     (0x0077, new byte[] { 0x00 }),              
                     (0x0111, new byte[8]),                      
                     (0x019F, new byte[] { 0x00, 0x00 }),        
+                    (0x0300, new byte[] { 0x00, 0x00 }),
                     (0x0357, new byte[] { 0x7B, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }),
                     (0x03D8, new byte[204]),                    
                 };
@@ -674,6 +698,12 @@ namespace DfoServer.Game.SelectCharacter
             LoadFieldFromInitBody(characterId, 0x0357, body => {
                 if (body == null || body.Length < 8) return;
                 RentalInfoSnapshot.ParseStorageBody(body, snap.RentalInfo);
+            });
+
+            LoadFieldFromInitBody(characterId, 0x0300, body => {
+                if (body == null || body.Length < 2) return;
+                snap.CubeType = body[0];
+                snap.CubeGrade = body[1];
             });
 
             
