@@ -342,9 +342,9 @@ namespace DfoServer.Game.SelectCharacter
             return _inventoryStore.TrySellItem(characterId, accountId, listType, slotIndex, sellCount, out result);
         }
 
-        public bool TryRepairEquipment(int characterId, int accountId, InventoryListType listType, short slotIndex, bool quickRepair, out RepairEquipmentResult result)
+        public bool TryRepairEquipment(int characterId, int accountId, InventoryListType listType, short slotIndex, bool quickRepair, bool freeRepair, out RepairEquipmentResult result)
         {
-            return _inventoryStore.TryRepairEquipment(characterId, accountId, listType, slotIndex, quickRepair, out result);
+            return _inventoryStore.TryRepairEquipment(characterId, accountId, listType, slotIndex, quickRepair, freeRepair, out result);
         }
 
         public bool TryDisjointItem(int characterId, int accountId, DisjointItemRequest request, out DisjointItemResult result)

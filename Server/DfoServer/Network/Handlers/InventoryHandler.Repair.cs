@@ -7,10 +7,11 @@ namespace DfoServer.Network.Handlers
 {
     public sealed partial class InventoryHandler
     {
-        // 请求 body(剥头后): [inven_type:1][slot:2 LE][repair_item_slot:2 LE][pad:2][quick:1]
+        // 请求 body(剥头后, 实测): [inven_type:1][slot:2 LE][repair_item_slot:2 LE][auto:1][pad:1][quick:1]
         //   inven_type: 0=背包/快捷栏, 3=穿戴装备, 2=货柜
         //   slot: 0xFFFF(-1)=全部修理, 否则指定槽
-        //   末字节(body[7]): 0=普通修理(商店价), 1=快速修理(侧边栏, 费用×[quick repair cost rate]=1.5)
+        //   body[5] auto: 1=魔王契约"自动修理"触发(耐久到0系统自动修, 免费), 0=手动
+        //   body[7] quick: 1=侧边栏快速修理(费用×1.5), 0=普通商店价  (自动修理包只有7字节, 无此字节)
         // 回包 body(9B): [01成功标志][剩余金币:4 LE][inven_type:1][slot:2 LE][00 00]
         public async Task Handle_ENUM_CMDPACKET_REPAIR_EQUIPMENT(EnhancedClientSession session, GamePacketHeader header, byte[] body)
         {
@@ -22,7 +23,13 @@ namespace DfoServer.Network.Handlers
 
             var invenType = body[0];
             var slot = BitConverter.ToInt16(body, 1);
-            var quickRepair = body.Length >= 8 && body[7] == 1;   // 侧边栏快速修理标志
+            var autoRepair = body.Length >= 6 && body[5] == 1;   // 魔王契约自动修理触发
+            var quickRepair = body.Length >= 8 && body[7] == 1;  // 侧边栏快速修理
+
+            var (cid, aid) = ResolveOwner(session);
+            // 自动修理免费: 需 body[5]=1(自动触发) 且账号有生效的"自动修理"契约(premium_type=586)双重校验。
+            var freeRepair = autoRepair && Game.Premium.PremiumService.HasActiveAutoRepairForAccount(aid);
+            FileLogger.Log($"[{ProtocolName}] REPAIR_EQUIPMENT raw body({body.Length}B): {BitConverter.ToString(body)} auto={autoRepair} quick={quickRepair} free={freeRepair}");
 
             var listType = MapInvenTypeToListType(invenType);
             if (listType == null)
@@ -31,8 +38,7 @@ namespace DfoServer.Network.Handlers
                 return;
             }
 
-            var (cid, aid) = ResolveOwner(session);
-            if (!_sqliteSelectCharacterDataSource.TryRepairEquipment(cid, aid, listType.Value, slot, quickRepair, out var result))
+            if (!_sqliteSelectCharacterDataSource.TryRepairEquipment(cid, aid, listType.Value, slot, quickRepair, freeRepair, out var result))
             {
                 FileLogger.Log($"[{ProtocolName}] REPAIR_EQUIPMENT: FAILED inven_type={invenType} slot={slot}");
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0017, RepairEquipmentAckBuilder.BuildError(0x0A)));
