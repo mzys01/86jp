@@ -193,10 +193,14 @@ namespace DfoServer.Network.Handlers
 
             foreach (var skill in StrikerSkillDataProvider.GetAvailableSkills(ch.Job, ch.GrowType, ch.Level))
             {
+                var level = StrikerSupportSkillLevelSource.ResolveBaseLevel(learnedLevels, skill);
+                if (level == 0)
+                    continue;
+
                 skills.Add(new StrikerCandidateSkillInfo
                 {
                     Skill = skill,
-                    Level = StrikerSupportSkillLevelSource.ResolveBaseLevel(learnedLevels, skill),
+                    Level = level,
                 });
             }
 
