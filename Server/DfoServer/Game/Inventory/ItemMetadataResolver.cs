@@ -541,6 +541,23 @@ namespace DfoServer.Game.Inventory
             return false;
         }
 
+        // 全部修理("一键修理")适用的装备类型 (客户端 handler 过滤一致)。
+        // 只修这 13 类穿戴装备; 
+        private static readonly HashSet<string> RepairAllEquipmentTypes = new HashSet<string>
+        {
+            "[weapon]", "[coat]", "[pants]", "[hat]", "[shoulder]", "[waist]",
+            "[shoes]", "[amulet]", "[wrist]", "[ring]", "[support]",
+            "[aurora avatar]", "[magic stone]",
+        };
+
+        // itemTemplateId 是否属于"全部修理"适用的装备类型。
+        public static bool IsRepairAllEligible(int itemTemplateId)
+        {
+            return TryGetEquipmentType(itemTemplateId, out var type)
+                && type != null
+                && RepairAllEquipmentTypes.Contains(type);
+        }
+
         private static string NormalizeEquipmentType(string raw)
         {
             if (string.IsNullOrWhiteSpace(raw))

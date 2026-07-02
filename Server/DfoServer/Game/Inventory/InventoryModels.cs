@@ -109,6 +109,13 @@ namespace DfoServer.Game.Inventory
         public int PetSerialOrHandle { get; set; }
     }
 
+    public sealed class RepairEquipmentResult
+    {
+        public short SlotIndex { get; set; }
+        public int UpdatedGold { get; set; }
+        public int Cost { get; set; }
+    }
+
     public sealed class BoosterRewardResult
     {
         public InventoryListType ListType { get; set; } = InventoryListType.Main;
