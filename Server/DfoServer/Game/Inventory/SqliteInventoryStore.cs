@@ -52,18 +52,6 @@ namespace DfoServer.Game.Inventory
             _migrationRunner = new InventoryMigrationRunner();
         }
 
-        private int _scopeCharacterId;
-        private int _scopeAccountId;
-
-        public IDisposable BeginScope(int characterId, int accountId)
-        {
-            _scopeCharacterId = characterId;
-            _scopeAccountId = accountId;
-            return new ScopeToken();
-        }
-
-        private sealed class ScopeToken : IDisposable { public void Dispose() { } }
-
         public int CountItem(int characterId, int itemTemplateId)
         {
             using (var conn = new SqliteConnection(_connectionString))
@@ -409,37 +397,6 @@ ORDER BY slot_index;";
             connection.Open();
             return connection;
         }
-
-        // Compatibility overloads — delegate to the explicit-parameter versions using BeginScope state.
-        // These exist only for SelfTests and SqliteAssetService that still call the old signatures.
-        // Remove once those callers are migrated.
-        public CharacterItemListSnapshot LoadCharacterItemListSnapshot() => LoadCharacterItemListSnapshot(_scopeCharacterId, _scopeAccountId);
-        public int DeleteExpiredRentalEquipment() => DeleteExpiredRentalEquipment(_scopeCharacterId, _scopeAccountId);
-        public bool TryDeleteItem(InventoryListType lt, short si, short dc, out InventoryMutationResult r) => TryDeleteItem(_scopeCharacterId, _scopeAccountId, lt, si, dc, out r);
-        public bool TryMoveItem(InventoryMoveRequest rq, out InventoryMoveResult r) => TryMoveItem(_scopeCharacterId, _scopeAccountId, rq, out r);
-        public bool TryEnchantByBead(EnchantByBeadCommand c, out EnchantByBeadResult r) => TryEnchantByBead(_scopeCharacterId, _scopeAccountId, c, out r);
-        public bool TryUpgradeItem(ItemUpgradeCommand c, out ItemUpgradeResult r) => TryUpgradeItem(_scopeCharacterId, _scopeAccountId, c, out r);
-        public bool TryOpenEquipmentSocket(short ts, int ti, short ms, out EquipmentSocketMutationResult r) => TryOpenEquipmentSocket(_scopeCharacterId, ts, ti, ms, out r);
-        public bool TrySetEquipmentEmblems(short ts, int ti, IReadOnlyList<EquipmentEmblemApplyRequest> e, out EquipmentEmblemMutationResult r) => TrySetEquipmentEmblems(_scopeCharacterId, ts, ti, e, out r);
-        public bool TryOpenAvatarSocket(short ts, int ti, short ms, out AvatarSocketMutationResult r) => TryOpenAvatarSocket(_scopeCharacterId, ts, ti, ms, out r);
-        public bool TrySetAvatarEmblems(short ts, int ti, IReadOnlyList<EquipmentEmblemApplyRequest> e, out AvatarEmblemMutationResult r) => TrySetAvatarEmblems(_scopeCharacterId, ts, ti, e, out r);
-        public bool TrySortItems(int characterId, InventoryListType lt, byte c) => TrySortItems(characterId, _scopeAccountId, lt, c);
-        public bool TryToggleSortItemLock(InventoryListType lt, short si, out SortItemLockEntry e) => TryToggleSortItemLock(_scopeCharacterId, lt, si, out e);
-        public bool TryUnlockSortItemLock(InventoryListType lt, short si) => TryUnlockSortItemLock(_scopeCharacterId, lt, si);
-        public IReadOnlyList<SortItemLockEntry> LoadSortItemLocks() => LoadSortItemLocks(_scopeCharacterId);
-        public IReadOnlyList<SortItemLockEntry> LoadSortItemLocks(InventoryListType lt) => LoadSortItemLocks(_scopeCharacterId, lt);
-        public bool TryLockEquipmentItem(InventoryListType lt, short si, out EquipmentItemLockResult r) => TryLockEquipmentItem(_scopeCharacterId, lt, si, out r);
-        public bool TryUnlockEquipmentItem(InventoryListType lt, short si, out EquipmentItemLockResult r) => TryUnlockEquipmentItem(_scopeCharacterId, lt, si, out r);
-        public bool TryCancelEquipmentItemUnlock(InventoryListType lt, short si, out EquipmentItemLockResult r) => TryCancelEquipmentItemUnlock(_scopeCharacterId, lt, si, out r);
-        public IReadOnlyList<EquipmentItemLockEntry> LoadEquipmentItemLocks() => LoadEquipmentItemLocks(_scopeCharacterId);
-        public IReadOnlyList<EquipmentItemLockEntry> LoadEquipmentItemLocks(InventoryListType lt) => LoadEquipmentItemLocks(_scopeCharacterId, lt);
-        public CommonInventoryItem LoadCommonItemForRefresh(InventoryListType lt, short si) => LoadCommonItemForRefresh(_scopeCharacterId, _scopeAccountId, lt, si);
-        public AvatarInventoryItem LoadAvatarItemForRefresh(short si) => LoadAvatarItemForRefresh(_scopeCharacterId, si);
-        public PetInventoryItem LoadPetItemForRefresh(short si) => LoadPetItemForRefresh(_scopeCharacterId, si);
-        public void SeedNewCharacterEquipment((short slot, int itemId)[] eq) => SeedNewCharacterEquipment(_scopeCharacterId, _scopeAccountId, eq);
-        public void EnsureContainerState(int characterId) => EnsureContainerState(characterId, _scopeAccountId);
-        public int CountItem(int itemTemplateId) => CountItem(_scopeCharacterId, itemTemplateId);
-        public void EnsureDatabase(CharacterItemListSnapshot s) => EnsureDatabase(_scopeCharacterId, _scopeAccountId, s);
 
         private static ushort GetListParam(Dictionary<InventoryListType, ushort> states, InventoryListType listType)
         {

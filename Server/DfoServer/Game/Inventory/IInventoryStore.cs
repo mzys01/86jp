@@ -48,7 +48,7 @@ namespace DfoServer.Game.Inventory
 
         bool TryPickupItem(int characterId, int accountId, int itemTemplateId, int stackCount, out short assignedSlot, out int newStackCount);
 
-        bool TryRemoveItemByTemplateId(int characterId, int itemTemplateId, out short slotIndex, out InventoryMutationResult result);
+        bool TryRemoveItemByTemplateId(int characterId, int accountId, int itemTemplateId, out short slotIndex, out InventoryMutationResult result);
 
         bool TrySellItem(int characterId, int accountId, InventoryListType listType, short slotIndex, short sellCount, out InventoryMutationResult result);
 

@@ -58,9 +58,8 @@ namespace DfoServer.SelfTests
                 Check("hatched pet creature-list row starts at level 1", creatureRow.FieldAfterValue == 1, ref failures);
             }
 
-            using (store.BeginScope(CharacterId, AccountId))
             {
-                var snapshot = store.LoadCharacterItemListSnapshot();
+                var snapshot = store.LoadCharacterItemListSnapshot(CharacterId, AccountId);
                 var petItem = snapshot.PetItems.FirstOrDefault(x => x.SlotIndex == EggSlot);
                 Check("pet item-list update serializes hatched pet",
                     petItem != null

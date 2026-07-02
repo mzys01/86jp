@@ -238,9 +238,8 @@ namespace DfoServer.SelfTests
                     }
                 }
 
-                using (store.BeginScope(CharacterId, AccountId))
                 {
-                    var snapshot = store.LoadCharacterItemListSnapshot();
+                    var snapshot = store.LoadCharacterItemListSnapshot(CharacterId, AccountId);
                     var expectedMinExpire = nowBefore + (long)timedRewardUsablePeriod * 86400L - 5;
                     var expectedMaxExpire = DateTimeOffset.Now.ToUnixTimeSeconds() + (long)timedRewardUsablePeriod * 86400L + 5;
                     var legacyRow = snapshot.MainItems.Find(x =>
@@ -266,7 +265,7 @@ namespace DfoServer.SelfTests
             }
 
             SelectablePackageOpenResult result = null;
-            using (store.BeginScope(CharacterId, AccountId))
+
             {
                 Check("open selectable package succeeds", store.TryOpenSelectablePackage(CharacterId, AccountId, request, out result));
             }
@@ -287,9 +286,8 @@ namespace DfoServer.SelfTests
                 Check("0x00A0 single reward ACK item count", singleAckBody.Length >= 21 && BitConverter.ToInt32(singleAckBody, 17) == 1);
             }
 
-            using (store.BeginScope(CharacterId, AccountId))
             {
-                var snapshot = store.LoadCharacterItemListSnapshot();
+                var snapshot = store.LoadCharacterItemListSnapshot(CharacterId, AccountId);
                 Check("snapshot no package in source slot", snapshot.MainItems.Find(x => x.SlotIndex == PackageSlot) == null);
 
                 var reward = snapshot.MainItems.Find(x => x.ItemTemplateId == SampleSelectedTitleRewardId);
@@ -307,7 +305,7 @@ namespace DfoServer.SelfTests
             if (avatarRequest != null)
             {
                 SelectablePackageOpenResult avatarResult = null;
-                using (store.BeginScope(CharacterId, AccountId))
+
                 {
                     Check("open avatar-choice selectable package succeeds", store.TryOpenSelectablePackage(CharacterId, AccountId, avatarRequest, out avatarResult));
                 }
@@ -329,9 +327,8 @@ namespace DfoServer.SelfTests
                     Check("0x00A0 success ACK first popup item count", ackBody.Length >= 21 && BitConverter.ToInt32(ackBody, 17) == 1);
                 }
 
-                using (store.BeginScope(CharacterId, AccountId))
                 {
-                    var snapshot = store.LoadCharacterItemListSnapshot();
+                    var snapshot = store.LoadCharacterItemListSnapshot(CharacterId, AccountId);
                     Check("snapshot no avatar package in source slot", snapshot.MainItems.Find(x => x.SlotIndex == AvatarPackageSlot) == null);
                     foreach (var itemId in CapturedAvatarItemTemplateIds)
                         Check($"avatar reward {itemId} exists in avatar inventory", snapshot.AvatarItems.Find(x => x.AvatarItemId == itemId) != null);
@@ -349,7 +346,7 @@ namespace DfoServer.SelfTests
                 SelectionFlag = 0,
             };
             SelectablePackageOpenResult crossJobAuraResult = null;
-            using (store.BeginScope(CharacterId, AccountId))
+
             {
                 Check("open cross-job avatar single-select package succeeds", store.TryOpenSelectablePackage(CharacterId, AccountId, crossJobAuraRequest, out crossJobAuraResult));
             }
@@ -362,15 +359,14 @@ namespace DfoServer.SelfTests
                 Check("cross-job aura result granted count", crossJobAuraResult.GrantedItems.Count == 1);
             }
 
-            using (store.BeginScope(CharacterId, AccountId))
             {
-                var snapshot = store.LoadCharacterItemListSnapshot();
+                var snapshot = store.LoadCharacterItemListSnapshot(CharacterId, AccountId);
                 Check("snapshot no cross-job aura package in source slot", snapshot.MainItems.Find(x => x.SlotIndex == CrossJobAuraPackageSlot) == null);
                 Check("cross-job aura reward exists in avatar inventory", snapshot.AvatarItems.Find(x => x.AvatarItemId == SampleCrossJobAuraRewardId) != null);
             }
 
             BoosterUseResult boosterResult = null;
-            using (store.BeginScope(CharacterId, AccountId))
+
             {
                 Check("open special-kind booster package succeeds", store.TryUseBoosterItem(CharacterId, AccountId, new BoosterUseRequest
                 {
@@ -386,9 +382,8 @@ namespace DfoServer.SelfTests
                 Check("special booster granted reward", boosterResult.Rewards.Find(x => x.ItemTemplateId == SampleSpecialKindBoosterRewardId) != null);
             }
 
-            using (store.BeginScope(CharacterId, AccountId))
             {
-                var snapshot = store.LoadCharacterItemListSnapshot();
+                var snapshot = store.LoadCharacterItemListSnapshot(CharacterId, AccountId);
                 Check("snapshot no special booster package in source slot", snapshot.MainItems.Find(x => x.SlotIndex == SpecialBoosterPackageSlot) == null);
                 Check("special booster reward exists", snapshot.MainItems.Find(x => x.ItemTemplateId == SampleSpecialKindBoosterRewardId) != null);
             }
@@ -422,7 +417,7 @@ namespace DfoServer.SelfTests
                 Check("0x0218 generic booster still keeps source ACK", InventoryHandler.ShouldSendSourceAckForBoosterResponse(0x0218));
 
                 BoosterUseResult hammerBundleResult = null;
-                using (store.BeginScope(CharacterId, AccountId))
+
                 {
                     Check("open consumable magic-hammer bundle succeeds",
                         store.TryUseBoosterItem(CharacterId, AccountId, new BoosterUseRequest
@@ -443,9 +438,8 @@ namespace DfoServer.SelfTests
                     Check("magic-hammer bundle grants chicken box", boxReward?.GrantedCount == MagicBoxBatchCount);
                 }
 
-                using (store.BeginScope(CharacterId, AccountId))
                 {
-                    var snapshot = store.LoadCharacterItemListSnapshot();
+                    var snapshot = store.LoadCharacterItemListSnapshot(CharacterId, AccountId);
                     Check("snapshot no consumable magic-hammer bundle in source slot", snapshot.MainItems.Find(x => x.SlotIndex == MagicHammerBundleSlot) == null);
                     Check($"wrong-tab magic hammer remains {WrongMagicHammerSlot}", snapshot.MainItems.Find(x => x.SlotIndex == WrongMagicHammerSlot)?.CountOrInstanceValue == 1);
                     var materialHammer = snapshot.MainItems.Find(x => x.ItemTemplateId == MagicHammerItemTemplateId && x.SlotIndex >= 121 && x.SlotIndex <= 176);
@@ -468,7 +462,7 @@ namespace DfoServer.SelfTests
                 var requestMaterialSlot = materialHammerSlot >= 0 ? materialHammerSlot : magicBoxRequest.MaterialSlotIndex;
                 var requestMagicBoxSlot = bundleMagicBoxSlot >= 0 ? bundleMagicBoxSlot : magicBoxRequest.SlotIndex;
                 BoosterUseResult magicBoxResult = null;
-                using (store.BeginScope(CharacterId, AccountId))
+
                 {
                     Check("open magic-box request with hammer material consumes requested boosters",
                         store.TryUseBoosterItem(CharacterId, AccountId, new BoosterUseRequest
@@ -493,9 +487,9 @@ namespace DfoServer.SelfTests
                 }
 
                 short seriaLuckSlot = -1;
-                using (store.BeginScope(CharacterId, AccountId))
+
                 {
-                    var snapshot = store.LoadCharacterItemListSnapshot();
+                    var snapshot = store.LoadCharacterItemListSnapshot(CharacterId, AccountId);
                     Check("snapshot magic-box stack consumed", snapshot.MainItems.Find(x => x.SlotIndex == requestMagicBoxSlot)?.ItemTemplateId != MagicBoxItemTemplateId);
                     Check("snapshot material-tab magic hammer consumed", snapshot.MainItems.Find(x => x.SlotIndex == requestMaterialSlot) == null);
                     Check($"wrong-tab magic hammer still ignored", snapshot.MainItems.Find(x => x.SlotIndex == WrongMagicHammerSlot)?.CountOrInstanceValue == 1);
@@ -513,7 +507,7 @@ namespace DfoServer.SelfTests
                     seriaLuckSlot = RelocatedSeriaLuckSlot;
 
                     BoosterUseResult seriaLuckResult = null;
-                    using (store.BeginScope(CharacterId, AccountId))
+
                     {
                         Check("open Seria luck request without material succeeds after stale source slot",
                             store.TryUseBoosterItem(CharacterId, AccountId, new BoosterUseRequest
@@ -533,16 +527,15 @@ namespace DfoServer.SelfTests
                         Check($"Seria luck stale source request uses actual slot {RelocatedSeriaLuckSlot}", seriaLuckResult.SourceSlotIndex == RelocatedSeriaLuckSlot);
                     }
 
-                    using (store.BeginScope(CharacterId, AccountId))
                     {
-                        var snapshot = store.LoadCharacterItemListSnapshot();
+                        var snapshot = store.LoadCharacterItemListSnapshot(CharacterId, AccountId);
                         Check($"snapshot Seria luck remaining count", snapshot.MainItems.Find(x => x.SlotIndex == seriaLuckSlot)?.CountOrInstanceValue == MagicBoxBatchCount - SeriaLuckBatchCount);
                     }
 
                     if (seriaLuckSingleRequest != null)
                     {
                         BoosterUseResult seriaLuckSingleResult = null;
-                        using (store.BeginScope(CharacterId, AccountId))
+
                         {
                             Check("open Seria luck single without material succeeds",
                                 store.TryUseBoosterItem(CharacterId, AccountId, new BoosterUseRequest
@@ -560,16 +553,15 @@ namespace DfoServer.SelfTests
                             Check("Seria luck single grants at least one reward", seriaLuckSingleResult.Rewards.Count > 0);
                         }
 
-                        using (store.BeginScope(CharacterId, AccountId))
                         {
-                            var snapshot = store.LoadCharacterItemListSnapshot();
+                            var snapshot = store.LoadCharacterItemListSnapshot(CharacterId, AccountId);
                             Check($"snapshot Seria luck remaining after single count", snapshot.MainItems.Find(x => x.SlotIndex == seriaLuckSlot)?.CountOrInstanceValue == MagicBoxBatchCount - SeriaLuckBatchCount - 1);
                         }
                     }
                 }
 
                 DeleteItemAtSlot(tempDb, requestMaterialSlot);
-                using (store.BeginScope(CharacterId, AccountId))
+
                 {
                     Check("magic-box request rejects insufficient hammer material",
                         !store.TryUseBoosterItem(CharacterId, AccountId, new BoosterUseRequest
@@ -589,9 +581,8 @@ namespace DfoServer.SelfTests
                         }, out _));
                 }
 
-                using (store.BeginScope(CharacterId, AccountId))
                 {
-                    var snapshot = store.LoadCharacterItemListSnapshot();
+                    var snapshot = store.LoadCharacterItemListSnapshot(CharacterId, AccountId);
                     Check($"wrong-tab magic hammer remains after insufficient hammer", snapshot.MainItems.Find(x => x.SlotIndex == WrongMagicHammerSlot)?.CountOrInstanceValue == 1);
                 }
             }
@@ -623,7 +614,7 @@ namespace DfoServer.SelfTests
                 SlotIndex = StackedPackageSlot,
                 SelectedItemTemplateId = InvalidRewardItemTemplateId,
             };
-            using (store.BeginScope(CharacterId, AccountId))
+
             {
                 Check("invalid selected reward is rejected", !store.TryOpenSelectablePackage(CharacterId, AccountId, invalidRequest, out _));
             }

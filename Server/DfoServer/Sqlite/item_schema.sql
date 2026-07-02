@@ -622,6 +622,15 @@ CREATE TABLE IF NOT EXISTS character_collectbox_slots (
     FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS character_active_quests (
+    character_id INTEGER NOT NULL,
+    slot INTEGER NOT NULL,
+    quest_id INTEGER NOT NULL,
+    trigger_value INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (character_id, slot),
+    FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS account_settings (
     account_id INTEGER PRIMARY KEY,
     main_game_option BLOB,

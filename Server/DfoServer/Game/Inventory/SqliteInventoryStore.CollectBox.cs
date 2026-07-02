@@ -5,7 +5,7 @@ namespace DfoServer.Game.Inventory
 {
     public sealed partial class SqliteInventoryStore
     {
-        public bool TryRemoveItemByTemplateId(int characterId, int itemTemplateId, out short slotIndex, out InventoryMutationResult result)
+        public bool TryRemoveItemByTemplateId(int characterId, int accountId, int itemTemplateId, out short slotIndex, out InventoryMutationResult result)
         {
             slotIndex = -1;
             result = null;
@@ -24,7 +24,7 @@ namespace DfoServer.Game.Inventory
                     slotIndex = Convert.ToInt16(found);
                 }
             }
-            return TryDeleteItem(InventoryListType.Main, slotIndex, 1, out result);
+            return TryDeleteItem(characterId, accountId, InventoryListType.Main, slotIndex, 1, out result);
         }
 
         public bool TryPickupItem(int characterId, int accountId, int itemTemplateId, int stackCount, out short assignedSlot, out int newStackCount)

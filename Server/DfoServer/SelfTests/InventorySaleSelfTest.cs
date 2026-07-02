@@ -95,9 +95,8 @@ namespace DfoServer.SelfTests
                 Check("low positive stackable sell ACK applied count", ack.Length >= 10 && BitConverter.ToInt16(ack, 8) == 1);
             }
 
-            using (store.BeginScope(CharacterId, AccountId))
             {
-                var snapshot = store.LoadCharacterItemListSnapshot();
+                var snapshot = store.LoadCharacterItemListSnapshot(CharacterId, AccountId);
                 var remaining = snapshot.MainItems.Find(x => x.SlotIndex == ConsumableSlot);
                 Check("snapshot still has partial stack", remaining != null);
                 if (remaining != null)

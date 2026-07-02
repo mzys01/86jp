@@ -38,13 +38,10 @@ namespace DfoServer.Game.Inventory
                     return true;
 
                 case AssetStorage.CharacterItem:
-                    using (_store.BeginScope(scope.CharacterId, scope.AccountId))
-                    {
-                        return _store.TryPickupItemCore(
+                    return _store.TryPickupItemCore(
                         scope.Connection, scope.Transaction,
                         scope.CharacterId, scope.AccountId,
                         itemTemplateId, count, out assignedSlot);
-                    }
 
                 default:
                     return false;
@@ -143,10 +140,7 @@ namespace DfoServer.Game.Inventory
 
         public CharacterItemListSnapshot LoadSnapshot(DbScope scope)
         {
-            // LoadCharacterItemListSnapshot uses its own connection internally (read-only, no deadlock risk).
-            // Phase 4 will optimize this to share the scope's connection.
-            using (_store.BeginScope(scope.CharacterId, scope.AccountId))
-                return _store.LoadCharacterItemListSnapshot();
+            return _store.LoadCharacterItemListSnapshot(scope.CharacterId, scope.AccountId);
         }
     }
 }

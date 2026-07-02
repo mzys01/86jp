@@ -294,7 +294,7 @@ namespace DfoServer.Game.SelectCharacter
 
         public bool TryRemoveItemByTemplateId(int characterId, int accountId, int itemTemplateId, out short slotIndex, out InventoryMutationResult result)
         {
-            return _inventoryStore.TryRemoveItemByTemplateId(characterId, itemTemplateId, out slotIndex, out result);
+            return _inventoryStore.TryRemoveItemByTemplateId(characterId, accountId, itemTemplateId, out slotIndex, out result);
         }
 
         public bool TryPickupItem(int characterId, int accountId, int itemTemplateId, int stackCount, out short assignedSlot, out int newStackCount)

@@ -265,8 +265,6 @@ WHERE account_id = @aid;";
             UpdateCurrencySlot(connection, transaction, characterId, 0, newGold);
         }
 
-        // 点券账号化: 写 accounts.cera, 并把 characters.coin 作兼容镜像同步,
-        // 防止旧的角色级 coin 在下次迁移时重新灌入账号钱包。
         public static void UpdateCera(SqliteConnection connection, SqliteTransaction transaction, int characterId, int newCera)
         {
             using (var cmd = connection.CreateCommand())
@@ -275,18 +273,6 @@ WHERE account_id = @aid;";
                 cmd.CommandText = @"
 UPDATE accounts
 SET cera = @val
-WHERE account_id = (SELECT account_id FROM characters WHERE character_id = @cid);";
-                cmd.Parameters.AddWithValue("@val", newCera);
-                cmd.Parameters.AddWithValue("@cid", characterId);
-                cmd.ExecuteNonQuery();
-            }
-
-            using (var cmd = connection.CreateCommand())
-            {
-                cmd.Transaction = transaction;
-                cmd.CommandText = @"
-UPDATE characters
-SET coin = @val
 WHERE account_id = (SELECT account_id FROM characters WHERE character_id = @cid);";
                 cmd.Parameters.AddWithValue("@val", newCera);
                 cmd.Parameters.AddWithValue("@cid", characterId);

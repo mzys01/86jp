@@ -82,7 +82,7 @@ namespace DfoServer.SelfTests
             SeedCharacterAndPackage(tempDb);
 
             AvatarPackageOpenResult result = null;
-            using (store.BeginScope(CharacterId, AccountId))
+
             {
                 Check("open avatar package succeeds", store.TryOpenAvatarPackage(CharacterId, AccountId, request, out result));
             }
@@ -114,9 +114,8 @@ namespace DfoServer.SelfTests
                 Check("0x0207 popup notification first item count", popupAckBody.Length >= 21 && BitConverter.ToInt32(popupAckBody, 17) == 1);
             }
 
-            using (store.BeginScope(CharacterId, AccountId))
             {
-                var snapshot = store.LoadCharacterItemListSnapshot();
+                var snapshot = store.LoadCharacterItemListSnapshot(CharacterId, AccountId);
                 Check($"snapshot avatar count={snapshot.AvatarItems.Count}", snapshot.AvatarItems.Count == ExpectedAvatarItemIds.Length);
                 Check("snapshot no package in main inventory", snapshot.MainItems.Find(x => x.SlotIndex == PackageSlot) == null);
                 CheckExpiringReward(snapshot, SampleExpiringAvatarPackageId, 1, "2027-11-19 06:00:00");

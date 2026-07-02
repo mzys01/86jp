@@ -22,9 +22,6 @@ namespace DfoServer.Game.Quests
             using (var conn = new SqliteConnection(connStr))
             {
                 conn.Open();
-                using (var tc = new SqliteCommand(
-                    "CREATE TABLE IF NOT EXISTS character_active_quests (character_id INTEGER NOT NULL, slot INTEGER NOT NULL, quest_id INTEGER NOT NULL, trigger_value INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (character_id, slot))", conn))
-                    tc.ExecuteNonQuery();
                 using (var cmd = new SqliteCommand(
                     "SELECT slot, quest_id, trigger_value FROM character_active_quests WHERE character_id=@cid ORDER BY slot", conn))
                 {
@@ -44,9 +41,6 @@ namespace DfoServer.Game.Quests
             using (var conn = new SqliteConnection(connStr))
             {
                 conn.Open();
-                using (var tc = new SqliteCommand(
-                    "CREATE TABLE IF NOT EXISTS character_active_quests (character_id INTEGER NOT NULL, slot INTEGER NOT NULL, quest_id INTEGER NOT NULL, trigger_value INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (character_id, slot))", conn))
-                    tc.ExecuteNonQuery();
                 using (var tx = conn.BeginTransaction())
                 {
                     foreach (var q in quests)
@@ -551,11 +545,6 @@ namespace DfoServer.Game.Quests
 
         private static void EnsureActiveQuestTable(SqliteConnection conn, SqliteTransaction tx)
         {
-            using (var tc = new SqliteCommand(
-                "CREATE TABLE IF NOT EXISTS character_active_quests (character_id INTEGER NOT NULL, slot INTEGER NOT NULL, quest_id INTEGER NOT NULL, trigger_value INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (character_id, slot))",
-                conn,
-                tx))
-                tc.ExecuteNonQuery();
         }
 
         private static void InsertActiveQuest(SqliteConnection conn, SqliteTransaction tx, int characterId, int slot, ushort questId, uint triggerValue)
