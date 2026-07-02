@@ -49,6 +49,12 @@ namespace DfoServer.Game.Inventory
                 if (target == null || target.ItemKind != "equipment" || target.ItemTemplateId != targetItemTemplateId)
                     return false;
 
+                if (IsEquipmentItemLocked(connection, transaction, characterId, target))
+                {
+                    FileLogger.Log($"  [EquipmentSocket] REJECT: locked item slot={targetSlotIndex} lockId={target.EquipmentLockId}");
+                    return false;
+                }
+
                 var common = _db.LoadCommonItem(connection, transaction, characterId, InventoryListType.Main, targetSlotIndex);
                 if (common == null)
                     return false;
@@ -125,6 +131,12 @@ namespace DfoServer.Game.Inventory
                 var target = _db.LoadItemRecord(connection, transaction, characterId, InventoryListType.Main, targetSlotIndex);
                 if (target == null || target.ItemKind != "equipment" || target.ItemTemplateId != targetItemTemplateId)
                     return TrySetEquippedEquipmentEmblems(characterId, connection, transaction, targetSlotIndex, targetItemTemplateId, emblems, out result);
+
+                if (IsEquipmentItemLocked(connection, transaction, characterId, target))
+                {
+                    FileLogger.Log($"  [EmblemAttach] REJECT: locked equipment slot={targetSlotIndex} lockId={target.EquipmentLockId}");
+                    return false;
+                }
 
                 var common = _db.LoadCommonItem(connection, transaction, characterId, InventoryListType.Main, targetSlotIndex);
                 if (common == null)
@@ -217,6 +229,12 @@ namespace DfoServer.Game.Inventory
             if (entry == null || entry.ItemId != targetItemTemplateId || entry.Raw == null || entry.Raw.Length == 0)
                 return false;
 
+            if (IsEquipmentLockIdActive(connection, transaction, characterId, entry.EquipmentLockId))
+            {
+                FileLogger.Log($"  [EmblemAttach] REJECT equipped: locked equipment slot={targetSlotIndex} lockId={entry.EquipmentLockId}");
+                return false;
+            }
+
             var fields = MakeEquipListCodec.ParseDisplayFields(entry.Raw);
             var openCount = fields.Emblem != null && fields.Emblem.Length > 0 ? fields.Emblem[0] : 0;
             if (openCount <= 0)
@@ -293,6 +311,12 @@ namespace DfoServer.Game.Inventory
                 var target = _db.LoadItemRecord(connection, transaction, characterId, InventoryListType.Avatar, targetSlotIndex);
                 if (target == null || target.ItemKind != "avatar" || target.ItemTemplateId != targetItemTemplateId)
                     return false;
+
+                if (IsEquipmentItemLocked(connection, transaction, characterId, target))
+                {
+                    FileLogger.Log($"  [AvatarSocket] REJECT: locked avatar slot={targetSlotIndex} lockId={target.EquipmentLockId}");
+                    return false;
+                }
 
                 var avatar = _db.LoadAvatarItem(connection, transaction, characterId, targetSlotIndex);
                 if (avatar == null)
@@ -379,6 +403,12 @@ namespace DfoServer.Game.Inventory
                 if (target == null || target.ItemKind != "avatar" || target.ItemTemplateId != targetItemTemplateId)
                     return TrySetEquippedAvatarEmblems(characterId, connection, transaction, targetSlotIndex, targetItemTemplateId, emblems, out result);
 
+                if (IsEquipmentItemLocked(connection, transaction, characterId, target))
+                {
+                    FileLogger.Log($"  [AvatarEmblemAttach] REJECT: locked avatar slot={targetSlotIndex} lockId={target.EquipmentLockId}");
+                    return false;
+                }
+
                 var avatar = _db.LoadAvatarItem(connection, transaction, characterId, targetSlotIndex);
                 if (avatar == null)
                     return false;
@@ -451,6 +481,12 @@ namespace DfoServer.Game.Inventory
             var entry = LoadEquippedEntry(connection, transaction, characterId, targetSlotIndex);
             if (entry == null || entry.ItemId != targetItemTemplateId || entry.Raw == null || entry.Raw.Length == 0)
                 return false;
+
+            if (IsEquipmentLockIdActive(connection, transaction, characterId, entry.EquipmentLockId))
+            {
+                FileLogger.Log($"  [AvatarEmblemAttach] REJECT equipped: locked avatar slot={targetSlotIndex} lockId={entry.EquipmentLockId}");
+                return false;
+            }
 
             InvenItem item;
             try

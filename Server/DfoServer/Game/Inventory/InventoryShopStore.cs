@@ -488,6 +488,12 @@ namespace DfoServer.Game.Inventory
                 return false;
             }
 
+            if (SqliteInventoryStore.IsEquipmentItemLocked(connection, transaction, characterId, item))
+            {
+                FileLogger.Log($"  [SellItem] REJECT: locked item listType={dbListType} slot={slotIndex} lockId={item.EquipmentLockId}");
+                return false;
+            }
+
             var metadata = ItemMetadataResolver.Resolve(item.ItemTemplateId);
             var isStackCountedRecord = SqliteInventoryStore.IsStackCountedRecord(item) || metadata.IsStackable;
             var appliedCount = NormalizeSellRemovalCount(item.StackCount, sellCount, isStackCountedRecord);
