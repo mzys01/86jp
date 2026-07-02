@@ -557,10 +557,13 @@ namespace DfoServer.GameWorld
             var qst = GetQuestFile(questId);
             if (qst == null) return new List<QuestRewardItem>();
             if (IsQuestClearQuest(qst)) return new List<QuestRewardItem>();
-            int typeCode = MapTypeString(qst.Type);
-            if (typeCode != 0 && typeCode != 1) return new List<QuestRewardItem>();
+
             if (IsSeekAndMeetNpcQuest(qst))
                 return ParseSeekAndMeetNpcItems(qst.IntData);
+
+            if (NormalizeQuestTag(qst.Type) != "seeking")
+                return new List<QuestRewardItem>();
+
             var items = ParseItemPairs(qst.IntData);
             items.RemoveAll(item => item.ItemId <= 0 || item.Count <= 0);
             return items;
@@ -689,7 +692,7 @@ namespace DfoServer.GameWorld
         private static uint ComputeInitTrigger(QuestFile qst)
         {
             int typeCode = MapTypeString(qst.Type);
-            string typeStr = (qst.Type ?? "").Trim().ToLowerInvariant();
+            string typeTag = NormalizeQuestTag(qst.Type);
 
             if (IsSeekAndMeetNpcQuest(qst))
                 return ComputeSeekAndMeetNpcInitTrigger(qst.IntData);
@@ -701,16 +704,22 @@ namespace DfoServer.GameWorld
                 return requiredQuestIds.Count > 0 ? (uint)requiredQuestIds.Count : 1;
             }
 
-            if (typeCode == 2 || typeCode == 6)
-                return ComputeTriggerFromIntData(qst.IntData, typeCode);
+            if (typeTag == "condition under clear" || typeTag == "clear map")
+                return ComputeTriggerFromIntData(qst.IntData, 4);
+
+            if (typeTag == "condition under clear2")
+                return ComputeTriggerFromIntData(qst.IntData, 5);
 
             if (typeCode == 25)
                 return PackTrigger(1, 1, 0);
 
             if (typeCode == 1)
             {
-                if (typeStr == "[hunt monster]")
-                    return ComputeTriggerFromIntData(qst.IntData, 1);
+                if (typeTag == "hunt monster")
+                    return ComputeTriggerFromIntData(qst.IntData, 4);
+
+                if (typeTag == "hunt enemy")
+                    return ComputeTriggerFromIntData(qst.IntData, 5);
 
                 if (qst.SubType == 6)
                 {
@@ -770,13 +779,12 @@ namespace DfoServer.GameWorld
             return result;
         }
 
-        private static uint ComputeTriggerFromIntData(string intData, int typeCode)
+        private static uint ComputeTriggerFromIntData(string intData, int stride)
         {
             var values = ParseIntList(intData);
-            if (values.Count == 0)
+            if (values.Count == 0 || stride <= 0)
                 return 1;
 
-            int stride = (typeCode == 6) ? 5 : 4;
             int countOffset = stride - 1;
 
             var channels = new List<int>();
