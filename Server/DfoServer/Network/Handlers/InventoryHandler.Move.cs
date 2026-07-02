@@ -89,6 +89,7 @@ namespace DfoServer.Network.Handlers
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0014, SortItemAckBuilder.Build(listType)));
                 await SendItemListRefresh(session, listType);
                 await SendSortItemLockRefresh(session, listType);
+                await SendEquipmentItemLockListRefresh(session, listType);
                 FileLogger.Log($"[{ProtocolName}] SORT: ack + ITEM_LIST sent, done");
             }
             catch (Exception ex)

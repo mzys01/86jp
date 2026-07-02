@@ -699,7 +699,12 @@ WHERE character_id = @characterId
                 ExpireTime = reader.GetInt32(10),
                 Marker16 = reader.GetInt32(11),
                 PetSerialOrHandle = reader.GetInt32(12),
-                ExtraJson = reader.IsDBNull(13) ? "{}" : reader.GetString(13),
+                EquipmentLockId = reader.FieldCount > 14
+                    ? Convert.ToByte(reader.GetInt32(13), CultureInfo.InvariantCulture)
+                    : (byte)0,
+                ExtraJson = reader.IsDBNull(reader.FieldCount > 14 ? 14 : 13)
+                    ? "{}"
+                    : reader.GetString(reader.FieldCount > 14 ? 14 : 13),
             };
         }
 
@@ -730,6 +735,8 @@ WHERE character_id = @characterId
             public int Marker16 { get; set; }
 
             public int PetSerialOrHandle { get; set; }
+
+            public byte EquipmentLockId { get; set; }
 
             public string ExtraJson { get; set; } = "{}";
         }

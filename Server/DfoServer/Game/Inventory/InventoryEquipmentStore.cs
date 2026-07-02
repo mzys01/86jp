@@ -236,7 +236,7 @@ ORDER BY slot;";
                 }
                 entries.Remove(removed);
                 SaveEquipEntriesTx(connection, transaction, characterId, entries);
-                InsertEquipToContainer(connection, transaction, characterId, dbSrcList, request.SourceSlotIndex, removed.ItemId, removed.Raw, removed.ExpireTime);
+                InsertEquipToContainer(connection, transaction, characterId, dbSrcList, request.SourceSlotIndex, removed.ItemId, removed.Raw, removed.ExpireTime, removed.EquipmentLockId);
                 FileLogger.Log($"  [EquipMove] UNEQUIP: removed equip slot {equipSlot} itemId=0x{removed.ItemId:X8} -> {dbSrcList} slot {request.SourceSlotIndex}");
                 return EquipOutcome.Unequipped;
             }
@@ -287,7 +287,7 @@ ORDER BY slot;";
                 if (existing != null)
                 {
                     entries.Remove(existing);
-                    InsertEquipToContainer(connection, transaction, characterId, dbSrcList, request.SourceSlotIndex, existing.ItemId, existing.Raw, existing.ExpireTime);
+                    InsertEquipToContainer(connection, transaction, characterId, dbSrcList, request.SourceSlotIndex, existing.ItemId, existing.Raw, existing.ExpireTime, existing.EquipmentLockId);
                     FileLogger.Log($"  [EquipMove] REPLACE: slot {equipSlot} old 0x{existing.ItemId:X8} -> {dbSrcList} slot {request.SourceSlotIndex}");
                 }
 
@@ -297,6 +297,7 @@ ORDER BY slot;";
                     ItemId = wantId,
                     Raw = entryRaw,
                     ExpireTime = mainSource != null ? mainSource.ExpireTime : 0,
+                    EquipmentLockId = mainSource != null ? mainSource.EquipmentLockId : (byte)0,
                 };
                 int insertAt = entries.FindIndex(e => e.Slot > equipSlot);
                 if (insertAt < 0) entries.Add(newEntry); else entries.Insert(insertAt, newEntry);
@@ -332,7 +333,7 @@ ORDER BY slot;";
             {
                 InsertEquipToContainer(
                     connection, transaction, characterId, dbSrcList, request.SourceSlotIndex,
-                    existing.ItemId, existing.Raw, existing.ExpireTime);
+                    existing.ItemId, existing.Raw, existing.ExpireTime, existing.EquipmentLockId);
             }
 
             var raw = BuildPetCreatureEquipEntry(request.DestinationSlotIndex, source.ItemTemplateId, creatureKey);
@@ -342,6 +343,7 @@ ORDER BY slot;";
                 ItemId = source.ItemTemplateId,
                 Raw = raw,
                 ExpireTime = source.ExpireTime,
+                EquipmentLockId = source.EquipmentLockId,
             };
 
             int insertAt = entries.FindIndex(e => e.Slot > request.DestinationSlotIndex);
@@ -471,7 +473,7 @@ VALUES (@accountId, @selectionKey, @value32, @itemCount, CURRENT_TIMESTAMP);";
             using (var cmd = connection.CreateCommand())
             {
                 cmd.Transaction = transaction;
-                cmd.CommandText = "SELECT slot, item_id, raw_entry, expire_time FROM character_equipped_entries WHERE character_id = @cid ORDER BY slot";
+                cmd.CommandText = "SELECT slot, item_id, raw_entry, expire_time, equipment_lock_id FROM character_equipped_entries WHERE character_id = @cid ORDER BY slot";
                 cmd.Parameters.AddWithValue("@cid", characterId);
                 using (var r = cmd.ExecuteReader())
                 {
@@ -482,6 +484,7 @@ VALUES (@accountId, @selectionKey, @value32, @itemCount, CURRENT_TIMESTAMP);";
                             ItemId = r.GetInt32(1),
                             Raw = (byte[])r.GetValue(2),
                             ExpireTime = r.GetInt32(3),
+                            EquipmentLockId = Convert.ToByte(r.GetInt32(4), CultureInfo.InvariantCulture),
                         });
                 }
             }
@@ -502,11 +505,12 @@ VALUES (@accountId, @selectionKey, @value32, @itemCount, CURRENT_TIMESTAMP);";
                 using (var cmd = connection.CreateCommand())
                 {
                     cmd.Transaction = transaction;
-                    cmd.CommandText = "INSERT INTO character_equipped_entries(character_id, slot, item_id, expire_time, raw_entry) VALUES(@cid, @s, @iid, @expireTime, @raw)";
+                    cmd.CommandText = "INSERT INTO character_equipped_entries(character_id, slot, item_id, expire_time, equipment_lock_id, raw_entry) VALUES(@cid, @s, @iid, @expireTime, @equipmentLockId, @raw)";
                     cmd.Parameters.AddWithValue("@cid", characterId);
                     cmd.Parameters.AddWithValue("@s", e.Slot);
                     cmd.Parameters.AddWithValue("@iid", e.ItemId);
                     cmd.Parameters.AddWithValue("@expireTime", e.ExpireTime);
+                    cmd.Parameters.AddWithValue("@equipmentLockId", (int)e.EquipmentLockId);
                     cmd.Parameters.AddWithValue("@raw", e.Raw);
                     cmd.ExecuteNonQuery();
                 }
@@ -634,14 +638,14 @@ VALUES (@accountId, @selectionKey, @value32, @itemCount, CURRENT_TIMESTAMP);";
             }
         }
 
-        private void InsertEquipToContainer(SqliteConnection connection, SqliteTransaction transaction, int characterId, InventoryListType listType, short slot, int itemId, byte[] entryRaw, int entryExpireTime)
+        private void InsertEquipToContainer(SqliteConnection connection, SqliteTransaction transaction, int characterId, InventoryListType listType, short slot, int itemId, byte[] entryRaw, int entryExpireTime, byte equipmentLockId = 0)
         {
             if (listType == InventoryListType.Pet)
             {
                 int serial = ResolvePetSerialOrHandleFromEquippedRaw(entryRaw);
                 _db.InsertCharacterItem(connection, transaction, characterId, InventoryListType.Pet, slot, itemId, "pet",
                     stackCount: 0, instanceValue: 0, durability: 0, sealFlag: 0, optionValue: 0,
-                    expireTime: 0, marker16: 0, petSerialOrHandle: serial, extraJson: "{}");
+                    expireTime: 0, marker16: 0, petSerialOrHandle: serial, extraJson: "{}", equipmentLockId: equipmentLockId);
                 return;
             }
             //   durability(entry+10)     → 84B Durability(+11)
@@ -673,7 +677,7 @@ VALUES (@accountId, @selectionKey, @value32, @itemCount, CURRENT_TIMESTAMP);";
                         connection, transaction, characterId, listType, slot, itemId, "avatar",
                         stackCount: 0, instanceValue: 0, durability: 0, sealFlag: 0, optionValue: avatar.OptionValue,
                         expireTime: 0, marker16: avatar.UnknownFixed30, petSerialOrHandle: 0,
-                        extraJson: InventoryItemCodec.SerializeAvatar(avatar));
+                        extraJson: InventoryItemCodec.SerializeAvatar(avatar), equipmentLockId: equipmentLockId);
                     return;
                 }
 
@@ -712,7 +716,7 @@ VALUES (@accountId, @selectionKey, @value32, @itemCount, CURRENT_TIMESTAMP);";
             byte ov = (byte)(listType == InventoryListType.Avatar ? dur : 0);
             _db.InsertCharacterItem(connection, transaction, characterId, listType, slot, itemId, "equipment",
                 stackCount: countOrIv, instanceValue: 0, durability: dur, sealFlag: 0, optionValue: ov,
-                expireTime: expireTime, marker16: -1, petSerialOrHandle: 0, extraJson: extraJson);
+                expireTime: expireTime, marker16: -1, petSerialOrHandle: 0, extraJson: extraJson, equipmentLockId: equipmentLockId);
             FileLogger.Log($"  [InsertEquipToContainer] listType={listType} slot={slot} itemId=0x{itemId:X8} durability={dur} optionValue={ov}");
         }
 

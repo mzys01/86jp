@@ -872,7 +872,7 @@ namespace DfoServer.Game.Inventory
             {
                 command.Transaction = transaction;
                 command.CommandText = @"
-SELECT slot, item_id, expire_time, raw_entry
+SELECT slot, item_id, expire_time, raw_entry, equipment_lock_id
 FROM character_equipped_entries
 WHERE character_id = @cid AND slot = @slot
 LIMIT 1;";
@@ -889,6 +889,7 @@ LIMIT 1;";
                         ItemId = reader.GetInt32(1),
                         ExpireTime = reader.GetInt32(2),
                         Raw = (byte[])reader.GetValue(3),
+                        EquipmentLockId = Convert.ToByte(reader.GetInt32(4), CultureInfo.InvariantCulture),
                     };
                 }
             }

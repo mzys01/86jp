@@ -22,7 +22,13 @@ namespace DfoServer.Game.Inventory
             DfoServer.Sqlite.SqliteSchemaMigrator.EnsureColumns(connection, "character_equipped_entries", new[]
             {
                 ("expire_time", "INTEGER NOT NULL DEFAULT 0"),
+                ("equipment_lock_id", "INTEGER NOT NULL DEFAULT 0"),
             });
+            DfoServer.Sqlite.SqliteSchemaMigrator.EnsureColumns(connection, "character_items", new[]
+            {
+                ("equipment_lock_id", "INTEGER NOT NULL DEFAULT 0"),
+            });
+            DfoServer.Sqlite.SqliteSchemaMigrator.MigrateCharacterItemLocks(connection);
             // 点券/代币券/欢乐代币券账号化: 旧库补列(账号级钱包)
             DfoServer.Sqlite.SqliteSchemaMigrator.EnsureColumns(connection, "accounts", new[]
             {

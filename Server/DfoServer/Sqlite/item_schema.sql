@@ -73,6 +73,7 @@ CREATE TABLE IF NOT EXISTS character_items (
     durability INTEGER NOT NULL DEFAULT 0,
     seal_flag INTEGER NOT NULL DEFAULT 0,
     option_value INTEGER NOT NULL DEFAULT 0,
+    equipment_lock_id INTEGER NOT NULL DEFAULT 0,
     expire_time INTEGER NOT NULL DEFAULT 0,
     marker_16 INTEGER NOT NULL DEFAULT 0,
     pet_serial_or_handle INTEGER NOT NULL DEFAULT 0,
@@ -253,12 +254,12 @@ CREATE TABLE IF NOT EXISTS character_item_values (
 
 CREATE TABLE IF NOT EXISTS character_item_locks (
     character_id INTEGER NOT NULL,
-    sort_order INTEGER NOT NULL,
-    type_or_list INTEGER NOT NULL,
-    item_key_or_slot INTEGER NOT NULL,
+    equipment_lock_id INTEGER NOT NULL,
+    inventory_list_type INTEGER NOT NULL,
+    slot INTEGER NOT NULL,
     state INTEGER NOT NULL,
-    extra_value INTEGER,
-    PRIMARY KEY (character_id, sort_order),
+    remaining_seconds INTEGER,
+    PRIMARY KEY (character_id, equipment_lock_id),
     FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
 );
 
@@ -555,6 +556,7 @@ CREATE TABLE IF NOT EXISTS character_equipped_entries (
     slot INTEGER NOT NULL,
     item_id INTEGER NOT NULL,
     expire_time INTEGER NOT NULL DEFAULT 0,
+    equipment_lock_id INTEGER NOT NULL DEFAULT 0,
     raw_entry BLOB NOT NULL,
     PRIMARY KEY (character_id, slot),
     FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
@@ -634,4 +636,3 @@ INSERT OR IGNORE INTO accounts (account_id, m_id, password_hash) VALUES
     (1, '10038', '');
 
 -- character 和 container_state 由 EnsureInitialized 从封包样本动态 seed（不再硬编码）
-

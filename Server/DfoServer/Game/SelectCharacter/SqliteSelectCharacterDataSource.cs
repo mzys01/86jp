@@ -451,6 +451,36 @@ namespace DfoServer.Game.SelectCharacter
                 return _inventoryStore.LoadSortItemLocks(listType);
         }
 
+        public bool TryLockEquipmentItem(int characterId, int accountId, InventoryListType listType, short slotIndex, out EquipmentItemLockResult result)
+        {
+            using (_inventoryStore.BeginScope(characterId, accountId))
+                return _inventoryStore.TryLockEquipmentItem(listType, slotIndex, out result);
+        }
+
+        public bool TryUnlockEquipmentItem(int characterId, int accountId, InventoryListType listType, short slotIndex, out EquipmentItemLockResult result)
+        {
+            using (_inventoryStore.BeginScope(characterId, accountId))
+                return _inventoryStore.TryUnlockEquipmentItem(listType, slotIndex, out result);
+        }
+
+        public bool TryCancelEquipmentItemUnlock(int characterId, int accountId, InventoryListType listType, short slotIndex, out EquipmentItemLockResult result)
+        {
+            using (_inventoryStore.BeginScope(characterId, accountId))
+                return _inventoryStore.TryCancelEquipmentItemUnlock(listType, slotIndex, out result);
+        }
+
+        public IReadOnlyList<EquipmentItemLockEntry> LoadEquipmentItemLocks(int characterId, int accountId)
+        {
+            using (_inventoryStore.BeginScope(characterId, accountId))
+                return _inventoryStore.LoadEquipmentItemLocks();
+        }
+
+        public IReadOnlyList<EquipmentItemLockEntry> LoadEquipmentItemLocks(int characterId, int accountId, InventoryListType listType)
+        {
+            using (_inventoryStore.BeginScope(characterId, accountId))
+                return _inventoryStore.LoadEquipmentItemLocks(listType);
+        }
+
         public CommonInventoryItem LoadCommonItemForRefresh(int characterId, int accountId, InventoryListType listType, short slotIndex)
         {
             using (_inventoryStore.BeginScope(characterId, accountId))

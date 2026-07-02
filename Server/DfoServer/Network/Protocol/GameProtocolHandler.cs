@@ -77,6 +77,7 @@ namespace DfoServer.Network
             RegisterCharacterHandlers(_cmdDispatch);
             RegisterInventoryHandlers(_cmdDispatch);
             RegisterSortItemLockHandlers(_cmdDispatch);
+            RegisterEquipmentItemLockHandlers(_cmdDispatch);
             RegisterEquipmentSocketHandlers(_cmdDispatch);
             RegisterEquipmentEmblemHandlers(_cmdDispatch);
             RegisterAvatarSocketHandlers(_cmdDispatch);
@@ -157,6 +158,7 @@ namespace DfoServer.Network
                         ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
                     s.GameSession = new Game.Session.GameSession(s, gsConnStr, _assetService);
                     await _inventoryHandler.SendAllSortItemLockRefresh(s);
+                    await _inventoryHandler.SendAllEquipmentItemLockListRefresh(s);
                 }
             };
             d[0x0005] = _characterSelectHandler.Handle_ENUM_CMDPACKET_CREATE_CHARACTER;
@@ -201,6 +203,13 @@ namespace DfoServer.Network
         {
             d[0x02CA] = _inventoryHandler.Handle_ENUM_CMDPACKET_TOGGLE_SORT_ITEM_LOCK;
             d[0x02CB] = _inventoryHandler.Handle_ENUM_CMDPACKET_UNLOCK_SORT_ITEM_LOCK;
+        }
+
+        private void RegisterEquipmentItemLockHandlers(Dictionary<ushort, Func<EnhancedClientSession, GamePacketHeader, byte[], Task>> d)
+        {
+            d[0x010B] = _inventoryHandler.Handle_ENUM_CMDPACKET_REQUEST_ITEM_LOCK;
+            d[0x010C] = _inventoryHandler.Handle_ENUM_CMDPACKET_REQUEST_ITEM_UNLOCK;
+            d[0x010D] = _inventoryHandler.Handle_ENUM_CMDPACKET_REQUEST_ITEM_UNLOCK_CANCEL;
         }
 
         private void RegisterEquipmentSocketHandlers(Dictionary<ushort, Func<EnhancedClientSession, GamePacketHeader, byte[], Task>> d)

@@ -34,7 +34,14 @@ namespace DfoServer.Infrastructure
                 DfoServer.Sqlite.SqliteSchemaMigrator.EnsureColumns(conn, "character_equipped_entries", new[]
                 {
                     ("expire_time", "INTEGER NOT NULL DEFAULT 0"),
+                    ("equipment_lock_id", "INTEGER NOT NULL DEFAULT 0"),
                 });
+                DfoServer.Sqlite.SqliteSchemaMigrator.EnsureColumns(conn, "character_items", new[]
+                {
+                    ("equipment_lock_id", "INTEGER NOT NULL DEFAULT 0"),
+                });
+                DfoServer.Sqlite.SqliteSchemaMigrator.MigrateCharacterItemLocks(conn);
+                DfoServer.Sqlite.SqliteSchemaMigrator.MigrateCharacterItemsUniqueConstraint(conn);
                 DfoServer.Sqlite.SqliteSchemaMigrator.EnsureColumns(conn, "character_init_flags", new[]
                 {
                     ("character_option_blob", "BLOB"),

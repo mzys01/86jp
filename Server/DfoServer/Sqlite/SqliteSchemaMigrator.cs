@@ -35,6 +35,11 @@ namespace DfoServer.Sqlite
         {
             if (connection == null) return;
 
+            EnsureColumns(connection, "character_items", new[]
+            {
+                ("equipment_lock_id", "INTEGER NOT NULL DEFAULT 0"),
+            });
+
             var createSql = ReadTableCreateSql(connection, "character_items");
             if (createSql == null) return;
             if (createSql.Contains("slot_index, item_kind")) return;
@@ -59,13 +64,22 @@ CREATE TABLE IF NOT EXISTS character_items_new (
     expire_time INTEGER NOT NULL DEFAULT 0,
     marker_16 INTEGER NOT NULL DEFAULT 0,
     pet_serial_or_handle INTEGER NOT NULL DEFAULT 0,
+    equipment_lock_id INTEGER NOT NULL DEFAULT 0,
     extra_json TEXT NOT NULL DEFAULT '{}',
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(owner_scope, owner_id, list_type, slot_index, item_kind),
     FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE SET NULL
 );
-INSERT INTO character_items_new SELECT * FROM character_items;
+INSERT INTO character_items_new (
+    item_uid, owner_scope, owner_id, character_id, list_type, slot_index, item_template_id, item_kind,
+    stack_count, instance_value, durability, seal_flag, option_value, expire_time, marker_16,
+    pet_serial_or_handle, equipment_lock_id, extra_json, created_at, updated_at)
+SELECT
+    item_uid, owner_scope, owner_id, character_id, list_type, slot_index, item_template_id, item_kind,
+    stack_count, instance_value, durability, seal_flag, option_value, expire_time, marker_16,
+    pet_serial_or_handle, equipment_lock_id, extra_json, created_at, updated_at
+FROM character_items;
 DROP TABLE character_items;
 ALTER TABLE character_items_new RENAME TO character_items;
 CREATE INDEX IF NOT EXISTS idx_character_items_owner_container
@@ -74,6 +88,50 @@ CREATE INDEX IF NOT EXISTS idx_character_items_template
     ON character_items(item_template_id);
 CREATE INDEX IF NOT EXISTS idx_character_items_character
     ON character_items(character_id, list_type, slot_index);";
+                cmd.ExecuteNonQuery();
+            }
+        }
+
+        public static void MigrateCharacterItemLocks(SqliteConnection connection)
+        {
+            if (connection == null) return;
+
+            var existing = ReadColumnNames(connection, "character_item_locks");
+            if (existing.Count == 0)
+                return;
+
+            if (existing.Contains("equipment_lock_id")
+                && existing.Contains("inventory_list_type")
+                && existing.Contains("slot")
+                && existing.Contains("remaining_seconds"))
+                return;
+
+            using (var cmd = connection.CreateCommand())
+            {
+                cmd.CommandText = @"
+CREATE TABLE IF NOT EXISTS character_item_locks_new (
+    character_id INTEGER NOT NULL,
+    equipment_lock_id INTEGER NOT NULL,
+    inventory_list_type INTEGER NOT NULL,
+    slot INTEGER NOT NULL,
+    state INTEGER NOT NULL,
+    remaining_seconds INTEGER,
+    PRIMARY KEY (character_id, equipment_lock_id),
+    FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
+);
+INSERT OR IGNORE INTO character_item_locks_new (
+    character_id, equipment_lock_id, inventory_list_type, slot, state, remaining_seconds)
+SELECT
+    character_id,
+    sort_order + 1,
+    type_or_list,
+    item_key_or_slot,
+    state,
+    extra_value
+FROM character_item_locks
+WHERE sort_order >= 0 AND sort_order < 255;
+DROP TABLE character_item_locks;
+ALTER TABLE character_item_locks_new RENAME TO character_item_locks;";
                 cmd.ExecuteNonQuery();
             }
         }

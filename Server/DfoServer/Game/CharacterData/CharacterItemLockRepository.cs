@@ -20,7 +20,35 @@ namespace DfoServer.Game.CharacterData
             {
                 conn.Open();
                 using (var cmd = new SqliteCommand(
-                    "SELECT type_or_list, item_key_or_slot, state, extra_value FROM character_item_locks WHERE character_id = @cid ORDER BY sort_order", conn))
+                    @"
+SELECT inventory_list_type, slot, state, remaining_seconds
+FROM (
+    SELECT ci.list_type AS inventory_list_type,
+           ci.slot_index AS slot,
+           l.state AS state,
+           l.remaining_seconds AS remaining_seconds,
+           l.equipment_lock_id AS equipment_lock_id
+    FROM character_item_locks l
+    JOIN character_items ci
+      ON ci.character_id = l.character_id
+     AND ci.equipment_lock_id = l.equipment_lock_id
+    WHERE l.character_id = @cid
+      AND ci.owner_scope = 'character'
+      AND ci.equipment_lock_id > 0
+    UNION ALL
+    SELECT 3 AS inventory_list_type,
+           e.slot AS slot,
+           l.state AS state,
+           l.remaining_seconds AS remaining_seconds,
+           l.equipment_lock_id AS equipment_lock_id
+    FROM character_item_locks l
+    JOIN character_equipped_entries e
+      ON e.character_id = l.character_id
+     AND e.equipment_lock_id = l.equipment_lock_id
+    WHERE l.character_id = @cid
+      AND e.equipment_lock_id > 0
+)
+ORDER BY equipment_lock_id;", conn))
                 {
                     cmd.Parameters.AddWithValue("@cid", characterId);
                     using (var reader = cmd.ExecuteReader())
@@ -62,10 +90,12 @@ namespace DfoServer.Game.CharacterData
                     {
                         var e = snapshot.Entries[i];
                         using (var cmd = new SqliteCommand(
-                            "INSERT INTO character_item_locks (character_id, sort_order, type_or_list, item_key_or_slot, state, extra_value) VALUES (@cid, @ord, @t, @k, @s, @ev)", conn, tx))
+                            @"INSERT INTO character_item_locks (
+                                character_id, equipment_lock_id, inventory_list_type, slot, state, remaining_seconds)
+                              VALUES (@cid, @lockId, @t, @k, @s, @ev)", conn, tx))
                         {
                             cmd.Parameters.AddWithValue("@cid", characterId);
-                            cmd.Parameters.AddWithValue("@ord", i);
+                            cmd.Parameters.AddWithValue("@lockId", i + 1);
                             cmd.Parameters.AddWithValue("@t", (int)e.TypeOrList);
                             cmd.Parameters.AddWithValue("@k", (int)e.ItemKeyOrSlot);
                             cmd.Parameters.AddWithValue("@s", (int)e.State);
