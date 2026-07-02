@@ -132,6 +132,11 @@ namespace DfoServer.Game.SelectCharacter
             
             
             CharacterRecord characterRecord = _characterRepository?.GetById(characterId);
+            if (characterRecord != null)
+            {
+                // 选角初始化 USERINFO 同样必须使用当前穿戴栏重建外观，避免 characters.appearance_blob在新建角色或换装后滞留为空/旧值，导致城镇模型和选人/副本显示不一致。
+                characterRecord.Appearance = Game.Appearance.AppearanceService.LoadAppearanceFromEquipEntries(characterId);
+            }
 
             
             var subtype1Repo = new CharacterData.SqliteSubtype1Repository(
