@@ -14,42 +14,42 @@ namespace DfoServer.Game.Inventory
 {
     public sealed partial class SqliteInventoryStore
     {
-        public bool TryEnchantByBead(EnchantByBeadCommand command, out EnchantByBeadResult result)
+        public bool TryEnchantByBead(int characterId, int accountId, EnchantByBeadCommand command, out EnchantByBeadResult result)
         {
-            using (var connection = _context.OpenConnection())
+            using (var connection = OpenConnection())
             using (var transaction = connection.BeginTransaction())
             {
-                var ok = _enchantStore.TryEnchantByBead(connection, transaction, _context.CharacterId, _context.AccountId, command, out result);
+                var ok = _enchantStore.TryEnchantByBead(connection, transaction, characterId, accountId, command, out result);
                 if (ok) transaction.Commit();
                 return ok;
             }
         }
 
-        public bool TryUpgradeItem(ItemUpgradeCommand command, out ItemUpgradeResult result)
+        public bool TryUpgradeItem(int characterId, int accountId, ItemUpgradeCommand command, out ItemUpgradeResult result)
         {
-            using (var connection = _context.OpenConnection())
+            using (var connection = OpenConnection())
             using (var transaction = connection.BeginTransaction())
             {
-                var ok = _itemUpgradeStore.TryUpgradeItem(connection, transaction, _context.CharacterId, _context.AccountId, command, out result);
+                var ok = _itemUpgradeStore.TryUpgradeItem(connection, transaction, characterId, accountId, command, out result);
                 if (ok) transaction.Commit();
                 return ok;
             }
         }
 
-        public bool TryOpenEquipmentSocket(short targetSlotIndex, int targetItemTemplateId, short materialSlotIndex, out EquipmentSocketMutationResult result)
+        public bool TryOpenEquipmentSocket(int characterId, short targetSlotIndex, int targetItemTemplateId, short materialSlotIndex, out EquipmentSocketMutationResult result)
         {
             result = null;
             if (targetItemTemplateId <= 0)
                 return false;
 
-            using (var connection = _context.OpenConnection())
+            using (var connection = OpenConnection())
             using (var transaction = connection.BeginTransaction())
             {
-                var target = _db.LoadItemRecord(connection, transaction, _context.CharacterId, InventoryListType.Main, targetSlotIndex);
+                var target = _db.LoadItemRecord(connection, transaction, characterId, InventoryListType.Main, targetSlotIndex);
                 if (target == null || target.ItemKind != "equipment" || target.ItemTemplateId != targetItemTemplateId)
                     return false;
 
-                var common = _db.LoadCommonItem(connection, transaction, _context.CharacterId, InventoryListType.Main, targetSlotIndex);
+                var common = _db.LoadCommonItem(connection, transaction, characterId, InventoryListType.Main, targetSlotIndex);
                 if (common == null)
                     return false;
 
@@ -62,7 +62,7 @@ namespace DfoServer.Game.Inventory
                 {
                     EnsureVisibleSocketCount(common, currentOpenCount);
                     _db.UpdateCommonExtraJson(connection, transaction, target.ItemUid, common);
-                    _auditLogger.WriteAuditLog(connection, transaction, _context.CharacterId, "repair_equipment_socket", target, target.ListType, target.SlotIndex, 0);
+                    _auditLogger.WriteAuditLog(connection, transaction, characterId, "repair_equipment_socket", target, target.ListType, target.SlotIndex, 0);
                     transaction.Commit();
 
                     result = new EquipmentSocketMutationResult
@@ -73,7 +73,7 @@ namespace DfoServer.Game.Inventory
                     return true;
                 }
 
-                var material = _db.LoadItemRecord(connection, transaction, _context.CharacterId, InventoryListType.Main, materialSlotIndex);
+                var material = _db.LoadItemRecord(connection, transaction, characterId, InventoryListType.Main, materialSlotIndex);
                 if (material == null || material.StackCount <= 0)
                     return false;
 
@@ -86,11 +86,11 @@ namespace DfoServer.Game.Inventory
                 else
                 {
                     _db.DeleteItem(connection, transaction, material.ItemUid);
-                    DeleteSortItemLock(connection, transaction, material.ListType, material.SlotIndex);
+                    DeleteSortItemLock(characterId, connection, transaction, material.ListType, material.SlotIndex);
                 }
 
-                _auditLogger.WriteDeleteAuditLog(connection, transaction, _context.CharacterId, material, 1);
-                _auditLogger.WriteAuditLog(connection, transaction, _context.CharacterId, "open_equipment_socket", target, target.ListType, target.SlotIndex, 0);
+                _auditLogger.WriteDeleteAuditLog(connection, transaction, characterId, material, 1);
+                _auditLogger.WriteAuditLog(connection, transaction, characterId, "open_equipment_socket", target, target.ListType, target.SlotIndex, 0);
                 transaction.Commit();
 
                 result = new EquipmentSocketMutationResult
@@ -113,20 +113,20 @@ namespace DfoServer.Game.Inventory
             }
         }
 
-        public bool TrySetEquipmentEmblems(short targetSlotIndex, int targetItemTemplateId, IReadOnlyList<EquipmentEmblemApplyRequest> emblems, out EquipmentEmblemMutationResult result)
+        public bool TrySetEquipmentEmblems(int characterId, short targetSlotIndex, int targetItemTemplateId, IReadOnlyList<EquipmentEmblemApplyRequest> emblems, out EquipmentEmblemMutationResult result)
         {
             result = null;
             if (emblems == null || emblems.Count == 0)
                 return false;
 
-            using (var connection = _context.OpenConnection())
+            using (var connection = OpenConnection())
             using (var transaction = connection.BeginTransaction())
             {
-                var target = _db.LoadItemRecord(connection, transaction, _context.CharacterId, InventoryListType.Main, targetSlotIndex);
+                var target = _db.LoadItemRecord(connection, transaction, characterId, InventoryListType.Main, targetSlotIndex);
                 if (target == null || target.ItemKind != "equipment" || target.ItemTemplateId != targetItemTemplateId)
-                    return TrySetEquippedEquipmentEmblems(connection, transaction, targetSlotIndex, targetItemTemplateId, emblems, out result);
+                    return TrySetEquippedEquipmentEmblems(characterId, connection, transaction, targetSlotIndex, targetItemTemplateId, emblems, out result);
 
-                var common = _db.LoadCommonItem(connection, transaction, _context.CharacterId, InventoryListType.Main, targetSlotIndex);
+                var common = _db.LoadCommonItem(connection, transaction, characterId, InventoryListType.Main, targetSlotIndex);
                 if (common == null)
                     return false;
 
@@ -167,7 +167,7 @@ namespace DfoServer.Game.Inventory
                         return false;
                     }
 
-                    var emblem = _db.LoadItemRecord(connection, transaction, _context.CharacterId, InventoryListType.Main, request.EmblemSlot);
+                    var emblem = _db.LoadItemRecord(connection, transaction, characterId, InventoryListType.Main, request.EmblemSlot);
                     if (emblem == null || emblem.ItemTemplateId != request.EmblemItemTemplateId || emblem.StackCount <= 0)
                         return false;
 
@@ -180,10 +180,10 @@ namespace DfoServer.Game.Inventory
                     else
                     {
                         _db.DeleteItem(connection, transaction, emblem.ItemUid);
-                        DeleteSortItemLock(connection, transaction, emblem.ListType, emblem.SlotIndex);
+                        DeleteSortItemLock(characterId, connection, transaction, emblem.ListType, emblem.SlotIndex);
                     }
 
-                    _auditLogger.WriteDeleteAuditLog(connection, transaction, _context.CharacterId, emblem, 1);
+                    _auditLogger.WriteDeleteAuditLog(connection, transaction, characterId, emblem, 1);
                     consumed.Add(new InventoryMutationResult
                     {
                         ListType = emblem.ListType,
@@ -198,7 +198,7 @@ namespace DfoServer.Game.Inventory
                 }
 
                 _db.UpdateCommonExtraJson(connection, transaction, target.ItemUid, common);
-                _auditLogger.WriteAuditLog(connection, transaction, _context.CharacterId, "set_equipment_emblems", target, target.ListType, target.SlotIndex, emblems.Count);
+                _auditLogger.WriteAuditLog(connection, transaction, characterId, "set_equipment_emblems", target, target.ListType, target.SlotIndex, emblems.Count);
                 transaction.Commit();
 
                 result = new EquipmentEmblemMutationResult
@@ -210,10 +210,10 @@ namespace DfoServer.Game.Inventory
             }
         }
 
-        private bool TrySetEquippedEquipmentEmblems(SqliteConnection connection, SqliteTransaction transaction, short targetSlotIndex, int targetItemTemplateId, IReadOnlyList<EquipmentEmblemApplyRequest> emblems, out EquipmentEmblemMutationResult result)
+        private bool TrySetEquippedEquipmentEmblems(int characterId, SqliteConnection connection, SqliteTransaction transaction, short targetSlotIndex, int targetItemTemplateId, IReadOnlyList<EquipmentEmblemApplyRequest> emblems, out EquipmentEmblemMutationResult result)
         {
             result = null;
-            var entry = LoadEquippedEntry(connection, transaction, _context.CharacterId, targetSlotIndex);
+            var entry = LoadEquippedEntry(connection, transaction, characterId, targetSlotIndex);
             if (entry == null || entry.ItemId != targetItemTemplateId || entry.Raw == null || entry.Raw.Length == 0)
                 return false;
 
@@ -239,7 +239,7 @@ namespace DfoServer.Game.Inventory
                     return false;
                 }
 
-                var emblem = _db.LoadItemRecord(connection, transaction, _context.CharacterId, InventoryListType.Main, request.EmblemSlot);
+                var emblem = _db.LoadItemRecord(connection, transaction, characterId, InventoryListType.Main, request.EmblemSlot);
                 if (emblem == null || emblem.ItemTemplateId != request.EmblemItemTemplateId || emblem.StackCount <= 0)
                     return false;
 
@@ -251,10 +251,10 @@ namespace DfoServer.Game.Inventory
                 else
                 {
                     _db.DeleteItem(connection, transaction, emblem.ItemUid);
-                    DeleteSortItemLock(connection, transaction, emblem.ListType, emblem.SlotIndex);
+                    DeleteSortItemLock(characterId, connection, transaction, emblem.ListType, emblem.SlotIndex);
                 }
 
-                _auditLogger.WriteDeleteAuditLog(connection, transaction, _context.CharacterId, emblem, 1);
+                _auditLogger.WriteDeleteAuditLog(connection, transaction, characterId, emblem, 1);
                 consumed.Add(new InventoryMutationResult
                 {
                     ListType = emblem.ListType,
@@ -269,7 +269,7 @@ namespace DfoServer.Game.Inventory
             }
 
             entry.Raw = MakeEquipListCodec.BuildEntryFromDisplayFields(targetSlotIndex, targetItemTemplateId, fields);
-            UpdateEquippedEntryRaw(connection, transaction, _context.CharacterId, targetSlotIndex, targetItemTemplateId, entry.Raw);
+            UpdateEquippedEntryRaw(connection, transaction, characterId, targetSlotIndex, targetItemTemplateId, entry.Raw);
             FileLogger.Log($"  [EmblemAttach] equipped OK slot={targetSlotIndex} item=0x{targetItemTemplateId:X8} emblems={emblems.Count}");
             transaction.Commit();
 
@@ -281,20 +281,20 @@ namespace DfoServer.Game.Inventory
             return true;
         }
 
-        public bool TryOpenAvatarSocket(short targetSlotIndex, int targetItemTemplateId, short materialSlotIndex, out AvatarSocketMutationResult result)
+        public bool TryOpenAvatarSocket(int characterId, short targetSlotIndex, int targetItemTemplateId, short materialSlotIndex, out AvatarSocketMutationResult result)
         {
             result = null;
             if (targetItemTemplateId <= 0)
                 return false;
 
-            using (var connection = _context.OpenConnection())
+            using (var connection = OpenConnection())
             using (var transaction = connection.BeginTransaction())
             {
-                var target = _db.LoadItemRecord(connection, transaction, _context.CharacterId, InventoryListType.Avatar, targetSlotIndex);
+                var target = _db.LoadItemRecord(connection, transaction, characterId, InventoryListType.Avatar, targetSlotIndex);
                 if (target == null || target.ItemKind != "avatar" || target.ItemTemplateId != targetItemTemplateId)
                     return false;
 
-                var avatar = _db.LoadAvatarItem(connection, transaction, _context.CharacterId, targetSlotIndex);
+                var avatar = _db.LoadAvatarItem(connection, transaction, characterId, targetSlotIndex);
                 if (avatar == null)
                     return false;
 
@@ -310,7 +310,7 @@ namespace DfoServer.Game.Inventory
                     }
 
                     _db.UpdateAvatarExtraJson(connection, transaction, target.ItemUid, avatar);
-                    _auditLogger.WriteAuditLog(connection, transaction, _context.CharacterId, "repair_avatar_socket", target, target.ListType, target.SlotIndex, 0);
+                    _auditLogger.WriteAuditLog(connection, transaction, characterId, "repair_avatar_socket", target, target.ListType, target.SlotIndex, 0);
                     transaction.Commit();
 
                     result = new AvatarSocketMutationResult
@@ -321,7 +321,7 @@ namespace DfoServer.Game.Inventory
                     return true;
                 }
 
-                var material = _db.LoadItemRecord(connection, transaction, _context.CharacterId, InventoryListType.Main, materialSlotIndex);
+                var material = _db.LoadItemRecord(connection, transaction, characterId, InventoryListType.Main, materialSlotIndex);
                 if (material == null || material.StackCount <= 0)
                     return false;
 
@@ -339,11 +339,11 @@ namespace DfoServer.Game.Inventory
                 else
                 {
                     _db.DeleteItem(connection, transaction, material.ItemUid);
-                    DeleteSortItemLock(connection, transaction, material.ListType, material.SlotIndex);
+                    DeleteSortItemLock(characterId, connection, transaction, material.ListType, material.SlotIndex);
                 }
 
-                _auditLogger.WriteDeleteAuditLog(connection, transaction, _context.CharacterId, material, 1);
-                _auditLogger.WriteAuditLog(connection, transaction, _context.CharacterId, "open_avatar_socket", target, target.ListType, target.SlotIndex, 0);
+                _auditLogger.WriteDeleteAuditLog(connection, transaction, characterId, material, 1);
+                _auditLogger.WriteAuditLog(connection, transaction, characterId, "open_avatar_socket", target, target.ListType, target.SlotIndex, 0);
                 transaction.Commit();
 
                 result = new AvatarSocketMutationResult
@@ -366,20 +366,20 @@ namespace DfoServer.Game.Inventory
             }
         }
 
-        public bool TrySetAvatarEmblems(short targetSlotIndex, int targetItemTemplateId, IReadOnlyList<EquipmentEmblemApplyRequest> emblems, out AvatarEmblemMutationResult result)
+        public bool TrySetAvatarEmblems(int characterId, short targetSlotIndex, int targetItemTemplateId, IReadOnlyList<EquipmentEmblemApplyRequest> emblems, out AvatarEmblemMutationResult result)
         {
             result = null;
             if (emblems == null || emblems.Count == 0)
                 return false;
 
-            using (var connection = _context.OpenConnection())
+            using (var connection = OpenConnection())
             using (var transaction = connection.BeginTransaction())
             {
-                var target = _db.LoadItemRecord(connection, transaction, _context.CharacterId, InventoryListType.Avatar, targetSlotIndex);
+                var target = _db.LoadItemRecord(connection, transaction, characterId, InventoryListType.Avatar, targetSlotIndex);
                 if (target == null || target.ItemKind != "avatar" || target.ItemTemplateId != targetItemTemplateId)
-                    return TrySetEquippedAvatarEmblems(connection, transaction, targetSlotIndex, targetItemTemplateId, emblems, out result);
+                    return TrySetEquippedAvatarEmblems(characterId, connection, transaction, targetSlotIndex, targetItemTemplateId, emblems, out result);
 
-                var avatar = _db.LoadAvatarItem(connection, transaction, _context.CharacterId, targetSlotIndex);
+                var avatar = _db.LoadAvatarItem(connection, transaction, characterId, targetSlotIndex);
                 if (avatar == null)
                     return false;
 
@@ -403,7 +403,7 @@ namespace DfoServer.Game.Inventory
                         return false;
                     }
 
-                    var emblem = _db.LoadItemRecord(connection, transaction, _context.CharacterId, InventoryListType.Main, request.EmblemSlot);
+                    var emblem = _db.LoadItemRecord(connection, transaction, characterId, InventoryListType.Main, request.EmblemSlot);
                     if (emblem == null || emblem.ItemTemplateId != request.EmblemItemTemplateId || emblem.StackCount <= 0)
                         return false;
 
@@ -415,10 +415,10 @@ namespace DfoServer.Game.Inventory
                     else
                     {
                         _db.DeleteItem(connection, transaction, emblem.ItemUid);
-                        DeleteSortItemLock(connection, transaction, emblem.ListType, emblem.SlotIndex);
+                        DeleteSortItemLock(characterId, connection, transaction, emblem.ListType, emblem.SlotIndex);
                     }
 
-                    _auditLogger.WriteDeleteAuditLog(connection, transaction, _context.CharacterId, emblem, 1);
+                    _auditLogger.WriteDeleteAuditLog(connection, transaction, characterId, emblem, 1);
                     consumed.Add(new InventoryMutationResult
                     {
                         ListType = emblem.ListType,
@@ -433,7 +433,7 @@ namespace DfoServer.Game.Inventory
                 }
 
                 _db.UpdateAvatarExtraJson(connection, transaction, target.ItemUid, avatar);
-                _auditLogger.WriteAuditLog(connection, transaction, _context.CharacterId, "set_avatar_emblems", target, target.ListType, target.SlotIndex, emblems.Count);
+                _auditLogger.WriteAuditLog(connection, transaction, characterId, "set_avatar_emblems", target, target.ListType, target.SlotIndex, emblems.Count);
                 transaction.Commit();
 
                 result = new AvatarEmblemMutationResult
@@ -445,10 +445,10 @@ namespace DfoServer.Game.Inventory
             }
         }
 
-        private bool TrySetEquippedAvatarEmblems(SqliteConnection connection, SqliteTransaction transaction, short targetSlotIndex, int targetItemTemplateId, IReadOnlyList<EquipmentEmblemApplyRequest> emblems, out AvatarEmblemMutationResult result)
+        private bool TrySetEquippedAvatarEmblems(int characterId, SqliteConnection connection, SqliteTransaction transaction, short targetSlotIndex, int targetItemTemplateId, IReadOnlyList<EquipmentEmblemApplyRequest> emblems, out AvatarEmblemMutationResult result)
         {
             result = null;
-            var entry = LoadEquippedEntry(connection, transaction, _context.CharacterId, targetSlotIndex);
+            var entry = LoadEquippedEntry(connection, transaction, characterId, targetSlotIndex);
             if (entry == null || entry.ItemId != targetItemTemplateId || entry.Raw == null || entry.Raw.Length == 0)
                 return false;
 
@@ -489,7 +489,7 @@ namespace DfoServer.Game.Inventory
                     return false;
                 }
 
-                var emblem = _db.LoadItemRecord(connection, transaction, _context.CharacterId, InventoryListType.Main, request.EmblemSlot);
+                var emblem = _db.LoadItemRecord(connection, transaction, characterId, InventoryListType.Main, request.EmblemSlot);
                 if (emblem == null || emblem.ItemTemplateId != request.EmblemItemTemplateId || emblem.StackCount <= 0)
                     return false;
 
@@ -501,10 +501,10 @@ namespace DfoServer.Game.Inventory
                 else
                 {
                     _db.DeleteItem(connection, transaction, emblem.ItemUid);
-                    DeleteSortItemLock(connection, transaction, emblem.ListType, emblem.SlotIndex);
+                    DeleteSortItemLock(characterId, connection, transaction, emblem.ListType, emblem.SlotIndex);
                 }
 
-                _auditLogger.WriteDeleteAuditLog(connection, transaction, _context.CharacterId, emblem, 1);
+                _auditLogger.WriteDeleteAuditLog(connection, transaction, characterId, emblem, 1);
                 consumed.Add(new InventoryMutationResult
                 {
                     ListType = emblem.ListType,
@@ -519,7 +519,7 @@ namespace DfoServer.Game.Inventory
             }
 
             entry.Raw = item.ToBytes();
-            UpdateEquippedEntryRaw(connection, transaction, _context.CharacterId, targetSlotIndex, targetItemTemplateId, entry.Raw);
+            UpdateEquippedEntryRaw(connection, transaction, characterId, targetSlotIndex, targetItemTemplateId, entry.Raw);
             FileLogger.Log($"  [AvatarEmblemAttach] equipped OK slot={targetSlotIndex} item=0x{targetItemTemplateId:X8} emblems={emblems.Count}");
             transaction.Commit();
 

@@ -84,7 +84,7 @@ namespace DfoServer.SelfTests
             AvatarPackageOpenResult result = null;
             using (store.BeginScope(CharacterId, AccountId))
             {
-                Check("open avatar package succeeds", store.TryOpenAvatarPackage(request, out result));
+                Check("open avatar package succeeds", store.TryOpenAvatarPackage(CharacterId, AccountId, request, out result));
             }
 
             if (result != null)

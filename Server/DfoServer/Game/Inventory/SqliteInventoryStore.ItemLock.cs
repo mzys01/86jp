@@ -12,16 +12,16 @@ namespace DfoServer.Game.Inventory
         private const byte EquipmentLockErrorEmptySlot = 21;
         private const byte EquipmentLockErrorNoFreeId = 22;
 
-        public bool TryLockEquipmentItem(InventoryListType listType, short slotIndex, out EquipmentItemLockResult result)
+        public bool TryLockEquipmentItem(int characterId, InventoryListType listType, short slotIndex, out EquipmentItemLockResult result)
         {
             result = CreateEquipmentLockResult(false, listType, slotIndex, EquipmentLockErrorInvalidTarget);
             if (!IsSupportedEquipmentLockListType(listType))
                 return false;
 
-            using (var connection = _context.OpenConnection())
+            using (var connection = OpenConnection())
             using (var transaction = connection.BeginTransaction())
             {
-                var target = LoadEquipmentLockTarget(connection, transaction, listType, slotIndex);
+                var target = LoadEquipmentLockTarget(characterId, connection, transaction, listType, slotIndex);
                 if (target == null)
                 {
                     result = CreateEquipmentLockResult(false, listType, slotIndex, EquipmentLockErrorEmptySlot);
@@ -40,15 +40,15 @@ namespace DfoServer.Game.Inventory
                     return false;
                 }
 
-                var lockId = AllocateEquipmentLockId(connection, transaction);
+                var lockId = AllocateEquipmentLockId(characterId, connection, transaction);
                 if (lockId == 0)
                 {
                     result = CreateEquipmentLockResult(false, listType, slotIndex, EquipmentLockErrorNoFreeId);
                     return false;
                 }
 
-                UpdateTargetEquipmentLockId(connection, transaction, target, lockId);
-                UpsertEquipmentLock(connection, transaction, lockId, listType, slotIndex, state: 1, remainingSeconds: null);
+                UpdateTargetEquipmentLockId(characterId, connection, transaction, target, lockId);
+                UpsertEquipmentLock(characterId, connection, transaction, lockId, listType, slotIndex, state: 1, remainingSeconds: null);
                 transaction.Commit();
 
                 result = CreateEquipmentLockResult(true, listType, slotIndex, 0);
@@ -56,16 +56,16 @@ namespace DfoServer.Game.Inventory
             }
         }
 
-        public bool TryUnlockEquipmentItem(InventoryListType listType, short slotIndex, out EquipmentItemLockResult result)
+        public bool TryUnlockEquipmentItem(int characterId, InventoryListType listType, short slotIndex, out EquipmentItemLockResult result)
         {
             result = CreateEquipmentLockResult(false, listType, slotIndex, EquipmentLockErrorInvalidTarget);
             if (!IsSupportedEquipmentLockListType(listType))
                 return false;
 
-            using (var connection = _context.OpenConnection())
+            using (var connection = OpenConnection())
             using (var transaction = connection.BeginTransaction())
             {
-                var target = LoadEquipmentLockTarget(connection, transaction, listType, slotIndex);
+                var target = LoadEquipmentLockTarget(characterId, connection, transaction, listType, slotIndex);
                 if (target == null)
                 {
                     result = CreateEquipmentLockResult(false, listType, slotIndex, EquipmentLockErrorEmptySlot);
@@ -79,15 +79,15 @@ namespace DfoServer.Game.Inventory
                 }
 
                 if (target.EquipmentLockId == 0
-                    || !TryLoadEquipmentLockState(connection, transaction, target.EquipmentLockId, out var state)
+                    || !TryLoadEquipmentLockState(characterId, connection, transaction, target.EquipmentLockId, out var state)
                     || state != 1)
                 {
                     result = CreateEquipmentLockResult(false, listType, slotIndex, EquipmentLockErrorInvalidTarget);
                     return false;
                 }
 
-                UpdateTargetEquipmentLockId(connection, transaction, target, 0);
-                DeleteEquipmentLock(connection, transaction, target.EquipmentLockId);
+                UpdateTargetEquipmentLockId(characterId, connection, transaction, target, 0);
+                DeleteEquipmentLock(characterId, connection, transaction, target.EquipmentLockId);
                 transaction.Commit();
 
                 result = CreateEquipmentLockResult(true, listType, slotIndex, 0);
@@ -95,16 +95,16 @@ namespace DfoServer.Game.Inventory
             }
         }
 
-        public bool TryCancelEquipmentItemUnlock(InventoryListType listType, short slotIndex, out EquipmentItemLockResult result)
+        public bool TryCancelEquipmentItemUnlock(int characterId, InventoryListType listType, short slotIndex, out EquipmentItemLockResult result)
         {
             result = CreateEquipmentLockResult(false, listType, slotIndex, EquipmentLockErrorInvalidTarget);
             if (!IsSupportedEquipmentLockListType(listType))
                 return false;
 
-            using (var connection = _context.OpenConnection())
+            using (var connection = OpenConnection())
             using (var transaction = connection.BeginTransaction())
             {
-                var target = LoadEquipmentLockTarget(connection, transaction, listType, slotIndex);
+                var target = LoadEquipmentLockTarget(characterId, connection, transaction, listType, slotIndex);
                 if (target == null)
                 {
                     result = CreateEquipmentLockResult(false, listType, slotIndex, EquipmentLockErrorEmptySlot);
@@ -113,13 +113,13 @@ namespace DfoServer.Game.Inventory
 
                 if (!TryValidateEquipmentLockTarget(target, forLock: false, out var errorCode)
                     || target.EquipmentLockId == 0
-                    || !TryLoadEquipmentLockState(connection, transaction, target.EquipmentLockId, out _))
+                    || !TryLoadEquipmentLockState(characterId, connection, transaction, target.EquipmentLockId, out _))
                 {
                     result = CreateEquipmentLockResult(false, listType, slotIndex, errorCode == 0 ? EquipmentLockErrorInvalidTarget : errorCode);
                     return false;
                 }
 
-                UpsertEquipmentLock(connection, transaction, target.EquipmentLockId, listType, slotIndex, state: 1, remainingSeconds: null);
+                UpsertEquipmentLock(characterId, connection, transaction, target.EquipmentLockId, listType, slotIndex, state: 1, remainingSeconds: null);
                 transaction.Commit();
 
                 result = CreateEquipmentLockResult(true, listType, slotIndex, 0);
@@ -127,22 +127,22 @@ namespace DfoServer.Game.Inventory
             }
         }
 
-        public IReadOnlyList<EquipmentItemLockEntry> LoadEquipmentItemLocks()
+        public IReadOnlyList<EquipmentItemLockEntry> LoadEquipmentItemLocks(int characterId)
         {
-            using (var connection = _context.OpenConnection())
-                return LoadEquipmentItemLocks(connection, null, null);
+            using (var connection = OpenConnection())
+                return LoadEquipmentItemLocks(characterId, connection, null, null);
         }
 
-        public IReadOnlyList<EquipmentItemLockEntry> LoadEquipmentItemLocks(InventoryListType listType)
+        public IReadOnlyList<EquipmentItemLockEntry> LoadEquipmentItemLocks(int characterId, InventoryListType listType)
         {
             if (!IsSupportedEquipmentLockListType(listType))
                 return Array.Empty<EquipmentItemLockEntry>();
 
-            using (var connection = _context.OpenConnection())
-                return LoadEquipmentItemLocks(connection, null, listType);
+            using (var connection = OpenConnection())
+                return LoadEquipmentItemLocks(characterId, connection, null, listType);
         }
 
-        private IReadOnlyList<EquipmentItemLockEntry> LoadEquipmentItemLocks(SqliteConnection connection, SqliteTransaction transaction, InventoryListType? listType)
+        private IReadOnlyList<EquipmentItemLockEntry> LoadEquipmentItemLocks(int characterId, SqliteConnection connection, SqliteTransaction transaction, InventoryListType? listType)
         {
             var entries = new List<EquipmentItemLockEntry>();
             using (var cmd = connection.CreateCommand())
@@ -179,7 +179,7 @@ FROM (
       AND (@lt < 0 OR @lt = 3)
 )
 ORDER BY equipment_lock_id;";
-                cmd.Parameters.AddWithValue("@cid", _context.CharacterId);
+                cmd.Parameters.AddWithValue("@cid", characterId);
                 cmd.Parameters.AddWithValue("@lt", listType.HasValue ? (int)listType.Value : -1);
                 using (var reader = cmd.ExecuteReader())
                 {
@@ -199,12 +199,12 @@ ORDER BY equipment_lock_id;";
             return entries;
         }
 
-        private EquipmentLockTarget LoadEquipmentLockTarget(SqliteConnection connection, SqliteTransaction transaction, InventoryListType listType, short slotIndex)
+        private EquipmentLockTarget LoadEquipmentLockTarget(int characterId, SqliteConnection connection, SqliteTransaction transaction, InventoryListType listType, short slotIndex)
         {
             if (listType == InventoryListType.Equipment)
-                return LoadEquippedEquipmentLockTarget(connection, transaction, slotIndex);
+                return LoadEquippedEquipmentLockTarget(characterId, connection, transaction, slotIndex);
 
-            var item = _db.LoadItemRecord(connection, transaction, _context.CharacterId, listType, slotIndex);
+            var item = _db.LoadItemRecord(connection, transaction, characterId, listType, slotIndex);
             if (item == null)
                 return null;
 
@@ -220,7 +220,7 @@ ORDER BY equipment_lock_id;";
             };
         }
 
-        private EquipmentLockTarget LoadEquippedEquipmentLockTarget(SqliteConnection connection, SqliteTransaction transaction, short slotIndex)
+        private EquipmentLockTarget LoadEquippedEquipmentLockTarget(int characterId, SqliteConnection connection, SqliteTransaction transaction, short slotIndex)
         {
             using (var cmd = connection.CreateCommand())
             {
@@ -230,7 +230,7 @@ SELECT item_id, equipment_lock_id
 FROM character_equipped_entries
 WHERE character_id = @cid AND slot = @slot
 LIMIT 1;";
-                cmd.Parameters.AddWithValue("@cid", _context.CharacterId);
+                cmd.Parameters.AddWithValue("@cid", characterId);
                 cmd.Parameters.AddWithValue("@slot", (int)slotIndex);
                 using (var reader = cmd.ExecuteReader())
                 {
@@ -275,7 +275,7 @@ LIMIT 1;";
             return true;
         }
 
-        private void UpdateTargetEquipmentLockId(SqliteConnection connection, SqliteTransaction transaction, EquipmentLockTarget target, byte equipmentLockId)
+        private void UpdateTargetEquipmentLockId(int characterId, SqliteConnection connection, SqliteTransaction transaction, EquipmentLockTarget target, byte equipmentLockId)
         {
             using (var cmd = connection.CreateCommand())
             {
@@ -286,7 +286,7 @@ LIMIT 1;";
 UPDATE character_equipped_entries
 SET equipment_lock_id = @lockId
 WHERE character_id = @cid AND slot = @slot;";
-                    cmd.Parameters.AddWithValue("@cid", _context.CharacterId);
+                    cmd.Parameters.AddWithValue("@cid", characterId);
                     cmd.Parameters.AddWithValue("@slot", (int)target.SlotIndex);
                 }
                 else
@@ -304,7 +304,7 @@ WHERE item_uid = @uid;";
             }
         }
 
-        private byte AllocateEquipmentLockId(SqliteConnection connection, SqliteTransaction transaction)
+        private byte AllocateEquipmentLockId(int characterId, SqliteConnection connection, SqliteTransaction transaction)
         {
             var used = new HashSet<int>();
             using (var cmd = connection.CreateCommand())
@@ -316,7 +316,7 @@ UNION
 SELECT equipment_lock_id FROM character_items WHERE character_id = @cid AND equipment_lock_id > 0
 UNION
 SELECT equipment_lock_id FROM character_equipped_entries WHERE character_id = @cid AND equipment_lock_id > 0;";
-                cmd.Parameters.AddWithValue("@cid", _context.CharacterId);
+                cmd.Parameters.AddWithValue("@cid", characterId);
                 using (var reader = cmd.ExecuteReader())
                 {
                     while (reader.Read())
@@ -331,7 +331,7 @@ SELECT equipment_lock_id FROM character_equipped_entries WHERE character_id = @c
             return 0;
         }
 
-        private void UpsertEquipmentLock(SqliteConnection connection, SqliteTransaction transaction, byte equipmentLockId, InventoryListType listType, short slotIndex, byte state, int? remainingSeconds)
+        private void UpsertEquipmentLock(int characterId, SqliteConnection connection, SqliteTransaction transaction, byte equipmentLockId, InventoryListType listType, short slotIndex, byte state, int? remainingSeconds)
         {
             using (var cmd = connection.CreateCommand())
             {
@@ -346,7 +346,7 @@ DO UPDATE SET
     slot = excluded.slot,
     state = excluded.state,
     remaining_seconds = excluded.remaining_seconds;";
-                cmd.Parameters.AddWithValue("@cid", _context.CharacterId);
+                cmd.Parameters.AddWithValue("@cid", characterId);
                 cmd.Parameters.AddWithValue("@lockId", (int)equipmentLockId);
                 cmd.Parameters.AddWithValue("@listType", (int)listType);
                 cmd.Parameters.AddWithValue("@slot", (int)slotIndex);
@@ -356,7 +356,7 @@ DO UPDATE SET
             }
         }
 
-        private bool TryLoadEquipmentLockState(SqliteConnection connection, SqliteTransaction transaction, byte equipmentLockId, out byte state)
+        private bool TryLoadEquipmentLockState(int characterId, SqliteConnection connection, SqliteTransaction transaction, byte equipmentLockId, out byte state)
         {
             state = 0;
             using (var cmd = connection.CreateCommand())
@@ -367,7 +367,7 @@ SELECT state
 FROM character_item_locks
 WHERE character_id = @cid AND equipment_lock_id = @lockId
 LIMIT 1;";
-                cmd.Parameters.AddWithValue("@cid", _context.CharacterId);
+                cmd.Parameters.AddWithValue("@cid", characterId);
                 cmd.Parameters.AddWithValue("@lockId", (int)equipmentLockId);
                 var value = cmd.ExecuteScalar();
                 if (value == null || value == DBNull.Value)
@@ -378,7 +378,7 @@ LIMIT 1;";
             }
         }
 
-        private void DeleteEquipmentLock(SqliteConnection connection, SqliteTransaction transaction, byte equipmentLockId)
+        private void DeleteEquipmentLock(int characterId, SqliteConnection connection, SqliteTransaction transaction, byte equipmentLockId)
         {
             using (var cmd = connection.CreateCommand())
             {
@@ -386,7 +386,7 @@ LIMIT 1;";
                 cmd.CommandText = @"
 DELETE FROM character_item_locks
 WHERE character_id = @cid AND equipment_lock_id = @lockId;";
-                cmd.Parameters.AddWithValue("@cid", _context.CharacterId);
+                cmd.Parameters.AddWithValue("@cid", characterId);
                 cmd.Parameters.AddWithValue("@lockId", (int)equipmentLockId);
                 cmd.ExecuteNonQuery();
             }

@@ -15,14 +15,17 @@ namespace DfoServer.Game.Inventory
 {
     public sealed partial class SqliteInventoryStore
     {
-        public bool TryBuyItem(int itemTemplateId, int buyCount, out InventoryMutationResult result)
+        public bool TryBuyItem(int characterId, int accountId, int itemTemplateId, int buyCount, out InventoryMutationResult result)
         {
-            using (var connection = _context.OpenConnection())
-            using (var transaction = connection.BeginTransaction())
+            using (var connection = new SqliteConnection(ConnectionString))
             {
-                var ok = _shopStore.TryBuyItem(connection, transaction, _context.CharacterId, _context.AccountId, itemTemplateId, buyCount, out result);
-                if (ok) transaction.Commit();
-                return ok;
+                connection.Open();
+                using (var transaction = connection.BeginTransaction())
+                {
+                    var ok = _shopStore.TryBuyItem(connection, transaction, characterId, accountId, itemTemplateId, buyCount, out result);
+                    if (ok) transaction.Commit();
+                    return ok;
+                }
             }
         }
 
@@ -46,22 +49,27 @@ namespace DfoServer.Game.Inventory
         public bool TryPickupRentalWeapon(
             SqliteConnection connection,
             SqliteTransaction transaction,
+            int characterId,
+            int accountId,
             int itemTemplateId,
             int expireTime,
             out short assignedSlot,
             out int instanceValue)
-            => _equipStore.TryPickupRentalWeapon(connection, transaction, _context.CharacterId, _context.AccountId, itemTemplateId, expireTime, out assignedSlot, out instanceValue);
+            => _equipStore.TryPickupRentalWeapon(connection, transaction, characterId, accountId, itemTemplateId, expireTime, out assignedSlot, out instanceValue);
 
-        public bool TryPickupItem(int itemTemplateId, int stackCount, out short assignedSlot)
+        public bool TryPickupItem(int characterId, int accountId, int itemTemplateId, int stackCount, out short assignedSlot)
         {
-            using (var connection = _context.OpenConnection())
-            using (var transaction = connection.BeginTransaction())
+            using (var connection = new SqliteConnection(ConnectionString))
             {
-                var result = TryPickupItemCore(connection, transaction,
-                    _context.CharacterId, _context.AccountId,
-                    itemTemplateId, stackCount, out assignedSlot);
-                if (result) transaction.Commit();
-                return result;
+                connection.Open();
+                using (var transaction = connection.BeginTransaction())
+                {
+                    var result = TryPickupItemCore(connection, transaction,
+                        characterId, accountId,
+                        itemTemplateId, stackCount, out assignedSlot);
+                    if (result) transaction.Commit();
+                    return result;
+                }
             }
         }
 
@@ -142,14 +150,17 @@ namespace DfoServer.Game.Inventory
             return true;
         }
 
-        public bool TrySellItem(InventoryListType listType, short slotIndex, short sellCount, out InventoryMutationResult result)
+        public bool TrySellItem(int characterId, int accountId, InventoryListType listType, short slotIndex, short sellCount, out InventoryMutationResult result)
         {
-            using (var connection = _context.OpenConnection())
-            using (var transaction = connection.BeginTransaction())
+            using (var connection = new SqliteConnection(ConnectionString))
             {
-                var ok = _shopStore.TrySellItem(connection, transaction, _context.CharacterId, _context.AccountId, listType, slotIndex, sellCount, out result);
-                if (ok) transaction.Commit();
-                return ok;
+                connection.Open();
+                using (var transaction = connection.BeginTransaction())
+                {
+                    var ok = _shopStore.TrySellItem(connection, transaction, characterId, accountId, listType, slotIndex, sellCount, out result);
+                    if (ok) transaction.Commit();
+                    return ok;
+                }
             }
         }
     }

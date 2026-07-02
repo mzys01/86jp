@@ -268,7 +268,7 @@ namespace DfoServer.SelfTests
             SelectablePackageOpenResult result = null;
             using (store.BeginScope(CharacterId, AccountId))
             {
-                Check("open selectable package succeeds", store.TryOpenSelectablePackage(request, out result));
+                Check("open selectable package succeeds", store.TryOpenSelectablePackage(CharacterId, AccountId, request, out result));
             }
 
             if (result != null)
@@ -309,7 +309,7 @@ namespace DfoServer.SelfTests
                 SelectablePackageOpenResult avatarResult = null;
                 using (store.BeginScope(CharacterId, AccountId))
                 {
-                    Check("open avatar-choice selectable package succeeds", store.TryOpenSelectablePackage(avatarRequest, out avatarResult));
+                    Check("open avatar-choice selectable package succeeds", store.TryOpenSelectablePackage(CharacterId, AccountId, avatarRequest, out avatarResult));
                 }
 
                 if (avatarResult != null)
@@ -351,7 +351,7 @@ namespace DfoServer.SelfTests
             SelectablePackageOpenResult crossJobAuraResult = null;
             using (store.BeginScope(CharacterId, AccountId))
             {
-                Check("open cross-job avatar single-select package succeeds", store.TryOpenSelectablePackage(crossJobAuraRequest, out crossJobAuraResult));
+                Check("open cross-job avatar single-select package succeeds", store.TryOpenSelectablePackage(CharacterId, AccountId, crossJobAuraRequest, out crossJobAuraResult));
             }
 
             if (crossJobAuraResult != null)
@@ -372,7 +372,7 @@ namespace DfoServer.SelfTests
             BoosterUseResult boosterResult = null;
             using (store.BeginScope(CharacterId, AccountId))
             {
-                Check("open special-kind booster package succeeds", store.TryUseBoosterItem(new BoosterUseRequest
+                Check("open special-kind booster package succeeds", store.TryUseBoosterItem(CharacterId, AccountId, new BoosterUseRequest
                 {
                     SlotIndex = SpecialBoosterPackageSlot,
                     SelectedItemTemplateIds = Array.Empty<int>(),
@@ -425,7 +425,7 @@ namespace DfoServer.SelfTests
                 using (store.BeginScope(CharacterId, AccountId))
                 {
                     Check("open consumable magic-hammer bundle succeeds",
-                        store.TryUseBoosterItem(new BoosterUseRequest
+                        store.TryUseBoosterItem(CharacterId, AccountId, new BoosterUseRequest
                         {
                             SlotIndex = MagicHammerBundleSlot,
                             SelectedItemTemplateIds = Array.Empty<int>(),
@@ -471,7 +471,7 @@ namespace DfoServer.SelfTests
                 using (store.BeginScope(CharacterId, AccountId))
                 {
                     Check("open magic-box request with hammer material consumes requested boosters",
-                        store.TryUseBoosterItem(new BoosterUseRequest
+                        store.TryUseBoosterItem(CharacterId, AccountId, new BoosterUseRequest
                         {
                             SlotIndex = requestMagicBoxSlot,
                             SelectedItemTemplateIds = Array.Empty<int>(),
@@ -516,7 +516,7 @@ namespace DfoServer.SelfTests
                     using (store.BeginScope(CharacterId, AccountId))
                     {
                         Check("open Seria luck request without material succeeds after stale source slot",
-                            store.TryUseBoosterItem(new BoosterUseRequest
+                            store.TryUseBoosterItem(CharacterId, AccountId, new BoosterUseRequest
                             {
                                 SlotIndex = staleSeriaLuckSlot,
                                 SelectedItemTemplateIds = Array.Empty<int>(),
@@ -545,7 +545,7 @@ namespace DfoServer.SelfTests
                         using (store.BeginScope(CharacterId, AccountId))
                         {
                             Check("open Seria luck single without material succeeds",
-                                store.TryUseBoosterItem(new BoosterUseRequest
+                                store.TryUseBoosterItem(CharacterId, AccountId, new BoosterUseRequest
                                 {
                                     SlotIndex = seriaLuckSlot,
                                     SelectedItemTemplateIds = Array.Empty<int>(),
@@ -572,7 +572,7 @@ namespace DfoServer.SelfTests
                 using (store.BeginScope(CharacterId, AccountId))
                 {
                     Check("magic-box request rejects insufficient hammer material",
-                        !store.TryUseBoosterItem(new BoosterUseRequest
+                        !store.TryUseBoosterItem(CharacterId, AccountId, new BoosterUseRequest
                         {
                             SlotIndex = requestMagicBoxSlot,
                             SelectedItemTemplateIds = Array.Empty<int>(),
@@ -581,7 +581,7 @@ namespace DfoServer.SelfTests
                             ExpectedMaterialItemTemplateId = magicBoxRequest.MaterialItemTemplateId,
                         }, out _));
                     Check("magic-box request rejects wrong-tab hammer without material slot",
-                        !store.TryUseBoosterItem(new BoosterUseRequest
+                        !store.TryUseBoosterItem(CharacterId, AccountId, new BoosterUseRequest
                         {
                             SlotIndex = requestMagicBoxSlot,
                             SelectedItemTemplateIds = Array.Empty<int>(),
@@ -596,17 +596,14 @@ namespace DfoServer.SelfTests
                 }
             }
 
-            using (store.BeginScope(CharacterId, AccountId))
+            Check("cera-shop magic-hammer bundle purchase succeeds",
+                store.TryBuyCeraShopItem(CharacterId, AccountId, SampleMagicHammerBundleProductId, 1, 0, 0, out var ceraShopBundleResult));
+            if (ceraShopBundleResult != null)
             {
-                Check("cera-shop magic-hammer bundle purchase succeeds",
-                    store.TryBuyCeraShopItem(SampleMagicHammerBundleProductId, 1, 0, 0, out var ceraShopBundleResult));
-                if (ceraShopBundleResult != null)
-                {
-                    var ceraAckBody = CeraShopPurchaseAckBuilder.BuildSuccess(SampleMagicHammerBundleProductId, ceraShopBundleResult);
-                    Check("cera-shop purchase result has magic-hammer reward", ceraShopBundleResult.ItemTemplateId == MagicHammerItemTemplateId);
-                    Check("cera-shop purchase result has chicken-box extra reward", ceraShopBundleResult.ExtraResults.Exists(x => x.ItemTemplateId == MagicBoxItemTemplateId));
-                    Check("cera-shop purchase ACK keeps mall extra item count zero", ceraAckBody.Length == 24 && BitConverter.ToUInt16(ceraAckBody, 22) == 0);
-                }
+                var ceraAckBody = CeraShopPurchaseAckBuilder.BuildSuccess(SampleMagicHammerBundleProductId, ceraShopBundleResult);
+                Check("cera-shop purchase result has magic-hammer reward", ceraShopBundleResult.ItemTemplateId == MagicHammerItemTemplateId);
+                Check("cera-shop purchase result has chicken-box extra reward", ceraShopBundleResult.ExtraResults.Exists(x => x.ItemTemplateId == MagicBoxItemTemplateId));
+                Check("cera-shop purchase ACK keeps mall extra item count zero", ceraAckBody.Length == 24 && BitConverter.ToUInt16(ceraAckBody, 22) == 0);
             }
 
             using (var connection = new SqliteConnection(SqliteDatabaseBootstrap.BuildConnectionString(tempDb)))
@@ -628,7 +625,7 @@ namespace DfoServer.SelfTests
             };
             using (store.BeginScope(CharacterId, AccountId))
             {
-                Check("invalid selected reward is rejected", !store.TryOpenSelectablePackage(invalidRequest, out _));
+                Check("invalid selected reward is rejected", !store.TryOpenSelectablePackage(CharacterId, AccountId, invalidRequest, out _));
             }
 
             using (var connection = new SqliteConnection(SqliteDatabaseBootstrap.BuildConnectionString(tempDb)))

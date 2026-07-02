@@ -4,7 +4,7 @@ namespace DfoServer.Game.Inventory
 {
     public sealed partial class SqliteInventoryStore
     {
-        public bool TryHatchCreatureEgg(InventoryListType listType, short slotIndex, int expectedItemTemplateId, out CreatureHatchResult result)
+        public bool TryHatchCreatureEgg(int characterId, InventoryListType listType, short slotIndex, int expectedItemTemplateId, out CreatureHatchResult result)
         {
             result = null;
 
@@ -12,64 +12,67 @@ namespace DfoServer.Game.Inventory
             if (dbListType != InventoryListType.Pet)
                 return false;
 
-            using (var connection = _context.OpenConnection())
-            using (var transaction = connection.BeginTransaction())
+            using (var connection = new SqliteConnection(ConnectionString))
             {
-                var source = _db.LoadItemRecord(connection, transaction, _context.CharacterId, dbListType, slotIndex);
-                if (source == null || source.ItemKind != "pet")
-                    return false;
-
-                if (expectedItemTemplateId > 0 && source.ItemTemplateId != expectedItemTemplateId)
-                    return false;
-
-                if (!CreatureEggResolver.TryResolveHatchedCreatureItemId(source.ItemTemplateId, out var hatchedItemTemplateId))
-                    return false;
-
-                var petSerial = source.PetSerialOrHandle > 0
-                    ? source.PetSerialOrHandle
-                    : _db.NextPetSerialOrHandle(connection, transaction, _context.CharacterId);
-
-                _db.InsertCharacterItem(
-                    connection,
-                    transaction,
-                    _context.CharacterId,
-                    InventoryListType.Pet,
-                    source.SlotIndex,
-                    hatchedItemTemplateId,
-                    "pet",
-                    0,
-                    0,
-                    0,
-                    0,
-                    0,
-                    0,
-                    0,
-                    petSerial,
-                    "{}");
-
-                UpsertCreatureListEntry(connection, transaction, _context.CharacterId, petSerial);
-
-                _auditLogger.WriteAuditLog(
-                    connection,
-                    transaction,
-                    _context.CharacterId,
-                    "hatch_creature",
-                    source,
-                    InventoryListType.Pet,
-                    source.SlotIndex,
-                    0);
-
-                transaction.Commit();
-
-                result = new CreatureHatchResult
+                connection.Open();
+                using (var transaction = connection.BeginTransaction())
                 {
-                    ListType = InventoryListType.Pet,
-                    SlotIndex = source.SlotIndex,
-                    EggItemTemplateId = source.ItemTemplateId,
-                    HatchedItemTemplateId = hatchedItemTemplateId,
-                    PetSerialOrHandle = petSerial,
-                };
-                return true;
+                    var source = _db.LoadItemRecord(connection, transaction, characterId, dbListType, slotIndex);
+                    if (source == null || source.ItemKind != "pet")
+                        return false;
+
+                    if (expectedItemTemplateId > 0 && source.ItemTemplateId != expectedItemTemplateId)
+                        return false;
+
+                    if (!CreatureEggResolver.TryResolveHatchedCreatureItemId(source.ItemTemplateId, out var hatchedItemTemplateId))
+                        return false;
+
+                    var petSerial = source.PetSerialOrHandle > 0
+                        ? source.PetSerialOrHandle
+                        : _db.NextPetSerialOrHandle(connection, transaction, characterId);
+
+                    _db.InsertCharacterItem(
+                        connection,
+                        transaction,
+                        characterId,
+                        InventoryListType.Pet,
+                        source.SlotIndex,
+                        hatchedItemTemplateId,
+                        "pet",
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        petSerial,
+                        "{}");
+
+                    UpsertCreatureListEntry(connection, transaction, characterId, petSerial);
+
+                    _auditLogger.WriteAuditLog(
+                        connection,
+                        transaction,
+                        characterId,
+                        "hatch_creature",
+                        source,
+                        InventoryListType.Pet,
+                        source.SlotIndex,
+                        0);
+
+                    transaction.Commit();
+
+                    result = new CreatureHatchResult
+                    {
+                        ListType = InventoryListType.Pet,
+                        SlotIndex = source.SlotIndex,
+                        EggItemTemplateId = source.ItemTemplateId,
+                        HatchedItemTemplateId = hatchedItemTemplateId,
+                        PetSerialOrHandle = petSerial,
+                    };
+                    return true;
+                }
             }
         }
 

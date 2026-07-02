@@ -37,17 +37,14 @@ namespace DfoServer.SelfTests
             var store = new SqliteInventoryStore(dbPath, ServerPaths.SchemaFilePath);
             SeedPetEgg(dbPath);
 
-            using (store.BeginScope(CharacterId, AccountId))
-            {
-                Check("hatching pet egg succeeds",
-                    store.TryHatchCreatureEgg(InventoryListType.Pet, EggSlot, BoboEggItemId, out var result)
-                    && result != null
-                    && result.SlotIndex == EggSlot
-                    && result.EggItemTemplateId == BoboEggItemId
-                    && result.HatchedItemTemplateId == BoboPetItemId
-                    && result.PetSerialOrHandle == PetSerial,
-                    ref failures);
-            }
+            Check("hatching pet egg succeeds",
+                store.TryHatchCreatureEgg(CharacterId, InventoryListType.Pet, EggSlot, BoboEggItemId, out var result)
+                && result != null
+                && result.SlotIndex == EggSlot
+                && result.EggItemTemplateId == BoboEggItemId
+                && result.HatchedItemTemplateId == BoboPetItemId
+                && result.PetSerialOrHandle == PetSerial,
+                ref failures);
 
             using (var connection = new SqliteConnection(SqliteDatabaseBootstrap.BuildConnectionString(dbPath)))
             {

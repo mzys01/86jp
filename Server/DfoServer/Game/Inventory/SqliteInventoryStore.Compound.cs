@@ -18,7 +18,7 @@ namespace DfoServer.Game.Inventory
         // 空位插入新时装。新时装itemId由 resolveNewItemId(oldItemId1, oldItemId2, consumeMaterialId)
         // 回调计算(在事务内、读到三个真实item之后才调用, 保证概率判定用的是事务内的真实数据)。
         // 返回新时装所在 slot (newSlotOut)。一个事务内完成, 失败回滚。
-        public bool TryCompoundAvatar(short slot1, short slot2, short consumeSlot,
+        public bool TryCompoundAvatar(int characterId, int accountId, short slot1, short slot2, short consumeSlot,
                 Func<int, int, int, List<int>> resolveNewItemIds, byte newOption,
                 out List<int> newSlotsOut, out int oldItemId1, out int oldItemId2, out List<int> newItemIdsOut,
                 out int consumedItemTemplateId, out int consumedItemRemainingCount)
@@ -30,18 +30,20 @@ namespace DfoServer.Game.Inventory
             consumedItemTemplateId = 0;
             consumedItemRemainingCount = 0;
 
-            using (var connection = _context.OpenConnection())
-            using (var transaction = connection.BeginTransaction())
+            using (var connection = new SqliteConnection(ConnectionString))
             {
-                var item1 = _db.LoadItemRecord(connection, transaction, _context.CharacterId, InventoryListType.Avatar, slot1);
-                var item2 = _db.LoadItemRecord(connection, transaction, _context.CharacterId, InventoryListType.Avatar, slot2);
+                connection.Open();
+                using (var transaction = connection.BeginTransaction())
+                {
+                    var item1 = _db.LoadItemRecord(connection, transaction, characterId, InventoryListType.Avatar, slot1);
+                    var item2 = _db.LoadItemRecord(connection, transaction, characterId, InventoryListType.Avatar, slot2);
                 if (item1 == null || item2 == null)
                 {
                     FileLogger.Log($"  [CompoundAvatar] REJECT: missing avatar item at slot1={slot1}(found={item1!=null}) slot2={slot2}(found={item2!=null})");
                     return false;
                 }
 
-                var consumeItem = _db.LoadItemRecord(connection, transaction, _context.CharacterId, InventoryListType.Main, consumeSlot);
+                var consumeItem = _db.LoadItemRecord(connection, transaction, characterId, InventoryListType.Main, consumeSlot);
                 if (consumeItem == null || consumeItem.StackCount < 1)
                 {
                     FileLogger.Log($"  [CompoundAvatar] REJECT: missing consumable at slot={consumeSlot}");
@@ -74,27 +76,28 @@ namespace DfoServer.Game.Inventory
                     _db.DeleteItem(connection, transaction, consumeItem.ItemUid);
                 }
 
-                var avatarExpansion = GetListParam(_equipStore.LoadContainerState(connection, transaction, _context.CharacterId, _context.AccountId), InventoryListType.Avatar);
+                var avatarExpansion = GetListParam(_equipStore.LoadContainerState(connection, transaction, characterId, accountId), InventoryListType.Avatar);
                 var avatarCapacity = 105 + avatarExpansion;
 
                 foreach (var newItemId in newItemIds)
                 {
-                    var newSlot = _db.FindEmptySlot(connection, transaction, _context.CharacterId, InventoryListType.Avatar, 0, avatarCapacity - 1);
+                    var newSlot = _db.FindEmptySlot(connection, transaction, characterId, InventoryListType.Avatar, 0, avatarCapacity - 1);
                     if (newSlot < 0)
                     {
                         FileLogger.Log($"  [CompoundAvatar] REJECT: no empty avatar slot (capacity={avatarCapacity})");
                         return false;
                     }
 
-                    _db.InsertAvatarItem(connection, transaction, _context.CharacterId, CreateDefaultAvatarItem((short)newSlot, newItemId, newOption));
+                    _db.InsertAvatarItem(connection, transaction, characterId, CreateDefaultAvatarItem((short)newSlot, newItemId, newOption));
                     newSlotsOut.Add(newSlot);
                 }
 
-                transaction.Commit();
-                FileLogger.Log($"  [CompoundAvatar] OK: deleted slot{slot1}(item {oldItemId1}) + slot{slot2}(item {oldItemId2}) + " +
-                               $"1x slot{consumeSlot}(template {consumedItemTemplateId}, remain {consumedItemRemainingCount}), " +
-                               $"added items [{string.Join(",", newItemIds)}] at slots [{string.Join(",", newSlotsOut)}]");
-                return true;
+                    transaction.Commit();
+                    FileLogger.Log($"  [CompoundAvatar] OK: deleted slot{slot1}(item {oldItemId1}) + slot{slot2}(item {oldItemId2}) + " +
+                                   $"1x slot{consumeSlot}(template {consumedItemTemplateId}, remain {consumedItemRemainingCount}), " +
+                                   $"added items [{string.Join(",", newItemIds)}] at slots [{string.Join(",", newSlotsOut)}]");
+                    return true;
+                }
             }
         }
 
@@ -102,7 +105,7 @@ namespace DfoServer.Game.Inventory
         // 消耗品按请求body里携带的Main列表槛位号精确定位(实测两组不同槛位数据交叉验证得到该字段)。
         // resolveNewItemId: 输入消耗品item_template_id, 由调用方(AbsoluteBindCubeService)按该合成器
         // 的[action type]配置 + 角色职业查表校验/纠正客户端请求的目标itemId; 返回负数表示校验失败。
-        public bool TryCompoundAvatarSet(short[] consumeSlots, int[] expectedItemIds, Func<int, int> resolveNewItemId, byte newOption,
+        public bool TryCompoundAvatarSet(int characterId, int accountId, short[] consumeSlots, int[] expectedItemIds, Func<int, int> resolveNewItemId, byte newOption,
                 short consumeStackableSlot,
                 out int newSlot, out List<int> oldItemIds, out int newItemId, out int consumedItemTemplateId, out int consumedItemRemainingCount)
         {
@@ -112,13 +115,15 @@ namespace DfoServer.Game.Inventory
             consumedItemTemplateId = 0;
             consumedItemRemainingCount = 0;
 
-            using (var connection = _context.OpenConnection())
-            using (var transaction = connection.BeginTransaction())
+            using (var connection = new SqliteConnection(ConnectionString))
             {
-                var items = new ItemRecord[consumeSlots.Length];
-                for (int i = 0; i < consumeSlots.Length; i++)
+                connection.Open();
+                using (var transaction = connection.BeginTransaction())
                 {
-                    items[i] = _db.LoadItemRecord(connection, transaction, _context.CharacterId, InventoryListType.Avatar, consumeSlots[i]);
+                    var items = new ItemRecord[consumeSlots.Length];
+                    for (int i = 0; i < consumeSlots.Length; i++)
+                    {
+                        items[i] = _db.LoadItemRecord(connection, transaction, characterId, InventoryListType.Avatar, consumeSlots[i]);
                     if (items[i] == null)
                     {
                         FileLogger.Log($"  [CompoundAvatarSet] REJECT: missing avatar item at slot={consumeSlots[i]}");
@@ -133,7 +138,7 @@ namespace DfoServer.Game.Inventory
                     }
                 }
 
-                var consumeItem = _db.LoadItemRecord(connection, transaction, _context.CharacterId, InventoryListType.Main, consumeStackableSlot);
+                var consumeItem = _db.LoadItemRecord(connection, transaction, characterId, InventoryListType.Main, consumeStackableSlot);
                 if (consumeItem == null || consumeItem.StackCount < 1)
                 {
                     FileLogger.Log($"  [CompoundAvatarSet] REJECT: missing consumable at slot={consumeStackableSlot}");
@@ -167,21 +172,22 @@ namespace DfoServer.Game.Inventory
 
                 // 同 TryCompoundAvatar: 按台服 AddAvatarItem 算法从槽位0扫描第一个空槛位, 上限按
                 // 105(基础) + character_container_state.list_param16(拓展值, 0~105, 每张拓展券+7)。
-                var avatarExpansion = GetListParam(_equipStore.LoadContainerState(connection, transaction, _context.CharacterId, _context.AccountId), InventoryListType.Avatar);
+                var avatarExpansion = GetListParam(_equipStore.LoadContainerState(connection, transaction, characterId, accountId), InventoryListType.Avatar);
                 var avatarCapacity = 105 + avatarExpansion;
-                var emptySlot = _db.FindEmptySlot(connection, transaction, _context.CharacterId, InventoryListType.Avatar, 0, avatarCapacity - 1);
+                var emptySlot = _db.FindEmptySlot(connection, transaction, characterId, InventoryListType.Avatar, 0, avatarCapacity - 1);
                 if (emptySlot < 0)
                 {
                     FileLogger.Log($"  [CompoundAvatarSet] REJECT: no empty avatar slot (capacity={avatarCapacity})");
                     return false;
                 }
 
-                _db.InsertAvatarItem(connection, transaction, _context.CharacterId, CreateDefaultAvatarItem((short)emptySlot, newItemId, newOption));
+                _db.InsertAvatarItem(connection, transaction, characterId, CreateDefaultAvatarItem((short)emptySlot, newItemId, newOption));
 
-                transaction.Commit();
-                newSlot = emptySlot;
-                FileLogger.Log($"  [CompoundAvatarSet] OK: consumed {items.Length} avatar items + 1x slot {consumeStackableSlot}(template {consumeItem.ItemTemplateId}), added item {newItemId} at slot {newSlot}");
-                return true;
+                    transaction.Commit();
+                    newSlot = emptySlot;
+                    FileLogger.Log($"  [CompoundAvatarSet] OK: consumed {items.Length} avatar items + 1x slot {consumeStackableSlot}(template {consumeItem.ItemTemplateId}), added item {newItemId} at slot {newSlot}");
+                    return true;
+                }
             }
         }
     }

@@ -50,10 +50,7 @@ namespace DfoServer.SelfTests
             SeedCharacterAndItem(tempDb);
 
             InventoryMutationResult result = null;
-            using (store.BeginScope(CharacterId, AccountId))
-            {
-                Check("zero-price consumable sale succeeds", store.TrySellItem(InventoryListType.Main, ConsumableSlot, 4, out result));
-            }
+            Check("zero-price consumable sale succeeds", store.TrySellItem(CharacterId, AccountId, InventoryListType.Main, ConsumableSlot, 4, out result));
 
             if (result != null)
             {
@@ -69,10 +66,7 @@ namespace DfoServer.SelfTests
             }
 
             InventoryMutationResult legacyPackageResult = null;
-            using (store.BeginScope(CharacterId, AccountId))
-            {
-                Check("legacy special-kind package bead sale succeeds", store.TrySellItem(InventoryListType.Main, LegacyPackageBeadSlot, LegacyPackageBeadSaleCount, out legacyPackageResult));
-            }
+            Check("legacy special-kind package bead sale succeeds", store.TrySellItem(CharacterId, AccountId, InventoryListType.Main, LegacyPackageBeadSlot, LegacyPackageBeadSaleCount, out legacyPackageResult));
 
             if (legacyPackageResult != null)
             {
@@ -87,10 +81,7 @@ namespace DfoServer.SelfTests
             }
 
             InventoryMutationResult lowPositiveResult = null;
-            using (store.BeginScope(CharacterId, AccountId))
-            {
-                Check("low positive stackable sale succeeds", store.TrySellItem(InventoryListType.Main, LowPositiveStackableSlot, 1, out lowPositiveResult));
-            }
+            Check("low positive stackable sale succeeds", store.TrySellItem(CharacterId, AccountId, InventoryListType.Main, LowPositiveStackableSlot, 1, out lowPositiveResult));
 
             if (lowPositiveResult != null)
             {

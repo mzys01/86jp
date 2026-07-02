@@ -21,7 +21,8 @@ namespace DfoServer.Game.Inventory
         internal static readonly object StackableItemCacheLock = new object();
         internal static readonly Dictionary<int, PvfLib.StackableItemFile> StackableItemCache = new Dictionary<int, PvfLib.StackableItemFile>();
 
-        private readonly ScopedStoreContext _context;
+        private readonly string _connectionString;
+        internal string ConnectionString => _connectionString;
         private readonly InventoryAuditLogger _auditLogger;
         internal readonly InventoryDbPrimitives _db;
         private readonly InventoryEnchantStore _enchantStore;
@@ -33,7 +34,14 @@ namespace DfoServer.Game.Inventory
 
         public SqliteInventoryStore(string databasePath, string schemaFilePath)
         {
-            _context = new ScopedStoreContext(databasePath, schemaFilePath);
+            if (databasePath == null) throw new ArgumentNullException(nameof(databasePath));
+            if (schemaFilePath == null) throw new ArgumentNullException(nameof(schemaFilePath));
+
+            var directory = Path.GetDirectoryName(databasePath);
+            if (!string.IsNullOrWhiteSpace(directory))
+                Directory.CreateDirectory(directory);
+
+            _connectionString = SqliteDatabaseBootstrap.Initialize(databasePath, schemaFilePath);
             _auditLogger = new InventoryAuditLogger();
             _db = new InventoryDbPrimitives();
             _enchantStore = new InventoryEnchantStore(_db, _auditLogger);
@@ -44,18 +52,28 @@ namespace DfoServer.Game.Inventory
             _migrationRunner = new InventoryMigrationRunner();
         }
 
-        public IDisposable BeginScope(int characterId, int accountId) => _context.BeginScope(characterId, accountId);
+        private int _scopeCharacterId;
+        private int _scopeAccountId;
 
-        public int CountItem(int itemTemplateId)
+        public IDisposable BeginScope(int characterId, int accountId)
         {
-            using (var conn = new Microsoft.Data.Sqlite.SqliteConnection(_context.ConnectionString))
+            _scopeCharacterId = characterId;
+            _scopeAccountId = accountId;
+            return new ScopeToken();
+        }
+
+        private sealed class ScopeToken : IDisposable { public void Dispose() { } }
+
+        public int CountItem(int characterId, int itemTemplateId)
+        {
+            using (var conn = new SqliteConnection(_connectionString))
             {
                 conn.Open();
-                using (var cmd = new Microsoft.Data.Sqlite.SqliteCommand(
+                using (var cmd = new SqliteCommand(
                     "SELECT COALESCE(SUM(stack_count), 0) FROM character_items WHERE character_id = @cid AND list_type = 0 AND item_template_id = @tid",
                     conn))
                 {
-                    cmd.Parameters.AddWithValue("@cid", _context.CharacterId);
+                    cmd.Parameters.AddWithValue("@cid", characterId);
                     cmd.Parameters.AddWithValue("@tid", itemTemplateId);
                     return Convert.ToInt32(cmd.ExecuteScalar());
                 }
@@ -65,27 +83,32 @@ namespace DfoServer.Game.Inventory
 
         public void RunMigrations()
         {
-            using (var connection = _context.OpenConnection())
-                _migrationRunner.RunMigrations(connection);
-        }
-
-        public void EnsureDatabase(CharacterItemListSnapshot seedSnapshot)
-        {
-            using (var connection = _context.OpenConnection())
+            using (var connection = new SqliteConnection(_connectionString))
             {
-                _migrationRunner.RunMigrationsInternal(connection);
-
-                if (HasSeedData(connection))
-                    return;
-
-                SeedInitialSnapshot(connection, seedSnapshot);
+                connection.Open();
+                _migrationRunner.RunMigrations(connection);
             }
         }
 
-        public void EnsureContainerState(int characterId)
+        public void EnsureDatabase(int characterId, int accountId, CharacterItemListSnapshot seedSnapshot)
         {
-            using (var connection = _context.OpenConnection())
+            using (var connection = new SqliteConnection(_connectionString))
             {
+                connection.Open();
+                _migrationRunner.RunMigrationsInternal(connection);
+
+                if (HasSeedData(connection, characterId))
+                    return;
+
+                SeedInitialSnapshot(connection, characterId, accountId, seedSnapshot);
+            }
+        }
+
+        public void EnsureContainerState(int characterId, int accountId)
+        {
+            using (var connection = new SqliteConnection(_connectionString))
+            {
+                connection.Open();
                 int count;
                 using (var cmd = connection.CreateCommand())
                 {
@@ -97,9 +120,9 @@ namespace DfoServer.Game.Inventory
                 {
                     if (count <= 0)
                     {
-                        _equipStore.UpsertContainerState(connection, tx, characterId, _context.AccountId, InventoryListType.Main, 24);
-                        _equipStore.UpsertContainerState(connection, tx, characterId, _context.AccountId, InventoryListType.Avatar, 0);
-                        _equipStore.UpsertContainerState(connection, tx, characterId, _context.AccountId, InventoryListType.PersonalCargo, 0);
+                        _equipStore.UpsertContainerState(connection, tx, characterId, accountId, InventoryListType.Main, 24);
+                        _equipStore.UpsertContainerState(connection, tx, characterId, accountId, InventoryListType.Avatar, 0);
+                        _equipStore.UpsertContainerState(connection, tx, characterId, accountId, InventoryListType.PersonalCargo, 0);
                     }
 
                     EnsureReviveCoinSlot(connection, tx, characterId);
@@ -128,16 +151,17 @@ VALUES (
             }
         }
 
-        public CharacterItemListSnapshot LoadCharacterItemListSnapshot()
+        public CharacterItemListSnapshot LoadCharacterItemListSnapshot(int characterId, int accountId)
         {
-            using (var connection = _context.OpenConnection())
+            using (var connection = new SqliteConnection(_connectionString))
             {
+                connection.Open();
                 var snapshot = new CharacterItemListSnapshot();
-                var listParams = _equipStore.LoadContainerState(connection, null, _context.CharacterId, _context.AccountId);
+                var listParams = _equipStore.LoadContainerState(connection, null, characterId, accountId);
                 snapshot.MainListParam16 = GetListParam(listParams, InventoryListType.Main);
                 snapshot.AvatarListParam16 = GetListParam(listParams, InventoryListType.Avatar);
                 snapshot.PersonalCargoListParam16 = GetListParam(listParams, InventoryListType.PersonalCargo);
-                snapshot.AccountCargoState = _equipStore.LoadAccountCargoState(connection, null, _context.CharacterId, _context.AccountId);
+                snapshot.AccountCargoState = _equipStore.LoadAccountCargoState(connection, null, characterId, accountId);
 
                 using (var command = connection.CreateCommand())
                 {
@@ -147,7 +171,7 @@ SELECT list_type, slot_index, item_template_id, item_kind, stack_count, instance
 FROM character_items
 WHERE character_id = @characterId
 ORDER BY list_type, slot_index;";
-                    command.Parameters.AddWithValue("@characterId", _context.CharacterId);
+                    command.Parameters.AddWithValue("@characterId", characterId);
 
                     using (var reader = command.ExecuteReader())
                     {
@@ -186,7 +210,7 @@ SELECT 12 AS list_type, slot_index, item_template_id, item_kind, stack_count, in
 FROM account_cargo_items
 WHERE account_id = @accountId
 ORDER BY slot_index;";
-                    acCmd.Parameters.AddWithValue("@accountId", _context.AccountId);
+                    acCmd.Parameters.AddWithValue("@accountId", accountId);
                     using (var reader = acCmd.ExecuteReader())
                     {
                         while (reader.Read())
@@ -195,7 +219,7 @@ ORDER BY slot_index;";
                 }
 
                 // 读取账号级晶块, 合成虚拟 slot 条目添加到 MainItems
-                var cubeFragments = CurrencyService.LoadCubeFragments(connection, null, _context.AccountId);
+                var cubeFragments = CurrencyService.LoadCubeFragments(connection, null, accountId);
                 foreach (var (itemId, slot, count) in cubeFragments)
                 {
                     if (count > 0)
@@ -213,18 +237,21 @@ ORDER BY slot_index;";
             }
         }
 
-        public int DeleteExpiredRentalEquipment()
+        public int DeleteExpiredRentalEquipment(int characterId, int accountId)
         {
-            using (var connection = _context.OpenConnection())
-            using (var transaction = connection.BeginTransaction())
+            using (var connection = new SqliteConnection(_connectionString))
             {
-                var count = _equipStore.DeleteExpiredRentalEquipment(connection, transaction, _context.CharacterId, _context.AccountId);
-                if (count > 0) transaction.Commit();
-                return count;
+                connection.Open();
+                using (var transaction = connection.BeginTransaction())
+                {
+                    var count = _equipStore.DeleteExpiredRentalEquipment(connection, transaction, characterId, accountId);
+                    if (count > 0) transaction.Commit();
+                    return count;
+                }
             }
         }
 
-        public bool TryDeleteItem(InventoryListType listType, short slotIndex, short deleteCount, out InventoryMutationResult result)
+        public bool TryDeleteItem(int characterId, int accountId, InventoryListType listType, short slotIndex, short deleteCount, out InventoryMutationResult result)
         {
             result = null;
             if (!IsSupportedDeleteOrSellListType(listType))
@@ -232,26 +259,28 @@ ORDER BY slot_index;";
 
             var dbListType = MapToDbListType(listType);
 
-            using (var connection = _context.OpenConnection())
-            using (var transaction = connection.BeginTransaction())
+            using (var connection = new SqliteConnection(_connectionString))
             {
-                if (CurrencyService.IsCubeFragmentSlot(slotIndex))
+                connection.Open();
+                using (var transaction = connection.BeginTransaction())
                 {
-                    var itemId = CurrencyService.GetCubeFragmentItemIdFromSlot(slotIndex);
-                    if (itemId <= 0)
-                        return false;
+                    if (CurrencyService.IsCubeFragmentSlot(slotIndex))
+                    {
+                        var itemId = CurrencyService.GetCubeFragmentItemIdFromSlot(slotIndex);
+                        if (itemId <= 0)
+                            return false;
 
-                    var cubes = CurrencyService.LoadCubeFragments(connection, transaction, _context.AccountId);
+                        var cubes = CurrencyService.LoadCubeFragments(connection, transaction, accountId);
                     var currentCount = 0;
                     foreach (var (id, slot, count) in cubes)
                         if (id == itemId) { currentCount = count; break; }
                     if (currentCount < deleteCount)
                         return false;
 
-                    CurrencyService.AddCubeFragment(connection, transaction, _context.AccountId, itemId, -deleteCount);
+                    CurrencyService.AddCubeFragment(connection, transaction, accountId, itemId, -deleteCount);
                     var remainingCount = currentCount - deleteCount;
 
-                    var cubeWallet = _db.LoadWallet(connection, transaction, _context.CharacterId);
+                    var cubeWallet = _db.LoadWallet(connection, transaction, characterId);
                     transaction.Commit();
 
                     result = new InventoryMutationResult
@@ -272,7 +301,7 @@ ORDER BY slot_index;";
                 }
 
 
-                var item = _db.LoadItemRecord(connection, transaction, _context.CharacterId, dbListType, slotIndex);
+                var item = _db.LoadItemRecord(connection, transaction, characterId, dbListType, slotIndex);
                 if (item == null)
                     return false;
 
@@ -293,10 +322,10 @@ ORDER BY slot_index;";
                 }
 
                 if (IsPetConsumableRecord(item))
-                    satietyMutation = ApplyPetFoodSatiety(connection, transaction, _context.CharacterId, item.ItemTemplateId);
+                    satietyMutation = ApplyPetFoodSatiety(connection, transaction, characterId, item.ItemTemplateId);
 
-                _auditLogger.WriteDeleteAuditLog(connection, transaction, _context.CharacterId, item, appliedCount);
-                var wallet = _db.LoadWallet(connection, transaction, _context.CharacterId);
+                _auditLogger.WriteDeleteAuditLog(connection, transaction, characterId, item, appliedCount);
+                var wallet = _db.LoadWallet(connection, transaction, characterId);
                 transaction.Commit();
 
                 result = new InventoryMutationResult
@@ -318,57 +347,99 @@ ORDER BY slot_index;";
                     PetSatietyChanged = satietyMutation.Changed,
                 };
                 return true;
+                }
             }
         }
 
-        private bool HasSeedData(SqliteConnection connection)
+        private static bool HasSeedData(SqliteConnection connection, int characterId)
         {
             using (var command = connection.CreateCommand())
             {
                 command.CommandText = "SELECT COUNT(1) FROM character_items WHERE character_id = @characterId;";
-                command.Parameters.AddWithValue("@characterId", _context.CharacterId);
+                command.Parameters.AddWithValue("@characterId", characterId);
                 return Convert.ToInt32(command.ExecuteScalar(), CultureInfo.InvariantCulture) > 0;
             }
         }
 
-        private void SeedInitialSnapshot(SqliteConnection connection, CharacterItemListSnapshot snapshot)
+        private void SeedInitialSnapshot(SqliteConnection connection, int characterId, int accountId, CharacterItemListSnapshot snapshot)
         {
             using (var transaction = connection.BeginTransaction())
             {
-                _equipStore.UpsertContainerState(connection, transaction, _context.CharacterId, _context.AccountId, InventoryListType.Main, snapshot.MainListParam16);
-                _equipStore.UpsertContainerState(connection, transaction, _context.CharacterId, _context.AccountId, InventoryListType.Avatar, snapshot.AvatarListParam16);
-                _equipStore.UpsertContainerState(connection, transaction, _context.CharacterId, _context.AccountId, InventoryListType.PersonalCargo, snapshot.PersonalCargoListParam16);
-                _equipStore.UpsertContainerState(connection, transaction, _context.CharacterId, _context.AccountId, InventoryListType.Pet, 0);
-                _equipStore.UpsertAccountCargoState(connection, transaction, _context.CharacterId, _context.AccountId, snapshot.AccountCargoState);
+                _equipStore.UpsertContainerState(connection, transaction, characterId, accountId, InventoryListType.Main, snapshot.MainListParam16);
+                _equipStore.UpsertContainerState(connection, transaction, characterId, accountId, InventoryListType.Avatar, snapshot.AvatarListParam16);
+                _equipStore.UpsertContainerState(connection, transaction, characterId, accountId, InventoryListType.PersonalCargo, snapshot.PersonalCargoListParam16);
+                _equipStore.UpsertContainerState(connection, transaction, characterId, accountId, InventoryListType.Pet, 0);
+                _equipStore.UpsertAccountCargoState(connection, transaction, characterId, accountId, snapshot.AccountCargoState);
 
                 foreach (var item in snapshot.MainItems)
-                    _db.InsertCommonItem(connection, transaction, _context.CharacterId, InventoryListType.Main, item);
+                    _db.InsertCommonItem(connection, transaction, characterId, InventoryListType.Main, item);
 
                 foreach (var item in snapshot.AvatarItems)
-                    _db.InsertAvatarItem(connection, transaction, _context.CharacterId, item);
+                    _db.InsertAvatarItem(connection, transaction, characterId, item);
 
                 foreach (var item in snapshot.PersonalCargoItems)
-                    _db.InsertCommonItem(connection, transaction, _context.CharacterId, InventoryListType.PersonalCargo, item);
+                    _db.InsertCommonItem(connection, transaction, characterId, InventoryListType.PersonalCargo, item);
 
                 foreach (var item in snapshot.PetItems)
-                    _db.InsertPetItem(connection, transaction, _context.CharacterId, item);
+                    _db.InsertPetItem(connection, transaction, characterId, item);
 
                 foreach (var item in snapshot.AccountCargoItems)
-                    _db.InsertAccountCargoItem(connection, transaction, _context.AccountId, item);
+                    _db.InsertAccountCargoItem(connection, transaction, accountId, item);
 
                 transaction.Commit();
             }
         }
 
-        public void SeedNewCharacterEquipment((short slot, int itemId)[] equipment)
+        public void SeedNewCharacterEquipment(int characterId, int accountId, (short slot, int itemId)[] equipment)
         {
-            using (var connection = _context.OpenConnection())
-            using (var transaction = connection.BeginTransaction())
+            using (var connection = new SqliteConnection(_connectionString))
             {
-                _equipStore.SeedNewCharacterEquipment(connection, transaction, _context.CharacterId, _context.AccountId, equipment);
-                transaction.Commit();
+                connection.Open();
+                using (var transaction = connection.BeginTransaction())
+                {
+                        _equipStore.SeedNewCharacterEquipment(connection, transaction, characterId, accountId, equipment);
+                    transaction.Commit();
+                }
             }
         }
+
+        private SqliteConnection OpenConnection()
+        {
+            var connection = new SqliteConnection(_connectionString);
+            connection.Open();
+            return connection;
+        }
+
+        // Compatibility overloads — delegate to the explicit-parameter versions using BeginScope state.
+        // These exist only for SelfTests and SqliteAssetService that still call the old signatures.
+        // Remove once those callers are migrated.
+        public CharacterItemListSnapshot LoadCharacterItemListSnapshot() => LoadCharacterItemListSnapshot(_scopeCharacterId, _scopeAccountId);
+        public int DeleteExpiredRentalEquipment() => DeleteExpiredRentalEquipment(_scopeCharacterId, _scopeAccountId);
+        public bool TryDeleteItem(InventoryListType lt, short si, short dc, out InventoryMutationResult r) => TryDeleteItem(_scopeCharacterId, _scopeAccountId, lt, si, dc, out r);
+        public bool TryMoveItem(InventoryMoveRequest rq, out InventoryMoveResult r) => TryMoveItem(_scopeCharacterId, _scopeAccountId, rq, out r);
+        public bool TryEnchantByBead(EnchantByBeadCommand c, out EnchantByBeadResult r) => TryEnchantByBead(_scopeCharacterId, _scopeAccountId, c, out r);
+        public bool TryUpgradeItem(ItemUpgradeCommand c, out ItemUpgradeResult r) => TryUpgradeItem(_scopeCharacterId, _scopeAccountId, c, out r);
+        public bool TryOpenEquipmentSocket(short ts, int ti, short ms, out EquipmentSocketMutationResult r) => TryOpenEquipmentSocket(_scopeCharacterId, ts, ti, ms, out r);
+        public bool TrySetEquipmentEmblems(short ts, int ti, IReadOnlyList<EquipmentEmblemApplyRequest> e, out EquipmentEmblemMutationResult r) => TrySetEquipmentEmblems(_scopeCharacterId, ts, ti, e, out r);
+        public bool TryOpenAvatarSocket(short ts, int ti, short ms, out AvatarSocketMutationResult r) => TryOpenAvatarSocket(_scopeCharacterId, ts, ti, ms, out r);
+        public bool TrySetAvatarEmblems(short ts, int ti, IReadOnlyList<EquipmentEmblemApplyRequest> e, out AvatarEmblemMutationResult r) => TrySetAvatarEmblems(_scopeCharacterId, ts, ti, e, out r);
+        public bool TrySortItems(int characterId, InventoryListType lt, byte c) => TrySortItems(characterId, _scopeAccountId, lt, c);
+        public bool TryToggleSortItemLock(InventoryListType lt, short si, out SortItemLockEntry e) => TryToggleSortItemLock(_scopeCharacterId, lt, si, out e);
+        public bool TryUnlockSortItemLock(InventoryListType lt, short si) => TryUnlockSortItemLock(_scopeCharacterId, lt, si);
+        public IReadOnlyList<SortItemLockEntry> LoadSortItemLocks() => LoadSortItemLocks(_scopeCharacterId);
+        public IReadOnlyList<SortItemLockEntry> LoadSortItemLocks(InventoryListType lt) => LoadSortItemLocks(_scopeCharacterId, lt);
+        public bool TryLockEquipmentItem(InventoryListType lt, short si, out EquipmentItemLockResult r) => TryLockEquipmentItem(_scopeCharacterId, lt, si, out r);
+        public bool TryUnlockEquipmentItem(InventoryListType lt, short si, out EquipmentItemLockResult r) => TryUnlockEquipmentItem(_scopeCharacterId, lt, si, out r);
+        public bool TryCancelEquipmentItemUnlock(InventoryListType lt, short si, out EquipmentItemLockResult r) => TryCancelEquipmentItemUnlock(_scopeCharacterId, lt, si, out r);
+        public IReadOnlyList<EquipmentItemLockEntry> LoadEquipmentItemLocks() => LoadEquipmentItemLocks(_scopeCharacterId);
+        public IReadOnlyList<EquipmentItemLockEntry> LoadEquipmentItemLocks(InventoryListType lt) => LoadEquipmentItemLocks(_scopeCharacterId, lt);
+        public CommonInventoryItem LoadCommonItemForRefresh(InventoryListType lt, short si) => LoadCommonItemForRefresh(_scopeCharacterId, _scopeAccountId, lt, si);
+        public AvatarInventoryItem LoadAvatarItemForRefresh(short si) => LoadAvatarItemForRefresh(_scopeCharacterId, si);
+        public PetInventoryItem LoadPetItemForRefresh(short si) => LoadPetItemForRefresh(_scopeCharacterId, si);
+        public void SeedNewCharacterEquipment((short slot, int itemId)[] eq) => SeedNewCharacterEquipment(_scopeCharacterId, _scopeAccountId, eq);
+        public void EnsureContainerState(int characterId) => EnsureContainerState(characterId, _scopeAccountId);
+        public int CountItem(int itemTemplateId) => CountItem(_scopeCharacterId, itemTemplateId);
+        public void EnsureDatabase(CharacterItemListSnapshot s) => EnsureDatabase(_scopeCharacterId, _scopeAccountId, s);
 
         private static ushort GetListParam(Dictionary<InventoryListType, ushort> states, InventoryListType listType)
         {
