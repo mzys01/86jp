@@ -34,6 +34,7 @@ namespace DfoServer.SelfTests
 
             CheckMercenarySupportRepository();
             CheckMercenaryWireSlotMapping();
+            CheckStrikerSupportSkillLevels();
             CheckMainApplyTagRecordPatch();
 
             Console.WriteLine("sample: " + string.Join(", ", mage.Take(3).Select(x => $"{x.SkillIndex}/{x.ComboIndex}:{x.SkillName ?? "?"}")));
@@ -135,6 +136,28 @@ WHERE character_id=@cid", conn))
                     }
                 }
             }
+        }
+
+        private static void CheckStrikerSupportSkillLevels()
+        {
+            var sampleSkill = new StrikerSkillEntry
+            {
+                SkillIndex = 24,
+                RequiredLevel = 60,
+            };
+
+            Check("striker support learned level uses real skill level",
+                StrikerSupportSkillLevelSource.ResolveBaseLevel(
+                    new Dictionary<ushort, byte> { { 24, 7 } },
+                    sampleSkill) == 7);
+            Check("striker support unlearned level defaults to one",
+                StrikerSupportSkillLevelSource.ResolveBaseLevel(
+                    new Dictionary<ushort, byte>(),
+                    sampleSkill) == 1);
+            Check("striker support explicit zero level defaults to one",
+                StrikerSupportSkillLevelSource.ResolveBaseLevel(
+                    new Dictionary<ushort, byte> { { 24, 0 } },
+                    sampleSkill) == 1);
         }
 
         private static void CheckMainApplyTagRecordPatch()
