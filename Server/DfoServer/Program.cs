@@ -53,6 +53,12 @@ namespace DfoServer
                 return;
             }
 
+            if (Array.IndexOf(args, "--selftest-crystal-contract") >= 0)
+            {
+                Environment.Exit(SelfTests.CrystalContractSelfTest.Run());
+                return;
+            }
+
             if (Array.IndexOf(args, "--selftest-slot-expansion-quest") >= 0)
             {
                 Environment.Exit(SelfTests.SlotExpansionQuestSelfTest.Run());

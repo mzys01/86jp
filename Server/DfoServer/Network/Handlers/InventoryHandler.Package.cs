@@ -344,6 +344,20 @@ namespace DfoServer.Network.Handlers
                 : string.Join(",", selectedItemTemplateIds.Select(id => $"0x{id:X8}"));
             FileLogger.Log($"[{ProtocolName}] USE_BOOSTER raw({body?.Length ?? 0}B): {(body != null ? BitConverter.ToString(body) : "null")} slot={(slotIndex.HasValue ? slotIndex.Value.ToString() : "auto")} selected={selectedText}");
 
+            if (TryBuildCrystalContractBodyFromUpdateRequest(header.type, body, out var crystalContractBody))
+            {
+                var owner = ResolveOwner(session);
+                if (!_sqliteSelectCharacterDataSource.TrySaveCrystalContractSelection(owner.characterId, crystalContractBody))
+                {
+                    FileLogger.Log($"[{ProtocolName}] UPDATE_CONTRACT_OF_CUBE_INFO: failed cid={owner.characterId} body={BitConverter.ToString(crystalContractBody)}");
+                    return false;
+                }
+
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, header.type, CommonPacketBodyBuilder.BuildSuccessAck()));
+                FileLogger.Log($"[{ProtocolName}] UPDATE_CONTRACT_OF_CUBE_INFO: saved cid={owner.characterId} body={BitConverter.ToString(crystalContractBody)}");
+                return true;
+            }
+
             if (slotIndex == 0 && header.type == 0x0218)
             {
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, header.type, CommonPacketBodyBuilder.BuildSuccessAck()));
@@ -364,6 +378,19 @@ namespace DfoServer.Network.Handlers
 
             await SendBoosterUseResult(session, header.type, result);
             FileLogger.Log($"[{ProtocolName}] USE_BOOSTER: source=0x{result.SourceItemTemplateId:X8} slot={result.SourceSlotIndex} remaining={result.SourceRemainingStackCount}, rewards={string.Join(",", result.Rewards.Select(r => $"{r.ListType}:0x{r.ItemTemplateId:X8}x{r.GrantedCount}@{r.SlotIndex}"))}, elapsed={elapsed.ElapsedMilliseconds}ms");
+            return true;
+        }
+
+        internal static bool TryBuildCrystalContractBodyFromUpdateRequest(ushort requestType, byte[] body, out byte[] crystalContractBody)
+        {
+            crystalContractBody = null;
+            if (requestType != 0x0218 || body == null || body.Length != 2)
+                return false;
+
+            if (body[0] != 0x00 || body[1] > 0x05)
+                return false;
+
+            crystalContractBody = new byte[] { body[0], body[1] };
             return true;
         }
 
