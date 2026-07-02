@@ -1,4 +1,5 @@
 using DfoServer.Game.Accounts;
+using DfoServer.Game.Settings;
 using DfoServer.Network.Builders;
 using DfoServer.Network.Parsers;
 using System;
@@ -11,12 +12,16 @@ namespace DfoServer.Network.Handlers
         private const string DefaultLoginMid = "10038";
 
         private readonly IAccountRepository _accountRepository;
+        private readonly AccountSettingsRepository _settingsRepository;
 
         public string ProtocolName => "GameProtocol";
 
         public LoginHandler(IAccountRepository accountRepository)
         {
             _accountRepository = accountRepository ?? throw new ArgumentNullException(nameof(accountRepository));
+            _settingsRepository = new AccountSettingsRepository(
+                Infrastructure.ServerPaths.DatabasePath,
+                Infrastructure.ServerPaths.SchemaFilePath);
         }
 
         public async Task Handle_ClientFirstConnected(EnhancedClientSession session)
@@ -60,10 +65,24 @@ namespace DfoServer.Network.Handlers
             }
 
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0001, LoginPacketBuilder.BuildLoginSuccess()));
+            await SendAccountSettingsOnLoginAsync(session);
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x00B7, ServiceNotificationBuilder.BuildAuctionService(0x00, 0x00)));
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x00B7, ServiceNotificationBuilder.BuildAuctionService(0x01, 0x00)));
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0289, CommonPacketBodyBuilder.BuildZeroBytes(8)));
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x01A1, CommonPacketBodyBuilder.BuildZeroBytes(1)));
+        }
+
+        private async Task SendAccountSettingsOnLoginAsync(EnhancedClientSession session)
+        {
+            var accountId = session.Account?.AccountId ?? 1;
+            var settings = _settingsRepository.Load(accountId);
+
+            // 普通攻击连发等输入选项是账号级状态。必须在登录成功后、GET_USERINFO/选角前下发，
+            // 只依赖选角色初始化包会导致 UI 勾选已恢复但运行态未应用。
+            foreach (var packet in AccountSettingsPacketBuilder.BuildLoginAccountSettings(settings))
+                await session.SendPacketAsync(packet);
+
+            FileLogger.Log($"[{ProtocolName}] LOGIN account settings sent account={accountId}");
         }
     }
 }
