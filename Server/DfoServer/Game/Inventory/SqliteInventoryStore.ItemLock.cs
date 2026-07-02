@@ -378,6 +378,31 @@ LIMIT 1;";
             }
         }
 
+        internal static bool IsEquipmentItemLocked(SqliteConnection connection, SqliteTransaction transaction, int characterId, ItemRecord target)
+        {
+            return target != null && IsEquipmentLockIdActive(connection, transaction, characterId, target.EquipmentLockId);
+        }
+
+        internal static bool IsEquipmentLockIdActive(SqliteConnection connection, SqliteTransaction transaction, int characterId, byte equipmentLockId)
+        {
+            if (equipmentLockId == 0)
+                return false;
+
+            using (var cmd = connection.CreateCommand())
+            {
+                cmd.Transaction = transaction;
+                cmd.CommandText = @"
+SELECT COUNT(1)
+FROM character_item_locks
+WHERE character_id = @cid
+  AND state != 0
+  AND equipment_lock_id = @lockId;";
+                cmd.Parameters.AddWithValue("@cid", characterId);
+                cmd.Parameters.AddWithValue("@lockId", (int)equipmentLockId);
+                return Convert.ToInt32(cmd.ExecuteScalar(), CultureInfo.InvariantCulture) > 0;
+            }
+        }
+
         private void DeleteEquipmentLock(int characterId, SqliteConnection connection, SqliteTransaction transaction, byte equipmentLockId)
         {
             using (var cmd = connection.CreateCommand())

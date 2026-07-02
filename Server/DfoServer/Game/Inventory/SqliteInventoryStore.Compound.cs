@@ -43,6 +43,13 @@ namespace DfoServer.Game.Inventory
                     return false;
                 }
 
+                if (IsEquipmentItemLocked(connection, transaction, characterId, item1)
+                    || IsEquipmentItemLocked(connection, transaction, characterId, item2))
+                {
+                    FileLogger.Log($"  [CompoundAvatar] REJECT: locked avatar slot1={slot1} lock1={item1.EquipmentLockId} slot2={slot2} lock2={item2.EquipmentLockId}");
+                    return false;
+                }
+
                 var consumeItem = _db.LoadItemRecord(connection, transaction, characterId, InventoryListType.Main, consumeSlot);
                 if (consumeItem == null || consumeItem.StackCount < 1)
                 {
@@ -134,6 +141,12 @@ namespace DfoServer.Game.Inventory
                     if (expectedItemIds != null && i < expectedItemIds.Length && expectedItemIds[i] != items[i].ItemTemplateId)
                     {
                         FileLogger.Log($"  [CompoundAvatarSet] REJECT: itemId mismatch at slot={consumeSlots[i]} expected=0x{expectedItemIds[i]:X8} actual=0x{items[i].ItemTemplateId:X8}");
+                        return false;
+                    }
+
+                    if (IsEquipmentItemLocked(connection, transaction, characterId, items[i]))
+                    {
+                        FileLogger.Log($"  [CompoundAvatarSet] REJECT: locked avatar slot={consumeSlots[i]} lockId={items[i].EquipmentLockId}");
                         return false;
                     }
                 }

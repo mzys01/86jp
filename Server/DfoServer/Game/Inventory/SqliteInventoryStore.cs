@@ -293,6 +293,12 @@ ORDER BY slot_index;";
                 if (item == null)
                     return false;
 
+                if (IsEquipmentItemLocked(connection, transaction, characterId, item))
+                {
+                    FileLogger.Log($"  [DeleteItem] REJECT: locked item listType={dbListType} slot={slotIndex} lockId={item.EquipmentLockId}");
+                    return false;
+                }
+
                 var appliedCount = NormalizeRemovalCount(item, deleteCount);
                 var itemRemainingCount = Math.Max(0, item.StackCount - appliedCount);
                 var isStackCountedRecord = IsStackCountedRecord(item);

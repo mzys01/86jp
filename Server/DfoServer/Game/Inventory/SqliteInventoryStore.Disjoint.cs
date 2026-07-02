@@ -14,6 +14,7 @@ namespace DfoServer.Game.Inventory
             if (request.ItemSpace != InventoryListType.Main || request.DisjointItemSlotIndex < -1)
                 return false;
 
+            // TODO: 当前服务端还没有交易状态上下文，这里暂不能校验“角色不能处于交易状态”。
             using (var connection = new SqliteConnection(ConnectionString))
             {
                 connection.Open();
@@ -23,6 +24,14 @@ namespace DfoServer.Game.Inventory
                 if (source == null)
                 {
                     result = CreateDisjointErrorResult(request, DisjointItemResult.ErrorInvalidTarget);
+                    return false;
+                }
+
+                if (IsEquipmentItemLocked(connection, transaction, characterId, source))
+                {
+                    FileLogger.Log($"  [DisjointItem] REJECT: locked item slot={request.TargetSlotIndex} lockId={source.EquipmentLockId}");
+                    result = CreateDisjointErrorResult(request, DisjointItemResult.ErrorInvalidTarget);
+                    result.SourceItemTemplateId = source.ItemTemplateId;
                     return false;
                 }
 
