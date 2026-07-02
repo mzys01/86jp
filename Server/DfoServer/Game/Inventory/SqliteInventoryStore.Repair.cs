@@ -9,7 +9,7 @@ namespace DfoServer.Game.Inventory
         // 修理装备入口。listType 由 inven_type 映射而来:
         //   Main(0)=背包/快捷栏(character_items), Equipment(3)=穿戴(character_equipped_entries)。
         // slotIndex=-1: 全部修理(仅穿戴装备); 否则修理指定槽。
-        public bool TryRepairEquipment(int characterId, int accountId, InventoryListType listType, short slotIndex, bool quickRepair, out RepairEquipmentResult result)
+        public bool TryRepairEquipment(int characterId, int accountId, InventoryListType listType, short slotIndex, bool quickRepair, bool freeRepair, out RepairEquipmentResult result)
         {
             result = null;
             using (var connection = new SqliteConnection(ConnectionString))
@@ -18,7 +18,7 @@ namespace DfoServer.Game.Inventory
                 using (var transaction = connection.BeginTransaction())
                 {
                     var ok = TryRepairEquipmentCore(connection, transaction,
-                        characterId, listType, slotIndex, quickRepair, out result);
+                        characterId, listType, slotIndex, quickRepair, freeRepair, out result);
                     if (ok) transaction.Commit();
                     return ok;
                 }
@@ -28,28 +28,28 @@ namespace DfoServer.Game.Inventory
         private bool TryRepairEquipmentCore(
             SqliteConnection connection, SqliteTransaction transaction,
             int characterId,
-            InventoryListType listType, short slotIndex, bool quickRepair,
+            InventoryListType listType, short slotIndex, bool quickRepair, bool freeRepair,
             out RepairEquipmentResult result)
         {
             result = null;
             var wallet = CurrencyService.LoadWallet(connection, transaction, characterId);
-            FileLogger.Log($"[Repair] cid={characterId} listType={listType} slot={slotIndex} quick={quickRepair} walletGold={wallet.Gold}");
+            FileLogger.Log($"[Repair] cid={characterId} listType={listType} slot={slotIndex} quick={quickRepair} free={freeRepair} walletGold={wallet.Gold}");
 
             if (slotIndex == -1)
-                return TryRepairAll(connection, transaction, characterId, wallet, quickRepair, out result);
+                return TryRepairAll(connection, transaction, characterId, wallet, quickRepair, freeRepair, out result);
 
             // listType=Equipment(3): 穿戴装备 → character_equipped_entries
             // listType=Main(0): 背包装备 → character_items
             if (listType == InventoryListType.Equipment)
-                return TryRepairSingleEquipped(connection, transaction, characterId, slotIndex, wallet, quickRepair, out result);
+                return TryRepairSingleEquipped(connection, transaction, characterId, slotIndex, wallet, quickRepair, freeRepair, out result);
 
-            return TryRepairSingle(connection, transaction, characterId, slotIndex, wallet, quickRepair, out result);
+            return TryRepairSingle(connection, transaction, characterId, slotIndex, wallet, quickRepair, freeRepair, out result);
         }
 
         private bool TryRepairSingleEquipped(
             SqliteConnection connection, SqliteTransaction transaction,
             int characterId, short slotIndex,
-            WalletSnapshot wallet, bool quickRepair, out RepairEquipmentResult result)
+            WalletSnapshot wallet, bool quickRepair, bool freeRepair, out RepairEquipmentResult result)
         {
             result = null;
 
@@ -82,7 +82,7 @@ namespace DfoServer.Game.Inventory
                 return true;
             }
 
-            var cost = EquipmentRepairPriceProvider.CalcRepairCost(equ.RepairPrice, equ.Grade, maxDura, item.Durability, item.EnchantUpgradeCount, quickRepair);
+            var cost = freeRepair ? 0 : EquipmentRepairPriceProvider.CalcRepairCost(equ.RepairPrice, equ.Grade, maxDura, item.Durability, item.EnchantUpgradeCount, quickRepair);
             if (cost > wallet.Gold) return false;
 
             var newGold = wallet.Gold - cost;
@@ -106,7 +106,7 @@ namespace DfoServer.Game.Inventory
         private bool TryRepairSingle(
             SqliteConnection connection, SqliteTransaction transaction,
             int characterId, short slotIndex,
-            WalletSnapshot wallet, bool quickRepair, out RepairEquipmentResult result)
+            WalletSnapshot wallet, bool quickRepair, bool freeRepair, out RepairEquipmentResult result)
         {
             result = null;
 
@@ -138,7 +138,7 @@ namespace DfoServer.Game.Inventory
                 return true;
             }
 
-            var cost = EquipmentRepairPriceProvider.CalcRepairCost(
+            var cost = freeRepair ? 0 : EquipmentRepairPriceProvider.CalcRepairCost(
                 equ.RepairPrice, equ.Grade, maxDura, bagItem.Durability, 0, quickRepair);
             if (cost > wallet.Gold)
                 return false;
@@ -172,7 +172,7 @@ namespace DfoServer.Game.Inventory
         // 适用类型: [weapon][coat][pants][hat][shoulder][waist][shoes][amulet][wrist][ring][support][aurora avatar][magic stone]
         private bool TryRepairAll(
             SqliteConnection connection, SqliteTransaction transaction,
-            int characterId, WalletSnapshot wallet, bool quickRepair, out RepairEquipmentResult result)
+            int characterId, WalletSnapshot wallet, bool quickRepair, bool freeRepair, out RepairEquipmentResult result)
         {
             result = null;
 
@@ -191,7 +191,7 @@ namespace DfoServer.Game.Inventory
                 var item = InvenItem.Parse(entry.Raw);
                 if (item.Durability >= equ.Durability) continue;   // 已满
 
-                var cost = EquipmentRepairPriceProvider.CalcRepairCost(
+                var cost = freeRepair ? 0 : EquipmentRepairPriceProvider.CalcRepairCost(
                     equ.RepairPrice, equ.Grade, equ.Durability, item.Durability, item.EnchantUpgradeCount, quickRepair);
                 FileLogger.Log($"[Repair] All equipped slot={entry.Slot} itemId=0x{entry.ItemId:X8} curDura={item.Durability} maxDura={equ.Durability} cost={cost}");
                 toRepair.Add((entry.Slot, entry.ItemId, (ushort)equ.Durability, true, entry.Raw));
@@ -208,7 +208,7 @@ namespace DfoServer.Game.Inventory
                 if (equ.Durability < 0) continue;
                 if (bagItem.Durability >= equ.Durability) continue;   // 已满
 
-                var cost = EquipmentRepairPriceProvider.CalcRepairCost(
+                var cost = freeRepair ? 0 : EquipmentRepairPriceProvider.CalcRepairCost(
                     equ.RepairPrice, equ.Grade, equ.Durability, bagItem.Durability, 0, quickRepair);
                 FileLogger.Log($"[Repair] All quickslot slot={slot} itemId=0x{bagItem.ItemId:X8} curDura={bagItem.Durability} maxDura={equ.Durability} cost={cost}");
                 toRepair.Add((slot, bagItem.ItemId, (ushort)equ.Durability, false, null));

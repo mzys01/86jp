@@ -115,6 +115,32 @@ namespace DfoServer.Game.Premium
             return data;
         }
 
+        // 账号是否有生效中的"自动修理"契约 — 自行解析连接串(供 handler 直接调用)。
+        public static bool HasActiveAutoRepairForAccount(int accountId)
+        {
+            var connStr = Infrastructure.SqliteDatabaseBootstrap.Initialize(
+                Infrastructure.ServerPaths.DatabasePath, Infrastructure.ServerPaths.SchemaFilePath);
+            return HasActiveAutoRepair(connStr, accountId);
+        }
+
+        // 账号是否有生效中的"自动修理"契约(魔王契约 slot 6, premium_type=586)。
+        // 生效时装备修理免费。
+        public static bool HasActiveAutoRepair(string connStr, int accountId)
+        {
+            using (var conn = new SqliteConnection(connStr))
+            {
+                conn.Open();
+                using (var cmd = conn.CreateCommand())
+                {
+                    cmd.CommandText = "SELECT 1 FROM account_premiums WHERE account_id=@aid AND premium_type=@type AND end_time>@now LIMIT 1;";
+                    cmd.Parameters.AddWithValue("@aid", accountId);
+                    cmd.Parameters.AddWithValue("@type", DevilContractCatalog.AutoRepairPremiumType);
+                    cmd.Parameters.AddWithValue("@now", DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+                    return cmd.ExecuteScalar() != null;
+                }
+            }
+        }
+
         public static long LoadDevilContractMaxExpire(string connStr, int accountId)
         {
             long maxExpire = 0;
