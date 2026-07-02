@@ -198,7 +198,6 @@ WHERE character_id=@cid", conn))
                 patched[selectedOffset] == 24 &&
                 patched[selectedOffset + 1] == 0);
 
-
             var fallback = StrikerSupportTagCharacterPacketBuilder.CloneTagCharacterRawRecordTemplate();
             var fallbackPatched = StrikerSupportTagCharacterPacketBuilder.PatchSelectedSkillIntoTagRecord(fallback, new MercenarySupportState
             {
@@ -217,6 +216,63 @@ WHERE character_id=@cid", conn))
             Check("0x019F owner mirror patch rewrites record character id",
                 patched[0] == 0x79 &&
                 patched[1] == 0x63);
+
+            var missingEquipmentPatched = StrikerSupportTagCharacterPacketBuilder.PatchMissingTemplateEquipmentEntriesForTest(
+                StrikerSupportTagCharacterPacketBuilder.CloneTagCharacterRawRecordTemplate(),
+                11, 13, 15);
+            var equipmentBlockOffset = FindAvatarEquipmentBlockOffsetForSelfTest(missingEquipmentPatched);
+            Check("0x019F missing template equipment removal keeps record length",
+                missingEquipmentPatched.Length == fallback.Length);
+            Check("0x019F missing template equipment removal keeps slot0 default-avatar entries",
+                equipmentBlockOffset > 0 &&
+                missingEquipmentPatched[equipmentBlockOffset] == 0 &&
+                missingEquipmentPatched[equipmentBlockOffset + 8 * 85] == 8);
+            Check("0x019F missing template equipment removal removes optional slots only",
+                equipmentBlockOffset > 0 &&
+                missingEquipmentPatched[equipmentBlockOffset - 1] == 13 &&
+                missingEquipmentPatched[equipmentBlockOffset + 9 * 85] == 11);
+
+            var knightGrow2Defaults = StrikerSupportTagCharacterPacketBuilder.ResolveDefaultAvatarItemIdsForTest(12, 34);
+            Check("0x019F default avatar lookup handles PVF header offset",
+                knightGrow2Defaults != null &&
+                knightGrow2Defaults.Length >= 11 &&
+                knightGrow2Defaults[0] == 413550014 &&
+                knightGrow2Defaults[3] == 413500014 &&
+                knightGrow2Defaults[8] == 413580005 &&
+                knightGrow2Defaults[9] == -1 &&
+                knightGrow2Defaults[10] == -1);
+        }
+
+        private static int FindAvatarEquipmentBlockOffsetForSelfTest(byte[] rawRecord)
+        {
+            if (rawRecord == null)
+                return -1;
+
+            for (var offset = 0; offset + 8 * 85 + 5 <= rawRecord.Length; offset++)
+            {
+                var ok = true;
+                for (var slot = 0; slot <= 8; slot++)
+                {
+                    var slotOffset = offset + slot * 85;
+                    if (slotOffset + 4 >= rawRecord.Length || rawRecord[slotOffset] != slot)
+                    {
+                        ok = false;
+                        break;
+                    }
+
+                    var itemId = BitConverter.ToInt32(rawRecord, slotOffset + 1);
+                    if (itemId <= 0 || itemId > 500000000)
+                    {
+                        ok = false;
+                        break;
+                    }
+                }
+
+                if (ok)
+                    return offset;
+            }
+
+            return -1;
         }
 
         private static void Check(string name, bool ok)
