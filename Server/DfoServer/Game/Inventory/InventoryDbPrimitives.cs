@@ -890,16 +890,34 @@ WHERE character_id = @characterId AND list_type = @listType;";
 
             if (metadata.IsStackable && !isAvatarReward)
             {
-                var existing = FindStackableItemByTemplateIdAndExpireTime(
-                    connection,
-                    transaction,
-                    characterId,
-                    insertListType,
-                    itemTemplateId,
-                    expireTime,
-                    metadata.StackLimit,
-                    slotStart,
-                    slotEnd);
+                var preferQuickSlotStack = insertListType == InventoryListType.Main &&
+                    IsQuickSlotConsumable(metadata);
+                var existing = preferQuickSlotStack
+                    ? FindStackableItemByTemplateIdAndExpireTime(
+                        connection,
+                        transaction,
+                        characterId,
+                        insertListType,
+                        itemTemplateId,
+                        expireTime,
+                        metadata.StackLimit,
+                        SqliteInventoryStore.QuickSlotStart,
+                        SqliteInventoryStore.QuickSlotEnd,
+                        effectiveCount)
+                    : null;
+
+                if (existing == null)
+                    existing = FindStackableItemByTemplateIdAndExpireTime(
+                        connection,
+                        transaction,
+                        characterId,
+                        insertListType,
+                        itemTemplateId,
+                        expireTime,
+                        metadata.StackLimit,
+                        slotStart,
+                        slotEnd,
+                        effectiveCount);
                 if (existing != null && (metadata.StackLimit <= 0 || existing.StackCount + effectiveCount <= metadata.StackLimit))
                 {
                     var newStackCount = existing.StackCount + effectiveCount;
@@ -970,6 +988,14 @@ WHERE character_id = @characterId AND list_type = @listType;";
                 GrantedCount = effectiveCount,
             };
             return true;
+        }
+
+        private static bool IsQuickSlotConsumable(ItemMetadata metadata)
+        {
+            return metadata != null &&
+                metadata.IsStackable &&
+                metadata.StackableType != null &&
+                metadata.StackableType.IndexOf("[waste]", StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
         private static int ResolveBoosterRewardExpireTime(int itemTemplateId, ItemMetadata metadata)

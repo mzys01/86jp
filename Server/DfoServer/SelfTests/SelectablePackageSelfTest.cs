@@ -42,6 +42,8 @@ namespace DfoServer.SelfTests
         private const int SeriaLuckItemTemplateId = 2682272;
         private const int MagicBoxBatchCount = 100;
         private const int SeriaLuckBatchCount = 10;
+        private const short QuickConsumableSlot = 3;
+        private const int QuickConsumableInitialCount = 7;
         private const int SampleSelectedTitleRewardId = 400330051;
         private const int SampleCrossJobAuraRewardId = 112590011;
         private const int InvalidRewardItemTemplateId = 1;
@@ -262,6 +264,47 @@ namespace DfoServer.SelfTests
                         futureRow != null &&
                         timedRewardResult.SlotIndex == futureRow.SlotIndex);
                 }
+            }
+
+            var quickslotRewardId = FindSeriaLuckQuickslotStackRewardId(out var quickslotRewardCount);
+            Check("Seria luck PVF contains a no-expire quickslot consumable reward", quickslotRewardId > 0);
+            if (quickslotRewardId > 0)
+            {
+                InsertStackableItem(tempDb, quickslotRewardId, QuickConsumableSlot, QuickConsumableInitialCount);
+                BoosterRewardResult quickslotRewardResult = null;
+                using (var connection = new SqliteConnection(SqliteDatabaseBootstrap.BuildConnectionString(tempDb)))
+                {
+                    connection.Open();
+                    using (var transaction = connection.BeginTransaction())
+                    {
+                        var db = new InventoryDbPrimitives();
+                        Check("add Seria luck quickslot consumable reward succeeds",
+                            db.TryAddBoosterRewardItem(
+                                connection,
+                                transaction,
+                                CharacterId,
+                                AccountId,
+                                quickslotRewardId,
+                                quickslotRewardCount,
+                                out quickslotRewardResult));
+                        transaction.Commit();
+                    }
+                }
+
+                var snapshot = store.LoadCharacterItemListSnapshot(CharacterId, AccountId);
+                var quickslotItem = snapshot.MainItems.Find(x =>
+                    x.SlotIndex == QuickConsumableSlot &&
+                    x.ItemTemplateId == quickslotRewardId);
+                Check("Seria luck quickslot consumable reward stacks into quick slot",
+                    quickslotItem != null &&
+                    quickslotItem.CountOrInstanceValue == QuickConsumableInitialCount + quickslotRewardCount);
+                Check("Seria luck quickslot reward result points to quick slot",
+                    quickslotRewardResult != null &&
+                    quickslotRewardResult.SlotIndex == QuickConsumableSlot);
+                Check("Seria luck quickslot consumable reward does not create bag duplicate",
+                    snapshot.MainItems.FindAll(x =>
+                        x.ItemTemplateId == quickslotRewardId &&
+                        x.SlotIndex != QuickConsumableSlot).Count == 0);
             }
 
             SelectablePackageOpenResult result = null;
@@ -755,7 +798,56 @@ VALUES
             return 0;
         }
 
+        private static int FindSeriaLuckQuickslotStackRewardId(out int rewardCount)
+        {
+            rewardCount = 1;
+            var seriaLuck = InventoryDbPrimitives.LoadStackableItem(SeriaLuckItemTemplateId);
+            if (seriaLuck == null)
+                return 0;
+
+            var pools = new[]
+            {
+                seriaLuck.RandomBoxRewards,
+                seriaLuck.BoosterRewards,
+                seriaLuck.PackageRewards,
+                seriaLuck.BoosterSelectionRewards,
+            };
+
+            foreach (var pool in pools)
+            {
+                foreach (var reward in pool)
+                {
+                    if (reward == null || reward.ItemId <= 0)
+                        continue;
+
+                    var metadata = ItemMetadataResolver.Resolve(reward.ItemId);
+                    if (!metadata.IsStackable ||
+                        metadata.StackableType == null ||
+                        metadata.StackableType.IndexOf("[waste]", StringComparison.OrdinalIgnoreCase) < 0)
+                        continue;
+
+                    var rewardStackable = InventoryDbPrimitives.LoadStackableItem(reward.ItemId);
+                    if (rewardStackable == null || rewardStackable.UsablePeriod > 0)
+                        continue;
+
+                    var count = Math.Max(1, reward.Count);
+                    if (metadata.StackLimit > 0 && QuickConsumableInitialCount + count > metadata.StackLimit)
+                        continue;
+
+                    rewardCount = count;
+                    return reward.ItemId;
+                }
+            }
+
+            return 0;
+        }
+
         private static void InsertLegacyNoExpireTimedReward(string databasePath, int itemTemplateId, short slotIndex)
+        {
+            InsertStackableItem(databasePath, itemTemplateId, slotIndex, 1);
+        }
+
+        private static void InsertStackableItem(string databasePath, int itemTemplateId, short slotIndex, int stackCount)
         {
             using (var connection = new SqliteConnection(SqliteDatabaseBootstrap.BuildConnectionString(databasePath)))
             {
@@ -769,10 +861,11 @@ INSERT OR REPLACE INTO character_items (
     pet_serial_or_handle, extra_json)
 VALUES (
     'character', @characterId, @characterId, 0, @slotIndex, @itemTemplateId, 'stackable',
-    1, 1, 0, 0, 0, 0, 0, 0, '{}');";
+    @stackCount, @stackCount, 0, 0, 0, 0, 0, 0, '{}');";
                     command.Parameters.AddWithValue("@characterId", CharacterId);
                     command.Parameters.AddWithValue("@slotIndex", slotIndex);
                     command.Parameters.AddWithValue("@itemTemplateId", itemTemplateId);
+                    command.Parameters.AddWithValue("@stackCount", stackCount);
                     command.ExecuteNonQuery();
                 }
             }
