@@ -1,3 +1,4 @@
+using DfoServer.Game.Appearance;
 using DfoServer.Game.Characters;
 using DfoServer.Game.SelectCharacter;
 using DfoServer.GameWorld;
@@ -81,6 +82,10 @@ namespace DfoServer.Network.Handlers
                         }
                         if (tail != null)
                             record.Subtype0Tail = tail;
+
+                        // 城镇模型使用会话内的 AppearanceEntries；不要使用可能过期/空的 characters.appearance_blob，
+                        // 每次选角都从当前穿戴栏重建，避免角色选人/副本正确但城镇武器外观错误。
+                        record.Appearance = AppearanceService.LoadAppearanceFromEquipEntries(record.CharacterId);
                     }
                     catch (Exception ex)
                     {
