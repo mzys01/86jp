@@ -102,6 +102,11 @@ namespace DfoServer.Network.Handlers.Dungeon
             session.Player.CurMoveMapU15 = 0;
             session.Player.CurMoveMapU19 = 0;
             session.Player.CurDungeonTotalExp = 0;
+            session.Player.CurDungeonBossTotalExp = 0;
+            session.Player.CurDungeonChampionTotalExp = 0;
+            session.Player.CurDungeonSuperChampionTotalExp = 0;
+            session.Player.CurDungeonNamedMonsterTotalExp = 0;
+            session.Player.CurDungeonMonsterGrowthContractBonusExp = 0;
             session.Player.CurDungeonTotalGold = 0;
             session.Player.CurSceneSlotCounter = 0;
             session.Player.CurDungeonDrops.Clear();
@@ -212,7 +217,7 @@ namespace DfoServer.Network.Handlers.Dungeon
             if (body == null || body.Length <= 13)
                 return false;
 
-            // 86 客户端 0x03B6：body[12] 固定为 7，body[13] 为 0 表示勾选，1 表示取消勾选。
+            // 86 client CMD 0x03B6: body[12] is always 7; body[13] is 0 for checked, 1 for unchecked.
             return body[13] == 0;
         }
 

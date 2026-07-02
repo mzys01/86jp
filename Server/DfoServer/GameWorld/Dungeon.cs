@@ -274,6 +274,37 @@ namespace DfoServer.GameWorld
             new Lazy<Dictionary<int, bool>>(() => LoadHellMonsterFlags("monster/monster.lst", "monster"));
         private static readonly Lazy<Dictionary<int, bool>> _aiCharacterHellFlags =
             new Lazy<Dictionary<int, bool>>(() => LoadHellMonsterFlags("AICharacter/AICharacter.lst", "AICharacter"));
+        private static readonly object _namedMonsterCacheLock = new object();
+        private static readonly Dictionary<int, HashSet<int>> _namedMonsterCache = new Dictionary<int, HashSet<int>>();
+
+        public static bool IsNamedMonster(int dungeonId, int monsterCode)
+        {
+            if (dungeonId <= 0 || monsterCode <= 0)
+                return false;
+
+            HashSet<int> namedSet;
+            lock (_namedMonsterCacheLock)
+            {
+                if (!_namedMonsterCache.TryGetValue(dungeonId, out namedSet))
+                {
+                    namedSet = new HashSet<int>();
+                    try
+                    {
+                        var loaded = LoadDungeonFileWithPath(dungeonId);
+                        if (loaded.File.NamedMonster != null)
+                        {
+                            foreach (var code in loaded.File.NamedMonster)
+                                if (code > 0) namedSet.Add(code);
+                        }
+                    }
+                    catch { }
+
+                    _namedMonsterCache[dungeonId] = namedSet;
+                }
+            }
+
+            return namedSet.Contains(monsterCode);
+        }
 
         public static int[] RandomizeBossPosition(int[] bossMap)
         {

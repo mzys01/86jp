@@ -26,6 +26,13 @@ namespace DfoServer.Game.Dungeon
             return _monsterBaseExp[monsterLevel - 1];
         }
 
+        public static int GetExpRewardBase(int level)
+        {
+            EnsureLoaded();
+            if (level < 1 || level > _monsterBaseExp.Length) return 0;
+            return _monsterBaseExp[level - 1];
+        }
+
         public static int GetMonsterGold(int monsterLevel, out int variancePercent)
         {
             EnsureLoaded();

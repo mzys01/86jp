@@ -38,6 +38,11 @@ namespace DfoServer.Game.Session
         public int CurBossCode { get; set; }
         public int[] CurBossMapPos { get; set; }
         public uint CurDungeonTotalExp { get; set; }
+        public uint CurDungeonBossTotalExp { get; set; }
+        public uint CurDungeonChampionTotalExp { get; set; }
+        public uint CurDungeonSuperChampionTotalExp { get; set; }
+        public uint CurDungeonNamedMonsterTotalExp { get; set; }
+        public uint CurDungeonMonsterGrowthContractBonusExp { get; set; }
         public int CurDungeonTotalGold { get; set; }
         public ushort CurSceneSlotCounter { get; set; }
         public Dictionary<ushort, Dungeon.DropInfo> CurDungeonDrops { get; set; }

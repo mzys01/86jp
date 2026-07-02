@@ -1,4 +1,5 @@
 using DfoServer.Game.Dungeon;
+using DfoServer.Game.Premium;
 using DfoServer.Game.Skills;
 using DfoServer.Infrastructure;
 using DfoServer.Network.Builders;
@@ -16,11 +17,16 @@ namespace DfoServer.Network.Handlers.Dungeon
 
         // PVF [visible on dungeon clear]=1: Delilah(1000) Gabriel(1002/1003/1004) Yunmi(1203, invalid in 86JP)
         private static readonly int[] SecretShopNpcIds = { 1000, 1002, 1003, 1004 };
+        private const int SetPlayResultRankPointOffset = 10;
+        private const int GrowthContractPremiumType = 84; // PVF premiumlist_new.etc: growth contract
+        private const float GrowthContractBonusRate = 0.20f;
+        private const float BlackDiamondBonusRate = 0.10f;
+        private static readonly int[] BlackDiamondPremiumTypes = { 1, 17 };
 
         internal DungeonSettlementHandler(DungeonSharedServices svc) => _svc = svc;
 
-        // ── Settlement result ──────────────────────────────────────────────────
-        // df_game_r CParty::CheckPlayResult → CParty::SetPlayResult
+        // Settlement result.
+        // df_game_r CParty::CheckPlayResult -> CParty::SetPlayResult
         // Sends 3 NOTI packets (34, 37, 35) to show the settlement screen.
         // Card layout is deferred: a 2 s server timer sends it automatically
         // so the player sees the settlement summary first, then the cards appear.
@@ -32,6 +38,17 @@ namespace DfoServer.Network.Handlers.Dungeon
         {
             if (!session.Player.CurBossKilled) return;
             session.Player.CurBossKilled = false;
+
+            var clearRank = CalculateClearRank(body);
+            var clearExp = CalculateClearRewardExp(session, clearRank.RankBonusIndex);
+            var prevLevel = session.Player.Level;
+            if (clearExp.Total > 0)
+            {
+                session.Player.Exp = AddSaturating(session.Player.Exp, clearExp.Total);
+                while (session.Player.Level < 86 && session.Player.Exp >= (uint)ExpTableProvider.GetLevelThreshold(session.Player.Level))
+                    session.Player.Level++;
+            }
+            var leveledUp = session.Player.Level > prevLevel;
             _svc.PersistLevelAndExp(session.Player.CharacterId, session.Player.Level, session.Player.Exp);
 
             // Pre-generate card rewards (df_game_r: clear_reward generated before NOTI 35)
@@ -52,15 +69,22 @@ namespace DfoServer.Network.Handlers.Dungeon
                 paidGold, paidItem, default, default    // paid: [4]gold [5]item [6-7]empty(solo)
             };
 
+            var monsterTotalExp = session.Player.CurDungeonTotalExp;
+            var bossTotalExp = Math.Min(session.Player.CurDungeonBossTotalExp, monsterTotalExp);
+            var championTotalExp = Math.Min(session.Player.CurDungeonChampionTotalExp, monsterTotalExp);
+            var superChampionTotalExp = Math.Min(session.Player.CurDungeonSuperChampionTotalExp, monsterTotalExp);
+            var namedMonsterTotalExp = Math.Min(session.Player.CurDungeonNamedMonsterTotalExp, monsterTotalExp);
+            var monsterGrowthContractBonus = session.Player.CurDungeonMonsterGrowthContractBonusExp;
+
             // Settlement 3 packets: NOTI 34, NOTI 37, NOTI 35
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0022,
                 DungeonNotificationBuilder.BuildPlayResult(
-                    session.Player.UserId, session.Player.CurBossCode,
-                    session.Player.CurDungeonTotalExp, allKill: true)));
+                    session.Player.UserId, monsterTotalExp, allKill: true,
+                    rankGrade: clearRank.RankGrade, clientRankPoint: clearRank.ClientRankPoint)));
             ushort remainSp = 0, remainTp = 0;
             try
             {
-                var synced = _svc.LoadSyncedSkillState(session.Player.CharacterId, session.Player.Level, persist: false);
+                var synced = _svc.LoadSyncedSkillState(session.Player.CharacterId, session.Player.Level, persist: leveledUp);
                 if (synced.Points != null)
                 {
                     var pageIndex = session.Player.Subtype0Tail?.SkillTreeIndex == 1 ? 1 : 0;
@@ -73,11 +97,26 @@ namespace DfoServer.Network.Handlers.Dungeon
                 DungeonNotificationBuilder.BuildExp(session.Player.Level, session.Player.Exp, remainSp, remainTp)));
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0023,
                 DungeonNotificationBuilder.BuildClearDungeonReward(
-                    session.Player.CurDungeonTotalExp, session.Player.CurDungeonTotalGold,
-                    goldCardCost: 10180, freeCardGold: freeGold.GoldAmount,
+                    clearExp.Base, scoreBonusExp: ToInt32Saturated(clearExp.ScoreBonus), clearBonusExp: 0,
+                    blackDiamondExp: ToInt32Saturated(clearExp.BlackDiamondBonus),
+                    growthContractExp: ToInt32Saturated(clearExp.GrowthContractBonus),
+                    monsterGrowthContractExp: ToInt32Saturated(monsterGrowthContractBonus),
+                    monsterExp: monsterTotalExp, bossExp: ToInt32Saturated(bossTotalExp),
+                    championExp: ToInt32Saturated(championTotalExp),
+                    superChampionExp: 0,
+                    freeCardGold: freeGold.GoldAmount,
                     freeCardItemId: freeItem.ItemId, freeCardItemCount: freeItem.StackCount)));
 
-            // Card layout is deferred: 2 s timer → layout, then 3 s → auto-flip free card.
+            FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] CLEAR_EXP: dungeon={session.Player.CurDungeon} diff={session.Player.CurDungeonDifficulty} clientRank={clearRank.ClientRankPoint} rankPoint={clearRank.RankPoint} rankGrade={clearRank.RankGrade} rankBonusIndex={clearRank.RankBonusIndex} base={clearExp.Base} scoreBonus={clearExp.ScoreBonus} growthContract={clearExp.GrowthContractBonus} blackDiamond={clearExp.BlackDiamondBonus} bonus={clearExp.Bonus} total={clearExp.Total} monsterTotalExp={monsterTotalExp} monsterGrowthContract={monsterGrowthContractBonus} bossTotalExp={bossTotalExp} championTotalExp={championTotalExp} superChampionTotalExp={superChampionTotalExp} namedMonsterTotalExp={namedMonsterTotalExp} charExp={session.Player.Exp}");
+
+            if (leveledUp)
+            {
+                FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] LEVEL UP from dungeon clear: cid={session.Player.CharacterId} {prevLevel}->{session.Player.Level} exp={session.Player.Exp}");
+                await _svc.SendQuestListRefresh(session);
+                await _svc.SendUserInfoBroadcast(session);
+            }
+
+            // Card layout is deferred: 2 s timer -> layout, then 4 s -> auto-flip free card.
             session.Player.CurDungeonClearState = 4;
             session.Player.CurCardFlipCount = 0;
             session.Player.CurFreeCardSlots = new byte[] { 0xFF, 0xFF, 0xFF, 0xFF };
@@ -88,12 +127,126 @@ namespace DfoServer.Network.Handlers.Dungeon
             await _svc.UpdateDungeonPermission(session, session.Player.CurDungeon, session.Player.CurDungeonDifficulty);
         }
 
-        // ── Auto-flow timer ────────────────────────────────────────────────────
+        // Auto-flow timer.
         // Phase 1: after layoutDelayMs, send the card layout (0x0045 + 0x0046).
         // Phase 2: after autoFlipDelayMs more, flip the free card.
         // If the player presses a key before phase 1 fires, HandleSelectCard (state==4)
         // cancels this timer and shows the layout immediately, then starts a fresh
         // phase-2 timer so the free card still auto-flips after 3 s.
+
+        private static ClearRankParts CalculateClearRank(byte[] body)
+        {
+            var clientRankPoint = ExtractClientRankPoint(body);
+            var timeBonusPoint = 0;
+            var rankPoint = Math.Min(255, clientRankPoint + timeBonusPoint);
+            var rankGrade = MonsterRewardTable.GetClearRankGrade(rankPoint);
+            var rankBonusIndex = MonsterRewardTable.GetClearRankBonusIndex(rankPoint);
+
+            return new ClearRankParts(
+                (byte)clientRankPoint,
+                timeBonusPoint,
+                rankPoint,
+                (byte)rankGrade,
+                rankBonusIndex);
+        }
+
+        private static int ExtractClientRankPoint(byte[] body)
+        {
+            if (body == null || body.Length == 0)
+                return 0;
+
+            if (body.Length > SetPlayResultRankPointOffset)
+                return body[SetPlayResultRankPointOffset];
+
+            return body[0];
+        }
+
+        private static ClearExpParts CalculateClearRewardExp(EnhancedClientSession session, int rankBonusIndex)
+        {
+            int dungeonLevel;
+            try { dungeonLevel = DungeonData.GetDungeonBasicLv(session.Player.CurDungeon); }
+            catch { dungeonLevel = session.Player.Level; }
+
+            var baseExp = ExpTableProvider.GetExpRewardBase(dungeonLevel);
+            if (baseExp <= 0)
+                return default;
+
+            float expWeight;
+            try { expWeight = DungeonData.GetExperienceWeight(session.Player.CurDungeon); }
+            catch { expWeight = 1.0f; }
+
+            var scaledBase = baseExp * expWeight * MonsterRewardTable.GetDifficultyExpRate(session.Player.CurDungeonDifficulty);
+            var clearBaseExp = ToUInt32Floor(scaledBase);
+            if (clearBaseExp == 0)
+                return default;
+
+            var connStr = SqliteDatabaseBootstrap.Initialize(ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
+            var accountId = session.Account?.AccountId ?? 1;
+            var scoreBonusRate = MonsterRewardTable.GetClearRankExpBonusRate(rankBonusIndex);
+            var scoreBonus = ToUInt32Floor(clearBaseExp * scoreBonusRate);
+            var growthContractBonus = PremiumService.HasActivePremium(connStr, accountId, GrowthContractPremiumType)
+                ? ToUInt32Floor(clearBaseExp * GrowthContractBonusRate)
+                : 0;
+            var blackDiamondBonus = PremiumService.HasActivePremium(connStr, accountId, BlackDiamondPremiumTypes)
+                ? ToUInt32Floor(clearBaseExp * BlackDiamondBonusRate)
+                : 0;
+
+            return new ClearExpParts(clearBaseExp, scoreBonus, growthContractBonus, blackDiamondBonus);
+        }
+
+        private static uint ToUInt32Floor(float value)
+        {
+            if (value <= 0)
+                return 0;
+            return value >= uint.MaxValue ? uint.MaxValue : (uint)value;
+        }
+
+        private static uint AddSaturating(uint current, uint add)
+        {
+            var value = (ulong)current + add;
+            return value > uint.MaxValue ? uint.MaxValue : (uint)value;
+        }
+
+        private static int ToInt32Saturated(uint value)
+        {
+            return value > int.MaxValue ? int.MaxValue : (int)value;
+        }
+
+        private readonly struct ClearRankParts
+        {
+            internal ClearRankParts(byte clientRankPoint, int timeBonusPoint, int rankPoint, byte rankGrade, int rankBonusIndex)
+            {
+                ClientRankPoint = clientRankPoint;
+                TimeBonusPoint = timeBonusPoint;
+                RankPoint = rankPoint;
+                RankGrade = rankGrade;
+                RankBonusIndex = rankBonusIndex;
+            }
+
+            internal byte ClientRankPoint { get; }
+            internal int TimeBonusPoint { get; }
+            internal int RankPoint { get; }
+            internal byte RankGrade { get; }
+            internal int RankBonusIndex { get; }
+        }
+
+        private readonly struct ClearExpParts
+        {
+            internal ClearExpParts(uint baseExp, uint scoreBonus, uint growthContractBonus, uint blackDiamondBonus)
+            {
+                Base = baseExp;
+                ScoreBonus = scoreBonus;
+                GrowthContractBonus = growthContractBonus;
+                BlackDiamondBonus = blackDiamondBonus;
+            }
+
+            internal uint Base { get; }
+            internal uint ScoreBonus { get; }
+            internal uint GrowthContractBonus { get; }
+            internal uint BlackDiamondBonus { get; }
+            internal uint Bonus => AddSaturating(AddSaturating(ScoreBonus, GrowthContractBonus), BlackDiamondBonus);
+            internal uint Total => AddSaturating(Base, Bonus);
+        }
 
         private void ScheduleAutoFlow(EnhancedClientSession session, int layoutDelayMs, int autoFlipDelayMs)
         {
@@ -106,7 +259,7 @@ namespace DfoServer.Network.Handlers.Dungeon
             {
                 try
                 {
-                    // Phase 1 — wait, then show card layout
+                    // Phase 1: wait, then show card layout.
                     await Task.Delay(layoutDelayMs, token);
                     if (token.IsCancellationRequested) return;
                     if (session.Player.CurDungeonClearState != 4) return;
@@ -116,7 +269,7 @@ namespace DfoServer.Network.Handlers.Dungeon
                     await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0046, BuildCardLayoutAck()));
                     session.Player.CurDungeonClearState = 5;
 
-                    // Phase 2 — wait, then auto-flip free card
+                    // Phase 2: wait, then auto-flip free card.
                     await Task.Delay(autoFlipDelayMs, token);
                     if (token.IsCancellationRequested) return;
 
@@ -169,7 +322,7 @@ namespace DfoServer.Network.Handlers.Dungeon
 
         // Auto-flips only the free card (never the paid card).
         // Sends ACK 0x0047 with flipped card info, then delivers free card
-        // rewards via NOTI 14. CurCardRewards is NOT cleared — the paid card
+        // rewards via NOTI 14. CurCardRewards is NOT cleared; the paid card
         // stays available for the player to flip/EPLP.
         private async Task AutoFlipFreeCard(EnhancedClientSession session)
         {
@@ -184,21 +337,21 @@ namespace DfoServer.Network.Handlers.Dungeon
             bool hasPaid = HasPaidCardReward(session.Player.CurCardRewards);
             if (!hasPaid)
             {
-                // No paid card — deliver free rewards and clear cards so EPLP works.
+                // No paid card: deliver free rewards and clear cards so EPLP works.
                 await DeliverCardRewards(session);
                 session.Player.CurCardRewards = null;
             }
             else
             {
-                // Paid card pending — only deliver free card rewards; keep cards alive.
+                // Paid card pending: only deliver free card rewards; keep cards alive.
                 await DeliverFreeCardRewardsOnly(session);
             }
         }
 
-        // ── SELECT_CARD (CMD 0x0047) — card flip only ──────────────────────────
+        // SELECT_CARD (CMD 0x0047): card flip only.
         // body[0]: 0=free card, 1=paid card
         // body[1]: cardIndex (0-3)
-        // EPLP buttons come via CMD 0x0048 → HandleEplpCommand, never here.
+        // EPLP buttons come via CMD 0x0048 -> HandleEplpCommand, never here.
         internal async Task HandleSelectCard(EnhancedClientSession session, GamePacketHeader header, byte[] body)
         {
             if (body.Length < 2) return;
@@ -219,7 +372,7 @@ namespace DfoServer.Network.Handlers.Dungeon
 
             CancelAutoFlip(session);
 
-            // Only card flips here — EPLP goes through CMD 0x0048.
+            // Only card flips here; EPLP goes through CMD 0x0048.
             if (cardType > 1 || cardIndex > 3) return;
 
             session.Player.CurCardFlipCount++;
@@ -244,9 +397,9 @@ namespace DfoServer.Network.Handlers.Dungeon
             }
         }
 
-        // ── EPLP (CMD 0x0048) — settlement option buttons ──────────────────────
+        // EPLP (CMD 0x0048): settlement option buttons.
         // body[0]: 1=confirm, 2=status update
-        // body[1]: 0=再次挑战, 1=选择其他地下城, 2=返回城镇
+        // body[1]: 0=retry, 1=select another dungeon, 2=return to town
         // If a paid card is still pending, auto-flip it before returning to town
         // (matches DNF behaviour: clicking any EPLP button auto-pays the card).
         internal async Task HandleEplpCommand(EnhancedClientSession session, GamePacketHeader header, byte[] body)
@@ -380,7 +533,7 @@ namespace DfoServer.Network.Handlers.Dungeon
                 : DungeonSharedServices.BuildItemEntry(slot, (uint)card.ItemId, (uint)card.StackCount));
         }
 
-        // CMD 0x0045 — client requests card layout after settlement screen.
+        // CMD 0x0045: client requests card layout after settlement screen.
         // Send the deferred card layout and start a fresh 3 s auto-flip timer.
         internal async Task HandleCardStartRequest(EnhancedClientSession session, GamePacketHeader header, byte[] body)
         {
@@ -399,7 +552,7 @@ namespace DfoServer.Network.Handlers.Dungeon
         // df_game_r CParty::ClearDungeon (0x85A9330)
         // Preamble: if (!cleared_flag) return; Epilogue: cleared_flag = 1;
         // Normal dungeon sends NOTI 31 (ENABLE_CLEAR_DUNGEON), sets CurBossKilled
-        // + NOTI 279 (0x0117) SECRET_SHOP_NPC — settlement mystery merchant NPC ID
+        // + NOTI 279 (0x0117) SECRET_SHOP_NPC: settlement mystery merchant NPC ID
         internal async Task TryClearDungeon(EnhancedClientSession session, string reason, int bossCode = 0)
         {
             if (session.Player.CurDungeonCleared) return;
@@ -481,7 +634,7 @@ namespace DfoServer.Network.Handlers.Dungeon
             FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] ReturnToVillage: 4 town packets sent");
         }
 
-        // CMD ACK 71 body — 86JP 8-seat format
+        // CMD ACK 71 body: 86JP 8-seat format
         // seat[0-3]: active seats (solo uses seat0 only)
         // seat[4-7]: 0xFF*4 (hidden/disabled)
         private byte[] BuildCardInfoAck(EnhancedClientSession session)
@@ -543,7 +696,7 @@ namespace DfoServer.Network.Handlers.Dungeon
             return w.ToArray();
         }
 
-        // CMD ACK 70 — card layout: u8 resultCode + u16[8] slotStatus
+        // CMD ACK 70: card layout, u8 resultCode + u16[8] slotStatus
         // Solo: slot[0]=0x0001(flippable) slot[1-7]=0xFFFF(disabled)
         private static byte[] BuildCardLayoutAck()
         {

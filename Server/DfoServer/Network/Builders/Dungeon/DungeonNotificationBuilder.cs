@@ -246,58 +246,57 @@ namespace DfoServer.Network.Builders
             return new byte[] { 0x00 };
         }
 
-        public static byte[] BuildPlayResult(ushort userId, int bossCode, uint totalExp, bool allKill)
+        public static byte[] BuildPlayResult(ushort userId, uint noticeExp, bool allKill,
+            byte rankGrade = 99, byte clientRankPoint = 99)
         {
             var writer = new GamePacketWriter();
-            writer.WriteByte(0x63);
-            writer.WriteUInt32(totalExp);
+            writer.WriteByte(rankGrade);
+            writer.WriteUInt32(noticeExp);
             writer.WriteByte(0x00);              // flagB
-            writer.WriteByte(0x63);
+            writer.WriteByte(clientRankPoint);
             writer.WriteByte(allKill ? (byte)1 : (byte)0);  // allKillFlag
-            if (bossCode > 0)
-            {
-                writer.WriteByte(0x01);                      // killCount = 1
-                writer.WriteUInt16((ushort)bossCode);
-                writer.WriteUInt32(totalExp);                 // actorScore
-                writer.WriteByte(0x01);                      // isMyKill = 1
-            }
-            else
-            {
-                writer.WriteByte(0x00);                      // killCount = 0
-            }
+            writer.WriteByte(0x01);              // result count
+            writer.WriteUInt16(userId);
+            writer.WriteUInt32(noticeExp);
+            writer.WriteByte(0x01);              // result flag
             return writer.ToArray();
         }
 
-        public static byte[] BuildExp(byte level, uint totalExp, ushort remainSp = 0, ushort remainTp = 0)
+        public static byte[] BuildExp(byte level, uint totalExp, ushort remainSp = 0, ushort remainTp = 0,
+            uint partyBonusExp = 0, uint memberBonusExp = 0, uint fatigueBuffBonusExp = 0,
+            uint seriaBufBonusExp = 0, uint growthContractBonusExp = 0,
+            uint weekendBonusExp = 0, uint premiumBonusExp = 0)
         {
             var writer = new GamePacketWriter();
             writer.WriteByte(level);
             writer.WriteUInt32(totalExp);
-            writer.WriteUInt32(0);
-            writer.WriteUInt32(0);
+            writer.WriteUInt32(partyBonusExp);
+            writer.WriteUInt32(memberBonusExp);
             writer.WriteUInt16(remainSp);
             writer.WriteUInt16(remainSp);
             writer.WriteUInt16(remainTp);
             writer.WriteUInt16(0);
             writer.WriteUInt32(0);
+            writer.WriteUInt32(fatigueBuffBonusExp);
+            writer.WriteByte(0x00);
+            writer.WriteUInt32(seriaBufBonusExp);
+            writer.WriteUInt32(premiumBonusExp);
+            writer.WriteZeroBytes(3);
+            writer.WriteUInt32(0);
             writer.WriteUInt32(0);
             writer.WriteByte(0x00);
+            writer.WriteByte(0x00);
+            writer.WriteUInt32(growthContractBonusExp);
+            writer.WriteUInt32(weekendBonusExp);
             writer.WriteUInt32(0);
             writer.WriteUInt32(0);
-            writer.WriteUInt32(0);               // #14 v131
             writer.WriteUInt32(0);
             writer.WriteUInt32(0);
-            writer.WriteByte(0x00);              // #17 pairCount=0
-            writer.WriteUInt32(0);
-            writer.WriteUInt32(0);               // #19 v134
-            writer.WriteUInt32(0);
-            writer.WriteUInt32(0);               // #20 v133
-            writer.WriteUInt32(0);               // #21 v125
-            writer.WriteUInt32(0);
-            writer.WriteUInt32(0);               // #23 v126
             writer.WriteUInt32(0);
             writer.WriteUInt32(0);
-            writer.WriteZeroBytes(8);
+            writer.WriteUInt32(0);
+            writer.WriteUInt32(0);
+            writer.WriteUInt32(0);
             return writer.ToArray();
         }
 
@@ -305,19 +304,31 @@ namespace DfoServer.Network.Builders
         //
         //
         // finalize (sub_1F595D0): grandTotal = expA + endValue + Σbonus
-        public static byte[] BuildClearDungeonReward(uint totalExp, int totalGold,
-            int goldCardCost = 0, int freeCardGold = 0, int freeCardItemId = 0, int freeCardItemCount = 0)
+        // df_game_r CParty::clear_reward / getClearRewardBonusExp:
+        // 总经验显示由通关基础经验、通关奖励字段、额外经验槽位、尾部杀怪经验共同组成。
+        // 槽位：1-13 通关额外奖励，14-25 杀怪额外奖励，101-108 后置额外奖励。
+        public static byte[] BuildClearDungeonReward(uint clearBaseExp, int scoreBonusExp = 0, uint clearBonusExp = 0,
+            int blackDiamondExp = 0, int growthContractExp = 0,
+            int monsterGrowthContractExp = 0,
+            uint monsterExp = 0, int bossExp = 0, int championExp = 0, int superChampionExp = 0,
+            int freeCardGold = 0, int freeCardItemId = 0, int freeCardItemCount = 0)
         {
             var w = new GamePacketWriter();
 
             // === BASE BLOCK (117B = 4u32 + 1u8 + 25u32) ===
-            w.WriteUInt32(totalExp);
-            w.WriteInt32(totalGold);
-            w.WriteUInt32(0);
+            w.WriteUInt32(clearBaseExp);
+            w.WriteInt32(scoreBonusExp);
+            w.WriteUInt32(clearBonusExp);
             w.WriteUInt32(0);               // #4  baseExp → bonus[0]
             w.WriteByte(0);
             for (int i = 0; i < 25; i++)
-                w.WriteInt32(0);
+            {
+                var value = 0;
+                if (i == 2) value = blackDiamondExp;       // 槽位3: 黑钻
+                else if (i == 9) value = growthContractExp; // 槽位10: 成长之契约
+                else if (i == 18) value = monsterGrowthContractExp; // 槽位19: 杀怪成长之契约
+                w.WriteInt32(value);
+            }
 
             // === ADD/MUL BONUS (2B) ===
             w.WriteByte(0);
@@ -328,10 +339,10 @@ namespace DfoServer.Network.Builders
                 w.WriteInt32(0);
 
             // === SCORE (16B = 4u32) ===
-            w.WriteInt32(0);                // score[0] (dead)
-            w.WriteInt32(goldCardCost);
-            w.WriteInt32(0);                // score[2] (dead)
-            w.WriteInt32(goldCardCost);
+            w.WriteInt32(0);
+            w.WriteInt32(championExp);
+            w.WriteInt32(superChampionExp);
+            w.WriteInt32(bossExp);
 
             // === QUEST (4B) ===
             w.WriteUInt32(0);
@@ -365,10 +376,10 @@ namespace DfoServer.Network.Builders
             w.WriteInt32(0);                // cardItemId
             w.WriteByte(0);                 // endFlagA
             w.WriteByte(0);                 // endFlagB
-            w.WriteUInt32(0);
+            w.WriteUInt32(monsterExp);
             w.WriteInt32(0);
 
-            return w.ToArray();             // 222B
+            return w.ToArray();             // 222B, free card has item 时会更长
         }
     }
 }
