@@ -22,7 +22,7 @@ namespace DfoServer.Game.Characters
                 foreach (var e in entries)
                 {
                     bw.Write(e.Slot);
-                    bw.Write(e.ItemId);
+                    bw.Write(e.DisplayItemId);
                     bw.Write(e.ExpansionLen);
                     var exp = e.ExpansionData ?? new byte[4];
                     bw.Write(exp.Length == 4 ? exp : new byte[4]);

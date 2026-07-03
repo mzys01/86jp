@@ -177,6 +177,18 @@ FROM (
     WHERE l.character_id = @cid
       AND e.equipment_lock_id > 0
       AND (@lt < 0 OR @lt = 3)
+    UNION ALL
+    SELECT l.inventory_list_type AS inventory_list_type,
+           l.slot AS slot,
+           l.state AS state,
+           l.remaining_seconds AS remaining_seconds,
+           l.equipment_lock_id AS equipment_lock_id
+    FROM character_item_locks l
+    WHERE l.character_id = @cid
+      AND l.equipment_lock_id > 0
+      AND l.inventory_list_type >= 19
+      AND l.inventory_list_type <= 23
+      AND (@lt < 0 OR l.inventory_list_type = @lt)
 )
 ORDER BY equipment_lock_id;";
                 cmd.Parameters.AddWithValue("@cid", characterId);

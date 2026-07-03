@@ -118,6 +118,13 @@ namespace DfoServer.Network.Handlers
 
             foreach (var packet in SelectCharacterPacketBuilder.BuildPacketStream(_selectCharacterDataSource, ownerCharId, ownerAcctId))
                 await session.SendPacketAsync(packet);
+
+            var cloneTitle = AppearanceService.LoadCloneTitleItemId(ownerCharId);
+            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
+                0x01,
+                0x0239,
+                AppearanceService.BuildCloneTitleAckBody(cloneTitle, suppressMessage: 1)));
+            FileLogger.Log($"[{ProtocolName}] SELECT_CHARACTER clone title restore: char={ownerCharId} cloneTitle=0x{cloneTitle:X8}");
         }
 
         public async Task Handle_ENUM_CMDPACKET_GET_USERINFO(EnhancedClientSession session, GamePacketHeader header, byte[] body)

@@ -9,10 +9,10 @@ namespace DfoServer.Game.Characters
     
     public sealed class CharacterAppearanceEntry
     {
-        public CharacterAppearanceEntry(byte slot, int itemId, int expansionLen, byte[] expansionData, byte state, int clearAvatar, uint enchantValue, byte flag20)
+        public CharacterAppearanceEntry(byte slot, int displayItemId, int expansionLen, byte[] expansionData, byte state, int clearAvatar, uint enchantValue, byte flag20)
         {
             Slot = slot;
-            ItemId = itemId;
+            DisplayItemId = displayItemId;
             ExpansionLen = expansionLen;
             ExpansionData = expansionData ?? new byte[4];
             State = state;
@@ -24,7 +24,8 @@ namespace DfoServer.Game.Characters
         public byte Slot { get; set; }
 
         
-        public int ItemId { get; set; }
+        // NOTI2 外观列表中的 itemId 是显示用模板ID；克隆装扮/替换称号动画会覆盖真实穿戴物品ID。
+        public int DisplayItemId { get; set; }
 
         
         public int ExpansionLen { get; set; } = 4;

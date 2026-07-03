@@ -26,6 +26,9 @@ namespace DfoServer.Game.Inventory
                 MiddleData1A = ReadHexValue(extraJson, "middleData1A", 17),
                 TailData2F = ReadHexValue(extraJson, "tailData2F", 37),
                 JewelSocket = ReadHexValue(extraJson, "jewelSocket", 30),
+                EquipmentLockId = reader.FieldCount > 13
+                    ? Convert.ToByte(reader.GetInt32(12), CultureInfo.InvariantCulture)
+                    : (byte)0,
             };
         }
 
