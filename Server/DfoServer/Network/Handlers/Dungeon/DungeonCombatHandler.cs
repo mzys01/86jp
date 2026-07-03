@@ -84,7 +84,8 @@ namespace DfoServer.Network.Handlers.Dungeon
                 }
 
                 var weight = DungeonData.GetExperienceWeight(session.Player.CurDungeon);
-                var isBossMonster = monster.Type == 3;
+                var rewardMonsterType = GetRewardMonsterType(monster.Type);
+                var isBossMonster = IsBossActorType(monster.Type);
                 var isChampionMonster = monster.Type == 1;
                 var isNamedMonster = !isBossMonster && DungeonData.IsNamedMonster(session.Player.CurDungeon, monster.Code);
                 var isSuperChampionMonster = monster.Type == 2 && !isNamedMonster;
@@ -93,7 +94,7 @@ namespace DfoServer.Network.Handlers.Dungeon
                     monsterLevel,
                     weight,
                     session.Player.CurDungeonDifficulty,
-                    monster.Type,
+                    rewardMonsterType,
                     isNamedMonster);
                 var growthContractBonusExp = CalculateGrowthContractMonsterBonus(session, gainedExp);
                 var totalGainedExp = AddSaturating(gainedExp, growthContractBonusExp);
@@ -132,7 +133,7 @@ namespace DfoServer.Network.Handlers.Dungeon
 
                     var generator = new DropGenerator(session.Player.CurRoomLcg);
                     var dropRateLevel = session.Player.CurDungeonHellMode ? dungeonBasisLevel : (int)monsterLevel;
-                    var result = generator.GenerateMonsterDrops(dropRateLevel, monster.Type, monster.Code, session.Player.CurDungeonDifficulty, dungeonBasisLevel, ref slotCounter, dropPool);
+                    var result = generator.GenerateMonsterDrops(dropRateLevel, rewardMonsterType, monster.Code, session.Player.CurDungeonDifficulty, dungeonBasisLevel, ref slotCounter, dropPool);
                     goldGained = result.goldAmount;
                     generatedDrops = result.drops;
                 }
@@ -207,9 +208,18 @@ namespace DfoServer.Network.Handlers.Dungeon
 
             // check_grid_clear (IDA 0x830A0E8): spawnType==100 && spawnFlag==0 blocks passage
             int blockingCount = 0;
-            foreach (var m in monsters)
-                if (m.IsBlocking) blockingCount++;
-            bool roomCleared = session.Player.CurRoomKilledSeqIds.Count >= blockingCount && blockingCount > 0;
+            int killedBlockingCount = 0;
+            for (var i = 0; i < monsters.Count; i++)
+            {
+                if (!monsters[i].IsBlocking)
+                    continue;
+
+                blockingCount++;
+                var seqId = (ushort)(session.Player.CurRoomStartSequence + i);
+                if (session.Player.CurRoomKilledSeqIds.Contains(seqId))
+                    killedBlockingCount++;
+            }
+            bool roomCleared = killedBlockingCount >= blockingCount && blockingCount > 0;
 
             // Old server kill_monster execution order (IDA 0x85A3AED):
             //   1. prepare_dungeon_clear (path B)
@@ -242,7 +252,7 @@ namespace DfoServer.Network.Handlers.Dungeon
                 if (ccType1 || endPoint)
                     await _settlement.TryClearDungeon(session, $"prepare_dungeon_clear ccType1={ccType1} endPoint={endPoint}", killedMonsterCode);
 
-                FileLogger.Log($"[DungeonHandler] ROOM CLEARED: dungeon={session.Player.CurDungeon} room=({session.Player.CurRoomKey.X},{session.Player.CurRoomKey.Y}) map={currentMapId} killed={session.Player.CurRoomKilledSeqIds.Count}/{blockingCount}");
+                FileLogger.Log($"[DungeonHandler] ROOM CLEARED: dungeon={session.Player.CurDungeon} room=({session.Player.CurRoomKey.X},{session.Player.CurRoomKey.Y}) map={currentMapId} killedBlocking={killedBlockingCount}/{blockingCount} killedTotal={session.Player.CurRoomKilledSeqIds.Count}");
                 if (currentMapId > 0 && session.GameSession?.QuestManager != null)
                 {
                     if (ShouldDeferQuestConnectedStartMapSync(session, currentMapId)
@@ -269,13 +279,23 @@ namespace DfoServer.Network.Handlers.Dungeon
             }
 
             // Path A: ClearCondition(type, monsterCode) (df_game_r kill_monster tail)
-            // monsterType -> conditionType: boss(3)->4, apc(5-8)->3, normal->2
+            // monsterType -> conditionType: boss(3) / AI boss(8)->4, APC(5-7)->3, normal->2
             if (session.Player.CurClearCondition != null)
             {
-                int ccType = killedMonsterType == 3 ? 4 : (killedMonsterType >= 5 ? 3 : 2);
+                int ccType = IsBossActorType(killedMonsterType) ? 4 : (killedMonsterType >= 5 ? 3 : 2);
                 if (session.Player.CurClearCondition.Check(ccType, killedMonsterCode))
                     await _settlement.TryClearDungeon(session, $"ClearCondition type={ccType} target={killedMonsterCode}", killedMonsterCode);
             }
+        }
+
+        private static bool IsBossActorType(byte monsterType)
+        {
+            return monsterType == 3 || monsterType == 8;
+        }
+
+        private static int GetRewardMonsterType(byte monsterType)
+        {
+            return monsterType == 8 ? 3 : monsterType;
         }
 
         private static bool TryGetCurrentRoomState(EnhancedClientSession session, out RoomState roomState)
