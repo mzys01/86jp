@@ -141,7 +141,10 @@ namespace DfoServer.Network.Handlers
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x02CB, SortItemLockBuilder.BuildUnlock(notiListType, slotIndex)));
 
             if (listType != InventoryListType.Equipment)
+            {
                 await SendItemListRefresh(session, notiListType);
+                await SendEquipmentItemLockListRefresh(session, notiListType);
+            }
 
             await SendSortItemLockRefresh(session, notiListType);
         }
