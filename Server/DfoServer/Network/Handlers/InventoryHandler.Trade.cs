@@ -126,26 +126,146 @@ namespace DfoServer.Network.Handlers
         public async Task Handle_SET_CLONE_TITLE(EnhancedClientSession session, GamePacketHeader header, byte[] body)
         {
             var cloneTitle = (body != null && body.Length >= 4) ? BitConverter.ToInt32(body, 0) : 0;
-            var ack = new byte[5];
-            ack[0] = 0x01;
-            BitConverter.GetBytes(cloneTitle).CopyTo(ack, 1);
-            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0239, ack));
-            var (cid, aid) = ResolveOwner(session);
-            var noti2 = Game.Appearance.AppearanceService.UpdateAndBroadcast(
-                session.Player, _sqliteSelectCharacterDataSource, _characterRepository, cid, aid);
-            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0002, noti2));
+            var (cid, _) = ResolveOwner(session);
+            Game.Appearance.AppearanceService.SaveCloneTitleItemId(cid, cloneTitle);
+            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
+                0x01,
+                0x0239,
+                Game.Appearance.AppearanceService.BuildCloneTitleAckBody(cloneTitle)));
+            FileLogger.Log($"[{ProtocolName}] SET_CLONE_TITLE: cloneTitle=0x{cloneTitle:X8} persisted, ackExtra=00-00");
         }
 
         public async Task Handle_TITLE_BOOK(EnhancedClientSession session, GamePacketHeader header, byte[] body)
         {
-            if (body == null || body.Length < 20) return;
+            if (body == null || body.Length < 20)
+                return;
+
+            var itemSpaceRaw = BitConverter.ToInt32(body, 0);
+            var slot = (short)BitConverter.ToInt32(body, 4);
+            var itemId = BitConverter.ToInt32(body, 8);
+            var category = BitConverter.ToInt32(body, 12);
+            var index = BitConverter.ToInt32(body, 16);
+
+            if (!TryParseInventoryListType(itemSpaceRaw, out var itemSpace))
+            {
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
+                    0x01, header.type, BuildTitleBookFailure(itemSpaceRaw, category, 0x0A)));
+                return;
+            }
+
+            var (cid, aid) = ResolveOwner(session);
+            bool ok;
+            Game.TitleBook.TitleBookMutationResult result;
+            if (header.type == 0x019C)
+                ok = _sqliteSelectCharacterDataSource.TryPutTitleBook(cid, aid, itemSpace, slot, itemId, category, index, out result);
+            else
+                ok = _sqliteSelectCharacterDataSource.TryGetTitleBook(cid, aid, itemSpace, slot, itemId, category, index, out result);
+
+            if (!ok)
+            {
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
+                    0x01, header.type, BuildTitleBookFailure(itemSpaceRaw, category, result != null ? result.ErrorCode : (byte)0x0A)));
+                return;
+            }
+
+            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
+                0x01, header.type, BuildTitleBookSuccess(itemSpaceRaw, slot, category, index)));
+
+            if (result.InventoryChanged && itemSpace != InventoryListType.Equipment)
+                await SendUpdateItemList(session, itemSpace, slot);
+
+            if (result.EquipmentChanged)
+                await SendNoti2AppearanceUpdate(session);
+
+            if (result.ItemLockChanged)
+                await SendAllEquipmentItemLockListRefresh(session);
+        }
+
+        public async Task Handle_ACHIEVEMENT_TRIGGER(EnhancedClientSession session, GamePacketHeader header, byte[] body)
+        {
+            if (body == null || body.Length < 10)
+                return;
+
+            var questId = BitConverter.ToInt32(body, 0);
+            var delta1 = BitConverter.ToUInt16(body, 4);
+            var delta2 = BitConverter.ToUInt16(body, 6);
+            var delta3 = BitConverter.ToUInt16(body, 8);
+            var (cid, _) = ResolveOwner(session);
+
+            if (!_sqliteSelectCharacterDataSource.TryTriggerAchievement(cid, questId, delta1, delta2, delta3, out var result))
+            {
+                var fail = new GamePacketWriter();
+                fail.WriteByte(0);
+                fail.WriteByte(result != null ? result.ErrorCode : (byte)0x0A);
+                fail.WriteInt32(questId);
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, header.type, fail.ToArray()));
+                return;
+            }
+
             var w = new GamePacketWriter();
-            w.WriteByte(0x01);
-            w.WriteInt32(BitConverter.ToInt32(body, 0));
-            w.WriteInt32(BitConverter.ToInt32(body, 4));
-            w.WriteInt32(BitConverter.ToInt32(body, 12));
-            w.WriteInt32(BitConverter.ToInt32(body, 16));
+            w.WriteByte(1);
+            w.WriteInt32(result.QuestId);
+            w.WriteUInt16(result.Remain1);
+            w.WriteUInt16(result.Remain2);
+            w.WriteUInt16(result.Remain3);
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, header.type, w.ToArray()));
+
+            if (result.Completed && result.TitleItemId > 0)
+            {
+                var complete = new GamePacketWriter();
+                complete.WriteInt32(result.QuestId);
+                complete.WriteInt32(result.Category);
+                complete.WriteInt32(result.BookIndex);
+                complete.WriteInt32(result.TitleItemId);
+                complete.WriteUInt16((ushort)Math.Max(0, result.BookIndex));
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0168, complete.ToArray()));
+                await SendTitleBookCategoryRefresh(session, cid, result.Category);
+            }
+        }
+
+        private static byte[] BuildTitleBookSuccess(int itemSpace, short slot, int category, int index)
+        {
+            var w = new GamePacketWriter();
+            w.WriteByte(1);
+            w.WriteInt32(itemSpace);
+            w.WriteInt32(slot);
+            w.WriteInt32(category);
+            w.WriteInt32(index);
+            return w.ToArray();
+        }
+
+        private static byte[] BuildTitleBookFailure(int itemSpace, int category, byte errorCode)
+        {
+            var w = new GamePacketWriter();
+            w.WriteByte(0);
+            w.WriteByte(errorCode);
+            w.WriteInt32(itemSpace);
+            w.WriteInt32(category);
+            return w.ToArray();
+        }
+
+        private async Task SendTitleBookCategoryRefresh(EnhancedClientSession session, int characterId, int category)
+        {
+            var categories = _sqliteSelectCharacterDataSource.LoadTitleBookSnapshots(characterId);
+            if (category < 0 || category >= categories.Count)
+                return;
+
+            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
+                0x00,
+                0x0166,
+                TitleBookListBodyBuilder.BuildCategoryBody(categories[category])));
+        }
+
+        private static bool TryParseInventoryListType(int value, out InventoryListType listType)
+        {
+            if (value >= byte.MinValue && value <= byte.MaxValue && Enum.IsDefined(typeof(InventoryListType), (byte)value))
+            {
+                listType = (InventoryListType)(byte)value;
+                return true;
+            }
+
+            listType = InventoryListType.Main;
+            return false;
         }
 
         // ── 账号金库 ──────────────────────────────────────────────────────────

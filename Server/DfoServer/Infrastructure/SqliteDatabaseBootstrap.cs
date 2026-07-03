@@ -36,6 +36,10 @@ namespace DfoServer.Infrastructure
                     ("expire_time", "INTEGER NOT NULL DEFAULT 0"),
                     ("equipment_lock_id", "INTEGER NOT NULL DEFAULT 0"),
                 });
+                DfoServer.Sqlite.SqliteSchemaMigrator.EnsureColumns(conn, "characters", new[]
+                {
+                    ("clone_title_item_id", "INTEGER NOT NULL DEFAULT 0"),
+                });
                 DfoServer.Sqlite.SqliteSchemaMigrator.EnsureColumns(conn, "character_items", new[]
                 {
                     ("equipment_lock_id", "INTEGER NOT NULL DEFAULT 0"),

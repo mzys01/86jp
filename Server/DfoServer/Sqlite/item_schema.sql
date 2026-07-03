@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS characters (
     area_state INTEGER NOT NULL DEFAULT 3,
     name_bytes BLOB,
     appearance_blob BLOB,
+    clone_title_item_id INTEGER NOT NULL DEFAULT 0,
     delete_flag INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -353,6 +354,27 @@ CREATE TABLE IF NOT EXISTS character_achievement_complete (
     p3 INTEGER NOT NULL DEFAULT 0,
     p4 INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (character_id, sort_order),
+    FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS character_titlebook (
+    character_id INTEGER NOT NULL PRIMARY KEY,
+    format_version INTEGER NOT NULL DEFAULT 1,
+    general BLOB,
+    specific BLOB,
+    pvp BLOB,
+    despair BLOB,
+    event BLOB,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS character_achievement (
+    character_id INTEGER NOT NULL PRIMARY KEY,
+    format_version INTEGER NOT NULL DEFAULT 1,
+    achievement BLOB,
+    last_update_time INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
 );
 

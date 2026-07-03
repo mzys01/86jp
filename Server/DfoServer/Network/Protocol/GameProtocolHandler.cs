@@ -7,7 +7,6 @@ using DfoServer.Infrastructure;
 using DfoServer.GameWorld;
 using DfoServer.Network.Builders;
 using DfoServer.Network.Handlers;
-using DfoServer.Network.Legacy;
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
@@ -331,8 +330,7 @@ namespace DfoServer.Network
             d[0x0003] = (s, h, b) =>
                 s.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0003, CommonPacketBodyBuilder.BuildSuccessAck()));
             d[0x0040] = _ceraShopHandler.HandleCeraShopPurchase;                   //64
-            d[0x01A1] = (s, h, b) =>                                               //417
-                s.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x01A1, LegacyPacketBodyBuilder.BuildVerifyPvpLagResponse(b)));
+            d[0x01A1] = _inventoryHandler.Handle_ACHIEVEMENT_TRIGGER;              //417
             d[0x01DE] = (s, h, b) =>                                               //478
                 s.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x01DE, CommonPacketBodyBuilder.BuildSuccessAck()));
             d[0x02A8] = (s, h, b) =>

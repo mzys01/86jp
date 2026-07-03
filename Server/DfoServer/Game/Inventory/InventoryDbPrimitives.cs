@@ -262,7 +262,7 @@ WHERE character_id = @characterId AND list_type = @listType AND slot_index = @sl
                 command.Transaction = transaction;
                 command.CommandText = @"
 SELECT list_type, slot_index, item_template_id, item_kind, stack_count, instance_value,
-       durability, seal_flag, option_value, expire_time, marker_16, pet_serial_or_handle, extra_json
+       durability, seal_flag, option_value, expire_time, marker_16, pet_serial_or_handle, equipment_lock_id, extra_json
 FROM character_items
 WHERE character_id = @characterId AND list_type = @listType AND slot_index = @slotIndex;";
                 command.Parameters.AddWithValue("@characterId", characterId);
@@ -274,7 +274,7 @@ WHERE character_id = @characterId AND list_type = @listType AND slot_index = @sl
                     if (!reader.Read())
                         return null;
 
-                    return InventoryItemCodec.ReadCommonItem(reader, reader.IsDBNull(12) ? "{}" : reader.GetString(12));
+                    return InventoryItemCodec.ReadCommonItem(reader, reader.IsDBNull(13) ? "{}" : reader.GetString(13));
                 }
             }
         }
@@ -286,7 +286,7 @@ WHERE character_id = @characterId AND list_type = @listType AND slot_index = @sl
                 command.Transaction = transaction;
                 command.CommandText = @"
 SELECT list_type, slot_index, item_template_id, item_kind, stack_count, instance_value,
-       durability, seal_flag, option_value, expire_time, marker_16, pet_serial_or_handle, extra_json
+       durability, seal_flag, option_value, expire_time, marker_16, pet_serial_or_handle, equipment_lock_id, extra_json
 FROM character_items
 WHERE character_id = @characterId AND list_type = @listType AND slot_index = @slotIndex
 ORDER BY CASE item_kind
@@ -307,7 +307,7 @@ LIMIT 1;";
                         return null;
 
                     var itemKind = reader.IsDBNull(3) ? "" : reader.GetString(3);
-                    var extraJson = reader.IsDBNull(12) ? "{}" : reader.GetString(12);
+                    var extraJson = reader.IsDBNull(13) ? "{}" : reader.GetString(13);
                     return itemKind == "avatar"
                         ? InventoryItemCodec.ReadAvatarItem(reader, extraJson)
                         : InventoryItemCodec.ReadEquipmentAsAvatarItem(reader, extraJson);
@@ -322,7 +322,7 @@ LIMIT 1;";
                 command.Transaction = transaction;
                 command.CommandText = @"
 SELECT list_type, slot_index, item_template_id, item_kind, stack_count, instance_value,
-       durability, seal_flag, option_value, expire_time, marker_16, pet_serial_or_handle, extra_json
+       durability, seal_flag, option_value, expire_time, marker_16, pet_serial_or_handle, equipment_lock_id, extra_json
 FROM character_items
 WHERE character_id = @characterId AND list_type = @listType AND slot_index = @slotIndex;";
                 command.Parameters.AddWithValue("@characterId", characterId);
@@ -334,7 +334,7 @@ WHERE character_id = @characterId AND list_type = @listType AND slot_index = @sl
                     if (!reader.Read())
                         return null;
 
-                    return InventoryItemCodec.ReadPetItem(reader, reader.IsDBNull(12) ? "{}" : reader.GetString(12));
+                    return InventoryItemCodec.ReadPetItem(reader, reader.IsDBNull(13) ? "{}" : reader.GetString(13));
                 }
             }
         }
@@ -346,7 +346,7 @@ WHERE character_id = @characterId AND list_type = @listType AND slot_index = @sl
                 command.Transaction = transaction;
                 command.CommandText = @"
 SELECT 12 AS list_type, slot_index, item_template_id, item_kind, stack_count, instance_value,
-       durability, seal_flag, option_value, expire_time, marker_16, 0 AS pet_serial_or_handle, extra_json
+       durability, seal_flag, option_value, expire_time, marker_16, 0 AS pet_serial_or_handle, 0 AS equipment_lock_id, extra_json
 FROM account_cargo_items
 WHERE account_id = @accountId AND slot_index = @slotIndex;";
                 command.Parameters.AddWithValue("@accountId", accountId);
@@ -357,7 +357,7 @@ WHERE account_id = @accountId AND slot_index = @slotIndex;";
                     if (!reader.Read())
                         return null;
 
-                    return InventoryItemCodec.ReadCommonItem(reader, reader.IsDBNull(12) ? "{}" : reader.GetString(12));
+                    return InventoryItemCodec.ReadCommonItem(reader, reader.IsDBNull(13) ? "{}" : reader.GetString(13));
                 }
             }
         }
@@ -426,7 +426,7 @@ VALUES (
 
         internal void InsertCommonItem(SqliteConnection connection, SqliteTransaction transaction, int characterId, InventoryListType listType, CommonInventoryItem item)
         {
-            InsertCharacterItem(connection, transaction, characterId, listType, item.SlotIndex, item.ItemTemplateId, InventoryItemCodec.InferCommonItemKind(item), item.CountOrInstanceValue, item.CountOrInstanceValue, item.Durability, item.SealFlag, 0, item.ExpireTime, item.Marker16, 0, InventoryItemCodec.SerializeCommon(item));
+            InsertCharacterItem(connection, transaction, characterId, listType, item.SlotIndex, item.ItemTemplateId, InventoryItemCodec.InferCommonItemKind(item), item.CountOrInstanceValue, item.CountOrInstanceValue, item.Durability, item.SealFlag, 0, item.ExpireTime, item.Marker16, 0, InventoryItemCodec.SerializeCommon(item), item.EquipmentLockId);
         }
 
         internal void InsertAvatarItem(SqliteConnection connection, SqliteTransaction transaction, int characterId, AvatarInventoryItem item)

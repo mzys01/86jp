@@ -155,7 +155,7 @@ VALUES (
                 {
                     command.CommandText = @"
 SELECT list_type, slot_index, item_template_id, item_kind, stack_count, instance_value,
-       durability, seal_flag, option_value, expire_time, marker_16, pet_serial_or_handle, extra_json
+       durability, seal_flag, option_value, expire_time, marker_16, pet_serial_or_handle, equipment_lock_id, extra_json
 FROM character_items
 WHERE character_id = @characterId
 ORDER BY list_type, slot_index;";
@@ -166,7 +166,7 @@ ORDER BY list_type, slot_index;";
                         while (reader.Read())
                         {
                             var listType = (InventoryListType)reader.GetInt32(0);
-                            var extraJson = reader.IsDBNull(12) ? "{}" : reader.GetString(12);
+                            var extraJson = reader.IsDBNull(13) ? "{}" : reader.GetString(13);
 
                             switch (listType)
                             {
@@ -194,7 +194,7 @@ ORDER BY list_type, slot_index;";
                 {
                     acCmd.CommandText = @"
 SELECT 12 AS list_type, slot_index, item_template_id, item_kind, stack_count, instance_value,
-       durability, seal_flag, option_value, expire_time, marker_16, 0 AS pet_serial_or_handle, extra_json
+       durability, seal_flag, option_value, expire_time, marker_16, 0 AS pet_serial_or_handle, 0 AS equipment_lock_id, extra_json
 FROM account_cargo_items
 WHERE account_id = @accountId
 ORDER BY slot_index;";
@@ -202,7 +202,7 @@ ORDER BY slot_index;";
                     using (var reader = acCmd.ExecuteReader())
                     {
                         while (reader.Read())
-                            snapshot.AccountCargoItems.Add(InventoryItemCodec.ReadCommonItem(reader, reader.IsDBNull(12) ? "{}" : reader.GetString(12)));
+                            snapshot.AccountCargoItems.Add(InventoryItemCodec.ReadCommonItem(reader, reader.IsDBNull(13) ? "{}" : reader.GetString(13)));
                     }
                 }
 

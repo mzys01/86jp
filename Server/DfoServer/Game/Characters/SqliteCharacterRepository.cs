@@ -44,6 +44,7 @@ namespace DfoServer.Game.Characters
                     ("user_state", "INTEGER NOT NULL DEFAULT 0"),
                     ("bonus_sp", "INTEGER NOT NULL DEFAULT 0"),
                     ("bonus_tp", "INTEGER NOT NULL DEFAULT 0"),
+                    ("clone_title_item_id", "INTEGER NOT NULL DEFAULT 0"),
                 });
             }
         }

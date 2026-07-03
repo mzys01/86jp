@@ -1,0 +1,555 @@
+using DfoServer.Game.CharacterData;
+using DfoServer.Game.Inventory;
+using Microsoft.Data.Sqlite;
+using System;
+using System.Linq;
+
+namespace DfoServer.Game.TitleBook
+{
+    public sealed class TitleBookMutationService
+    {
+        private readonly string _connectionString;
+        private readonly InventoryDbPrimitives _db = new InventoryDbPrimitives();
+        private readonly InventoryEquipmentStore _equipmentStore;
+        private readonly CharacterTitleBookRepository _titleBookRepository;
+        private readonly CharacterAchievementProgressRepository _achievementRepository;
+        private readonly TitleBookStaticDataProvider _staticData;
+        private const int TitleBookLockListTypeBase = 19;
+
+        public TitleBookMutationService(string connectionString)
+        {
+            _connectionString = connectionString ?? throw new ArgumentNullException(nameof(connectionString));
+            var audit = new InventoryAuditLogger();
+            _equipmentStore = new InventoryEquipmentStore(_db, audit);
+            _titleBookRepository = new CharacterTitleBookRepository(connectionString);
+            _achievementRepository = new CharacterAchievementProgressRepository(connectionString);
+            _staticData = TitleBookStaticDataProvider.LoadDefault();
+        }
+
+        public TitleBookMutationResult PutTitle(
+            int characterId,
+            int accountId,
+            InventoryListType sourceList,
+            short sourceSlot,
+            int itemId,
+            int category,
+            int bookIndex)
+        {
+            var result = CreateMutationResult(sourceList, sourceSlot, itemId, category, bookIndex);
+            if (!IsCategoryIndexValid(category, bookIndex))
+                return result;
+
+            using (var connection = OpenConnection())
+            using (var transaction = connection.BeginTransaction())
+            {
+                if (sourceList == InventoryListType.Equipment)
+                    return PutEquippedTitle(connection, transaction, characterId, sourceSlot, itemId, category, bookIndex, result);
+
+                var sourceCommon = LoadCommon(connection, transaction, characterId, accountId, sourceList, sourceSlot);
+                var sourceRecord = LoadRecord(connection, transaction, characterId, accountId, sourceList, sourceSlot);
+                if (sourceCommon == null || sourceRecord == null || sourceCommon.ItemTemplateId != itemId)
+                    return result;
+
+                var definition = _staticData.GetSlot(category, bookIndex);
+                if (!definition.AllowsItem(itemId))
+                    return result;
+
+                var existing = _titleBookRepository.LoadItem(connection, transaction, characterId, category, bookIndex);
+                DeleteRecord(connection, transaction, sourceList, sourceRecord);
+
+                if (existing != null && !existing.IsEmpty)
+                {
+                    var back = TitleBookInventoryItemCodec.ToCommon(existing, sourceSlot);
+                    InsertCommon(connection, transaction, characterId, accountId, sourceList, back, forceEquipmentKind: false);
+                    result.ItemLockChanged |= MoveEquipmentLock(connection, transaction, characterId, existing.EquipmentLockId, sourceList, sourceSlot);
+                }
+
+                var titleItem = TitleBookInventoryItemCodec.FromCommon(category, (ushort)bookIndex, sourceCommon);
+                titleItem.Slot = (ushort)bookIndex;
+                titleItem.BookIndex = (ushort)bookIndex;
+                _titleBookRepository.SaveItem(connection, transaction, characterId, titleItem);
+                result.ItemLockChanged |= MoveEquipmentLockToTitleBook(connection, transaction, characterId, titleItem);
+
+                transaction.Commit();
+                result.Success = true;
+                result.InventoryChanged = true;
+                return result;
+            }
+        }
+
+        private TitleBookMutationResult PutEquippedTitle(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            int characterId,
+            short sourceSlot,
+            int itemId,
+            int category,
+            int bookIndex,
+            TitleBookMutationResult result)
+        {
+            var equipped = LoadEquippedTitle(connection, transaction, characterId, sourceSlot);
+            if (equipped == null || equipped.ItemId != itemId)
+                return result;
+
+            var definition = _staticData.GetSlot(category, bookIndex);
+            if (!definition.AllowsItem(itemId))
+                return result;
+
+            var existing = _titleBookRepository.LoadItem(connection, transaction, characterId, category, bookIndex);
+            if (existing != null && !existing.IsEmpty && existing.ItemId != itemId)
+                return result;
+
+            var titleItem = FromEquippedTitle(category, (ushort)bookIndex, equipped);
+            if (existing != null && existing.EquipmentLockId != 0 && existing.EquipmentLockId != titleItem.EquipmentLockId)
+                result.ItemLockChanged |= DeleteEquipmentLock(connection, transaction, characterId, existing.EquipmentLockId);
+            _titleBookRepository.SaveItem(connection, transaction, characterId, titleItem);
+            DeleteEquippedTitle(connection, transaction, characterId, sourceSlot);
+            result.ItemLockChanged |= MoveEquipmentLockToTitleBook(connection, transaction, characterId, titleItem);
+
+            transaction.Commit();
+            result.Success = true;
+            result.EquipmentChanged = true;
+            return result;
+        }
+
+        public TitleBookMutationResult GetTitle(
+            int characterId,
+            int accountId,
+            InventoryListType targetList,
+            short targetSlot,
+            int itemId,
+            int category,
+            int bookIndex)
+        {
+            var result = CreateMutationResult(targetList, targetSlot, itemId, category, bookIndex);
+            if (!IsCategoryIndexValid(category, bookIndex))
+                return result;
+
+            using (var connection = OpenConnection())
+            using (var transaction = connection.BeginTransaction())
+            {
+                var title = _titleBookRepository.LoadItem(connection, transaction, characterId, category, bookIndex);
+                if (title == null || title.IsEmpty || title.ItemId != itemId)
+                    return result;
+
+                if (targetList == InventoryListType.Equipment)
+                    return EquipTitleFromBook(connection, transaction, characterId, accountId, title, targetSlot, result);
+
+                var definition = _staticData.GetSlot(category, bookIndex);
+                if (definition.QuestId != -1)
+                    return result;
+
+                if (LoadRecord(connection, transaction, characterId, accountId, targetList, targetSlot) != null)
+                    return result;
+
+                InsertCommon(connection, transaction, characterId, accountId, targetList,
+                    TitleBookInventoryItemCodec.ToCommon(title, targetSlot),
+                    forceEquipmentKind: false);
+                _titleBookRepository.ClearItem(connection, transaction, characterId, category, bookIndex);
+                result.ItemLockChanged |= MoveEquipmentLock(connection, transaction, characterId, title.EquipmentLockId, targetList, targetSlot);
+
+                transaction.Commit();
+                result.Success = true;
+                result.InventoryChanged = true;
+                return result;
+            }
+        }
+
+        public AchievementTriggerResult TriggerAchievement(int characterId, int questId, ushort delta1, ushort delta2, ushort delta3)
+        {
+            var result = new AchievementTriggerResult { QuestId = questId };
+            using (var connection = OpenConnection())
+            using (var transaction = connection.BeginTransaction())
+            {
+                var quest = _staticData.GetQuest(questId);
+                var entry = _achievementRepository.LoadOrCreateEntry(
+                    connection,
+                    transaction,
+                    characterId,
+                    questId,
+                    quest != null ? quest.CheckCount : (ushort)1);
+                entry.P1 = SaturatingSubtract(entry.P1, delta1);
+                entry.P2 = SaturatingSubtract(entry.P2, delta2);
+                entry.P3 = SaturatingSubtract(entry.P3, delta3);
+                _achievementRepository.SaveEntry(connection, transaction, characterId, entry);
+
+                result.Remain1 = entry.P1;
+                result.Remain2 = entry.P2;
+                result.Remain3 = entry.P3;
+                result.TailOrState = entry.P4;
+                result.Success = true;
+                result.Completed = entry.P1 == 0 && entry.P2 == 0 && entry.P3 == 0;
+
+                if (result.Completed && _staticData.TryFindByQuestId(questId, out var definition))
+                {
+                    var titleItemId = quest != null && quest.RewardTitleItemId > 0
+                        ? quest.RewardTitleItemId
+                        : definition.AllowedTitleItemIds.FirstOrDefault(id => id > 0);
+                    if (titleItemId > 0)
+                    {
+                        var title = new TitleBookInventoryItem
+                        {
+                            Category = definition.Category,
+                            BookIndex = (ushort)definition.Index,
+                            Slot = (ushort)definition.Index,
+                            ItemId = titleItemId,
+                            Value = titleItemId,
+                        };
+                        _titleBookRepository.SaveItem(connection, transaction, characterId, title);
+                        result.Category = definition.Category;
+                        result.BookIndex = definition.Index;
+                        result.TitleItemId = titleItemId;
+                    }
+                }
+
+                transaction.Commit();
+                return result;
+            }
+        }
+
+        private TitleBookMutationResult EquipTitleFromBook(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            int characterId,
+            int accountId,
+            TitleBookInventoryItem title,
+            short equipSlot,
+            TitleBookMutationResult result)
+        {
+            var tempSlot = _db.FindEmptySlot(connection, transaction, characterId, InventoryListType.Main, 9, 353);
+            if (tempSlot < 0)
+                return result;
+
+            var tempCommon = TitleBookInventoryItemCodec.ToCommon(title, (short)tempSlot);
+            InsertCommon(connection, transaction, characterId, accountId, InventoryListType.Main, tempCommon, forceEquipmentKind: true);
+
+            var sourceRecord = _db.LoadItemRecord(connection, transaction, characterId, InventoryListType.Main, (short)tempSlot);
+            var request = new InventoryMoveRequest
+            {
+                SourceListType = InventoryListType.Main,
+                SourceSlotIndex = (short)tempSlot,
+                SourceInstanceValue = title.ItemId,
+                DestinationListType = InventoryListType.Equipment,
+                DestinationSlotIndex = equipSlot,
+                MoveCount = title.Value,
+            };
+
+            var outcome = _equipmentStore.HandleEquipSlotMove(
+                connection,
+                transaction,
+                characterId,
+                accountId,
+                request,
+                sourceRecord,
+                InventoryListType.Main);
+
+            var changed = outcome == EquipOutcome.Equipped || outcome == EquipOutcome.Unequipped;
+            if (!changed)
+                return result;
+
+            var returned = _db.LoadCommonItem(connection, transaction, characterId, InventoryListType.Main, (short)tempSlot);
+            var returnedRecord = _db.LoadItemRecord(connection, transaction, characterId, InventoryListType.Main, (short)tempSlot);
+            if (returned != null && returnedRecord != null)
+            {
+                var swapped = TitleBookInventoryItemCodec.FromCommon(title.Category, title.BookIndex, returned);
+                swapped.Slot = title.BookIndex;
+                _titleBookRepository.SaveItem(connection, transaction, characterId, swapped);
+                _db.DeleteItem(connection, transaction, returnedRecord.ItemUid);
+                result.ItemLockChanged |= MoveEquipmentLockToTitleBook(connection, transaction, characterId, swapped);
+            }
+            else
+            {
+                _titleBookRepository.ClearItem(connection, transaction, characterId, title.Category, title.BookIndex);
+            }
+            result.ItemLockChanged |= MoveEquipmentLock(connection, transaction, characterId, title.EquipmentLockId, InventoryListType.Equipment, equipSlot);
+
+            transaction.Commit();
+            result.Success = true;
+            result.InventoryChanged = true;
+            result.EquipmentChanged = true;
+            return result;
+        }
+
+        private SqliteConnection OpenConnection()
+        {
+            var connection = new SqliteConnection(_connectionString);
+            connection.Open();
+            return connection;
+        }
+
+        private static TitleBookMutationResult CreateMutationResult(InventoryListType itemSpace, short slotIndex, int itemId, int category, int bookIndex)
+        {
+            return new TitleBookMutationResult
+            {
+                ItemSpace = itemSpace,
+                SlotIndex = slotIndex,
+                ItemId = itemId,
+                Category = category,
+                BookIndex = bookIndex,
+            };
+        }
+
+        private static bool IsCategoryIndexValid(int category, int bookIndex)
+        {
+            return category >= 0
+                && category < TitleBookStaticDataProvider.CategoryCapacities.Count
+                && bookIndex >= 0
+                && bookIndex < TitleBookStaticDataProvider.CategoryCapacities[category];
+        }
+
+        private CommonInventoryItem LoadCommon(SqliteConnection connection, SqliteTransaction transaction, int characterId, int accountId, InventoryListType listType, short slotIndex)
+        {
+            if (listType == InventoryListType.AccountCargo)
+                return _db.LoadAccountCargoCommonItem(connection, transaction, accountId, slotIndex);
+
+            if (listType == InventoryListType.Equipment || listType == InventoryListType.Pet)
+                return null;
+
+            return _db.LoadCommonItem(connection, transaction, characterId, SqliteInventoryStore.MapToDbListType(listType), slotIndex);
+        }
+
+        private SqliteInventoryStore.ItemRecord LoadRecord(SqliteConnection connection, SqliteTransaction transaction, int characterId, int accountId, InventoryListType listType, short slotIndex)
+        {
+            if (listType == InventoryListType.AccountCargo)
+                return _db.LoadAccountCargoItemRecord(connection, transaction, accountId, slotIndex);
+
+            if (listType == InventoryListType.Equipment || listType == InventoryListType.Pet)
+                return null;
+
+            return _db.LoadItemRecord(connection, transaction, characterId, SqliteInventoryStore.MapToDbListType(listType), slotIndex);
+        }
+
+        private void DeleteRecord(SqliteConnection connection, SqliteTransaction transaction, InventoryListType listType, SqliteInventoryStore.ItemRecord record)
+        {
+            if (listType == InventoryListType.AccountCargo)
+                _db.DeleteAccountCargoItem(connection, transaction, record.ItemUid);
+            else
+                _db.DeleteItem(connection, transaction, record.ItemUid);
+        }
+
+        private void InsertCommon(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            int characterId,
+            int accountId,
+            InventoryListType listType,
+            CommonInventoryItem item,
+            bool forceEquipmentKind)
+        {
+            if (listType == InventoryListType.AccountCargo)
+            {
+                _db.InsertAccountCargoItem(connection, transaction, accountId, item);
+                return;
+            }
+
+            var dbListType = SqliteInventoryStore.MapToDbListType(listType);
+            var itemKind = forceEquipmentKind ? "equipment" : InventoryItemCodec.InferCommonItemKind(item);
+            _db.InsertCharacterItem(
+                connection,
+                transaction,
+                characterId,
+                dbListType,
+                item.SlotIndex,
+                item.ItemTemplateId,
+                itemKind,
+                item.CountOrInstanceValue,
+                item.CountOrInstanceValue,
+                item.Durability,
+                item.SealFlag,
+                0,
+                item.ExpireTime,
+                item.Marker16,
+                0,
+                InventoryItemCodec.SerializeCommon(item),
+                item.EquipmentLockId);
+        }
+
+        private static EquippedTitleRecord LoadEquippedTitle(SqliteConnection connection, SqliteTransaction transaction, int characterId, short slot)
+        {
+            using (var command = connection.CreateCommand())
+            {
+                command.Transaction = transaction;
+                command.CommandText = @"
+SELECT slot, item_id, expire_time, equipment_lock_id, raw_entry
+FROM character_equipped_entries
+WHERE character_id = @cid AND slot = @slot;";
+                command.Parameters.AddWithValue("@cid", characterId);
+                command.Parameters.AddWithValue("@slot", slot);
+                using (var reader = command.ExecuteReader())
+                {
+                    if (!reader.Read())
+                        return null;
+
+                    return new EquippedTitleRecord
+                    {
+                        Slot = reader.GetInt32(0),
+                        ItemId = reader.GetInt32(1),
+                        ExpireTime = reader.GetInt32(2),
+                        EquipmentLockId = unchecked((byte)reader.GetInt32(3)),
+                        Raw = (byte[])reader["raw_entry"],
+                    };
+                }
+            }
+        }
+
+        private static void DeleteEquippedTitle(SqliteConnection connection, SqliteTransaction transaction, int characterId, short slot)
+        {
+            using (var command = connection.CreateCommand())
+            {
+                command.Transaction = transaction;
+                command.CommandText = "DELETE FROM character_equipped_entries WHERE character_id = @cid AND slot = @slot;";
+                command.Parameters.AddWithValue("@cid", characterId);
+                command.Parameters.AddWithValue("@slot", slot);
+                command.ExecuteNonQuery();
+            }
+        }
+
+        private static TitleBookInventoryItem FromEquippedTitle(int category, ushort bookIndex, EquippedTitleRecord equipped)
+        {
+            var fields = MakeEquipListCodec.ParseDisplayFields(equipped.Raw);
+            return new TitleBookInventoryItem
+            {
+                Category = category,
+                BookIndex = bookIndex,
+                Slot = bookIndex,
+                ItemId = equipped.ItemId,
+                Value = unchecked((int)fields.InstanceValue),
+                Attr = fields.Reinforce,
+                Durability = fields.Durability,
+                SealFlag = 0,
+                EnchantIndex = unchecked((int)fields.Enchant),
+                EnchantUpgradeCount = fields.EnchantUpgradeCount,
+                AmplifyType = fields.AmplifyType,
+                AmplifyValue = fields.AmplifyValue,
+                Marker16 = -1,
+                ExpireTime = equipped.ExpireTime,
+                TailData = BuildTitleBookTail(fields),
+                EquipmentLockId = equipped.EquipmentLockId,
+            };
+        }
+
+        private static byte[] BuildTitleBookTail(MakeEquipListCodec.DisplayFields fields)
+        {
+            var tail = new byte[37];
+            if (fields.Emblem != null && fields.Emblem.Length > 0)
+                Buffer.BlockCopy(fields.Emblem, 0, tail, 0, Math.Min(fields.Emblem.Length, 9));
+
+            BitConverter.GetBytes(fields.Rune).CopyTo(tail, 9);
+            tail[27] = fields.Forging;
+            if (fields.SealCount > 0 && fields.SealTypes != null)
+            {
+                tail[11] = fields.SealCount;
+                for (var i = 0; i < fields.SealCount && i < 3; i++)
+                {
+                    tail[12 + i] = fields.SealTypes[i];
+                    tail[15 + i] = fields.SealVal1s[i];
+                    tail[18 + i] = fields.SealVal2s[i];
+                }
+
+                if (fields.SealTail != null)
+                {
+                    for (var i = 0; i < fields.SealTail.Length && 21 + i < tail.Length; i++)
+                        tail[21 + i] = fields.SealTail[i];
+                }
+            }
+
+            return tail;
+        }
+
+        private static bool MoveEquipmentLockToTitleBook(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            int characterId,
+            TitleBookInventoryItem item)
+        {
+            if (item == null)
+                return false;
+
+            return MoveEquipmentLock(
+                connection,
+                transaction,
+                characterId,
+                item.EquipmentLockId,
+                GetTitleBookLockListType(item.Category),
+                unchecked((short)item.BookIndex));
+        }
+
+        private static InventoryListType GetTitleBookLockListType(int category)
+        {
+            return (InventoryListType)(TitleBookLockListTypeBase + category);
+        }
+
+        private static bool MoveEquipmentLock(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            int characterId,
+            byte equipmentLockId,
+            InventoryListType listType,
+            short slot)
+        {
+            if (equipmentLockId == 0)
+                return false;
+
+            using (var command = connection.CreateCommand())
+            {
+                command.Transaction = transaction;
+                command.CommandText = @"
+INSERT INTO character_item_locks (
+    character_id, equipment_lock_id, inventory_list_type, slot, state, remaining_seconds)
+VALUES (@cid, @lockId, @listType, @slot, 1, NULL)
+ON CONFLICT(character_id, equipment_lock_id)
+DO UPDATE SET
+    inventory_list_type = excluded.inventory_list_type,
+    slot = excluded.slot;";
+                command.Parameters.AddWithValue("@cid", characterId);
+                command.Parameters.AddWithValue("@lockId", (int)equipmentLockId);
+                command.Parameters.AddWithValue("@listType", (int)listType);
+                command.Parameters.AddWithValue("@slot", (int)slot);
+                command.ExecuteNonQuery();
+            }
+
+            return true;
+        }
+
+        private static bool DeleteEquipmentLock(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            int characterId,
+            byte equipmentLockId)
+        {
+            if (equipmentLockId == 0)
+                return false;
+
+            using (var command = connection.CreateCommand())
+            {
+                command.Transaction = transaction;
+                command.CommandText = @"
+DELETE FROM character_item_locks
+WHERE character_id = @cid AND equipment_lock_id = @lockId;";
+                command.Parameters.AddWithValue("@cid", characterId);
+                command.Parameters.AddWithValue("@lockId", (int)equipmentLockId);
+                command.ExecuteNonQuery();
+            }
+
+            return true;
+        }
+
+        private static ushort SaturatingSubtract(ushort value, ushort delta)
+        {
+            return delta >= value ? (ushort)0 : (ushort)(value - delta);
+        }
+
+        private sealed class EquippedTitleRecord
+        {
+            public int Slot { get; set; }
+
+            public int ItemId { get; set; }
+
+            public int ExpireTime { get; set; }
+
+            public byte EquipmentLockId { get; set; }
+
+            public byte[] Raw { get; set; }
+        }
+    }
+}

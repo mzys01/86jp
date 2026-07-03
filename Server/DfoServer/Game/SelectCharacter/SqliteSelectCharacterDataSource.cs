@@ -5,6 +5,7 @@ using DfoServer.Game.ExpertJob;
 using DfoServer.Game.Inventory;
 using DfoServer.Game.ItemUpgrade;
 using DfoServer.Game.Settings;
+using DfoServer.Game.TitleBook;
 using System;
 using System.Collections.Generic;
 using Microsoft.Data.Sqlite;
@@ -21,6 +22,9 @@ namespace DfoServer.Game.SelectCharacter
         private readonly PacketSequenceRepository _packetSequenceRepository;
         private readonly ICharacterRepository _characterRepository;
         private readonly AccountSettingsRepository _accountSettingsRepository;
+        private readonly CharacterTitleBookRepository _titleBookRepository;
+        private readonly TitleBookMutationService _titleBookMutationService;
+        private readonly CharacterAchievementProgressRepository _achievementProgressRepository;
         private readonly string _connectionString;
         private readonly string _databasePath;
         private readonly string _schemaFilePath;
@@ -38,6 +42,9 @@ namespace DfoServer.Game.SelectCharacter
             _packetSequenceRepository = new PacketSequenceRepository(databasePath, schemaFilePath);
             _characterRepository = characterRepository;
             _accountSettingsRepository = new AccountSettingsRepository(databasePath, schemaFilePath);
+            _titleBookRepository = new CharacterTitleBookRepository(_connectionString);
+            _titleBookMutationService = new TitleBookMutationService(_connectionString);
+            _achievementProgressRepository = new CharacterAchievementProgressRepository(_connectionString);
         }
 
         public int GetSeedCharacterId()
@@ -49,6 +56,29 @@ namespace DfoServer.Game.SelectCharacter
         public CreatureItemListSnapshot LoadCreatureItemListSnapshot(int characterId)
         {
             return _initDataRepository.LoadCreatures(characterId);
+        }
+
+        public List<TitleBookCategorySnapshot> LoadTitleBookSnapshots(int characterId)
+        {
+            return _titleBookRepository.LoadSnapshots(characterId);
+        }
+
+        public bool TryPutTitleBook(int characterId, int accountId, InventoryListType sourceList, short sourceSlot, int itemId, int category, int bookIndex, out TitleBookMutationResult result)
+        {
+            result = _titleBookMutationService.PutTitle(characterId, accountId, sourceList, sourceSlot, itemId, category, bookIndex);
+            return result.Success;
+        }
+
+        public bool TryGetTitleBook(int characterId, int accountId, InventoryListType targetList, short targetSlot, int itemId, int category, int bookIndex, out TitleBookMutationResult result)
+        {
+            result = _titleBookMutationService.GetTitle(characterId, accountId, targetList, targetSlot, itemId, category, bookIndex);
+            return result.Success;
+        }
+
+        public bool TryTriggerAchievement(int characterId, int questId, ushort delta1, ushort delta2, ushort delta3, out AchievementTriggerResult result)
+        {
+            result = _titleBookMutationService.TriggerAchievement(characterId, questId, delta1, delta2, delta3);
+            return result.Success;
         }
 
         public SelectCharacterDataSnapshot Load(int characterId, int accountId)
@@ -65,6 +95,9 @@ namespace DfoServer.Game.SelectCharacter
                 initSnapshot.CreatureItemList = _initDataRepository.LoadCreatures(characterId);
 
             _initFlagsRepository.LoadAll(characterId, initSnapshot);
+            initSnapshot.TitleBookCategories.Clear();
+            initSnapshot.TitleBookCategories.AddRange(_titleBookRepository.LoadSnapshots(characterId));
+            MergeAchievementProgress(initSnapshot, _achievementProgressRepository.LoadSnapshot(characterId));
 
             
             {
@@ -205,6 +238,23 @@ namespace DfoServer.Game.SelectCharacter
                 Type = 0x0312,
                 OccurrenceIndex = 0,
             });
+        }
+
+        private static void MergeAchievementProgress(
+            SelectCharacterInitializationSnapshot initSnapshot,
+            AchievementCompleteSnapshot progress)
+        {
+            if (progress == null || progress.Entries.Count == 0)
+                return;
+
+            var merged = new Dictionary<int, AchievementCompleteEntrySnapshot>();
+            foreach (var entry in initSnapshot.AchievementComplete.Entries)
+                merged[entry.AchievementId] = entry;
+            foreach (var entry in progress.Entries)
+                merged[entry.AchievementId] = entry;
+
+            initSnapshot.AchievementComplete = new AchievementCompleteSnapshot();
+            initSnapshot.AchievementComplete.Entries.AddRange(merged.Values);
         }
 
         private static void ApplyWallet(SelectCharacterInitializationSnapshot initSnapshot, WalletSnapshot wallet)

@@ -143,7 +143,7 @@ namespace DfoServer.Network.Builders
         internal static void WriteAppearanceEntry(GamePacketWriter writer, CharacterAppearanceEntry e)
         {
             writer.WriteByte(e.Slot);
-            writer.WriteInt32(e.ItemId);
+            writer.WriteInt32(e.DisplayItemId);
             writer.WriteInt32(e.ExpansionLen);
             writer.WriteBytes(e.ExpansionData != null && e.ExpansionData.Length == 4
                 ? e.ExpansionData : new byte[4]);
