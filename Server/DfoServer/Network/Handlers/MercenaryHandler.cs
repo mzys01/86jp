@@ -35,6 +35,12 @@ namespace DfoServer.Network.Handlers
 
             var accountId = session.Account?.AccountId ?? 1;
             var activeCharacterId = session.Player?.CharacterId ?? 0;
+            if (activeCharacterId <= 0)
+            {
+                FileLogger.Log($"[{ProtocolName}] MERCENARY/STRIKER subtype5 ignored before character select");
+                return;
+            }
+
             var roster = ListAccountCharacters(accountId);
 
             await SendCandidateUserInfoAsync(session, roster, activeCharacterId);
