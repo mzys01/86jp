@@ -8,6 +8,8 @@ namespace DfoServer.GameWorld
 {
     public class Dungeon
     {
+        private const byte StartMapSpecialPassiveObjectType = 9;
+
         private static LstFile LoadLstFile(string relativePath)
         {
             var content = PvfArchiveAccessor.ReadText(relativePath);
@@ -206,8 +208,14 @@ namespace DfoServer.GameWorld
 
             var normalIndices = new List<int>();
             for (int i = 0; i < monsters.Count; i++)
-                if (monsters[i].Type == 0 && (namedSet == null || !namedSet.Contains(monsters[i].Code)))
+            {
+                var monster = monsters[i];
+                if (monster.Type == 0
+                    && monster.IsBlocking
+                    && monster.Flag0 == 0
+                    && (namedSet == null || !namedSet.Contains(monster.Code)))
                     normalIndices.Add(i);
+            }
 
             for (int i = 0; i < count && normalIndices.Count > 0; i++)
             {
@@ -871,6 +879,9 @@ namespace DfoServer.GameWorld
                         IsBlocking = true,
                     });
                 }
+
+                AppendSpecialPassiveObjects(listO, mapFileO, dungeonBasicLv, overrideMapId, dungeonId, x, y);
+
                 foreach (var apc in mapFileO.AICharacters)
                 {
                     if (apc.Code <= 0 || !TryGetAICharacterLevel(apc.Code, out var apcLevel))
@@ -889,7 +900,7 @@ namespace DfoServer.GameWorld
                         Code = apc.Code,
                         Type = apcType,
                         Level = apcLevel,
-                        IsBlocking = false,
+                        IsBlocking = IsBlockingAICharacter(apc),
                     });
                 }
                 return new MazeSumInfo { Monsters = listO, X = x, Y = y, Index = overrideMapId };
@@ -1310,6 +1321,8 @@ namespace DfoServer.GameWorld
                 list.Add(monster);
             }
 
+            AppendSpecialPassiveObjects(list, mapFile, dungeonBasicLv, mapId, dungeonId, x, y);
+
             // APC
             foreach (var apc in mapFile.AICharacters)
             {
@@ -1329,7 +1342,7 @@ namespace DfoServer.GameWorld
                     Code = apc.Code,
                     Type = apcType,
                     Level = apcLevel,
-                    IsBlocking = false,
+                    IsBlocking = IsBlockingAICharacter(apc),
                 });
             }
 
@@ -1340,6 +1353,80 @@ namespace DfoServer.GameWorld
                 Y = y,
                 Index = mapId,
             };
+        }
+
+        private static bool IsBlockingAICharacter(AICharacterInfo apc)
+        {
+            return apc != null && apc.Faction == ApcFaction.Monster;
+        }
+
+        private static void AppendSpecialPassiveObjects(
+            List<MonsterSumInfo> list,
+            MapFile mapFile,
+            byte dungeonBasicLv,
+            int mapId,
+            int dungeonId,
+            int x,
+            int y)
+        {
+            if (list == null || mapFile?.SpecialPassiveObjects == null || mapFile.SpecialPassiveObjects.Count == 0)
+                return;
+
+            var objectRows = 0;
+            var templateRows = 0;
+            for (var objectIndex = 0; objectIndex < mapFile.SpecialPassiveObjects.Count; objectIndex++)
+            {
+                var obj = mapFile.SpecialPassiveObjects[objectIndex];
+                if (obj == null)
+                    continue;
+
+                if (obj.ObjectCode > 0)
+                {
+                    list.Add(new MonsterSumInfo
+                    {
+                        Code = obj.ObjectCode,
+                        Type = StartMapSpecialPassiveObjectType,
+                        Level = 0,
+                        IsBlocking = false,
+                        PacketIndex = objectIndex,
+                    });
+                    objectRows++;
+                }
+            }
+
+            for (var objectIndex = 0; objectIndex < mapFile.SpecialPassiveObjects.Count; objectIndex++)
+            {
+                var obj = mapFile.SpecialPassiveObjects[objectIndex];
+                if (obj?.Spawns == null || obj.Spawns.Count == 0)
+                    continue;
+
+                for (var spawnIndex = 0; spawnIndex < obj.Spawns.Count; spawnIndex++)
+                {
+                    var spawn = obj.Spawns[spawnIndex];
+                    if (spawn.Code <= 0
+                        || !string.Equals(spawn.Kind, "[monster]", StringComparison.OrdinalIgnoreCase))
+                        continue;
+
+                    var level = spawn.Level > 0
+                        ? (byte)Math.Min(spawn.Level, 255)
+                        : dungeonBasicLv;
+                    list.Add(new MonsterSumInfo
+                    {
+                        Code = spawn.Code,
+                        Type = 0,
+                        Level = level,
+                        IsBlocking = false,
+                        TemplateOrder = (ushort)Math.Min(objectIndex, ushort.MaxValue),
+                        PacketIndex = spawnIndex,
+                        Flag0 = 1,
+                        Flag1 = (byte)Math.Min(objectIndex, byte.MaxValue),
+                    });
+                    templateRows++;
+                }
+            }
+
+            if (objectRows > 0 || templateRows > 0)
+                FileLogger.Log($"[Dungeon] special passive objects: dungeon={dungeonId} room=({x},{y}) map={mapId} objects={objectRows} templates={templateRows}");
         }
 
         internal static int SelectFallbackMapIdForUnresolvedRoom(

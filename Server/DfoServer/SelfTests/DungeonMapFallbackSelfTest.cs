@@ -38,6 +38,37 @@ namespace DfoServer.SelfTests
                 mapId == 14999 && reason.StartsWith("quest-variant", StringComparison.Ordinal),
                 ref failures);
 
+            try
+            {
+                var flatSpecialPassiveMap = MapFile.Parse(
+                    "[special passive object]\n" +
+                    "10001 10 20 0 " +
+                    "10002 30 40 1\n");
+                Check("special passive object parser keeps legacy flat rows",
+                    flatSpecialPassiveMap.SpecialPassiveObjects.Count == 2
+                    && flatSpecialPassiveMap.SpecialPassiveObjects[0].ObjectCode == 10001
+                    && flatSpecialPassiveMap.SpecialPassiveObjects[1].ObjectCode == 10002
+                    && flatSpecialPassiveMap.SpecialPassiveObjects[0].Spawns.Count == 0,
+                    ref failures);
+
+                var extendedSpecialPassiveMap = MapFile.Parse(
+                    "[special passive object]\n" +
+                    "14056 100 200 0 2 " +
+                    "`[monster]` 61801 62 0 0 0 " +
+                    "`[monster]` 59013 62 0 1 0\n");
+                Check("special passive object parser reads inline spawn rows",
+                    extendedSpecialPassiveMap.SpecialPassiveObjects.Count == 1
+                    && extendedSpecialPassiveMap.SpecialPassiveObjects[0].Spawns.Count == 2
+                    && extendedSpecialPassiveMap.SpecialPassiveObjects[0].Spawns[0].Code == 61801
+                    && extendedSpecialPassiveMap.SpecialPassiveObjects[0].Spawns[1].Code == 59013,
+                    ref failures);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[FAIL] special passive object parser compatibility: {ex.Message}");
+                failures++;
+            }
+
             var compactQuestMapEntries = new List<LstEntry>
             {
                 new LstEntry { Id = 13417, FilePath = "eternal_dream/01.map" },
@@ -216,6 +247,56 @@ namespace DfoServer.SelfTests
                 failures++;
             }
 
+            try
+            {
+                var issue167Boss = DungeonData.GetDungeonMapMonsterSummaryInformation(
+                    dungeonId: 89,
+                    x: 0,
+                    y: 1,
+                    mazeIndex: 0,
+                    bossPos: new[] { 0, 1 });
+                var issue167QuestStart = DungeonData.GetDungeonMapMonsterSummaryInformation(
+                    dungeonId: 89,
+                    x: 5,
+                    y: 1,
+                    mazeIndex: 1);
+
+                Check("issue 167 gent defense final room uses AI boss map",
+                    issue167Boss.Index == 21314 && ContainsMonster(issue167Boss, 10409),
+                    ref failures);
+                Check("issue 167 hostile AI boss blocks room clear",
+                    ContainsBlockingMonster(issue167Boss, 10409),
+                    ref failures);
+                Check("issue 167 final room includes special passive wave monster templates",
+                    CountMonster(issue167Boss, 61801) > 0 && CountMonster(issue167Boss, 61803) > 0,
+                    ref failures);
+                Check("issue 167 special passive wave templates do not block clear",
+                    ContainsMonster(issue167Boss, 61801) && !ContainsBlockingMonster(issue167Boss, 61801),
+                    ref failures);
+                Check("issue 167 special passive wave templates preserve object grouping",
+                    HasTemplate(issue167Boss, 61801, 0, 0, 0)
+                    && HasTemplate(issue167Boss, 61801, 1, 0, 1)
+                    && HasTemplate(issue167Boss, 61494, 2, 0, 2)
+                    && HasTemplate(issue167Boss, 59013, 2, 1, 2),
+                    ref failures);
+                Check("issue 167 final room includes special passive wave checker object",
+                    HasStartMapObject(issue167Boss, 14056, 9, 9) && !ContainsBlockingMonster(issue167Boss, 14056),
+                    ref failures);
+                Check("issue 167 special passive object rows precede hidden templates",
+                    IndexOfMonster(issue167Boss, 14056) >= 0
+                    && IndexOfMonster(issue167Boss, 14056) < IndexOfFirstHiddenTemplate(issue167Boss)
+                    && IndexOfMonster(issue167Boss, 10409) > IndexOfLastHiddenTemplate(issue167Boss),
+                    ref failures);
+                Check("issue 167 friendly quest AI remains non-blocking",
+                    ContainsMonster(issue167QuestStart, 10625) && !ContainsBlockingMonster(issue167QuestStart, 10625),
+                    ref failures);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[FAIL] issue 167 gent defense AI boss room: {ex.Message}");
+                failures++;
+            }
+
             Console.WriteLine(failures == 0 ? "PASS" : $"FAIL: {failures}");
             return failures == 0 ? 0 : 1;
         }
@@ -228,6 +309,90 @@ namespace DfoServer.SelfTests
                 if (monster.Code == monsterCode)
                     return true;
             return false;
+        }
+
+        private static bool ContainsBlockingMonster(DungeonData.MazeSumInfo maze, int monsterCode)
+        {
+            if (maze.Monsters == null)
+                return false;
+            foreach (var monster in maze.Monsters)
+                if (monster.Code == monsterCode && monster.IsBlocking)
+                    return true;
+            return false;
+        }
+
+        private static int CountMonster(DungeonData.MazeSumInfo maze, int monsterCode)
+        {
+            var count = 0;
+            if (maze.Monsters == null)
+                return count;
+            foreach (var monster in maze.Monsters)
+                if (monster.Code == monsterCode)
+                    count++;
+            return count;
+        }
+
+        private static bool HasTemplate(DungeonData.MazeSumInfo maze, int monsterCode, ushort templateOrder, int packetIndex, byte flag1)
+        {
+            if (maze.Monsters == null)
+                return false;
+            foreach (var monster in maze.Monsters)
+            {
+                if (monster.Code == monsterCode
+                    && monster.Type == 0
+                    && monster.TemplateOrder == templateOrder
+                    && monster.PacketIndex == packetIndex
+                    && monster.Flag0 == 1
+                    && monster.Flag1 == flag1)
+                    return true;
+            }
+            return false;
+        }
+
+        private static bool HasStartMapObject(DungeonData.MazeSumInfo maze, int objectCode, byte type, int packetIndex)
+        {
+            if (maze.Monsters == null)
+                return false;
+            foreach (var monster in maze.Monsters)
+            {
+                if (monster.Code == objectCode
+                    && monster.Type == type
+                    && monster.PacketIndex == packetIndex
+                    && monster.Flag0 == 0)
+                    return true;
+            }
+            return false;
+        }
+
+        private static int IndexOfMonster(DungeonData.MazeSumInfo maze, int monsterCode)
+        {
+            if (maze.Monsters == null)
+                return -1;
+            for (var i = 0; i < maze.Monsters.Count; i++)
+                if (maze.Monsters[i].Code == monsterCode)
+                    return i;
+            return -1;
+        }
+
+        private static int IndexOfFirstHiddenTemplate(DungeonData.MazeSumInfo maze)
+        {
+            if (maze.Monsters == null)
+                return -1;
+            for (var i = 0; i < maze.Monsters.Count; i++)
+                if (maze.Monsters[i].Flag0 == 1)
+                    return i;
+            return -1;
+        }
+
+        private static int IndexOfLastHiddenTemplate(DungeonData.MazeSumInfo maze)
+        {
+            var index = -1;
+            if (maze.Monsters == null)
+                return index;
+            for (var i = 0; i < maze.Monsters.Count; i++)
+                if (maze.Monsters[i].Flag0 == 1)
+                    index = i;
+            return index;
         }
 
         private static void Check(string name, bool ok, ref int failures)

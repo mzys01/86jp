@@ -23,6 +23,13 @@ namespace DfoServer.Network.Handlers.Dungeon
         internal async Task HandleMoveMap(EnhancedClientSession session, GamePacketHeader header, byte[] body)
         {
             var req = MoveMapRequest.Parse(body);
+
+            if (session.Player.CurDungeonCleared)
+            {
+                FileLogger.Log($"[DungeonHandler] MOVE_MAP ignored after dungeon clear: current=({session.Player.CurRoomKey.X},{session.Player.CurRoomKey.Y}) next=({req.NextX},{req.NextY})");
+                return;
+            }
+
             session.Player.CurMoveMapU15 = req.Unknown15;
             session.Player.CurMoveMapU19 = req.Unknown19;
 

@@ -55,7 +55,18 @@ namespace PvfLib
         public int X { get; set; }
         public int Y { get; set; }
         public int Flags { get; set; }
+        public List<SpecialPassiveObjectSpawnInfo> Spawns { get; set; } = new List<SpecialPassiveObjectSpawnInfo>();
         public List<HellPartyMapEntry> HellPartyEntries { get; set; } = new List<HellPartyMapEntry>();
+    }
+
+    public class SpecialPassiveObjectSpawnInfo
+    {
+        public string Kind { get; set; }
+        public int Code { get; set; }
+        public int Level { get; set; }
+        public int Param0 { get; set; }
+        public int Param1 { get; set; }
+        public int Param2 { get; set; }
     }
 
     public enum ApcFaction
@@ -117,6 +128,7 @@ namespace PvfLib
         private static readonly Regex InlineHellPartyRx = new Regex(
             @"`?\[hellparty\]`?(?<body>.*?)`?\[/hellparty\]`?",
             RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.Singleline);
+        private static readonly Regex SpecialPassiveTokenRx = new Regex(@"`[^`]*`|\S+", RegexOptions.Compiled);
 
         public static MapFile Parse(string content)
         {
@@ -342,16 +354,19 @@ namespace PvfLib
 
             var hellMatch = InlineHellPartyRx.Match(data);
             var head = hellMatch.Success ? data.Substring(0, hellMatch.Index) : data;
-            var nums = ParseIntArray(head);
-            for (int i = 0; i + 3 < nums.Length; i += 4)
+            if (!TryParseSpecialPassiveObjectsWithSpawns(head, result))
             {
-                result.Add(new SpecialPassiveObjectInfo
+                var nums = ParseIntArray(head);
+                for (int i = 0; i + 3 < nums.Length; i += 4)
                 {
-                    ObjectCode = nums[i],
-                    X = nums[i + 1],
-                    Y = nums[i + 2],
-                    Flags = nums[i + 3],
-                });
+                    result.Add(new SpecialPassiveObjectInfo
+                    {
+                        ObjectCode = nums[i],
+                        X = nums[i + 1],
+                        Y = nums[i + 2],
+                        Flags = nums[i + 3],
+                    });
+                }
             }
 
             if (hellMatch.Success && result.Count > 0)
@@ -362,6 +377,88 @@ namespace PvfLib
             }
 
             return result;
+        }
+
+        private static bool TryParseSpecialPassiveObjectsWithSpawns(
+            string data,
+            List<SpecialPassiveObjectInfo> result)
+        {
+            if (string.IsNullOrWhiteSpace(data))
+                return false;
+
+            var matches = SpecialPassiveTokenRx.Matches(data);
+            if (matches.Count < 5)
+                return false;
+
+            var tokens = new List<string>(matches.Count);
+            foreach (Match match in matches)
+                tokens.Add(match.Value);
+
+            var parsed = new List<SpecialPassiveObjectInfo>();
+            var i = 0;
+            while (i < tokens.Count)
+            {
+                int objectCode, x, y, flags, spawnCount;
+                if (i + 4 >= tokens.Count
+                    || !int.TryParse(tokens[i], out objectCode)
+                    || !int.TryParse(tokens[i + 1], out x)
+                    || !int.TryParse(tokens[i + 2], out y)
+                    || !int.TryParse(tokens[i + 3], out flags)
+                    || !int.TryParse(tokens[i + 4], out spawnCount)
+                    || spawnCount < 0)
+                {
+                    return false;
+                }
+
+                var obj = new SpecialPassiveObjectInfo
+                {
+                    ObjectCode = objectCode,
+                    X = x,
+                    Y = y,
+                    Flags = flags,
+                };
+                i += 5;
+
+                if (spawnCount > (tokens.Count - i) / 6)
+                    return false;
+
+                for (var spawnIndex = 0; spawnIndex < spawnCount && i < tokens.Count; spawnIndex++)
+                {
+                    var kind = StripBacktick(tokens[i]);
+                    if (string.IsNullOrEmpty(kind) || kind[0] != '[')
+                        return false;
+
+                    int code, level, p0, p1, p2;
+                    if (i + 5 >= tokens.Count
+                        || !int.TryParse(tokens[i + 1], out code)
+                        || !int.TryParse(tokens[i + 2], out level)
+                        || !int.TryParse(tokens[i + 3], out p0)
+                        || !int.TryParse(tokens[i + 4], out p1)
+                        || !int.TryParse(tokens[i + 5], out p2))
+                    {
+                        return false;
+                    }
+
+                    obj.Spawns.Add(new SpecialPassiveObjectSpawnInfo
+                    {
+                        Kind = kind,
+                        Code = code,
+                        Level = level,
+                        Param0 = p0,
+                        Param1 = p1,
+                        Param2 = p2,
+                    });
+                    i += 6;
+                }
+
+                parsed.Add(obj);
+            }
+
+            if (parsed.Count == 0 || i != tokens.Count)
+                return false;
+
+            result.AddRange(parsed);
+            return true;
         }
 
         private static List<HellPartyMapEntry> ParseHellPartyEntries(string data)
