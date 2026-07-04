@@ -176,10 +176,15 @@ namespace DfoServer.Game.Quests
 
         public async Task SyncMonsterRewardItemProgressAsync(ICollection<int> itemFilter)
         {
+            await SyncItemSeekingQuestProgressAsync(itemFilter);
+        }
+
+        public async Task SyncItemSeekingQuestProgressAsync(ICollection<int> itemFilter)
+        {
             int cid = _sender.CharacterId;
             if (cid <= 0) return;
 
-            bool matched = QuestService.SyncMonsterRewardItemProgress(
+            bool matched = QuestService.SyncItemSeekingQuestProgress(
                 _connStr, cid, _assetService, _sender.AccountId, itemFilter);
             if (!matched)
                 return;

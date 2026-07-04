@@ -284,6 +284,16 @@ namespace DfoServer.Game.Quests
             int accountId,
             ICollection<int> itemFilter)
         {
+            return SyncItemSeekingQuestProgress(connStr, characterId, assetService, accountId, itemFilter);
+        }
+
+        public static bool SyncItemSeekingQuestProgress(
+            string connStr,
+            int characterId,
+            IAssetService assetService,
+            int accountId,
+            ICollection<int> itemFilter)
+        {
             var active = LoadActiveQuests(connStr, characterId);
             if (active.Count == 0 || assetService == null)
                 return false;

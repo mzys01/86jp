@@ -704,6 +704,7 @@ namespace DfoServer.Network.Handlers.Dungeon
             if (candidates == null) return;
 
             var accountId = session.Account?.AccountId ?? 1;
+            var grantedItemIds = new HashSet<int>();
 
             foreach (var candidate in candidates)
             {
@@ -716,11 +717,21 @@ namespace DfoServer.Network.Handlers.Dungeon
                 catch { }
 
                 int dropCount = QuestDropProvider.RollDrop(candidate, currentHeld);
-                if (dropCount <= 0) continue;
+                if (dropCount <= 0)
+                {
+                    if (candidate.MaxStack != -1 && currentHeld >= candidate.MaxStack)
+                        FileLogger.Log($"[{ProtocolLogName}] QUEST_DROP: skipped maxStack monster={monsterCode} item={candidate.ItemId} held={currentHeld} max={candidate.MaxStack}");
+                    else if (candidate.DropRate >= 100)
+                        FileLogger.Log($"[{ProtocolLogName}] QUEST_DROP: skipped despite guaranteed rate monster={monsterCode} item={candidate.ItemId} held={currentHeld} count={candidate.Count}");
+                    continue;
+                }
 
                 short slot;
                 if (!TryPickupItemToInventory(session.Player.CharacterId, accountId, candidate.ItemId, dropCount, out slot))
+                {
+                    FileLogger.Log($"[{ProtocolLogName}] QUEST_DROP: failed to insert monster={monsterCode} item={candidate.ItemId} x{dropCount} held={currentHeld}");
                     continue;
+                }
 
                 // NOTI 14 UPDATE_ITEM_LIST (independent send, 86JP 84B fixed format)
                 var w = new GamePacketWriter();
@@ -729,8 +740,20 @@ namespace DfoServer.Network.Handlers.Dungeon
                 w.WriteBytes(BuildItemEntry(slot, (uint)candidate.ItemId, (uint)(currentHeld + dropCount)));
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000E, w.ToArray()));
 
+                grantedItemIds.Add(candidate.ItemId);
                 FileLogger.Log($"[{ProtocolLogName}] QUEST_DROP: monster={monsterCode} -> item={candidate.ItemId} x{dropCount} slot={slot} (held={currentHeld}->{currentHeld + dropCount})");
             }
+
+            if (grantedItemIds.Count <= 0)
+                return;
+
+            if (session.GameSession?.QuestManager == null)
+            {
+                FileLogger.Log($"[{ProtocolLogName}] QUEST_DROP: granted {grantedItemIds.Count} item kinds but quest progress sync skipped because QuestManager is missing");
+                return;
+            }
+
+            await session.GameSession.QuestManager.SyncItemSeekingQuestProgressAsync(grantedItemIds);
         }
     }
 
