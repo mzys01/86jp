@@ -58,13 +58,14 @@ namespace DfoServer.Network.Handlers
                 {
                     var (characterId, accountId) = SessionOwnerResolver.Resolve(session);
 
+                    // 背包扣减与进度写入同一事务: 中间崩溃整体回滚, 宝珠不会"已扣未点亮"地丢失
                     InventoryMutationResult removeResult = null;
                     bool removed = await Task.Run(() =>
-                        _dataSource.TryRemoveItemByTemplateId(characterId, accountId, itemId, out _, out removeResult));
+                        _dataSource.TryRemoveItemByTemplateId(characterId, accountId, itemId, out _, out removeResult,
+                            (conn, tx) => _progressRepository.PutSlot(conn, tx, characterId, boxIndex, slotIndex, itemId)));
 
                     if (removed)
                     {
-                        await Task.Run(() => _progressRepository.PutSlot(characterId, boxIndex, slotIndex, itemId));
                         resultCode = 1;
 
                         await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0012, DeleteItemAckBuilder.Build(removeResult)));
@@ -84,7 +85,7 @@ namespace DfoServer.Network.Handlers
 
         // CMD 0x038A (906) 取出宝珠
         // 请求 body: body[0]=固定标志(含义未知), body[1..4]=itemId(u32)，不含槛位信息，靠存档表反查。
-        // 顺序：先还道具到背包，成功后再删存档记录。反之崩溃时宝珠会永久消失。
+        // 归还背包与删存档记录同一事务: 中间崩溃整体回滚，宝珠既不丢失也不复制。
         public async Task HandleRemoveCollectBoxItem(EnhancedClientSession session, GamePacketHeader header, byte[] body)
         {
             const byte ErrorCodeItemMismatch = 0x12;
@@ -106,11 +107,11 @@ namespace DfoServer.Network.Handlers
                     short assignedSlot = 0;
                     int newStackCount = 0;
                     bool pickedUp = await Task.Run(() =>
-                        _dataSource.TryPickupItem(characterId, accountId, itemId, 1, out assignedSlot, out newStackCount));
+                        _dataSource.TryPickupItem(characterId, accountId, itemId, 1, out assignedSlot, out newStackCount,
+                            (conn, tx) => _progressRepository.RemoveItem(conn, tx, characterId, boxIndex, itemId)));
 
                     if (pickedUp)
                     {
-                        await Task.Run(() => _progressRepository.RemoveItem(characterId, boxIndex, itemId));
                         resultCode = 1;
 
                         var returnedItem = new CommonInventoryItem

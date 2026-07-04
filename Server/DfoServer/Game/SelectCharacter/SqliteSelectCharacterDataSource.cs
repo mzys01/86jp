@@ -342,14 +342,16 @@ namespace DfoServer.Game.SelectCharacter
             return _inventoryStore.CountItem(characterId, itemTemplateId);
         }
 
-        public bool TryRemoveItemByTemplateId(int characterId, int accountId, int itemTemplateId, out short slotIndex, out InventoryMutationResult result)
+        public bool TryRemoveItemByTemplateId(int characterId, int accountId, int itemTemplateId, out short slotIndex, out InventoryMutationResult result,
+            Action<SqliteConnection, SqliteTransaction> alsoInSameTransaction = null)
         {
-            return _inventoryStore.TryRemoveItemByTemplateId(characterId, accountId, itemTemplateId, out slotIndex, out result);
+            return _inventoryStore.TryRemoveItemByTemplateId(characterId, accountId, itemTemplateId, out slotIndex, out result, alsoInSameTransaction);
         }
 
-        public bool TryPickupItem(int characterId, int accountId, int itemTemplateId, int stackCount, out short assignedSlot, out int newStackCount)
+        public bool TryPickupItem(int characterId, int accountId, int itemTemplateId, int stackCount, out short assignedSlot, out int newStackCount,
+            Action<SqliteConnection, SqliteTransaction> alsoInSameTransaction = null)
         {
-            return _inventoryStore.TryPickupItem(characterId, accountId, itemTemplateId, stackCount, out assignedSlot, out newStackCount);
+            return _inventoryStore.TryPickupItem(characterId, accountId, itemTemplateId, stackCount, out assignedSlot, out newStackCount, alsoInSameTransaction);
         }
 
         public bool TryOpenAvatarPackage(int characterId, int accountId, AvatarPackageOpenRequest request, out AvatarPackageOpenResult result)

@@ -1151,45 +1151,32 @@ WHERE character_id = @characterId AND list_type = @listType;";
             }
 
             // ── Normal item path ──
+            // 走正规 DeleteItem/UpdateStackCount(按item_uid): 整删带排列锁清理, 部分扣减维护 instance_value/updated_at。
+            // 旧版自写 DELETE/UPDATE 会留孤儿排列锁、instance_value 滞留旧值。
             using (var cmd = conn.CreateCommand())
             {
                 cmd.Transaction = tx;
-                cmd.CommandText = "SELECT slot_index, stack_count FROM character_items WHERE character_id = @cid AND list_type = 0 AND item_template_id = @tid LIMIT 1;";
+                cmd.CommandText = "SELECT item_uid, slot_index, stack_count FROM character_items WHERE character_id = @cid AND list_type = 0 AND item_template_id = @tid LIMIT 1;";
                 cmd.Parameters.AddWithValue("@cid", characterId);
                 cmd.Parameters.AddWithValue("@tid", itemTemplateId);
                 using (var reader = cmd.ExecuteReader())
                 {
                     if (!reader.Read()) return null;
-                    int slot = reader.GetInt32(0);
-                    int stackCount = reader.GetInt32(1);
+                    long itemUid = reader.GetInt64(0);
+                    int slot = reader.GetInt32(1);
+                    int stackCount = reader.GetInt32(2);
                     reader.Close();
 
+                    var db = new InventoryDbPrimitives();
                     if (stackCount <= count)
                     {
-                        // Full removal
-                        using (var del = conn.CreateCommand())
-                        {
-                            del.Transaction = tx;
-                            del.CommandText = "DELETE FROM character_items WHERE character_id = @cid AND list_type = 0 AND slot_index = @slot;";
-                            del.Parameters.AddWithValue("@cid", characterId);
-                            del.Parameters.AddWithValue("@slot", slot);
-                            del.ExecuteNonQuery();
-                        }
+                        db.DeleteItem(conn, tx, itemUid);
                         return ((short)slot, count, 0);
                     }
                     else
                     {
-                        // Partial deduction
                         int remaining = stackCount - count;
-                        using (var upd = conn.CreateCommand())
-                        {
-                            upd.Transaction = tx;
-                            upd.CommandText = "UPDATE character_items SET stack_count = @ns WHERE character_id = @cid AND list_type = 0 AND slot_index = @slot;";
-                            upd.Parameters.AddWithValue("@ns", remaining);
-                            upd.Parameters.AddWithValue("@cid", characterId);
-                            upd.Parameters.AddWithValue("@slot", slot);
-                            upd.ExecuteNonQuery();
-                        }
+                        db.UpdateStackCount(conn, tx, itemUid, remaining);
                         return ((short)slot, count, remaining);
                     }
                 }

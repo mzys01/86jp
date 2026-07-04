@@ -289,60 +289,73 @@ ORDER BY slot_index;";
                 }
 
 
-                var item = _db.LoadItemRecord(connection, transaction, characterId, dbListType, slotIndex);
-                if (item == null)
-                    return false;
-
-                if (IsEquipmentItemLocked(connection, transaction, characterId, item))
-                {
-                    FileLogger.Log($"  [DeleteItem] REJECT: locked item listType={dbListType} slot={slotIndex} lockId={item.EquipmentLockId}");
-                    return false;
-                }
-
-                var appliedCount = NormalizeRemovalCount(item, deleteCount);
-                var itemRemainingCount = Math.Max(0, item.StackCount - appliedCount);
-                var isStackCountedRecord = IsStackCountedRecord(item);
-                var satietyMutation = default(PetSatietyMutation);
-                if (isStackCountedRecord && appliedCount < item.StackCount)
-                {
-                    if (IsPetConsumableRecord(item))
-                        _db.UpdatePetStackCount(connection, transaction, item.ItemUid, itemRemainingCount);
-                    else
-                        _db.UpdateStackCount(connection, transaction, item.ItemUid, itemRemainingCount);
-                }
-                else
-                {
-                    _db.DeleteItem(connection, transaction, item.ItemUid);
-                }
-
-                if (IsPetConsumableRecord(item))
-                    satietyMutation = ApplyPetFoodSatiety(connection, transaction, characterId, item.ItemTemplateId);
-
-                _auditLogger.WriteDeleteAuditLog(connection, transaction, characterId, item, appliedCount);
-                var wallet = _db.LoadWallet(connection, transaction, characterId);
-                transaction.Commit();
-
-                result = new InventoryMutationResult
-                {
-                    ListType = listType,
-                    SlotIndex = slotIndex,
-                    ItemTemplateId = item.ItemTemplateId,
-                    RemainingStackCount = itemRemainingCount,
-                    InstanceValue = isStackCountedRecord ? itemRemainingCount : item.InstanceValue,
-                    Durability = item.Durability,
-                    UpdatedGold = wallet.Gold,
-                    UpdatedSp = wallet.Sp,
-                    UpdatedCoin = wallet.Cera,
-                    RequestedCount = deleteCount,
-                    AppliedCount = (short)appliedCount,
-                    PetCreatureKey = satietyMutation.CreatureKey,
-                    PetSatietyBefore = satietyMutation.Before,
-                    PetSatietyAfter = satietyMutation.After,
-                    PetSatietyChanged = satietyMutation.Changed,
-                };
-                return true;
+                var ok = TryDeleteItemCore(connection, transaction, characterId, listType, dbListType, slotIndex, deleteCount, out result);
+                if (ok)
+                    transaction.Commit();
+                return ok;
                 }
             }
+        }
+
+        // 非晶块删除内核: 调用方持有连接与事务并负责提交(失败不提交=回滚)。
+        internal bool TryDeleteItemCore(
+            SqliteConnection connection, SqliteTransaction transaction,
+            int characterId, InventoryListType listType, InventoryListType dbListType,
+            short slotIndex, short deleteCount, out InventoryMutationResult result)
+        {
+            result = null;
+
+            var item = _db.LoadItemRecord(connection, transaction, characterId, dbListType, slotIndex);
+            if (item == null)
+                return false;
+
+            if (IsEquipmentItemLocked(connection, transaction, characterId, item))
+            {
+                FileLogger.Log($"  [DeleteItem] REJECT: locked item listType={dbListType} slot={slotIndex} lockId={item.EquipmentLockId}");
+                return false;
+            }
+
+            var appliedCount = NormalizeRemovalCount(item, deleteCount);
+            var itemRemainingCount = Math.Max(0, item.StackCount - appliedCount);
+            var isStackCountedRecord = IsStackCountedRecord(item);
+            var satietyMutation = default(PetSatietyMutation);
+            if (isStackCountedRecord && appliedCount < item.StackCount)
+            {
+                if (IsPetConsumableRecord(item))
+                    _db.UpdatePetStackCount(connection, transaction, item.ItemUid, itemRemainingCount);
+                else
+                    _db.UpdateStackCount(connection, transaction, item.ItemUid, itemRemainingCount);
+            }
+            else
+            {
+                _db.DeleteItem(connection, transaction, item.ItemUid);
+            }
+
+            if (IsPetConsumableRecord(item))
+                satietyMutation = ApplyPetFoodSatiety(connection, transaction, characterId, item.ItemTemplateId);
+
+            _auditLogger.WriteDeleteAuditLog(connection, transaction, characterId, item, appliedCount);
+            var wallet = _db.LoadWallet(connection, transaction, characterId);
+
+            result = new InventoryMutationResult
+            {
+                ListType = listType,
+                SlotIndex = slotIndex,
+                ItemTemplateId = item.ItemTemplateId,
+                RemainingStackCount = itemRemainingCount,
+                InstanceValue = isStackCountedRecord ? itemRemainingCount : item.InstanceValue,
+                Durability = item.Durability,
+                UpdatedGold = wallet.Gold,
+                UpdatedSp = wallet.Sp,
+                UpdatedCoin = wallet.Cera,
+                RequestedCount = deleteCount,
+                AppliedCount = (short)appliedCount,
+                PetCreatureKey = satietyMutation.CreatureKey,
+                PetSatietyBefore = satietyMutation.Before,
+                PetSatietyAfter = satietyMutation.After,
+                PetSatietyChanged = satietyMutation.Changed,
+            };
+            return true;
         }
 
         private static bool HasSeedData(SqliteConnection connection, int characterId)

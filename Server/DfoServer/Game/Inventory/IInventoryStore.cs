@@ -46,9 +46,11 @@ namespace DfoServer.Game.Inventory
 
         bool TryPickupItem(int characterId, int accountId, int itemTemplateId, int stackCount, out short assignedSlot);
 
-        bool TryPickupItem(int characterId, int accountId, int itemTemplateId, int stackCount, out short assignedSlot, out int newStackCount);
+        bool TryPickupItem(int characterId, int accountId, int itemTemplateId, int stackCount, out short assignedSlot, out int newStackCount,
+            Action<SqliteConnection, SqliteTransaction> alsoInSameTransaction = null);
 
-        bool TryRemoveItemByTemplateId(int characterId, int accountId, int itemTemplateId, out short slotIndex, out InventoryMutationResult result);
+        bool TryRemoveItemByTemplateId(int characterId, int accountId, int itemTemplateId, out short slotIndex, out InventoryMutationResult result,
+            Action<SqliteConnection, SqliteTransaction> alsoInSameTransaction = null);
 
         bool TryRepairEquipment(int characterId, int accountId, InventoryListType listType, short slotIndex, bool quickRepair, bool freeRepair, out RepairEquipmentResult result);
 
