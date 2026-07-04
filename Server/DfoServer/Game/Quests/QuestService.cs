@@ -689,11 +689,13 @@ namespace DfoServer.Game.Quests
             if (body == null || body.Length < 2) return BuildFailAck(22);
             ushort questId = BitConverter.ToUInt16(body, 0);
             ushort rewardSelectIdx = (body.Length >= 4) ? BitConverter.ToUInt16(body, 2) : (ushort)0;
+            bool hasRewardSelectIdx = body.Length >= 4 && rewardSelectIdx != ushort.MaxValue;
             ushort multiplier = (body.Length >= 6) ? BitConverter.ToUInt16(body, 4) : (ushort)1;
             if (multiplier == 0) multiplier = 1;
 
             var active = LoadActiveQuests(connStr, characterId);
             var q = FindByQuestId(active, questId);
+            int clearedFlagValue = 1;
             if (GameWorld.QuestData.IsQuestClearQuest(questId))
             {
                 if (!CanFinishQuestClearQuest(connStr, characterId, questId))
@@ -701,6 +703,11 @@ namespace DfoServer.Game.Quests
 
                 if (q != null)
                     q.TriggerValue = 0;
+            }
+            else if (GameWorld.QuestData.IsQuestionQuest(questId))
+            {
+                if (!TryResolveQuestionQuestClearFlagValue(questId, q, hasRewardSelectIdx, rewardSelectIdx, out clearedFlagValue))
+                    return BuildFailAck(22);
             }
             else if (q != null && q.TriggerValue != 0)
             {
@@ -807,7 +814,7 @@ namespace DfoServer.Game.Quests
                 }
 
                 if (!GameWorld.QuestData.IsRepeatableQuest(questId))
-                    MarkQuestCleared(scope.Connection, scope.Transaction, characterId, questId);
+                    MarkQuestCleared(scope.Connection, scope.Transaction, characterId, questId, clearedFlagValue);
                 SyncQuestClearParentProgress(scope.Connection, scope.Transaction, characterId);
                 scope.Commit();
             }
@@ -864,17 +871,65 @@ namespace DfoServer.Game.Quests
                 w.WriteByte(0); // npcCount layer 2
             }
 
-            FileLogger.Log($"[QuestService] FINISH quest={questId} rewardIdx={rewardSelectIdx} mult={multiplier} gold={reward.Gold * multiplier} consumed={consumedEntries.Count} rewarded={insertedEntries.Count}");
+            FileLogger.Log($"[QuestService] FINISH quest={questId} rewardIdx={rewardSelectIdx} mult={multiplier} flag={clearedFlagValue} gold={reward.Gold * multiplier} consumed={consumedEntries.Count} rewarded={insertedEntries.Count}");
             return w.ToArray();
         }
 
-        private static void MarkQuestCleared(SqliteConnection conn, SqliteTransaction tx, int characterId, ushort questId)
+        private static bool TryResolveQuestionQuestClearFlagValue(
+            ushort questId,
+            ActiveQuest activeQuest,
+            bool hasRewardSelectIdx,
+            ushort rewardSelectIdx,
+            out int flagValue)
         {
+            flagValue = 1;
+            int answerCount = GameWorld.QuestData.GetQuestionAnswerCount(questId);
+            if (answerCount <= 0)
+                return activeQuest == null || activeQuest.TriggerValue == 0;
+
+            if (activeQuest != null && TryResolveQuestionQuestFlagValueFromTrigger(activeQuest.TriggerValue, answerCount, out flagValue))
+                return true;
+
+            if (hasRewardSelectIdx && rewardSelectIdx < answerCount)
+            {
+                flagValue = GameWorld.QuestData.GetRequiredQuestAnswerFlagValue(rewardSelectIdx);
+                return true;
+            }
+
+            uint trigger = activeQuest != null ? activeQuest.TriggerValue : uint.MaxValue;
+            FileLogger.Log($"[QuestService] Question quest finish rejected: quest={questId} trigger={trigger} answerCount={answerCount}");
+            return false;
+        }
+
+        private static bool TryResolveQuestionQuestFlagValueFromTrigger(uint trigger, int answerCount, out int flagValue)
+        {
+            if (trigger == 0)
+            {
+                flagValue = GameWorld.QuestData.GetRequiredQuestAnswerFlagValue(0);
+                return true;
+            }
+
+            if (trigger <= (uint)answerCount)
+            {
+                flagValue = (int)trigger;
+                return true;
+            }
+
+            flagValue = 1;
+            return false;
+        }
+
+        private static void MarkQuestCleared(SqliteConnection conn, SqliteTransaction tx, int characterId, ushort questId, int flagValue = 1)
+        {
+            if (flagValue == 0)
+                flagValue = 1;
+
             using (var cmd = new SqliteCommand(
-                "INSERT OR REPLACE INTO character_invisible_falgs (character_id, slot_index, flag_value) VALUES (@cid, @idx, 1)", conn, tx))
+                "INSERT OR REPLACE INTO character_invisible_falgs (character_id, slot_index, flag_value) VALUES (@cid, @idx, @flag)", conn, tx))
             {
                 cmd.Parameters.AddWithValue("@cid", characterId);
                 cmd.Parameters.AddWithValue("@idx", (int)questId);
+                cmd.Parameters.AddWithValue("@flag", flagValue);
                 cmd.ExecuteNonQuery();
             }
 
@@ -899,6 +954,11 @@ namespace DfoServer.Game.Quests
 
         private static bool IsQuestCleared(SqliteConnection conn, SqliteTransaction tx, int characterId, int questId)
         {
+            return ReadQuestClearedFlagValue(conn, tx, characterId, questId) != 0;
+        }
+
+        private static int ReadQuestClearedFlagValue(SqliteConnection conn, SqliteTransaction tx, int characterId, int questId)
+        {
             using (var cmd = new SqliteCommand(
                 "SELECT flag_value FROM character_invisible_falgs WHERE character_id=@cid AND slot_index=@idx",
                 conn,
@@ -907,7 +967,7 @@ namespace DfoServer.Game.Quests
                 cmd.Parameters.AddWithValue("@cid", characterId);
                 cmd.Parameters.AddWithValue("@idx", questId);
                 var result = cmd.ExecuteScalar();
-                return result != null && Convert.ToInt32(result) != 0;
+                return result != null ? Convert.ToInt32(result) : 0;
             }
         }
 
@@ -924,8 +984,10 @@ namespace DfoServer.Game.Quests
             var qst = GameWorld.QuestData.GetQuestFile(questId);
             if (qst == null) return true;
 
+            bool preQuestOk = true;
             if (qst.PreRequiredQuestGroups != null && qst.PreRequiredQuestGroups.Count > 0)
             {
+                preQuestOk = false;
                 foreach (var group in qst.PreRequiredQuestGroups)
                 {
                     var ids = GameWorld.QuestData.ParseIntList(group);
@@ -935,20 +997,51 @@ namespace DfoServer.Game.Quests
                         if (pq > 0 && !IsQuestCleared(connStr, characterId, (ushort)pq))
                         { groupOk = false; break; }
                     }
-                    if (groupOk) return true;
+                    if (groupOk) { preQuestOk = true; break; }
                 }
-                return false;
+            }
+            else
+            {
+                var preReqs = GameWorld.QuestData.GetPreRequiredQuests(questId);
+                if (preReqs.Count > 0)
+                {
+                    foreach (var preQid in preReqs)
+                    {
+                        if (preQid > 0 && !IsQuestCleared(connStr, characterId, (ushort)preQid))
+                        {
+                            preQuestOk = false;
+                            break;
+                        }
+                    }
+                }
             }
 
-            var preReqs = GameWorld.QuestData.GetPreRequiredQuests(questId);
-            if (preReqs.Count > 0)
+            return preQuestOk && CheckPreRequiredQuestAnswers(connStr, characterId, qst);
+        }
+
+        private static bool CheckPreRequiredQuestAnswers(string connStr, int characterId, PvfLib.QuestFile qst)
+        {
+            var preReqAns = GameWorld.QuestData.ParseIntList(qst.PreRequiredQuestAnswer);
+            if (preReqAns.Count == 0)
+                return true;
+
+            using (var conn = new SqliteConnection(connStr))
             {
-                foreach (var preQid in preReqs)
+                conn.Open();
+                for (int i = 0; i + 1 < preReqAns.Count; i += 2)
                 {
-                    if (preQid > 0 && !IsQuestCleared(connStr, characterId, (ushort)preQid))
+                    int reqQid = preReqAns[i];
+                    int reqAnswer = preReqAns[i + 1];
+                    if (reqQid <= 0)
+                        continue;
+
+                    int expectedFlag = GameWorld.QuestData.GetRequiredQuestAnswerFlagValue(reqAnswer);
+                    int actualFlag = ReadQuestClearedFlagValue(conn, null, characterId, reqQid);
+                    if (expectedFlag <= 0 || actualFlag != expectedFlag)
                         return false;
                 }
             }
+
             return true;
         }
 
