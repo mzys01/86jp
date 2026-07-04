@@ -97,7 +97,7 @@ namespace DfoServer.Network.Handlers
 
             if (result.ListType == InventoryListType.Pet)
             {
-                await SendUpdateItemList(session, InventoryListType.Pet, result.SlotIndex);
+                await _refresh.SendUpdateItemList(session, InventoryListType.Pet, result.SlotIndex);
                 FileLogger.Log($"[{ProtocolName}] BUY_ITEM: pet ITEM_LIST update sent slot={result.SlotIndex}");
             }
         }
@@ -172,13 +172,13 @@ namespace DfoServer.Network.Handlers
                 0x01, header.type, BuildTitleBookSuccess(itemSpaceRaw, slot, category, index)));
 
             if (result.InventoryChanged && itemSpace != InventoryListType.Equipment)
-                await SendUpdateItemList(session, itemSpace, slot);
+                await _refresh.SendUpdateItemList(session, itemSpace, slot);
 
             if (result.EquipmentChanged)
-                await SendNoti2AppearanceUpdate(session);
+                await _refresh.SendNoti2AppearanceUpdate(session);
 
             if (result.ItemLockChanged)
-                await SendAllEquipmentItemLockListRefresh(session);
+                await _refresh.SendAllEquipmentItemLockListRefresh(session);
         }
 
         public async Task Handle_ACHIEVEMENT_TRIGGER(EnhancedClientSession session, GamePacketHeader header, byte[] body)

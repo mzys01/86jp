@@ -66,27 +66,6 @@ namespace DfoServer.Network.Handlers
             await SendEquipmentItemLockEntryRefresh(session, result, 1, "ITEM_LOCK_LIST_DELTA_CANCEL");
         }
 
-        public async Task SendEquipmentItemLockListRefresh(EnhancedClientSession session, InventoryListType listType)
-        {
-            if (!IsEquipmentItemLockListType(listType))
-                return;
-
-            var (cid, aid) = ResolveOwner(session);
-            var locks = _inventoryStore.LoadEquipmentItemLocks(cid);
-            LogEquipmentItemLockList("ITEM_LOCK_LIST_REFRESH", locks);
-            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x00FB,
-                EquipmentItemLockBuilder.BuildLockList(locks)));
-        }
-
-        public async Task SendAllEquipmentItemLockListRefresh(EnhancedClientSession session)
-        {
-            var (cid, aid) = ResolveOwner(session);
-            var locks = _inventoryStore.LoadEquipmentItemLocks(cid);
-            LogEquipmentItemLockList("ITEM_LOCK_LIST_ALL", locks);
-            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x00FB,
-                EquipmentItemLockBuilder.BuildLockList(locks)));
-        }
-
         private async Task SendEquipmentItemLockEntryRefresh(EnhancedClientSession session, EquipmentItemLockResult result, byte state, string tag)
         {
             var entries = new[]
@@ -100,7 +79,7 @@ namespace DfoServer.Network.Handlers
                 }
             };
 
-            LogEquipmentItemLockList(tag, entries);
+            InventoryRefreshSender.LogEquipmentItemLockList(tag, entries);
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x00FB,
                 EquipmentItemLockBuilder.BuildLockList(entries)));
         }
@@ -115,15 +94,6 @@ namespace DfoServer.Network.Handlers
             listType = (InventoryListType)body[0];
             slotIndex = BitConverter.ToInt16(body, 1);
             return true;
-        }
-
-        private static bool IsEquipmentItemLockListType(InventoryListType listType)
-        {
-            return listType == InventoryListType.Main
-                || listType == InventoryListType.PersonalCargo
-                || listType == InventoryListType.Equipment
-                || listType == InventoryListType.Avatar
-                || listType == InventoryListType.Pet;
         }
 
         private void LogEquipmentItemLockList(string tag, System.Collections.Generic.IReadOnlyList<EquipmentItemLockEntry> locks)

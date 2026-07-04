@@ -42,7 +42,7 @@ namespace DfoServer.Network.Handlers
 
             if (result.ListType == InventoryListType.Pet)
             {
-                await SendUpdateItemList(session, InventoryListType.Pet, result.SlotIndex);
+                await _refresh.SendUpdateItemList(session, InventoryListType.Pet, result.SlotIndex);
             }
 
             if (result.PetSatietyChanged)
@@ -135,7 +135,7 @@ namespace DfoServer.Network.Handlers
 
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, header.type, CommonPacketBodyBuilder.BuildSuccessAck()));
 
-            await SendUpdateItemList(session, InventoryListType.Pet, result.SlotIndex);
+            await _refresh.SendUpdateItemList(session, InventoryListType.Pet, result.SlotIndex);
             await SendCreatureListRefresh(session);
 
             FileLogger.Log($"[{ProtocolName}] HATCH_CREATURE_EGG: OK type=0x{header.type:X4} slot={result.SlotIndex} egg=0x{result.EggItemTemplateId:X8} -> pet=0x{result.HatchedItemTemplateId:X8} serial={result.PetSerialOrHandle}");
@@ -572,9 +572,9 @@ namespace DfoServer.Network.Handlers
             }
 
             if (avatarSlots.Count > 0)
-                await SendUpdateItemList(session, InventoryListType.Avatar, avatarSlots);
+                await _refresh.SendUpdateItemList(session, InventoryListType.Avatar, avatarSlots);
             if (petSlots.Count > 0)
-                await SendUpdateItemList(session, InventoryListType.Pet, petSlots);
+                await _refresh.SendUpdateItemList(session, InventoryListType.Pet, petSlots);
         }
 
         private async Task SendAvatarOrPetUpdateListForBoosterRewards(EnhancedClientSession session, BoosterUseResult result)
@@ -593,9 +593,9 @@ namespace DfoServer.Network.Handlers
             }
 
             if (avatarSlots.Count > 0)
-                await SendUpdateItemList(session, InventoryListType.Avatar, avatarSlots);
+                await _refresh.SendUpdateItemList(session, InventoryListType.Avatar, avatarSlots);
             if (petSlots.Count > 0)
-                await SendUpdateItemList(session, InventoryListType.Pet, petSlots);
+                await _refresh.SendUpdateItemList(session, InventoryListType.Pet, petSlots);
         }
 
         private static bool TryParseCreatureEggHatchRequest(byte[] body, out InventoryListType listType, out short slotIndex, out int expectedItemTemplateId)

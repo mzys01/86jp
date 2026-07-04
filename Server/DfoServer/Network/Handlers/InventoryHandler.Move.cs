@@ -59,13 +59,13 @@ namespace DfoServer.Network.Handlers
 
             FileLogger.Log($"[{ProtocolName}] MOVE_ITEMSPACE: OK src=({result.SourceListType},{result.SourceSlotIndex}) dst=({result.DestinationListType},{result.DestinationSlotIndex}) moveVal={result.MoveValue32}");
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0013, MoveItemSpaceAckBuilder.Build(result)));
-            await SendSortItemLockRefresh(session, request.SourceListType);
-            if (MapToSortLockListType(request.SourceListType) != MapToSortLockListType(request.DestinationListType))
-                await SendSortItemLockRefresh(session, request.DestinationListType);
+            await _refresh.SendSortItemLockRefresh(session, request.SourceListType);
+            if (InventoryRefreshSender.MapToSortLockListType(request.SourceListType) != InventoryRefreshSender.MapToSortLockListType(request.DestinationListType))
+                await _refresh.SendSortItemLockRefresh(session, request.DestinationListType);
 
 
             if (result.Mutated && (request.SourceListType == InventoryListType.Equipment || request.DestinationListType == InventoryListType.Equipment))
-                await SendNoti2AppearanceUpdate(session);
+                await _refresh.SendNoti2AppearanceUpdate(session);
         }
 
         public async Task Handle_ENUM_CMDPACKET_SORT_ITEM(EnhancedClientSession session, GamePacketHeader header, byte[] body)
@@ -87,9 +87,9 @@ namespace DfoServer.Network.Handlers
                     return;
 
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0014, SortItemAckBuilder.Build(listType)));
-                await SendItemListRefresh(session, listType);
-                await SendSortItemLockRefresh(session, listType);
-                await SendEquipmentItemLockListRefresh(session, listType);
+                await _refresh.SendItemListRefresh(session, listType);
+                await _refresh.SendSortItemLockRefresh(session, listType);
+                await _refresh.SendEquipmentItemLockListRefresh(session, listType);
                 FileLogger.Log($"[{ProtocolName}] SORT: ack + ITEM_LIST sent, done");
             }
             catch (Exception ex)
@@ -137,16 +137,16 @@ namespace DfoServer.Network.Handlers
 
         private async Task SendSortItemUnlockAckAndRefresh(EnhancedClientSession session, InventoryListType listType, short slotIndex)
         {
-            var notiListType = MapToSortLockListType(listType);
+            var notiListType = InventoryRefreshSender.MapToSortLockListType(listType);
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x02CB, SortItemLockBuilder.BuildUnlock(notiListType, slotIndex)));
 
             if (listType != InventoryListType.Equipment)
             {
-                await SendItemListRefresh(session, notiListType);
-                await SendEquipmentItemLockListRefresh(session, notiListType);
+                await _refresh.SendItemListRefresh(session, notiListType);
+                await _refresh.SendEquipmentItemLockListRefresh(session, notiListType);
             }
 
-            await SendSortItemLockRefresh(session, notiListType);
+            await _refresh.SendSortItemLockRefresh(session, notiListType);
         }
     }
 }

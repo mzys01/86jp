@@ -27,6 +27,7 @@ namespace DfoServer.Network
         private readonly RentalHandler _rentalHandler;
         private readonly MailboxHandler _mailboxHandler;
         private readonly CollectionBoxHandler _collectionBoxHandler;
+        private readonly InventoryRefreshSender _inventoryRefreshSender;
         private readonly MercenaryHandler _mercenaryHandler;
         private readonly ICharacterRepository _characterRepository;
         private readonly SqliteSelectCharacterDataSource _selectCharacterDataSource;
@@ -61,7 +62,8 @@ namespace DfoServer.Network
             _selectCharacterDataSource = sqliteSelectCharacterDataSource;
             _loginHandler = new LoginHandler(accountRepository);
             _characterSelectHandler = new CharacterSelectHandler(sqliteSelectCharacterDataSource, characterRepository, getUserInfoTemplate);
-            _inventoryHandler = new InventoryHandler(inventoryStore, sqliteSelectCharacterDataSource, characterRepository, broadcastGamePacket);
+            _inventoryRefreshSender = new InventoryRefreshSender(inventoryStore, sqliteSelectCharacterDataSource, characterRepository);
+            _inventoryHandler = new InventoryHandler(inventoryStore, sqliteSelectCharacterDataSource, characterRepository, _inventoryRefreshSender, broadcastGamePacket);
             _townHandler = new TownHandler(characterRepository, inventoryStore);
             _dungeonHandler = new DungeonHandler(_assetService);
             _skillHandler = new SkillHandler(characterRepository);
@@ -159,8 +161,8 @@ namespace DfoServer.Network
                     var gsConnStr = SqliteDatabaseBootstrap.Initialize(
                         ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
                     s.GameSession = new Game.Session.GameSession(s, gsConnStr, _assetService);
-                    await _inventoryHandler.SendAllSortItemLockRefresh(s);
-                    await _inventoryHandler.SendAllEquipmentItemLockListRefresh(s);
+                    await _inventoryRefreshSender.SendAllSortItemLockRefresh(s);
+                    await _inventoryRefreshSender.SendAllEquipmentItemLockListRefresh(s);
                 }
             };
             d[0x0005] = _characterSelectHandler.Handle_ENUM_CMDPACKET_CREATE_CHARACTER;
