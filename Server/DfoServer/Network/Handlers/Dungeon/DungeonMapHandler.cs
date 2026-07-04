@@ -22,6 +22,10 @@ namespace DfoServer.Network.Handlers.Dungeon
 
         internal async Task HandleMoveMap(EnhancedClientSession session, GamePacketHeader header, byte[] body)
         {
+            // 塔内分流: 在塔中时 MOVE_MAP = 推进下一层(不走普通地图切换)
+            if (await _svc.DeathTower.TryHandleMoveMap(session))
+                return;
+
             var req = MoveMapRequest.Parse(body);
 
             if (session.Player.CurDungeonCleared)

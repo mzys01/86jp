@@ -22,11 +22,13 @@ namespace DfoServer.Network.Handlers.Dungeon
         private readonly IAssetService _assetService;
 
         internal Game.ReviveCoin.ReviveCoinService ReviveCoin { get; }
+        internal Game.DeathTower.DeathTowerHandler DeathTower { get; }
 
         internal DungeonSharedServices(IAssetService assetService, Game.ReviveCoin.ReviveCoinService reviveCoin)
         {
             _assetService = assetService ?? throw new ArgumentNullException(nameof(assetService));
             ReviveCoin = reviveCoin ?? throw new ArgumentNullException(nameof(reviveCoin));
+            DeathTower = new Game.DeathTower.DeathTowerHandler();
         }
 
         internal static DungeonRoomProgress GetCurrentRoomProgress(EnhancedClientSession session)
@@ -130,6 +132,7 @@ namespace DfoServer.Network.Handlers.Dungeon
 
         public static void ResetDungeonState(EnhancedClientSession session)
         {
+            Game.DeathTower.DeathTowerHandler.ClearTowerState(session);
             session.Player.CurDungeon = 0;
             session.Player.CurDungeonClearState = 0;
             session.Player.CurDungeonTotalExp = 0;

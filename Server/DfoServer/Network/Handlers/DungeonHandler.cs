@@ -84,5 +84,8 @@ namespace DfoServer.Network.Handlers
 
         public Task Handle_BACK_2_VILLAGE(EnhancedClientSession session, GamePacketHeader header, byte[] body)
             => _tutorial.HandleBack2Village(session, header, body);
+
+        public Task Handle_ENUM_CMDPACKET_DEATH_TOWER_STAGE_CMD(EnhancedClientSession session, GamePacketHeader header, byte[] body)
+            => _services.DeathTower.HandleStageCommand(session, header, body);
     }
 }

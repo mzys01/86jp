@@ -81,6 +81,10 @@ namespace DfoServer.Network.Handlers.Dungeon
         {
             var req = Network.Parsers.Dungeon.SelectDungeonRequest.Parse(body);
 
+            // 塔类副本分流: dungeonKind==1 走专属流程(NOTI 142+143, 非普通副本的 START_MAP)
+            if (await _svc.DeathTower.TryHandleSelectDungeon(session, req.DungeonId))
+                return;
+
             session.Player.CurDungeon = (short)req.DungeonId;
             session.Player.CurDungeonDifficulty = req.Difficulty;
             session.Player.CurDungeonFlag1 = req.Flag1;
