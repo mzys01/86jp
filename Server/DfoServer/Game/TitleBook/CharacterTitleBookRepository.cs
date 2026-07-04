@@ -1,3 +1,4 @@
+using DfoServer.Game.Inventory;
 using Microsoft.Data.Sqlite;
 using System;
 using System.Collections.Generic;
@@ -7,10 +8,12 @@ namespace DfoServer.Game.TitleBook
     public sealed class CharacterTitleBookRepository
     {
         private readonly string _connectionString;
+        private readonly TitleBookStaticDataProvider _staticData;
 
         public CharacterTitleBookRepository(string connectionString)
         {
             _connectionString = connectionString ?? throw new ArgumentNullException(nameof(connectionString));
+            _staticData = TitleBookStaticDataProvider.LoadDefault();
         }
 
         public List<TitleBookCategorySnapshot> LoadSnapshots(int characterId)
@@ -88,6 +91,56 @@ namespace DfoServer.Game.TitleBook
             return BuildSnapshot(category, blob != null
                 ? LoadCategoryItems(category, blob)
                 : LoadLegacyCategoryItems(connection, transaction, characterId, category));
+        }
+
+        public TitleBookCategorySnapshot LoadSnapshotWithEquippedProjection(int characterId, int category, short titleEquipSlot)
+        {
+            using (var connection = new SqliteConnection(_connectionString))
+            {
+                connection.Open();
+                var snapshot = LoadSnapshot(connection, null, characterId, category);
+                AppendEquippedProjection(connection, null, characterId, category, titleEquipSlot, snapshot);
+                return snapshot;
+            }
+        }
+
+        private void AppendEquippedProjection(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            int characterId,
+            int category,
+            short titleEquipSlot,
+            TitleBookCategorySnapshot snapshot)
+        {
+            var equipped = LoadEquippedTitle(connection, transaction, characterId, titleEquipSlot);
+            if (equipped == null)
+                return;
+
+            if (!TryFindTitleBookSlot(equipped.ItemId, out var fitCategory, out var fitIndex) || fitCategory != category)
+                return;
+
+            foreach (var entry in snapshot.Entries)
+            {
+                if (entry.SlotIndex == fitIndex)
+                    return;
+            }
+
+            var fields = equipped.Raw != null
+                ? MakeEquipListCodec.ParseDisplayFields(equipped.Raw)
+                : new MakeEquipListCodec.DisplayFields();
+            snapshot.Entries.Add(new TitleBookListEntrySnapshot
+            {
+                SlotIndex = (ushort)fitIndex,
+                ItemId = equipped.ItemId,
+                Value = unchecked((int)fields.InstanceValue),
+                Attr = fields.Reinforce,
+                Durability = fields.Durability,
+                SealFlag = 0,
+                EnchantIndex = unchecked((int)fields.Enchant),
+                EnchantUpgradeCount = fields.EnchantUpgradeCount,
+                AmplifyType = fields.AmplifyType,
+                AmplifyValue = fields.AmplifyValue,
+            });
         }
 
         private static List<TitleBookInventoryItem> LoadCategoryItems(int category, byte[] blob)
@@ -284,6 +337,59 @@ WHERE character_id = @cid AND chunk_index = @category;";
                 case 4: return "event";
                 default: throw new ArgumentOutOfRangeException(nameof(category));
             }
+        }
+
+        private bool TryFindTitleBookSlot(int itemId, out int category, out int index)
+        {
+            for (category = 0; category < TitleBookStaticDataProvider.CategoryCapacities.Count; category++)
+            {
+                var capacity = TitleBookStaticDataProvider.CategoryCapacities[category];
+                for (index = 0; index < capacity; index++)
+                {
+                    if (_staticData.GetSlot(category, index).AllowsItem(itemId))
+                        return true;
+                }
+            }
+
+            category = -1;
+            index = -1;
+            return false;
+        }
+
+        private static EquippedTitleProjection LoadEquippedTitle(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            int characterId,
+            short slot)
+        {
+            using (var command = connection.CreateCommand())
+            {
+                command.Transaction = transaction;
+                command.CommandText = @"
+SELECT item_id, raw_entry
+FROM character_equipped_entries
+WHERE character_id = @cid AND slot = @slot;";
+                command.Parameters.AddWithValue("@cid", characterId);
+                command.Parameters.AddWithValue("@slot", slot);
+                using (var reader = command.ExecuteReader())
+                {
+                    if (!reader.Read())
+                        return null;
+
+                    return new EquippedTitleProjection
+                    {
+                        ItemId = reader.GetInt32(0),
+                        Raw = (byte[])reader["raw_entry"],
+                    };
+                }
+            }
+        }
+
+        private sealed class EquippedTitleProjection
+        {
+            public int ItemId { get; set; }
+
+            public byte[] Raw { get; set; }
         }
     }
 }

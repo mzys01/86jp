@@ -27,7 +27,7 @@ namespace DfoServer.Game.Characters
                     var exp = e.ExpansionData ?? new byte[4];
                     bw.Write(exp.Length == 4 ? exp : new byte[4]);
                     bw.Write(e.State);
-                    bw.Write(e.ClearAvatar);
+                    bw.Write(e.LinkItemId);
                     bw.Write(e.EnchantValue);
                     bw.Write(e.Flag20);
                 }
@@ -52,10 +52,10 @@ namespace DfoServer.Game.Characters
                     var expLen = br.ReadInt32();
                     var expData = br.ReadBytes(4);
                     var state = br.ReadByte();
-                    var clearAvatar = br.ReadInt32();
+                    var linkItemId = br.ReadInt32();
                     var enchantValue = br.ReadUInt32();
                     var flag20 = br.ReadByte();
-                    list.Add(new CharacterAppearanceEntry(slot, itemId, expLen, expData, state, clearAvatar, enchantValue, flag20));
+                    list.Add(new CharacterAppearanceEntry(slot, itemId, expLen, expData, state, linkItemId, enchantValue, flag20));
                 }
                 return list.ToArray();
             }

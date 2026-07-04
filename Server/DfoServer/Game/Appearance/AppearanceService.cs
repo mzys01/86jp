@@ -1,4 +1,5 @@
 using DfoServer.Game.Characters;
+using DfoServer.Game.CharacterData;
 using DfoServer.Game.Inventory;
 using DfoServer.Game.SelectCharacter;
 using DfoServer.Game.Session;
@@ -36,6 +37,9 @@ namespace DfoServer.Game.Appearance
             int cloneTitleItemId)
         {
             SaveCloneTitleItemId(characterId, cloneTitleItemId);
+            var tail = player.Subtype0Tail ?? new UserInfoMinimumTailSnapshot();
+            tail.CloneTitleItemId = (uint)(cloneTitleItemId > 0 ? cloneTitleItemId : 0);
+            player.Subtype0Tail = tail;
             var updated = LoadAppearanceFromEquipEntries(characterId);
 
             player.AppearanceEntries = updated;
@@ -57,6 +61,9 @@ namespace DfoServer.Game.Appearance
             if (player.CharacterId > 0)
             {
                 SaveCloneTitleItemId(player.CharacterId, cloneTitleItemId);
+                var tail = player.Subtype0Tail ?? new UserInfoMinimumTailSnapshot();
+                tail.CloneTitleItemId = (uint)(cloneTitleItemId > 0 ? cloneTitleItemId : 0);
+                player.Subtype0Tail = tail;
                 player.AppearanceEntries = LoadAppearanceFromEquipEntries(player.CharacterId);
             }
 
@@ -65,11 +72,9 @@ namespace DfoServer.Game.Appearance
 
         public static byte[] BuildCloneTitleAckBody(int cloneTitleItemId, byte state = 0, byte suppressMessage = 0)
         {
-            var ack = new byte[7];
+            var ack = new byte[5];
             ack[0] = 0x01;
             BitConverter.GetBytes(cloneTitleItemId).CopyTo(ack, 1);
-            ack[5] = state;
-            ack[6] = suppressMessage;
             return ack;
         }
 
@@ -89,7 +94,7 @@ namespace DfoServer.Game.Appearance
 
             foreach (var entry in addition.EquippedEntries)
             {
-                // 外观列表的 itemId 是显示用模板ID；称号替换动画由 0x0239 独立状态恢复。
+                // 外观列表的 itemId 保持真实穿戴模板；替换称号动画还会由 subtype0 tail 首字段刷新。
                 if (entry.Slot > TitleAppearanceSlot) continue;
                 if (entry.ItemId == 0) continue;
 
@@ -104,7 +109,7 @@ namespace DfoServer.Game.Appearance
                 }
 
                 result.Add(new CharacterAppearanceEntry(
-                    (byte)entry.Slot, displayItemId, 4, new byte[4], 0x00, 0, 0u, 0));
+                    (byte)entry.Slot, displayItemId, 4, new byte[4], 0, 0, 0u, 0));
             }
 
             return result.ToArray();
@@ -165,6 +170,16 @@ WHERE character_id = @cid;";
                 Appearance = player.AppearanceEntries,
                 Subtype0Tail = player.Subtype0Tail,
             };
+
+            if (record.Subtype0Tail == null && player.CharacterId > 0)
+            {
+                record.Subtype0Tail = new SqliteSubtype0FieldsRepository(ServerPaths.DatabasePath, ServerPaths.SchemaFilePath)
+                    .Load(player.CharacterId);
+                player.Subtype0Tail = record.Subtype0Tail;
+            }
+
+            if (record.Subtype0Tail == null)
+                record.Subtype0Tail = new UserInfoMinimumTailSnapshot();
 
             var writer = new GamePacketWriter();
             writer.WriteByte(0x00);
