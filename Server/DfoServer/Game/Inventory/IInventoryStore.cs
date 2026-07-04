@@ -54,6 +54,14 @@ namespace DfoServer.Game.Inventory
 
         bool TryRepairEquipment(int characterId, int accountId, InventoryListType listType, short slotIndex, bool quickRepair, bool freeRepair, out RepairEquipmentResult result);
 
+        bool TryDepositCargoGold(int characterId, int accountId, int amount, out int newCharGold, out int newCargoGold);
+
+        bool TryWithdrawCargoGold(int characterId, int accountId, int amount, out int newCharGold, out int newCargoGold);
+
+        bool TryCreateAccountCargo(int accountId);
+
+        bool TryUpgradeAccountCargo(int accountId, out byte errorCode);
+
         bool TrySellItem(int characterId, int accountId, InventoryListType listType, short slotIndex, short sellCount, out InventoryMutationResult result);
 
         bool TryBuyCeraShopItem(int characterId, int accountId, int productId, int buyCount, int paymentMode, byte attributeValue, out InventoryMutationResult result);

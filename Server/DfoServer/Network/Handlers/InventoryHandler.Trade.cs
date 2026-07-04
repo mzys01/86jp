@@ -269,9 +269,7 @@ namespace DfoServer.Network.Handlers
         }
 
         // ── 账号金库 ──────────────────────────────────────────────────────────
-
-        private const int CargoInitialCapacity = 1;
-        private static readonly int[] CargoCapacityTiers = { 1, 8, 16, 24, 32, 40, 48, 56, 64 };
+        // SQL 已下沉 SqliteInventoryStore.Cargo.cs; handler 只留解析+ACK。
 
         public async Task Handle_DEPOSIT_MONEY(EnhancedClientSession session, GamePacketHeader header, byte[] body)
         {
@@ -299,156 +297,47 @@ namespace DfoServer.Network.Handlers
             }
 
             var (cid, aid) = ResolveOwner(session);
-            var connStr = Infrastructure.SqliteDatabaseBootstrap.Initialize(
-                Infrastructure.ServerPaths.DatabasePath, Infrastructure.ServerPaths.SchemaFilePath);
-
-            using (var conn = new Microsoft.Data.Sqlite.SqliteConnection(connStr))
+            int newCharGold, newCargoGold;
+            var ok = isDeposit
+                ? _inventoryStore.TryDepositCargoGold(cid, aid, amount, out newCharGold, out newCargoGold)
+                : _inventoryStore.TryWithdrawCargoGold(cid, aid, amount, out newCharGold, out newCargoGold);
+            if (!ok)
             {
-                conn.Open();
-                using (var tx = conn.BeginTransaction())
-                {
-                    var wallet = CurrencyService.LoadWallet(conn, tx, cid);
-                    int cargoGold = LoadCargoStateField(conn, tx, aid, "value32");
-
-                    // 角色金币与金库列均为条件增减, 任一步失败直接错误ACK并return(不提交→回滚)。
-                    // 修复旧版隐患: 金库行不存在时 SaveCargoGold 命中0行, 存款会扣角色钱但金库没进账。
-                    int newCharGold, newCargoGold;
-                    if (isDeposit)
-                    {
-                        if (!CurrencyService.TrySpendGold(conn, tx, cid, amount) ||
-                            !TryAddCargoGold(conn, tx, aid, amount))
-                        {
-                            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, wireType, new byte[] { 0x00, 0x0A }));
-                            return;
-                        }
-                        newCharGold = wallet.Gold - amount;
-                        newCargoGold = cargoGold + amount;
-                    }
-                    else
-                    {
-                        if (!TrySpendCargoGold(conn, tx, aid, amount))
-                        {
-                            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, wireType, new byte[] { 0x00, 0x0A }));
-                            return;
-                        }
-                        CurrencyService.GrantGold(conn, tx, cid, amount);
-                        newCargoGold = cargoGold - amount;
-                        newCharGold = wallet.Gold + amount;
-                    }
-
-                    tx.Commit();
-
-                    var ack = new GamePacketWriter();
-                    ack.WriteByte(0x01);
-                    ack.WriteInt32(newCargoGold);
-                    await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, wireType, ack.ToArray()));
-
-                    await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000E,
-                        ItemListUpdateBuilder.BuildGoldUpdate(newCharGold)));
-
-                    FileLogger.Log($"[{ProtocolName}] {(isDeposit ? "DEPOSIT" : "WITHDRAW")}_MONEY: amount={amount} charGold={newCharGold} cargoGold={newCargoGold}");
-                }
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, wireType, new byte[] { 0x00, 0x0A }));
+                return;
             }
+
+            var ack = new GamePacketWriter();
+            ack.WriteByte(0x01);
+            ack.WriteInt32(newCargoGold);
+            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, wireType, ack.ToArray()));
+
+            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000E,
+                ItemListUpdateBuilder.BuildGoldUpdate(newCharGold)));
+
+            FileLogger.Log($"[{ProtocolName}] {(isDeposit ? "DEPOSIT" : "WITHDRAW")}_MONEY: amount={amount} charGold={newCharGold} cargoGold={newCargoGold}");
         }
 
-        private static int LoadCargoStateField(Microsoft.Data.Sqlite.SqliteConnection conn, Microsoft.Data.Sqlite.SqliteTransaction tx, int accountId, string column)
-        {
-            using (var cmd = conn.CreateCommand())
-            {
-                cmd.Transaction = tx;
-                cmd.CommandText = $"SELECT {column} FROM account_cargo_state WHERE account_id=@aid;";
-                cmd.Parameters.AddWithValue("@aid", accountId);
-                var result = cmd.ExecuteScalar();
-                return result != null && result != DBNull.Value ? Convert.ToInt32(result) : 0;
-            }
-        }
-
-        // 金库入账: 原子增量; 金库行不存在(未开通)命中0行返回false
-        private static bool TryAddCargoGold(Microsoft.Data.Sqlite.SqliteConnection conn, Microsoft.Data.Sqlite.SqliteTransaction tx, int accountId, int amount)
-        {
-            using (var cmd = conn.CreateCommand())
-            {
-                cmd.Transaction = tx;
-                cmd.CommandText = "UPDATE account_cargo_state SET value32=value32+@amt, updated_at=CURRENT_TIMESTAMP WHERE account_id=@aid;";
-                cmd.Parameters.AddWithValue("@amt", amount);
-                cmd.Parameters.AddWithValue("@aid", accountId);
-                return cmd.ExecuteNonQuery() > 0;
-            }
-        }
-
-        // 金库取出: 条件扣减, 余额不足或未开通返回false
-        private static bool TrySpendCargoGold(Microsoft.Data.Sqlite.SqliteConnection conn, Microsoft.Data.Sqlite.SqliteTransaction tx, int accountId, int amount)
-        {
-            using (var cmd = conn.CreateCommand())
-            {
-                cmd.Transaction = tx;
-                cmd.CommandText = "UPDATE account_cargo_state SET value32=value32-@amt, updated_at=CURRENT_TIMESTAMP WHERE account_id=@aid AND value32>=@amt;";
-                cmd.Parameters.AddWithValue("@amt", amount);
-                cmd.Parameters.AddWithValue("@aid", accountId);
-                return cmd.ExecuteNonQuery() > 0;
-            }
-        }
         public async Task Handle_CREATE_ACCOUNT_CARGO(EnhancedClientSession session, GamePacketHeader header, byte[] body)
         {
             var (cid, aid) = ResolveOwner(session);
-            var connStr = Infrastructure.SqliteDatabaseBootstrap.Initialize(
-                Infrastructure.ServerPaths.DatabasePath, Infrastructure.ServerPaths.SchemaFilePath);
-
-            using (var conn = new Microsoft.Data.Sqlite.SqliteConnection(connStr))
+            if (!_inventoryStore.TryCreateAccountCargo(aid))
             {
-                conn.Open();
-                int existing = LoadCargoStateField(conn, null, aid, "selection_key");
-                if (existing > 0)
-                {
-                    await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0131, new byte[] { 0x00, 0x14 }));
-                    return;
-                }
-
-                using (var cmd = conn.CreateCommand())
-                {
-                    cmd.CommandText = @"
-INSERT OR REPLACE INTO account_cargo_state (account_id, selection_key, value32, updated_at)
-VALUES (@aid, @cap, 0, CURRENT_TIMESTAMP);";
-                    cmd.Parameters.AddWithValue("@aid", aid);
-                    cmd.Parameters.AddWithValue("@cap", CargoInitialCapacity);
-                    cmd.ExecuteNonQuery();
-                }
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0131, new byte[] { 0x00, 0x14 }));
+                return;
             }
 
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0131, new byte[] { 0x01 }));
-            FileLogger.Log($"[{ProtocolName}] CREATE_ACCOUNT_CARGO: aid={aid} selectionKey={CargoInitialCapacity}");
+            FileLogger.Log($"[{ProtocolName}] CREATE_ACCOUNT_CARGO: aid={aid} cargo created");
         }
 
         public async Task Handle_UPGRADE_ACCOUNT_CARGO(EnhancedClientSession session, GamePacketHeader header, byte[] body)
         {
             var (cid, aid) = ResolveOwner(session);
-            var connStr = Infrastructure.SqliteDatabaseBootstrap.Initialize(
-                Infrastructure.ServerPaths.DatabasePath, Infrastructure.ServerPaths.SchemaFilePath);
-
-            using (var conn = new Microsoft.Data.Sqlite.SqliteConnection(connStr))
+            if (!_inventoryStore.TryUpgradeAccountCargo(aid, out var errorCode))
             {
-                conn.Open();
-                int current = LoadCargoStateField(conn, null, aid, "selection_key");
-                if (current <= 0)
-                {
-                    await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0132, new byte[] { 0x00, 0x15 }));
-                    return;
-                }
-                int nextTierIndex = Array.IndexOf(CargoCapacityTiers, current) + 1;
-                if (nextTierIndex <= 0 || nextTierIndex >= CargoCapacityTiers.Length)
-                {
-                    await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0132, new byte[] { 0x00, 0x13 }));
-                    return;
-                }
-                int newCap = CargoCapacityTiers[nextTierIndex];
-
-                using (var cmd = conn.CreateCommand())
-                {
-                    cmd.CommandText = "UPDATE account_cargo_state SET selection_key=@cap, updated_at=CURRENT_TIMESTAMP WHERE account_id=@aid;";
-                    cmd.Parameters.AddWithValue("@cap", newCap);
-                    cmd.Parameters.AddWithValue("@aid", aid);
-                    cmd.ExecuteNonQuery();
-                }
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0132, new byte[] { 0x00, errorCode }));
+                return;
             }
 
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0132, new byte[] { 0x01 }));
