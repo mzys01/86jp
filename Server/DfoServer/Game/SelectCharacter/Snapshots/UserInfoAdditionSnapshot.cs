@@ -36,7 +36,8 @@ namespace DfoServer.Game.SelectCharacter
 
         
         public List<EquippedEntrySnapshot> EquippedEntries { get; } = new List<EquippedEntrySnapshot>();
-        public uint EquipListTrailing { get; set; }
+        // subtype1 装备列表末尾的独立字段，不属于 InvenItem；0 会清空克隆称号动画。
+        public uint CloneTitleItemId { get; set; }
 
         
         public uint NameTagItemId { get; set; }

@@ -71,7 +71,6 @@ namespace DfoServer.Game.CharacterData
                         snap.NameTagExpireTime = (uint)r.GetInt64(21);
                         snap.SkillTreeIndex = NormalizeSkillTreeIndex(r.GetInt32(22));
                         snap.EquippedCreatureLevel = (byte)r.GetInt32(23);
-                        snap.EquipListTrailing = r.IsDBNull(24) ? 0u : (uint)r.GetInt64(24);
                         snap.ManageLevel = (byte)r.GetInt32(25);
                         snap.FlagByte = (byte)r.GetInt32(26);
                         snap.GuildPowerWar = (uint)r.GetInt64(27);
@@ -83,7 +82,7 @@ namespace DfoServer.Game.CharacterData
                 }
 
                 
-                using (var cmd = new SqliteCommand("SELECT exp, ex_equip_slot_stat FROM characters WHERE character_id=@cid", conn))
+                using (var cmd = new SqliteCommand("SELECT exp, ex_equip_slot_stat, clone_title_item_id FROM characters WHERE character_id=@cid", conn))
                 {
                     cmd.Parameters.AddWithValue("@cid", characterId);
                     using (var r = cmd.ExecuteReader())
@@ -92,6 +91,7 @@ namespace DfoServer.Game.CharacterData
                         {
                             snap.CharacExp = (uint)r.GetInt64(0);
                             snap.ExEquipSlotStat = (byte)r.GetInt32(1);
+                            snap.CloneTitleItemId = r.IsDBNull(2) ? 0u : (uint)r.GetInt64(2);
                         }
                     }
                 }
