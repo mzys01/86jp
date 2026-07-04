@@ -83,6 +83,17 @@ namespace DfoServer.GameWorld
             public List<MonsterSumInfo> Monsters { get; set; }
         }
 
+        public struct DungeonRoomCoordinate
+        {
+            public int X { get; set; }
+
+            public int Y { get; set; }
+
+            public int MapId { get; set; }
+
+            public string FilePath { get; set; }
+        }
+
         public sealed class HellPartyWaveInfo
         {
             public int GroupId { get; set; }
@@ -363,6 +374,26 @@ namespace DfoServer.GameWorld
             return (pick.maze, pick.index);
         }
 
+        public static MazeInfo GetDungeonMaze(int dungeonId, int mazeIndex)
+        {
+            try
+            {
+                var loaded = LoadDungeonFileWithPath(dungeonId);
+                var dungeonFile = loaded.File;
+                if (dungeonFile.Mazes == null || dungeonFile.Mazes.Count == 0)
+                    return null;
+
+                return mazeIndex >= 0 && mazeIndex < dungeonFile.Mazes.Count
+                    ? dungeonFile.Mazes[mazeIndex]
+                    : dungeonFile.Mazes[0];
+            }
+            catch (Exception ex)
+            {
+                FileLogger.Log($"[Dungeon] GetDungeonMaze ERROR: dungeon={dungeonId} maze={mazeIndex} {ex.Message}");
+                return null;
+            }
+        }
+
         internal static int FindQuestConnectedMazeIndex(
             IReadOnlyList<MazeInfo> mazes,
             ICollection<int> primaryQuestIds,
@@ -487,6 +518,61 @@ namespace DfoServer.GameWorld
             }
 
             return -1;
+        }
+
+        public static IReadOnlyList<DungeonRoomCoordinate> GetDungeonRoomCoordinates(
+            int dungeonId,
+            int mazeIndex,
+            MazeInfo maze)
+        {
+            var result = new List<DungeonRoomCoordinate>();
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            try
+            {
+                var loaded = LoadDungeonFileWithPath(dungeonId);
+                if (maze == null)
+                {
+                    var dungeonFile = loaded.File;
+                    if (dungeonFile.Mazes == null || dungeonFile.Mazes.Count == 0)
+                        return result;
+
+                    maze = mazeIndex >= 0 && mazeIndex < dungeonFile.Mazes.Count
+                        ? dungeonFile.Mazes[mazeIndex]
+                        : dungeonFile.Mazes[0];
+                }
+
+                var maplst = LoadLstFile(Path.Combine("map", "map.lst"));
+                var mapDirCandidates = BuildMapDirCandidates(maplst, maze, loaded.FilePath);
+
+                foreach (var entry in maplst.Entries)
+                {
+                    if (!IsInCandidateDir(entry.FilePath, mapDirCandidates))
+                        continue;
+
+                    var fileName = Path.GetFileName(entry.FilePath);
+                    if (!TryParseMapFileCoordinate(fileName, out var x, out var y))
+                        continue;
+
+                    var key = x + "," + y;
+                    if (!seen.Add(key))
+                        continue;
+
+                    result.Add(new DungeonRoomCoordinate
+                    {
+                        X = x,
+                        Y = y,
+                        MapId = entry.Id,
+                        FilePath = entry.FilePath,
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                FileLogger.Log($"[Dungeon] GetDungeonRoomCoordinates ERROR: dungeon={dungeonId} maze={mazeIndex} {ex.Message}");
+            }
+
+            return result;
         }
 
         public static HellPartyRoomInfo FindHellMapRoom(int dungeonId, MazeInfo maze, int mazeIndex, byte difficulty)
@@ -972,7 +1058,7 @@ namespace DfoServer.GameWorld
                 }
                 return false;
             }
-            int FindMapIdByFileName(string[] patterns)
+            int FindMapIdByFileName(string[] patterns, bool allowBossVariant = false)
             {
                 if (maplst == null) return -1;
                 foreach (var pat in patterns)
@@ -982,6 +1068,7 @@ namespace DfoServer.GameWorld
                         if (!InCandidateDir(entry.FilePath)) continue;
                         var fileName = System.IO.Path.GetFileName(entry.FilePath);
                         if (IsQuestVariantFile(fileName)) continue;
+                        if (!allowBossVariant && IsBossVariantFileName(fileName)) continue;
                         if (fileName.IndexOf(pat, StringComparison.OrdinalIgnoreCase) >= 0)
                             return entry.Id;
                     }
@@ -1177,6 +1264,8 @@ namespace DfoServer.GameWorld
                 {
                     if (item.X != x || item.Y != y)
                         continue;
+                    if (string.Equals(item.Type, "boss", StringComparison.OrdinalIgnoreCase))
+                        continue;
                     if (item.MapCandidates != null && item.MapCandidates.Length > 1)
                         return item.MapCandidates[_mazeRng.Next(item.MapCandidates.Length)];
                     return item.Index;
@@ -1200,6 +1289,15 @@ namespace DfoServer.GameWorld
                 });
             }
 
+            if (mapId == -1 && isStartRoom && !isQuestConnectedMaze)
+            {
+                mapId = FindMapIdByPrefixChar('s');
+                if (mapId == -1)
+                    mapId = FindMapIdByDigitSuffix('S');
+                if (mapId == -1)
+                    mapId = FindMapIdByKeywordPrefix("start");
+            }
+
             if (mapId == -1)
             {
                 mapId = FindMapIdByMapSpecification(allowMapTypeForBossRoom: false);
@@ -1211,7 +1309,7 @@ namespace DfoServer.GameWorld
                 {
                     $"({x},{y})_boss", $"({x},{y})boss",
                     $"({x}.{y})_boss", $"({x}.{y})boss",
-                });
+                }, allowBossVariant: true);
                 if (bossVariant == -1)
                     bossVariant = FindMapIdByPrefixChar('b');
                 if (bossVariant == -1)
@@ -1452,27 +1550,10 @@ namespace DfoServer.GameWorld
                 }
             }
 
-            // Some PVFs omit ordinary rooms from [map specification] and keep a
-            // generic maze(x,y) map in the same directory. Use that PVF template
-            // before unrelated specs so a boss-only spec cannot fill normal rooms.
-            var mazeTemplateMapId = FindNearestCoordinateMapId(
-                mapEntries,
-                mapDirCandidates,
-                x,
-                y,
-                requireMazeTemplateName: true,
-                allowBossVariant: false,
-                allowQuestVariant: false,
-                out var mazeTemplateReason);
-            if (mazeTemplateMapId > 0)
-            {
-                reason = mazeTemplateReason;
-                return mazeTemplateMapId;
-            }
-
-            // Without a shared maze template, use nearby ordinary coordinate maps
-            // by filename. This stays below exact map-spec/name matches, but above
-            // the old "first map spec" fallback that can point at an unrelated room.
+            // Use nearby ordinary coordinate maps by filename. This stays below exact
+            // map-spec/name matches, but above the old "first map spec" fallback that
+            // can point at an unrelated room. It must run before generic maze templates:
+            // distant maze(x,y) templates can have incompatible exits for sparse mazes.
             var coordinateMapId = FindNearestCoordinateMapId(
                 mapEntries,
                 mapDirCandidates,
@@ -1486,6 +1567,24 @@ namespace DfoServer.GameWorld
             {
                 reason = coordinateReason;
                 return coordinateMapId;
+            }
+
+            // Some PVFs omit ordinary rooms from [map specification] and keep a
+            // generic maze(x,y) map in the same directory. Use that PVF template only
+            // after nearby coordinate maps so a distant template cannot trap the client.
+            var mazeTemplateMapId = FindNearestCoordinateMapId(
+                mapEntries,
+                mapDirCandidates,
+                x,
+                y,
+                requireMazeTemplateName: true,
+                allowBossVariant: false,
+                allowQuestVariant: false,
+                out var mazeTemplateReason);
+            if (mazeTemplateMapId > 0)
+            {
+                reason = mazeTemplateReason;
+                return mazeTemplateMapId;
             }
 
             if (mapSpecifications != null)
@@ -1555,6 +1654,8 @@ namespace DfoServer.GameWorld
                 if (!allowBossVariant && IsBossVariantFileName(fileName))
                     continue;
                 if (requireMazeTemplateName && !IsMazeTemplateFileName(fileName))
+                    continue;
+                if (!requireMazeTemplateName && IsMazeTemplateFileName(fileName))
                     continue;
                 if (!TryParseMapFileCoordinate(fileName, out var mapX, out var mapY))
                     continue;

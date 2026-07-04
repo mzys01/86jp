@@ -39,11 +39,28 @@ namespace DfoServer.Network.Handlers.Dungeon
                 return;
             }
 
+            if (!DungeonRoomTopology.TryResolveMoveTarget(
+                session.Player.CurDungeon,
+                session.Player.CurMazeIndex,
+                session.Player.CurRoomKey,
+                req.NextX,
+                req.NextY,
+                session.Player.CurBossMapPos,
+                out var moveTarget,
+                out var targetReason))
+            {
+                FileLogger.Log($"[DungeonHandler] MOVE_MAP blocked outside maze: current=({session.Player.CurRoomKey.X},{session.Player.CurRoomKey.Y}) requested=({req.NextX},{req.NextY}) dungeon={session.Player.CurDungeon} maze={session.Player.CurMazeIndex}");
+                return;
+            }
+
+            if (moveTarget.X != req.NextX || moveTarget.Y != req.NextY)
+                FileLogger.Log($"[DungeonHandler] MOVE_MAP normalized: current=({session.Player.CurRoomKey.X},{session.Player.CurRoomKey.Y}) requested=({req.NextX},{req.NextY}) target=({moveTarget.X},{moveTarget.Y}) reason={targetReason}");
+
             int overrideMapId = -1;
 
             if (req.Unknown23 == 1)
             {
-                var layeredIds = DungeonData.GetLayeredMapIds(session.Player.CurDungeon, req.NextX, req.NextY, session.Player.CurMazeIndex);
+                var layeredIds = DungeonData.GetLayeredMapIds(session.Player.CurDungeon, moveTarget.X, moveTarget.Y, session.Player.CurMazeIndex);
                 if (layeredIds != null && layeredIds.Length > 0)
                 {
                     var nextLayer = session.Player.CurLayeredMapIndex + 1;
@@ -59,7 +76,7 @@ namespace DfoServer.Network.Handlers.Dungeon
                 session.Player.CurLayeredMapIndex = -1;
             }
 
-            await SendStartMapAsync(session, req.NextX, req.NextY, overrideMapId);
+            await SendStartMapAsync(session, moveTarget.X, moveTarget.Y, overrideMapId);
         }
 
         internal async Task SendStartMapAsync(EnhancedClientSession session, int nextX, int nextY, int overrideMapId)
@@ -130,7 +147,7 @@ namespace DfoServer.Network.Handlers.Dungeon
                 {
                     Maze = startMapMaze,
                     FirstSeqId = session.Player.CurRoomStartSequence,
-                    MonsterCount = (ushort)CountServerTrackedMonsters(startMapMaze, isHellPartyRoom ? hellRoomInfo : null),
+                    MonsterCount = (ushort)CountServerTrackedMonsters(startMapMaze),
                     KilledSeqIds = killedSet,
                     Seed = seed,
                     Lcg = lcg,
@@ -346,13 +363,10 @@ namespace DfoServer.Network.Handlers.Dungeon
             return string.Join(",", groups.Select(x => $"{x.Key}={x.Value}"));
         }
 
-        private static int CountServerTrackedMonsters(DungeonData.MazeSumInfo maze, DungeonData.HellPartyRoomInfo hellRoomInfo)
+        internal static int CountServerTrackedMonsters(DungeonData.MazeSumInfo maze)
         {
             if (maze.Monsters == null)
                 return 0;
-
-            if (hellRoomInfo == null)
-                return maze.Monsters.Count;
 
             return maze.Monsters.Count(monster => monster.Type != 9);
         }

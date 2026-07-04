@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using DfoServer.Game.Dungeon;
+using DfoServer.Network.Handlers.Dungeon;
 using PvfLib;
 using DungeonData = DfoServer.GameWorld.Dungeon;
 
@@ -69,6 +71,18 @@ namespace DfoServer.SelfTests
                 failures++;
             }
 
+            var passiveObjectMaze = new DungeonData.MazeSumInfo
+            {
+                Monsters = new List<DungeonData.MonsterSumInfo>
+                {
+                    new DungeonData.MonsterSumInfo { Code = 100, Type = 0, Level = 1, IsBlocking = true },
+                    new DungeonData.MonsterSumInfo { Code = 14056, Type = 9, Level = 1, IsBlocking = false },
+                },
+            };
+            Check("passive start-map objects do not count as tracked monsters",
+                DungeonMapHandler.CountServerTrackedMonsters(passiveObjectMaze) == 1,
+                ref failures);
+
             var compactQuestMapEntries = new List<LstEntry>
             {
                 new LstEntry { Id = 13417, FilePath = "eternal_dream/01.map" },
@@ -125,8 +139,8 @@ namespace DfoServer.SelfTests
                 preferQuestVariant: false,
                 reason: out reason);
 
-            Check("unresolved rotten land room uses PVF maze coordinate before boss spec",
-                rottenFallbackMapId == 36041 && reason.StartsWith("nearest maze coordinate map", StringComparison.Ordinal),
+            Check("unresolved rotten land room uses nearby normal coordinate before distant maze template",
+                rottenFallbackMapId == 18911 && reason.StartsWith("nearest coordinate map", StringComparison.Ordinal),
                 ref failures);
 
             var lowercaseBossEntries = new List<LstEntry>
@@ -237,13 +251,150 @@ namespace DfoServer.SelfTests
                 Check("issue 227 selected boss room keeps boss actor map",
                     issue227Boss.Index == 18915 && ContainsMonster(issue227Boss, 65029),
                     ref failures);
-                Check("issue 227 adjacent unresolved room uses rotten land maze template",
-                    issue227Adjacent.Index == 36041 && !ContainsMonster(issue227Adjacent, 65029),
+                Check("issue 227 adjacent room uses declared PVF map without false boss",
+                    (issue227Adjacent.Index == 18901
+                        || issue227Adjacent.Index == 18905
+                        || issue227Adjacent.Index == 18908)
+                    && !ContainsMonster(issue227Adjacent, 65029),
                     ref failures);
             }
             catch (Exception ex)
             {
                 Console.WriteLine($"[FAIL] issue 227 rotten land unresolved room map selection: {ex.Message}");
+                failures++;
+            }
+
+            try
+            {
+                var issue361StartRoom = DungeonData.GetDungeonMapMonsterSummaryInformation(
+                    dungeonId: 158,
+                    x: 0,
+                    y: 2,
+                    mazeIndex: 0,
+                    bossPos: new[] { 4, 0 });
+                var issue361SelectedUpperBoss = DungeonData.GetDungeonMapMonsterSummaryInformation(
+                    dungeonId: 158,
+                    x: 4,
+                    y: 0,
+                    mazeIndex: 0,
+                    bossPos: new[] { 4, 0 });
+                var issue361UnselectedLowerBossCoordinate = DungeonData.GetDungeonMapMonsterSummaryInformation(
+                    dungeonId: 158,
+                    x: 0,
+                    y: 5,
+                    mazeIndex: 0,
+                    bossPos: new[] { 4, 0 });
+                var issue361LowerConnectorCoordinate = DungeonData.GetDungeonMapMonsterSummaryInformation(
+                    dungeonId: 158,
+                    x: 1,
+                    y: 5,
+                    mazeIndex: 0,
+                    bossPos: new[] { 4, 0 });
+
+                Check("issue 361 start room still prefers start map variant",
+                    issue361StartRoom.Index == 18916,
+                    ref failures);
+                Check("issue 361 selected upper boss room keeps boss actor map",
+                    issue361SelectedUpperBoss.Index == 18914 && ContainsMonster(issue361SelectedUpperBoss, 65029),
+                    ref failures);
+                Check("issue 361 unselected lower boss coordinate does not spawn false boss",
+                    issue361UnselectedLowerBossCoordinate.Index != 18915
+                    && !ContainsMonster(issue361UnselectedLowerBossCoordinate, 65029),
+                    ref failures);
+                Check("issue 361 lower connector uses declared PVF map specification",
+                    (issue361LowerConnectorCoordinate.Index == 18901
+                        || issue361LowerConnectorCoordinate.Index == 18905
+                        || issue361LowerConnectorCoordinate.Index == 18908)
+                    && !ContainsMonster(issue361LowerConnectorCoordinate, 65029),
+                    ref failures);
+
+                var issue361Maze = new MazeInfo
+                {
+                    Width = 5,
+                    Height = 6,
+                    StartMap = new[] { 0, 2 },
+                    BossMap = new[] { 4, 0 },
+                    MapSpecifications = new List<MapSpecificationItem>
+                    {
+                        new MapSpecificationItem { X = 0, Y = 2, Index = 18904 },
+                        new MapSpecificationItem { X = 1, Y = 2, Index = 18905 },
+                        new MapSpecificationItem { X = 2, Y = 2, Index = 18906 },
+                        new MapSpecificationItem { X = 2, Y = 3, Index = 18907 },
+                        new MapSpecificationItem { X = 2, Y = 4, Index = 18910 },
+                        new MapSpecificationItem { X = 2, Y = 5, Index = 18913 },
+                        new MapSpecificationItem { X = 0, Y = 5, Index = 18911 },
+                        new MapSpecificationItem { X = 1, Y = 5, Index = 18901, MapCandidates = new[] { 18901, 18905, 18908 } },
+                        new MapSpecificationItem { Type = "boss", X = 4, Y = 0, Index = 18914 },
+                    },
+                };
+                var resolvedIssue361Move = DungeonRoomTopology.TryResolveMoveTarget(
+                    dungeonId: 158,
+                    mazeIndex: 0,
+                    maze: issue361Maze,
+                    currentRoom: new RoomKey(0, 5, -1),
+                    requestedX: 1,
+                    requestedY: 5,
+                    bossMapPos: new[] { 4, 0 },
+                    target: out var issue361MoveTarget,
+                    reason: out var issue361MoveReason);
+                Check("issue 361 sparse MOVE_MAP keeps declared lower connector room",
+                    resolvedIssue361Move
+                    && issue361MoveTarget.X == 1
+                    && issue361MoveTarget.Y == 5
+                    && issue361MoveReason == "known room",
+                    ref failures);
+
+                var issue361ShortMaze = new MazeInfo
+                {
+                    Width = 5,
+                    Height = 3,
+                    StartMap = new[] { 0, 2 },
+                    BossMap = new[] { 4, 0 },
+                    MapSpecifications = new List<MapSpecificationItem>
+                    {
+                        new MapSpecificationItem { X = 0, Y = 2, Index = 18904 },
+                        new MapSpecificationItem { X = 1, Y = 2, Index = 18905 },
+                        new MapSpecificationItem { X = 2, Y = 2, Index = 18906 },
+                        new MapSpecificationItem { Type = "boss", X = 4, Y = 0, Index = 18914 },
+                    },
+                };
+                var resolvedOutOfBoundsMove = DungeonRoomTopology.TryResolveMoveTarget(
+                    dungeonId: 158,
+                    mazeIndex: 1,
+                    maze: issue361ShortMaze,
+                    currentRoom: new RoomKey(0, 2, -1),
+                    requestedX: 0,
+                    requestedY: 3,
+                    bossMapPos: new[] { 4, 0 },
+                    target: out var outOfBoundsMoveTarget,
+                    reason: out var outOfBoundsMoveReason);
+                Check("issue 361 topology ignores same-directory PVF coordinates outside current maze bounds",
+                    !resolvedOutOfBoundsMove
+                    && outOfBoundsMoveTarget.X == 0
+                    && outOfBoundsMoveTarget.Y == 0
+                    && outOfBoundsMoveReason == "outside known dungeon room coordinates",
+                    ref failures);
+
+                var resolvedFarMove = DungeonRoomTopology.TryResolveMoveTarget(
+                    dungeonId: 158,
+                    mazeIndex: 0,
+                    maze: issue361Maze,
+                    currentRoom: new RoomKey(0, 5, -1),
+                    requestedX: 4,
+                    requestedY: 5,
+                    bossMapPos: new[] { 4, 0 },
+                    target: out var farMoveTarget,
+                    reason: out var farMoveReason);
+                Check("issue 361 topology does not normalize non-adjacent MOVE_MAP requests",
+                    !resolvedFarMove
+                    && farMoveTarget.X == 0
+                    && farMoveTarget.Y == 0
+                    && farMoveReason == "outside known dungeon room coordinates",
+                    ref failures);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[FAIL] issue 361 unselected boss coordinate map selection: {ex.Message}");
                 failures++;
             }
 
