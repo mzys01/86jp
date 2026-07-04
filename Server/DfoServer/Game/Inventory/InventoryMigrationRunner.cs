@@ -35,6 +35,7 @@ namespace DfoServer.Game.Inventory
                 ("cera", "INTEGER NOT NULL DEFAULT 0"),
                 ("token_cera", "INTEGER NOT NULL DEFAULT 0"),
                 ("happy_token_cera", "INTEGER NOT NULL DEFAULT 0"),
+                ("seria_luck_value", "INTEGER NOT NULL DEFAULT 0"),
             });
             DfoServer.Sqlite.SqliteSchemaMigrator.MigrateCharacterItemsUniqueConstraint(connection);
         }

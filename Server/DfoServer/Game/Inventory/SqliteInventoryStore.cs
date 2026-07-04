@@ -2,6 +2,7 @@ using DfoServer.Game.Currency;
 using DfoServer.Infrastructure;
 using DfoServer.Game.ExpertJob;
 using DfoServer.Game.ItemUpgrade;
+using DfoServer.Game.Premium;
 using System;
 using System.Collections.Generic;
 using System.Globalization;
@@ -17,6 +18,7 @@ namespace DfoServer.Game.Inventory
     {
         internal const int DefaultAvatarUnknownFixed30 = 0x00001E00;
         internal const ushort DefaultAvatarUnknownFixed4 = 0x0400;
+        private const int SeriaLuckItemTemplateId = 2682272;
         private const short ReviveCoinSlotIndex = 1;
         internal static readonly object StackableItemCacheLock = new object();
         internal static readonly Dictionary<int, PvfLib.StackableItemFile> StackableItemCache = new Dictionary<int, PvfLib.StackableItemFile>();
@@ -209,8 +211,28 @@ ORDER BY slot_index;";
                     }
                 }
 
+                ApplySeriaLuckValueToCommonItems(connection, null, snapshot.MainItems);
                 return snapshot;
             }
+        }
+
+        private void ApplySeriaLuckValueToCommonItems(SqliteConnection connection, SqliteTransaction transaction, IEnumerable<CommonInventoryItem> items)
+        {
+            var matchingItems = items.Where(item => item.ItemTemplateId == SeriaLuckItemTemplateId).ToList();
+            if (matchingItems.Count == 0)
+                return;
+
+            var value = (byte)_db.LoadSeriaLuckValue(connection, transaction, _context.AccountId);
+            foreach (var item in matchingItems)
+                item.ExtData0 = value;
+        }
+
+        private CommonInventoryItem ApplySeriaLuckValueToCommonItem(SqliteConnection connection, SqliteTransaction transaction, CommonInventoryItem item)
+        {
+            if (item != null && item.ItemTemplateId == SeriaLuckItemTemplateId)
+                item.ExtData0 = (byte)_db.LoadSeriaLuckValue(connection, transaction, _context.AccountId);
+
+            return item;
         }
 
         public int DeleteExpiredRentalEquipment()
@@ -319,6 +341,82 @@ ORDER BY slot_index;";
                 };
                 return true;
             }
+        }
+
+        public bool TryUsePremiumContractItem(InventoryListType listType, short slotIndex, int expectedItemTemplateId, out PremiumContractUseResult result)
+        {
+            result = null;
+            if (listType != InventoryListType.Main)
+                return false;
+
+            using (var connection = _context.OpenConnection())
+            using (var transaction = connection.BeginTransaction())
+            {
+                var item = _db.LoadItemRecord(connection, transaction, _context.CharacterId, InventoryListType.Main, slotIndex);
+                return TryUsePremiumContractItemRecord(connection, transaction, item, expectedItemTemplateId, out result);
+            }
+        }
+
+        private bool TryUsePremiumContractItemRecord(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            ItemRecord item,
+            int expectedItemTemplateId,
+            out PremiumContractUseResult result)
+        {
+            result = null;
+            if (item == null)
+                return false;
+
+            if (!PremiumCatalog.Load().TryGetValue(item.ItemTemplateId, out var premiumType, out _))
+                return false;
+
+            result = new PremiumContractUseResult { IsPremiumContract = true };
+
+            if (expectedItemTemplateId > 0 && item.ItemTemplateId != expectedItemTemplateId)
+                return false;
+
+            if (!IsStackCountedRecord(item) || item.StackCount <= 0)
+                return false;
+
+            if (item.EquipmentLockId != 0)
+            {
+                FileLogger.Log($"  [UsePremiumContract] REJECT: locked item slot={item.SlotIndex} item=0x{item.ItemTemplateId:X8}");
+                return false;
+            }
+
+            var activated = PremiumService.TryActivateContract(connection, transaction, _context.AccountId, item.ItemTemplateId, 1);
+            if (activated == null)
+                return false;
+
+            const short appliedCount = 1;
+            var remainingCount = Math.Max(0, item.StackCount - appliedCount);
+            if (remainingCount > 0)
+                _db.UpdateStackCount(connection, transaction, item.ItemUid, remainingCount);
+            else
+                _db.DeleteItem(connection, transaction, item.ItemUid);
+
+            _auditLogger.WriteDeleteAuditLog(connection, transaction, _context.CharacterId, item, appliedCount);
+            var wallet = _db.LoadWallet(connection, transaction, _context.CharacterId);
+            transaction.Commit();
+
+            result.PremiumType = premiumType;
+            result.PremiumRemaining = activated.Value.remaining;
+            result.Mutation = new InventoryMutationResult
+            {
+                ListType = InventoryListType.Main,
+                SlotIndex = item.SlotIndex,
+                ItemTemplateId = item.ItemTemplateId,
+                RemainingStackCount = remainingCount,
+                InstanceValue = remainingCount,
+                Durability = item.Durability,
+                UpdatedGold = wallet.Gold,
+                UpdatedSp = wallet.Sp,
+                UpdatedCoin = wallet.Coin,
+                RequestedCount = appliedCount,
+                AppliedCount = appliedCount,
+            };
+            return true;
         }
 
         private bool HasSeedData(SqliteConnection connection)

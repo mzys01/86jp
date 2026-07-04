@@ -1,4 +1,5 @@
 using DfoServer.Game.Inventory;
+using DfoServer.Game.Premium;
 using DfoServer.Infrastructure;
 using DfoServer.Network.Builders;
 using DfoServer.Network.Builders.CeraShop;
@@ -7,6 +8,7 @@ using DfoServer.Network.Parsers.Inventory;
 using Microsoft.Data.Sqlite;
 using PvfLib;
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 
@@ -27,6 +29,7 @@ namespace DfoServer.SelfTests
         private const short MagicHammerSlot = 173;
         private const short RelocatedSeriaLuckSlot = 112;
         private const short LegacyNoExpireTimedRewardSlot = 119;
+        private const short ContractTestSlot = 118;
         // These are PVF sample IDs used only to exercise generic package paths.
         // Production logic resolves package/reward data from PVF, not from these constants.
         private const int SampleTitleSelectablePackageId = 10007993;
@@ -42,6 +45,9 @@ namespace DfoServer.SelfTests
         private const int SeriaLuckItemTemplateId = 2682272;
         private const int MagicBoxBatchCount = 100;
         private const int SeriaLuckBatchCount = 10;
+        private const int SeriaLuckValueMax = 100;
+        private const int MagicBoxBatchRewardRowSize = 31;
+        private const int MagicBoxSingleRewardRowSize = 31;
         private const int SampleSelectedTitleRewardId = 400330051;
         private const int SampleCrossJobAuraRewardId = 112590011;
         private const int InvalidRewardItemTemplateId = 1;
@@ -265,6 +271,51 @@ namespace DfoServer.SelfTests
                 }
             }
 
+            var contractRewardId = FindSeriaLuckContractRewardId(out var contractPremiumType);
+            Check("Seria luck PVF contains a contract reward", contractRewardId > 0 && contractPremiumType > 0);
+            if (contractRewardId > 0 && contractPremiumType > 0)
+            {
+                InsertLegacyNoExpireTimedReward(tempDb, contractRewardId, ContractTestSlot);
+                using (store.BeginScope(CharacterId, AccountId))
+                {
+                    var snapshot = store.LoadCharacterItemListSnapshot();
+                    var contractItem = snapshot.MainItems.Find(x => x.SlotIndex == ContractTestSlot && x.ItemTemplateId == contractRewardId);
+                    Check("magic-box contract reward stays in consumable inventory before use",
+                        contractItem != null &&
+                        contractItem.CountOrInstanceValue == 1);
+                }
+
+                PremiumContractUseResult contractUseResult = null;
+                using (store.BeginScope(CharacterId, AccountId))
+                {
+                    Check("use-stackable contract item activates premium and consumes one",
+                        store.TryUsePremiumContractItem(
+                            InventoryListType.Main,
+                            ContractTestSlot,
+                            contractRewardId,
+                            out contractUseResult));
+                }
+
+                Check("use-stackable contract reports premium activation",
+                    contractUseResult != null &&
+                    contractUseResult.IsPremiumContract &&
+                    contractUseResult.PremiumType == contractPremiumType &&
+                    contractUseResult.PremiumRemaining > 0);
+                Check("use-stackable contract removes one-stack item",
+                    contractUseResult?.Mutation != null &&
+                    contractUseResult.Mutation.RemainingStackCount == 0);
+                Check("use-stackable contract premium notify body",
+                    InventoryHandler.BuildPremiumContractNotificationBody(contractUseResult) is var contractNoticeBody &&
+                    contractNoticeBody != null &&
+                    contractNoticeBody.Length == 11 &&
+                    BitConverter.ToUInt16(contractNoticeBody, 0) == 2 &&
+                    contractNoticeBody[2] == contractPremiumType &&
+                    BitConverter.ToInt64(contractNoticeBody, 3) == contractUseResult.PremiumRemaining);
+                Check("use-stackable contract activates account premium",
+                    TryLoadPremiumEndTime(tempDb, contractPremiumType, out var contractEndTime) &&
+                    contractEndTime > DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+            }
+
             SelectablePackageOpenResult result = null;
             using (store.BeginScope(CharacterId, AccountId))
             {
@@ -401,6 +452,7 @@ namespace DfoServer.SelfTests
                 Check($"magic-box request material slot={magicBoxRequest.MaterialSlotIndex}", magicBoxRequest.MaterialSlotIndex == MagicHammerSlot);
                 Check($"magic-box request material item={magicBoxRequest.MaterialItemTemplateId}", magicBoxRequest.MaterialItemTemplateId == MagicHammerItemTemplateId);
                 Check($"magic-box request count={magicBoxRequest.RequestedCount}", magicBoxRequest.RequestedCount == MagicBoxBatchCount);
+                Check($"magic-box request client type={magicBoxRequest.RawListType}", magicBoxRequest.RawListType == 0);
 
                 Check("parse captured 0x03F3 Seria luck request", MagicBoxOpenRequest.TryParse(CapturedSeriaLuckOpenRequestBody, out var seriaLuckRequest));
                 if (seriaLuckRequest != null)
@@ -408,6 +460,7 @@ namespace DfoServer.SelfTests
                     Check($"Seria luck request item={seriaLuckRequest.ItemTemplateId}", seriaLuckRequest.ItemTemplateId == SeriaLuckItemTemplateId);
                     Check($"Seria luck request material slot={seriaLuckRequest.MaterialSlotIndex}", seriaLuckRequest.MaterialSlotIndex == -1);
                     Check($"Seria luck request count={seriaLuckRequest.RequestedCount}", seriaLuckRequest.RequestedCount == SeriaLuckBatchCount);
+                    Check($"Seria luck request client type={seriaLuckRequest.RawListType}", seriaLuckRequest.RawListType == 4);
                 }
 
                 Check("parse captured 0x00D0 Seria luck single-open request", MagicBoxOpenRequest.TryParseSingle(CapturedSeriaLuckSingleOpenRequestBody, out var seriaLuckSingleRequest));
@@ -415,10 +468,17 @@ namespace DfoServer.SelfTests
                 {
                     Check($"Seria luck single request item={seriaLuckSingleRequest.ItemTemplateId}", seriaLuckSingleRequest.ItemTemplateId == 0);
                     Check($"Seria luck single request count={seriaLuckSingleRequest.RequestedCount}", seriaLuckSingleRequest.RequestedCount == 1);
+                    Check($"Seria luck single request client type={seriaLuckSingleRequest.RawListType}", seriaLuckSingleRequest.RawListType == 4);
                 }
 
-                Check("0x03F3 magic-box success uses 0x00A0 popup without source ACK", !InventoryHandler.ShouldSendSourceAckForBoosterResponse(0x03F3));
-                Check("0x00D0 magic-box single success uses 0x00A0 popup without source ACK", !InventoryHandler.ShouldSendSourceAckForBoosterResponse(0x00D0));
+                Check("0x03F3 magic-box success suppresses source ACK", !InventoryHandler.ShouldSendSourceAckForBoosterResponse(0x03F3));
+                Check("0x03F3 non-Seria batch keeps legacy obtained-items popup",
+                    InventoryHandler.ShouldSendObtainedItemsPopupForBoosterResponse(0x03F3, new BoosterUseResult()));
+                Check("0x03F3 Seria luck batch uses native ACK without obtained-items popup",
+                    !InventoryHandler.ShouldSendObtainedItemsPopupForBoosterResponse(0x03F3, new BoosterUseResult { IsSeriaLuckValueSource = true }));
+                Check("0x00D0 magic-box single success does not use 0x00A0 obtained-items popup", !InventoryHandler.ShouldSendObtainedItemsPopupForBoosterResponse(0x00D0));
+                Check("0x0218 generic booster keeps obtained-items popup after source ACK", InventoryHandler.ShouldSendObtainedItemsPopupForBoosterResponse(0x0218));
+                Check("0x00D0 magic-box single success uses native ACK without source ACK", !InventoryHandler.ShouldSendSourceAckForBoosterResponse(0x00D0));
                 Check("0x0218 generic booster still keeps source ACK", InventoryHandler.ShouldSendSourceAckForBoosterResponse(0x0218));
 
                 BoosterUseResult hammerBundleResult = null;
@@ -488,8 +548,13 @@ namespace DfoServer.SelfTests
                     Check($"magic-box consumed material item={magicBoxResult.ConsumedMaterialItemTemplateId}", magicBoxResult.ConsumedMaterialItemTemplateId == MagicHammerItemTemplateId);
                     Check($"magic-box consumed material count={magicBoxResult.ConsumedMaterialCount}", magicBoxResult.ConsumedMaterialCount == MagicBoxBatchCount);
                     Check("magic-box grants at least one reward", magicBoxResult.Rewards.Count > 0);
+                    Check("magic-box keeps one popup reward row per resolved draw", magicBoxResult.DisplayRewards.Count >= magicBoxResult.Rewards.Count);
                     Check($"magic-box grants instant teleport potions", magicBoxResult.Rewards.Find(x => x.ItemTemplateId == InstantTeleportPotionItemTemplateId)?.GrantedCount == MagicBoxBatchCount * 2);
                     Check($"magic-box grants Seria luck boxes", magicBoxResult.Rewards.Find(x => x.ItemTemplateId == SeriaLuckItemTemplateId)?.GrantedCount == MagicBoxBatchCount);
+                    Check("0x03F3 non-Seria magic-box does not use native ACK before client layout is known",
+                        !InventoryHandler.ShouldUseNativeMagicBoxBatchAck(magicBoxResult));
+                    Check("0x03F3 non-Seria magic-box legacy popup uses aggregated reward rows",
+                        InventoryHandler.ToAggregatedBoosterGrantedItemsForSelfTest(magicBoxResult).Count == magicBoxResult.Rewards.Count);
                 }
 
                 short seriaLuckSlot = -1;
@@ -502,6 +567,7 @@ namespace DfoServer.SelfTests
                     Check($"snapshot instant teleport potion count", snapshot.MainItems.Find(x => x.ItemTemplateId == InstantTeleportPotionItemTemplateId)?.CountOrInstanceValue == MagicBoxBatchCount * 2);
                     var seriaLuckItem = snapshot.MainItems.Find(x => x.ItemTemplateId == SeriaLuckItemTemplateId);
                     Check($"snapshot Seria luck count", seriaLuckItem?.CountOrInstanceValue == MagicBoxBatchCount);
+                    Check("snapshot Seria luck ext_data1 starts at zero", seriaLuckItem?.ExtData0 == 0);
                     if (seriaLuckItem != null)
                         seriaLuckSlot = seriaLuckItem.SlotIndex;
                 }
@@ -531,12 +597,53 @@ namespace DfoServer.SelfTests
                     {
                         Check("Seria luck grants at least one reward", seriaLuckResult.Rewards.Count > 0);
                         Check($"Seria luck stale source request uses actual slot {RelocatedSeriaLuckSlot}", seriaLuckResult.SourceSlotIndex == RelocatedSeriaLuckSlot);
+                        Check("Seria luck ten-open keeps popup rows for every draw", seriaLuckResult.DisplayRewards.Count >= SeriaLuckBatchCount);
+                        Check("Seria luck result is marked as Seria luck value source", seriaLuckResult.IsSeriaLuckValueSource);
+                        Check("Seria luck ten-open value starts at zero", seriaLuckResult.SeriaLuckValueBefore == 0);
+                        Check("Seria luck ten-open increments value by opened count", seriaLuckResult.SeriaLuckValueAfter == SeriaLuckBatchCount);
+                        Check("Seria luck ten-open does not mutate rental lucky_star", LoadLuckyStar(tempDb) == 0);
+                        Check("Seria luck ten-open persists Seria luck value", LoadSeriaLuckValue(tempDb) == SeriaLuckBatchCount);
+                        Check("runtime 0x019D refresh is disabled for non-full Seria luck value",
+                            !InventoryHandler.ShouldSendBoosterGageRefreshAfterOpen(seriaLuckResult));
+                        var disabledGageBuilder = new BoosterGageBodyBuilder();
+                        Check("0x019D booster gage init builder is disabled until client layout is proven",
+                            !disabledGageBuilder.TryBuild(new DfoServer.Game.SelectCharacter.SelectCharacterDataSnapshot
+                            {
+                                InitializationSnapshot = new DfoServer.Game.SelectCharacter.SelectCharacterInitializationSnapshot
+                                {
+                                    BoosterGage = SeriaLuckBatchCount,
+                                },
+                            }, 0, out var disabledGageBody) && disabledGageBody.Length == 0);
+                        Check("0x03F3 Seria luck ten-open keeps native ACK path for reverse-engineered UI work",
+                            InventoryHandler.ShouldUseNativeMagicBoxBatchAck(seriaLuckResult));
+
+                        seriaLuckResult.MagicBoxClientType = seriaLuckRequest.RawListType;
+                        var seriaLuckAck = MagicBoxOpenAckBuilder.BuildBatch(seriaLuckResult);
+                        var seriaLuckListCount = seriaLuckAck.Length >= 11 ? BitConverter.ToUInt16(seriaLuckAck, 9) : 0;
+                        var seriaLuckSecondListOffset = 9 + 2 + seriaLuckListCount * MagicBoxBatchRewardRowSize + 2;
+                        Check("0x03F3 Seria luck ACK carries success flag and client type", seriaLuckAck.Length >= 11 && seriaLuckAck[0] == 1 && seriaLuckAck[1] == seriaLuckRequest.RawListType);
+                        Check("0x03F3 Seria luck ACK clears double flag before full value", seriaLuckAck.Length >= 11 && seriaLuckAck[2] == 0);
+                        Check("0x03F3 Seria luck ACK carries requested count after double flag", seriaLuckAck.Length >= 5 && BitConverter.ToUInt16(seriaLuckAck, 3) == SeriaLuckBatchCount);
+                        Check("0x03F3 Seria luck ACK carries source slot after requested count", seriaLuckAck.Length >= 7 && BitConverter.ToInt16(seriaLuckAck, 5) == seriaLuckResult.SourceSlotIndex);
+                        Check("0x03F3 Seria luck ACK carries no material slot after source slot", seriaLuckAck.Length >= 9 && BitConverter.ToInt16(seriaLuckAck, 7) == -1);
+                        var seriaLuckDoubleListCount = seriaLuckAck.Length >= seriaLuckSecondListOffset + 2
+                            ? BitConverter.ToUInt16(seriaLuckAck, seriaLuckSecondListOffset)
+                            : 0;
+                        var expectedSeriaLuckAckLength = seriaLuckSecondListOffset + 2 + seriaLuckDoubleListCount * MagicBoxBatchRewardRowSize;
+                        Check("0x03F3 Seria luck ACK writes first 31-byte reward list", seriaLuckAck.Length >= seriaLuckSecondListOffset + 2);
+                        Check("0x03F3 Seria luck ACK length matches 31-byte reward rows", seriaLuckAck.Length == expectedSeriaLuckAckLength);
+                        Check("0x03F3 Seria luck ACK row item/count fields stay aligned",
+                            CheckMagicBoxPackageRows(seriaLuckAck, 9, seriaLuckResult.DisplayRewards, MagicBoxBatchRewardRowSize));
                     }
 
                     using (store.BeginScope(CharacterId, AccountId))
                     {
                         var snapshot = store.LoadCharacterItemListSnapshot();
-                        Check($"snapshot Seria luck remaining count", snapshot.MainItems.Find(x => x.SlotIndex == seriaLuckSlot)?.CountOrInstanceValue == MagicBoxBatchCount - SeriaLuckBatchCount);
+                        var refreshedSeriaLuck = snapshot.MainItems.Find(x => x.SlotIndex == seriaLuckSlot);
+                        Check($"snapshot Seria luck remaining count", refreshedSeriaLuck?.CountOrInstanceValue == MagicBoxBatchCount - SeriaLuckBatchCount);
+                        Check("snapshot Seria luck ext_data1 after ten-open", refreshedSeriaLuck?.ExtData0 == SeriaLuckBatchCount);
+                        Check("single-item refresh Seria luck ext_data1 after ten-open",
+                            store.LoadCommonItemForRefresh(InventoryListType.Main, seriaLuckSlot)?.ExtData0 == SeriaLuckBatchCount);
                     }
 
                     if (seriaLuckSingleRequest != null)
@@ -558,12 +665,81 @@ namespace DfoServer.SelfTests
                         if (seriaLuckSingleResult != null)
                         {
                             Check("Seria luck single grants at least one reward", seriaLuckSingleResult.Rewards.Count > 0);
+                            Check("Seria luck single result is marked as Seria luck value source", seriaLuckSingleResult.IsSeriaLuckValueSource);
+                            Check("Seria luck single sees previous ten-open value", seriaLuckSingleResult.SeriaLuckValueBefore == SeriaLuckBatchCount);
+                            Check("Seria luck single increments value by one", seriaLuckSingleResult.SeriaLuckValueAfter == SeriaLuckBatchCount + 1);
+                            Check("Seria luck single persists Seria luck value", LoadSeriaLuckValue(tempDb) == SeriaLuckBatchCount + 1);
+                            Check("runtime 0x019D refresh is disabled for non-full single-open value",
+                                !InventoryHandler.ShouldSendBoosterGageRefreshAfterOpen(seriaLuckSingleResult));
+
+                            seriaLuckSingleResult.MagicBoxClientType = seriaLuckSingleRequest.RawListType;
+                            var seriaLuckSingleAck = MagicBoxOpenAckBuilder.BuildSingle(seriaLuckSingleResult);
+                            var singleListCount = seriaLuckSingleAck.Length >= 9 ? BitConverter.ToUInt16(seriaLuckSingleAck, 7) : 0;
+                            Check("0x00D0 Seria luck ACK carries success flag and client type", seriaLuckSingleAck.Length >= 9 && seriaLuckSingleAck[0] == 1 && seriaLuckSingleAck[1] == seriaLuckSingleRequest.RawListType);
+                            Check("0x00D0 Seria luck ACK clears double flag before full value", seriaLuckSingleAck.Length >= 9 && seriaLuckSingleAck[2] == 0);
+                            Check("0x00D0 Seria luck ACK carries source slot at client-read offset", seriaLuckSingleAck.Length >= 5 && BitConverter.ToInt16(seriaLuckSingleAck, 3) == seriaLuckSingleResult.SourceSlotIndex);
+                            Check("0x00D0 Seria luck ACK carries no material slot at client-read offset", seriaLuckSingleAck.Length >= 7 && BitConverter.ToInt16(seriaLuckSingleAck, 5) == -1);
+                            Check("0x00D0 Seria luck ACK writes 31-byte reward rows", seriaLuckSingleAck.Length == 9 + singleListCount * MagicBoxSingleRewardRowSize);
+                            Check("0x00D0 Seria luck ACK row item/count fields stay aligned",
+                                CheckMagicBoxRewardRows(seriaLuckSingleAck, 7, seriaLuckSingleResult.Rewards, MagicBoxSingleRewardRowSize));
+                            Check("0x00D0 Seria luck single ACK displays actual granted rows",
+                                singleListCount == seriaLuckSingleResult.Rewards.Count);
                         }
 
                         using (store.BeginScope(CharacterId, AccountId))
                         {
                             var snapshot = store.LoadCharacterItemListSnapshot();
-                            Check($"snapshot Seria luck remaining after single count", snapshot.MainItems.Find(x => x.SlotIndex == seriaLuckSlot)?.CountOrInstanceValue == MagicBoxBatchCount - SeriaLuckBatchCount - 1);
+                            var refreshedSeriaLuck = snapshot.MainItems.Find(x => x.SlotIndex == seriaLuckSlot);
+                            Check($"snapshot Seria luck remaining after single count", refreshedSeriaLuck?.CountOrInstanceValue == MagicBoxBatchCount - SeriaLuckBatchCount - 1);
+                            Check("snapshot Seria luck ext_data1 after single-open", refreshedSeriaLuck?.ExtData0 == SeriaLuckBatchCount + 1);
+                        }
+
+                        SetSeriaLuckValue(tempDb, SeriaLuckValueMax);
+                        BoosterUseResult seriaLuckDoubleResult = null;
+                        using (store.BeginScope(CharacterId, AccountId))
+                        {
+                            Check("open full-value Seria luck single succeeds",
+                                store.TryUseBoosterItem(new BoosterUseRequest
+                                {
+                                    SlotIndex = seriaLuckSlot,
+                                    SelectedItemTemplateIds = Array.Empty<int>(),
+                                    ExpectedItemTemplateId = seriaLuckSingleRequest.ItemTemplateId,
+                                    MaterialSlotIndex = seriaLuckSingleRequest.MaterialSlotIndex,
+                                    ExpectedMaterialItemTemplateId = seriaLuckSingleRequest.MaterialItemTemplateId,
+                                }, out seriaLuckDoubleResult));
+                        }
+
+                        if (seriaLuckDoubleResult != null)
+                        {
+                            seriaLuckDoubleResult.MagicBoxClientType = seriaLuckSingleRequest.RawListType;
+                            var fullValueAck = MagicBoxOpenAckBuilder.BuildSingle(seriaLuckDoubleResult);
+                            var fullValueListCount = fullValueAck.Length >= 9 ? BitConverter.ToUInt16(fullValueAck, 7) : 0;
+                            Check("full-value Seria luck single sees max value before open", seriaLuckDoubleResult.SeriaLuckValueBefore == SeriaLuckValueMax);
+                            Check("full-value Seria luck single triggers double reward", seriaLuckDoubleResult.SeriaLuckDoubleTriggered && seriaLuckDoubleResult.DoubleRewards.Count > 0);
+                            Check("full-value Seria luck single restarts value after double reward", seriaLuckDoubleResult.SeriaLuckValueAfter == 1);
+                            Check("full-value Seria luck single persists restarted value", LoadSeriaLuckValue(tempDb) == 1);
+                            Check("0x00D0 full-value Seria luck ACK sets double flag",
+                                fullValueAck.Length >= 9 && fullValueAck[2] == 1);
+                            Check("0x00D0 full-value Seria luck ACK row item/count fields stay aligned",
+                                CheckMagicBoxRewardRows(fullValueAck, 7, seriaLuckDoubleResult.Rewards, MagicBoxSingleRewardRowSize));
+                            Check("0x00D0 full-value Seria luck ACK displays actual doubled grants",
+                                fullValueListCount == seriaLuckDoubleResult.Rewards.Count);
+                            Check("runtime 0x019D refresh is skipped after full-value double reset",
+                                !InventoryHandler.ShouldSendBoosterGageRefreshAfterOpen(seriaLuckDoubleResult));
+                            Check("runtime 0x019D refresh is disabled even for newly full Seria luck value until layout is proven",
+                                !InventoryHandler.ShouldSendBoosterGageRefreshAfterOpen(new BoosterUseResult
+                                {
+                                    IsSeriaLuckValueSource = true,
+                                    SeriaLuckValueAfter = SeriaLuckValueMax,
+                                    SeriaLuckValueMax = SeriaLuckValueMax,
+                                }));
+                        }
+
+                        using (store.BeginScope(CharacterId, AccountId))
+                        {
+                            var snapshot = store.LoadCharacterItemListSnapshot();
+                            Check("snapshot Seria luck ext_data1 after full-value single",
+                                snapshot.MainItems.Find(x => x.SlotIndex == seriaLuckSlot)?.ExtData0 == 1);
                         }
                     }
                 }
@@ -767,6 +943,63 @@ VALUES
             return 0;
         }
 
+        private static int FindSeriaLuckContractRewardId(out int premiumType)
+        {
+            premiumType = 0;
+            var seriaLuck = InventoryDbPrimitives.LoadStackableItem(SeriaLuckItemTemplateId);
+            if (seriaLuck == null)
+                return 0;
+
+            var pools = new[]
+            {
+                seriaLuck.RandomBoxRewards,
+                seriaLuck.BoosterRewards,
+                seriaLuck.PackageRewards,
+                seriaLuck.BoosterSelectionRewards,
+            };
+
+            foreach (var pool in pools)
+            {
+                foreach (var reward in pool)
+                {
+                    if (reward == null || reward.ItemId <= 0)
+                        continue;
+
+                    if (!PremiumCatalog.Load().TryGetValue(reward.ItemId, out var type, out _))
+                        continue;
+
+                    premiumType = type;
+                    return reward.ItemId;
+                }
+            }
+
+            return 0;
+        }
+
+        private static bool TryLoadPremiumEndTime(string databasePath, int premiumType, out long endTime)
+        {
+            endTime = 0;
+            using (var connection = new SqliteConnection(SqliteDatabaseBootstrap.BuildConnectionString(databasePath)))
+            {
+                connection.Open();
+                using (var command = connection.CreateCommand())
+                {
+                    command.CommandText = @"
+SELECT end_time
+FROM account_premiums
+WHERE account_id=@accountId AND premium_type=@premiumType;";
+                    command.Parameters.AddWithValue("@accountId", AccountId);
+                    command.Parameters.AddWithValue("@premiumType", premiumType);
+                    var value = command.ExecuteScalar();
+                    if (value == null || value == DBNull.Value)
+                        return false;
+
+                    endTime = Convert.ToInt64(value, CultureInfo.InvariantCulture);
+                    return true;
+                }
+            }
+        }
+
         private static void InsertLegacyNoExpireTimedReward(string databasePath, int itemTemplateId, short slotIndex)
         {
             using (var connection = new SqliteConnection(SqliteDatabaseBootstrap.BuildConnectionString(databasePath)))
@@ -879,6 +1112,106 @@ WHERE character_id=@characterId AND list_type=0 AND slot_index=@slotIndex;";
                     command.ExecuteNonQuery();
                 }
             }
+        }
+
+        private static void SetSeriaLuckValue(string databasePath, int value)
+        {
+            using (var connection = new SqliteConnection(SqliteDatabaseBootstrap.BuildConnectionString(databasePath)))
+            {
+                connection.Open();
+                using (var command = connection.CreateCommand())
+                {
+                    command.CommandText = @"
+UPDATE accounts
+SET seria_luck_value=@value
+WHERE account_id=@accountId;";
+                    command.Parameters.AddWithValue("@accountId", AccountId);
+                    command.Parameters.AddWithValue("@value", value);
+                    command.ExecuteNonQuery();
+                }
+            }
+        }
+
+        private static int LoadSeriaLuckValue(string databasePath)
+        {
+            return LoadAccountInteger(databasePath, "seria_luck_value");
+        }
+
+        private static int LoadLuckyStar(string databasePath)
+        {
+            return LoadAccountInteger(databasePath, "lucky_star");
+        }
+
+        private static int LoadAccountInteger(string databasePath, string columnName)
+        {
+            using (var connection = new SqliteConnection(SqliteDatabaseBootstrap.BuildConnectionString(databasePath)))
+            {
+                connection.Open();
+                using (var command = connection.CreateCommand())
+                {
+                    command.CommandText = $"SELECT {columnName} FROM accounts WHERE account_id=@accountId;";
+                    command.Parameters.AddWithValue("@accountId", AccountId);
+                    return Convert.ToInt32(command.ExecuteScalar());
+                }
+            }
+        }
+
+        private static bool CheckMagicBoxPackageRows(byte[] body, int listOffset, IReadOnlyList<PackageGrantedItem> expectedRows, int rowSize)
+        {
+            if (body == null || expectedRows == null || listOffset < 0 || body.Length < listOffset + 2)
+                return false;
+
+            var count = BitConverter.ToUInt16(body, listOffset);
+            if (count != Math.Min(expectedRows.Count, ushort.MaxValue))
+                return false;
+
+            var offset = listOffset + 2;
+            for (var i = 0; i < count; i++)
+            {
+                if (body.Length < offset + rowSize)
+                    return false;
+
+                var itemTemplateId = BitConverter.ToInt32(body, offset + 2);
+                var displayCount = BitConverter.ToInt32(body, offset + 6);
+                if (itemTemplateId != expectedRows[i].ItemTemplateId ||
+                    displayCount != Math.Max(1, expectedRows[i].DisplayCount))
+                {
+                    return false;
+                }
+
+                offset += rowSize;
+            }
+
+            return true;
+        }
+
+        private static bool CheckMagicBoxRewardRows(byte[] body, int listOffset, IReadOnlyList<BoosterRewardResult> expectedRows, int rowSize)
+        {
+            if (body == null || expectedRows == null || listOffset < 0 || body.Length < listOffset + 2)
+                return false;
+
+            var count = BitConverter.ToUInt16(body, listOffset);
+            if (count != Math.Min(expectedRows.Count, ushort.MaxValue))
+                return false;
+
+            var offset = listOffset + 2;
+            for (var i = 0; i < count; i++)
+            {
+                if (body.Length < offset + rowSize)
+                    return false;
+
+                var itemTemplateId = BitConverter.ToInt32(body, offset + 2);
+                var displayCount = BitConverter.ToInt32(body, offset + 6);
+                if (itemTemplateId != expectedRows[i].ItemTemplateId ||
+                    displayCount != Math.Max(1, expectedRows[i].GrantedCount))
+                {
+                    return false;
+                }
+
+                offset += rowSize;
+            }
+
+            return true;
         }
 
         private static void Check(string label, bool ok)

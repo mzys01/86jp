@@ -106,6 +106,7 @@ namespace DfoServer.Game.SelectCharacter
                     ApplyWallet(initSnapshot, wallet);
                 }
             }
+            initSnapshot.BoosterGage = (ushort)InventoryDbPrimitives.NormalizeSeriaLuckValue(LoadSeriaLuckValue(accountId));
 
             var acctSettings = _accountSettingsRepository.Load(accountId);
             initSnapshot.MainGameOptionBlob = acctSettings?.MainGameOption ?? Settings.AccountSettings.DefaultMainGameOption;
@@ -221,6 +222,24 @@ namespace DfoServer.Game.SelectCharacter
             initSnapshot.LuckyStar = wallet.LuckyStar;
         }
 
+        private int LoadSeriaLuckValue(int accountId)
+        {
+            using (var conn = new SqliteConnection(_connectionString))
+            {
+                conn.Open();
+                using (var cmd = conn.CreateCommand())
+                {
+                    cmd.CommandText = @"
+SELECT seria_luck_value
+FROM accounts
+WHERE account_id=@aid;";
+                    cmd.Parameters.AddWithValue("@aid", accountId);
+                    var raw = cmd.ExecuteScalar();
+                    return raw == null || raw == DBNull.Value ? 0 : Convert.ToInt32(raw);
+                }
+            }
+        }
+
         private void LoadAccountPremiums(int accountId, SelectCharacterInitializationSnapshot initSnapshot)
         {
             initSnapshot.AckPremiums.Clear();
@@ -291,6 +310,12 @@ namespace DfoServer.Game.SelectCharacter
         {
             using (_inventoryStore.BeginScope(characterId, accountId))
                 return _inventoryStore.TryDeleteItem(listType, slotIndex, deleteCount, out result);
+        }
+
+        public bool TryUsePremiumContractItem(int characterId, int accountId, InventoryListType listType, short slotIndex, int expectedItemTemplateId, out PremiumContractUseResult result)
+        {
+            using (_inventoryStore.BeginScope(characterId, accountId))
+                return _inventoryStore.TryUsePremiumContractItem(listType, slotIndex, expectedItemTemplateId, out result);
         }
 
         public int CountItem(int characterId, int accountId, int itemTemplateId)

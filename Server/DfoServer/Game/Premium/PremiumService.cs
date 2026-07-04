@@ -10,19 +10,33 @@ namespace DfoServer.Game.Premium
     {
         public static (int premiumType, long remaining)? TryActivateContract(int accountId, int itemTemplateId)
         {
+            var connStr = Infrastructure.SqliteDatabaseBootstrap.Initialize(
+                Infrastructure.ServerPaths.DatabasePath, Infrastructure.ServerPaths.SchemaFilePath);
+            using (var conn = new SqliteConnection(connStr))
+            {
+                conn.Open();
+                return TryActivateContract(conn, null, accountId, itemTemplateId, 1);
+            }
+        }
+
+        internal static (int premiumType, long remaining)? TryActivateContract(
+            SqliteConnection conn,
+            SqliteTransaction tx,
+            int accountId,
+            int itemTemplateId,
+            int itemCount)
+        {
             if (!PremiumCatalog.Load().TryGetValue(itemTemplateId, out var premiumType, out var durationDays))
                 return null;
-            if (premiumType <= 0 || durationDays <= 0)
+            if (conn == null || accountId <= 0 || premiumType <= 0 || durationDays <= 0)
                 return null;
 
             var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-            var duration = (long)durationDays * 86400;
-            var connStr = Infrastructure.SqliteDatabaseBootstrap.Initialize(
-                Infrastructure.ServerPaths.DatabasePath, Infrastructure.ServerPaths.SchemaFilePath);
-
-            var newExpire = UpsertPremiumExpire(connStr, accountId, premiumType, now, duration);
+            var count = Math.Max(1, itemCount);
+            var duration = (long)durationDays * 86400L * count;
+            var newExpire = UpsertPremiumExpire(conn, tx, accountId, premiumType, now, duration);
             var remaining = newExpire - now;
-            FileLogger.Log($"[PremiumService] Contract activated: account={accountId} type={premiumType} days={durationDays} remaining={remaining} item=0x{itemTemplateId:X8}");
+            FileLogger.Log($"[PremiumService] Contract activated: account={accountId} type={premiumType} days={durationDays} count={count} remaining={remaining} item=0x{itemTemplateId:X8}");
             return (premiumType, remaining);
         }
 

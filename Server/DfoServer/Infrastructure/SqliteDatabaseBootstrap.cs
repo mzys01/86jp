@@ -30,6 +30,7 @@ namespace DfoServer.Infrastructure
                     ("token_cera", "INTEGER NOT NULL DEFAULT 0"),
                     ("happy_token_cera", "INTEGER NOT NULL DEFAULT 0"),
                     ("lucky_star", "INTEGER NOT NULL DEFAULT 0"),
+                    ("seria_luck_value", "INTEGER NOT NULL DEFAULT 0"),
                 });
                 DfoServer.Sqlite.SqliteSchemaMigrator.EnsureColumns(conn, "character_equipped_entries", new[]
                 {

@@ -112,6 +112,9 @@ namespace DfoServer.Game.SelectCharacter
         public ushort LuckyStar { get; set; }
 
         
+        public ushort BoosterGage { get; set; }
+
+        
         public ushort FatigueAccelValue { get; set; }
         public byte FatigueAccelState { get; set; }
 

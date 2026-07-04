@@ -208,6 +208,48 @@ namespace DfoServer.Network.Handlers
             return true;
         }
 
+        internal static List<PackageGrantedItem> ToBoosterPopupGrantedItemsForSelfTest(BoosterUseResult result)
+        {
+            return ToBoosterPopupGrantedItems(result);
+        }
+
+        internal static List<PackageGrantedItem> ToAggregatedBoosterGrantedItemsForSelfTest(BoosterUseResult result)
+        {
+            return ToPackageGrantedItems(result);
+        }
+
+        private static List<PackageGrantedItem> ToBoosterPopupGrantedItems(BoosterUseResult result)
+        {
+            var items = new List<PackageGrantedItem>();
+            if (result == null)
+                return items;
+
+            AddPopupItems(items, result.DisplayRewards);
+            AddPopupItems(items, result.DoubleRewards);
+            return items.Count > 0 ? items : ToPackageGrantedItems(result);
+        }
+
+        private static void AddPopupItems(List<PackageGrantedItem> target, IEnumerable<PackageGrantedItem> source)
+        {
+            if (target == null || source == null)
+                return;
+
+            foreach (var reward in source)
+            {
+                if (reward == null || reward.ItemTemplateId <= 0 || reward.DisplayCount <= 0)
+                    continue;
+
+                target.Add(new PackageGrantedItem
+                {
+                    ListType = reward.ListType,
+                    SlotIndex = reward.SlotIndex,
+                    ItemTemplateId = reward.ItemTemplateId,
+                    DisplayCount = reward.DisplayCount <= 0 ? 1 : reward.DisplayCount,
+                    Durability = reward.Durability,
+                });
+            }
+        }
+
         private static List<PackageGrantedItem> ToPackageGrantedItems(BoosterUseResult result)
         {
             var items = new List<PackageGrantedItem>();
