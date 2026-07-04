@@ -15,7 +15,7 @@ namespace DfoServer.Game.SelectCharacter
     
     public sealed class UserInfoMinimumTailSnapshot
     {
-        public uint NameTagItemId { get; set; }              
+        public uint CloneTitleItemId { get; set; }
         public byte CreatureField1 { get; set; }             
         public byte CreatureField2 { get; set; }             
         public byte CreatureField3 { get; set; }             
@@ -78,7 +78,7 @@ namespace DfoServer.Game.SelectCharacter
 
             return new UserInfoMinimumTailSnapshot
             {
-                NameTagItemId = BitConverter.ToUInt32(t, 0),
+                CloneTitleItemId = BitConverter.ToUInt32(t, 0),
                 CreatureField1 = t[4],
                 CreatureField2 = t[5],
                 CreatureField3 = t[6],

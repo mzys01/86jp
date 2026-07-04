@@ -489,7 +489,7 @@ CREATE TABLE IF NOT EXISTS character_init_bodies (
 --               progressA/B(+57/+61) 与 skillTreeIndex(+79) 同源 character_subtype1_fields (客户端同 obj 偏移 0x394/0x398)
 CREATE TABLE IF NOT EXISTS character_subtype0_fields (
     character_id INTEGER PRIMARY KEY,
-    name_tag_item_id INTEGER NOT NULL DEFAULT 0,        -- +0  u32 名称装饰卡 itemId → vfunc+20 (语义已解2026-06-10: 100330501=[name tag]模板"我在恋爱")
+    name_tag_item_id INTEGER NOT NULL DEFAULT 0,        -- 旧列保留兼容；86 tail首u32改由 characters.clone_title_item_id 提供
     creature_field1 INTEGER NOT NULL DEFAULT 0,         -- +4  u8
     creature_field2 INTEGER NOT NULL DEFAULT 0,         -- +5  u8
     creature_field3 INTEGER NOT NULL DEFAULT 0,         -- +6  u8 (客户端读后未用)

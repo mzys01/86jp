@@ -28,6 +28,7 @@ namespace DfoServer.Game.SelectCharacter
         private readonly string _connectionString;
         private readonly string _databasePath;
         private readonly string _schemaFilePath;
+        private const short TitleEquipmentSlot86 = 12;
 
         public SqliteSelectCharacterDataSource(string databasePath, string schemaFilePath, ICharacterRepository characterRepository, IAssetService assetService = null, IInventoryStore inventoryStore = null)
         {
@@ -63,6 +64,11 @@ namespace DfoServer.Game.SelectCharacter
             return _titleBookRepository.LoadSnapshots(characterId);
         }
 
+        public TitleBookCategorySnapshot LoadTitleBookSnapshotWithEquippedProjection(int characterId, int category)
+        {
+            return _titleBookRepository.LoadSnapshotWithEquippedProjection(characterId, category, TitleEquipmentSlot86);
+        }
+
         public bool TryPutTitleBook(int characterId, int accountId, InventoryListType sourceList, short sourceSlot, int itemId, int category, int bookIndex, out TitleBookMutationResult result)
         {
             result = _titleBookMutationService.PutTitle(characterId, accountId, sourceList, sourceSlot, itemId, category, bookIndex);
@@ -96,7 +102,9 @@ namespace DfoServer.Game.SelectCharacter
 
             _initFlagsRepository.LoadAll(characterId, initSnapshot);
             initSnapshot.TitleBookCategories.Clear();
-            initSnapshot.TitleBookCategories.AddRange(_titleBookRepository.LoadSnapshots(characterId));
+            for (var category = 0; category < TitleBookStaticDataProvider.CategoryCapacities.Count; category++)
+                initSnapshot.TitleBookCategories.Add(
+                    _titleBookRepository.LoadSnapshotWithEquippedProjection(characterId, category, TitleEquipmentSlot86));
             MergeAchievementProgress(initSnapshot, _achievementProgressRepository.LoadSnapshot(characterId));
 
             

@@ -346,6 +346,8 @@ namespace DfoServer.Game.Quests
                 var charRepo = new SqliteCharacterRepository(ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
                 var record = charRepo.GetById(characterId);
                 if (record == null) return;
+                record.Subtype0Tail = new SqliteSubtype0FieldsRepository(ServerPaths.DatabasePath, ServerPaths.SchemaFilePath)
+                    .Load(characterId);
 
                 _sender.Player.GrowType = record.GrowType;
 
@@ -373,7 +375,10 @@ namespace DfoServer.Game.Quests
                 var record = charRepo.GetById(characterId);
                 if (record == null || _sender.Player == null) return;
 
-                var tail = _sender.Player.Subtype0Tail ?? new UserInfoMinimumTailSnapshot();
+                var tail = new SqliteSubtype0FieldsRepository(ServerPaths.DatabasePath, ServerPaths.SchemaFilePath)
+                    .Load(characterId)
+                    ?? _sender.Player.Subtype0Tail
+                    ?? new UserInfoMinimumTailSnapshot();
                 tail.ExpertJobType = (byte)expertJobType;
                 _sender.Player.Subtype0Tail = tail;
                 record.Subtype0Tail = tail;

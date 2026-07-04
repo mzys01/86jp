@@ -57,7 +57,7 @@ namespace DfoServer.Network.Builders
         {
             var t = record.Subtype0Tail ?? new UserInfoMinimumTailSnapshot();
 
-            writer.WriteUInt32(t.NameTagItemId);            
+            writer.WriteUInt32(t.CloneTitleItemId);
             writer.WriteByte(t.CreatureField1);             
             writer.WriteByte(t.CreatureField2);             
             writer.WriteByte(t.CreatureField3);             
@@ -148,7 +148,7 @@ namespace DfoServer.Network.Builders
             writer.WriteBytes(e.ExpansionData != null && e.ExpansionData.Length == 4
                 ? e.ExpansionData : new byte[4]);
             writer.WriteByte(e.State);
-            writer.WriteInt32(e.ClearAvatar);
+            writer.WriteInt32(e.LinkItemId);
             writer.WriteUInt32(e.EnchantValue);
             writer.WriteByte(e.Flag20);
         }

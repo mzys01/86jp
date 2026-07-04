@@ -10,7 +10,6 @@ namespace DfoServer.Game.TitleBook
     {
         private readonly string _connectionString;
         private readonly InventoryDbPrimitives _db = new InventoryDbPrimitives();
-        private readonly InventoryEquipmentStore _equipmentStore;
         private readonly CharacterTitleBookRepository _titleBookRepository;
         private readonly CharacterAchievementProgressRepository _achievementRepository;
         private readonly TitleBookStaticDataProvider _staticData;
@@ -19,8 +18,6 @@ namespace DfoServer.Game.TitleBook
         public TitleBookMutationService(string connectionString)
         {
             _connectionString = connectionString ?? throw new ArgumentNullException(nameof(connectionString));
-            var audit = new InventoryAuditLogger();
-            _equipmentStore = new InventoryEquipmentStore(_db, audit);
             _titleBookRepository = new CharacterTitleBookRepository(connectionString);
             _achievementRepository = new CharacterAchievementProgressRepository(connectionString);
             _staticData = TitleBookStaticDataProvider.LoadDefault();
@@ -89,17 +86,25 @@ namespace DfoServer.Game.TitleBook
         {
             var equipped = LoadEquippedTitle(connection, transaction, characterId, sourceSlot);
             if (equipped == null || equipped.ItemId != itemId)
+            {
+                result.ErrorCode = 0x02;
                 return result;
+            }
 
-            var definition = _staticData.GetSlot(category, bookIndex);
-            if (!definition.AllowsItem(itemId))
+            if (!TryResolveTitleBookSlotForItem(itemId, category, bookIndex, out var resolvedCategory, out var resolvedBookIndex))
+            {
+                result.ErrorCode = 0x02;
                 return result;
+            }
 
-            var existing = _titleBookRepository.LoadItem(connection, transaction, characterId, category, bookIndex);
+            var existing = _titleBookRepository.LoadItem(connection, transaction, characterId, resolvedCategory, resolvedBookIndex);
             if (existing != null && !existing.IsEmpty && existing.ItemId != itemId)
+            {
+                result.ErrorCode = 0x02;
                 return result;
+            }
 
-            var titleItem = FromEquippedTitle(category, (ushort)bookIndex, equipped);
+            var titleItem = FromEquippedTitle(resolvedCategory, (ushort)resolvedBookIndex, equipped);
             if (existing != null && existing.EquipmentLockId != 0 && existing.EquipmentLockId != titleItem.EquipmentLockId)
                 result.ItemLockChanged |= DeleteEquipmentLock(connection, transaction, characterId, existing.EquipmentLockId);
             _titleBookRepository.SaveItem(connection, transaction, characterId, titleItem);
@@ -108,6 +113,8 @@ namespace DfoServer.Game.TitleBook
 
             transaction.Commit();
             result.Success = true;
+            result.Category = resolvedCategory;
+            result.BookIndex = resolvedBookIndex;
             result.EquipmentChanged = true;
             return result;
         }
@@ -216,56 +223,20 @@ namespace DfoServer.Game.TitleBook
             short equipSlot,
             TitleBookMutationResult result)
         {
-            var tempSlot = _db.FindEmptySlot(connection, transaction, characterId, InventoryListType.Main, 9, 353);
-            if (tempSlot < 0)
+            if (LoadEquippedTitle(connection, transaction, characterId, equipSlot) != null)
+            {
+                result.ErrorCode = 0x02;
                 return result;
-
-            var tempCommon = TitleBookInventoryItemCodec.ToCommon(title, (short)tempSlot);
-            InsertCommon(connection, transaction, characterId, accountId, InventoryListType.Main, tempCommon, forceEquipmentKind: true);
-
-            var sourceRecord = _db.LoadItemRecord(connection, transaction, characterId, InventoryListType.Main, (short)tempSlot);
-            var request = new InventoryMoveRequest
-            {
-                SourceListType = InventoryListType.Main,
-                SourceSlotIndex = (short)tempSlot,
-                SourceInstanceValue = title.ItemId,
-                DestinationListType = InventoryListType.Equipment,
-                DestinationSlotIndex = equipSlot,
-                MoveCount = title.Value,
-            };
-
-            var outcome = _equipmentStore.HandleEquipSlotMove(
-                connection,
-                transaction,
-                characterId,
-                accountId,
-                request,
-                sourceRecord,
-                InventoryListType.Main);
-
-            var changed = outcome == EquipOutcome.Equipped || outcome == EquipOutcome.Unequipped;
-            if (!changed)
-                return result;
-
-            var returned = _db.LoadCommonItem(connection, transaction, characterId, InventoryListType.Main, (short)tempSlot);
-            var returnedRecord = _db.LoadItemRecord(connection, transaction, characterId, InventoryListType.Main, (short)tempSlot);
-            if (returned != null && returnedRecord != null)
-            {
-                var swapped = TitleBookInventoryItemCodec.FromCommon(title.Category, title.BookIndex, returned);
-                swapped.Slot = title.BookIndex;
-                _titleBookRepository.SaveItem(connection, transaction, characterId, swapped);
-                _db.DeleteItem(connection, transaction, returnedRecord.ItemUid);
-                result.ItemLockChanged |= MoveEquipmentLockToTitleBook(connection, transaction, characterId, swapped);
             }
-            else
-            {
-                _titleBookRepository.ClearItem(connection, transaction, characterId, title.Category, title.BookIndex);
-            }
+
+            InsertEquippedTitle(connection, transaction, characterId, equipSlot, title);
+            _titleBookRepository.ClearItem(connection, transaction, characterId, title.Category, title.BookIndex);
             result.ItemLockChanged |= MoveEquipmentLock(connection, transaction, characterId, title.EquipmentLockId, InventoryListType.Equipment, equipSlot);
 
             transaction.Commit();
             result.Success = true;
-            result.InventoryChanged = true;
+            result.Category = title.Category;
+            result.BookIndex = title.BookIndex;
             result.EquipmentChanged = true;
             return result;
         }
@@ -404,6 +375,59 @@ WHERE character_id = @cid AND slot = @slot;";
             }
         }
 
+        private static void InsertEquippedTitle(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            int characterId,
+            short slot,
+            TitleBookInventoryItem title)
+        {
+            using (var command = connection.CreateCommand())
+            {
+                command.Transaction = transaction;
+                command.CommandText = @"
+INSERT INTO character_equipped_entries(character_id, slot, item_id, expire_time, equipment_lock_id, raw_entry)
+VALUES(@cid, @slot, @itemId, @expireTime, @equipmentLockId, @raw);";
+                command.Parameters.AddWithValue("@cid", characterId);
+                command.Parameters.AddWithValue("@slot", (int)slot);
+                command.Parameters.AddWithValue("@itemId", title.ItemId);
+                command.Parameters.AddWithValue("@expireTime", title.ExpireTime);
+                command.Parameters.AddWithValue("@equipmentLockId", (int)title.EquipmentLockId);
+                command.Parameters.AddWithValue("@raw", BuildEquippedRawFromTitleBook(title, slot));
+                command.ExecuteNonQuery();
+            }
+        }
+
+        private bool TryResolveTitleBookSlotForItem(
+            int itemId,
+            int requestedCategory,
+            int requestedBookIndex,
+            out int category,
+            out int bookIndex)
+        {
+            if (IsCategoryIndexValid(requestedCategory, requestedBookIndex)
+                && _staticData.GetSlot(requestedCategory, requestedBookIndex).AllowsItem(itemId))
+            {
+                category = requestedCategory;
+                bookIndex = requestedBookIndex;
+                return true;
+            }
+
+            for (category = 0; category < TitleBookStaticDataProvider.CategoryCapacities.Count; category++)
+            {
+                var capacity = TitleBookStaticDataProvider.CategoryCapacities[category];
+                for (bookIndex = 0; bookIndex < capacity; bookIndex++)
+                {
+                    if (_staticData.GetSlot(category, bookIndex).AllowsItem(itemId))
+                        return true;
+                }
+            }
+
+            category = -1;
+            bookIndex = -1;
+            return false;
+        }
+
         private static TitleBookInventoryItem FromEquippedTitle(int category, ushort bookIndex, EquippedTitleRecord equipped)
         {
             var fields = MakeEquipListCodec.ParseDisplayFields(equipped.Raw);
@@ -426,6 +450,67 @@ WHERE character_id = @cid AND slot = @slot;";
                 TailData = BuildTitleBookTail(fields),
                 EquipmentLockId = equipped.EquipmentLockId,
             };
+        }
+
+        private static byte[] BuildEquippedRawFromTitleBook(TitleBookInventoryItem title, short equipSlot)
+        {
+            return MakeEquipListCodec.BuildEntryFromDisplayFields(
+                equipSlot,
+                title.ItemId,
+                BuildDisplayFields(title));
+        }
+
+        private static MakeEquipListCodec.DisplayFields BuildDisplayFields(TitleBookInventoryItem title)
+        {
+            var tail = title.TailData ?? Array.Empty<byte>();
+            var fields = new MakeEquipListCodec.DisplayFields
+            {
+                InstanceValue = unchecked((uint)title.Value),
+                Reinforce = title.Attr,
+                Durability = title.Durability,
+                Enchant = unchecked((uint)title.EnchantIndex),
+                EnchantUpgradeCount = title.EnchantUpgradeCount,
+                AmplifyType = title.AmplifyType,
+                AmplifyValue = title.AmplifyValue,
+                SealTypes = new byte[3],
+                SealVal1s = new byte[3],
+                SealVal2s = new byte[3],
+                SealTail = Array.Empty<byte>(),
+            };
+
+            if (tail.Length > 0)
+            {
+                var emblemLen = 1 + tail[0] * 4;
+                if (emblemLen > 0 && emblemLen <= tail.Length)
+                {
+                    fields.Emblem = new byte[emblemLen];
+                    Buffer.BlockCopy(tail, 0, fields.Emblem, 0, emblemLen);
+                }
+            }
+
+            if (tail.Length >= 11)
+                fields.Rune = BitConverter.ToUInt16(tail, 9);
+            if (tail.Length > 27)
+                fields.Forging = tail[27];
+            if (tail.Length > 11)
+            {
+                fields.SealCount = tail[11];
+                for (var i = 0; i < fields.SealCount && i < 3; i++)
+                {
+                    if (12 + i < tail.Length) fields.SealTypes[i] = tail[12 + i];
+                    if (15 + i < tail.Length) fields.SealVal1s[i] = tail[15 + i];
+                    if (18 + i < tail.Length) fields.SealVal2s[i] = tail[18 + i];
+                }
+
+                if (fields.SealCount > 0 && tail.Length > 21)
+                {
+                    var sealTailLen = Math.Min(6, tail.Length - 21);
+                    fields.SealTail = new byte[sealTailLen];
+                    Buffer.BlockCopy(tail, 21, fields.SealTail, 0, sealTailLen);
+                }
+            }
+
+            return fields;
         }
 
         private static byte[] BuildTitleBookTail(MakeEquipListCodec.DisplayFields fields)

@@ -128,6 +128,12 @@ namespace DfoServer.Network.Handlers
             var cloneTitle = (body != null && body.Length >= 4) ? BitConverter.ToInt32(body, 0) : 0;
             var (cid, _) = ResolveOwner(session);
             Game.Appearance.AppearanceService.SaveCloneTitleItemId(cid, cloneTitle);
+            if (session.Player != null)
+            {
+                var tail = session.Player.Subtype0Tail ?? new Game.SelectCharacter.UserInfoMinimumTailSnapshot();
+                tail.CloneTitleItemId = (uint)(cloneTitle > 0 ? cloneTitle : 0);
+                session.Player.Subtype0Tail = tail;
+            }
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
                 0x01,
                 0x0239,
@@ -168,14 +174,11 @@ namespace DfoServer.Network.Handlers
                 return;
             }
 
-            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
-                0x01, header.type, BuildTitleBookSuccess(itemSpaceRaw, slot, category, index)));
-
-            if (result.InventoryChanged && itemSpace != InventoryListType.Equipment)
-                await _refresh.SendUpdateItemList(session, itemSpace, slot);
-
             if (result.EquipmentChanged)
                 await _refresh.SendNoti2AppearanceUpdate(session);
+
+            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
+                0x01, header.type, BuildTitleBookSuccess(itemSpaceRaw, slot, result.Category, result.BookIndex)));
 
             if (result.ItemLockChanged)
                 await _refresh.SendAllEquipmentItemLockListRefresh(session);
@@ -246,14 +249,14 @@ namespace DfoServer.Network.Handlers
 
         private async Task SendTitleBookCategoryRefresh(EnhancedClientSession session, int characterId, int category)
         {
-            var categories = _sqliteSelectCharacterDataSource.LoadTitleBookSnapshots(characterId);
-            if (category < 0 || category >= categories.Count)
+            var snapshot = _sqliteSelectCharacterDataSource.LoadTitleBookSnapshotWithEquippedProjection(characterId, category);
+            if (snapshot == null)
                 return;
 
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
                 0x00,
                 0x0166,
-                TitleBookListBodyBuilder.BuildCategoryBody(categories[category])));
+                TitleBookListBodyBuilder.BuildCategoryBody(snapshot)));
         }
 
         private static bool TryParseInventoryListType(int value, out InventoryListType listType)

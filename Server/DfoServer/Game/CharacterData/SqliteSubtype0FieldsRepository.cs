@@ -30,17 +30,30 @@ namespace DfoServer.Game.CharacterData
         public static UserInfoMinimumTailSnapshot Load(SqliteConnection conn, int characterId)
         {
             using (var cmd = new SqliteCommand(@"SELECT
-                name_tag_item_id, creature_field1, creature_field2, creature_field3, creature_field4,
-                creature_buffer, stamina, fatigue_penalty, is_event_character, pc_room_id,
-                is_private_store, is_premium_pc_room, server_group_id, black_count, guild_level,
-                chaos_point, disguise_kind, is_disguised, expert_job_type, expert_job_exp,
-                is_hardcore_mode, is_hardcore_dead, hardcore_death_count, user_state_bits, chat_ban_end_time,
-                fatigue_update, return_user_flag, channel_display_mode, channel_type, channel_id,
-                is_return_user, link_slot_enabled, link_type_a, link_type_b, emotion_index,
-                action_byte, fatigue_display_update, costume_flag, aura_flag, pet_display_flag,
-                title_display_flag, pvp_stat_a, pvp_win_streak, pvp_lose_streak, pvp_rank_point,
-                trailing_byte
-            FROM character_subtype0_fields WHERE character_id=@cid", conn))
+                c.clone_title_item_id,
+                COALESCE(f.creature_field1, 0), COALESCE(f.creature_field2, 0),
+                COALESCE(f.creature_field3, 0), COALESCE(f.creature_field4, 0),
+                f.creature_buffer, COALESCE(f.stamina, 0), COALESCE(f.fatigue_penalty, 0),
+                COALESCE(f.is_event_character, 0), COALESCE(f.pc_room_id, 65537),
+                COALESCE(f.is_private_store, 0), COALESCE(f.is_premium_pc_room, 0),
+                COALESCE(f.server_group_id, 0), COALESCE(f.black_count, 0), COALESCE(f.guild_level, 0),
+                COALESCE(f.chaos_point, 0), COALESCE(f.disguise_kind, 0), COALESCE(f.is_disguised, 0),
+                COALESCE(f.expert_job_type, 0), COALESCE(f.expert_job_exp, 0),
+                COALESCE(f.is_hardcore_mode, 0), COALESCE(f.is_hardcore_dead, 0),
+                COALESCE(f.hardcore_death_count, 0), COALESCE(f.user_state_bits, 3),
+                COALESCE(f.chat_ban_end_time, 0), COALESCE(f.fatigue_update, 0),
+                COALESCE(f.return_user_flag, 1), COALESCE(f.channel_display_mode, 0),
+                COALESCE(f.channel_type, 0), COALESCE(f.channel_id, 2),
+                COALESCE(f.is_return_user, 0), COALESCE(f.link_slot_enabled, 0),
+                COALESCE(f.link_type_a, 0), COALESCE(f.link_type_b, 0), COALESCE(f.emotion_index, 0),
+                COALESCE(f.action_byte, 0), COALESCE(f.fatigue_display_update, 0),
+                COALESCE(f.costume_flag, 0), COALESCE(f.aura_flag, 0), COALESCE(f.pet_display_flag, 0),
+                COALESCE(f.title_display_flag, 0), COALESCE(f.pvp_stat_a, 0),
+                COALESCE(f.pvp_win_streak, 0), COALESCE(f.pvp_lose_streak, 0),
+                COALESCE(f.pvp_rank_point, 0), COALESCE(f.trailing_byte, 0)
+            FROM characters c
+            LEFT JOIN character_subtype0_fields f ON f.character_id = c.character_id
+            WHERE c.character_id=@cid", conn))
             {
                 cmd.Parameters.AddWithValue("@cid", characterId);
                 using (var r = cmd.ExecuteReader())
@@ -48,7 +61,7 @@ namespace DfoServer.Game.CharacterData
                     if (!r.Read()) return null;
                     return new UserInfoMinimumTailSnapshot
                     {
-                        NameTagItemId = (uint)r.GetInt64(0),
+                        CloneTitleItemId = (uint)r.GetInt64(0),
                         CreatureField1 = (byte)r.GetInt32(1),
                         CreatureField2 = (byte)r.GetInt32(2),
                         CreatureField3 = (byte)r.GetInt32(3),
@@ -122,7 +135,7 @@ namespace DfoServer.Game.CharacterData
             )", conn))
             {
                 cmd.Parameters.AddWithValue("@cid", characterId);
-                cmd.Parameters.AddWithValue("@uvp", (long)s.NameTagItemId);
+                cmd.Parameters.AddWithValue("@uvp", (long)s.CloneTitleItemId);
                 cmd.Parameters.AddWithValue("@cf1", (int)s.CreatureField1);
                 cmd.Parameters.AddWithValue("@cf2", (int)s.CreatureField2);
                 cmd.Parameters.AddWithValue("@cf3", (int)s.CreatureField3);
