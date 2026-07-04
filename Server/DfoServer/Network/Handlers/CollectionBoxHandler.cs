@@ -8,10 +8,10 @@ namespace DfoServer.Network.Handlers
 {
     internal sealed class CollectionBoxHandler
     {
-        private readonly SqliteSelectCharacterDataSource _dataSource;
+        private readonly Game.Inventory.IInventoryStore _dataSource;
         private readonly CollectBoxProgressRepository _progressRepository;
 
-        public CollectionBoxHandler(SqliteSelectCharacterDataSource dataSource, CollectBoxProgressRepository progressRepository)
+        public CollectionBoxHandler(Game.Inventory.IInventoryStore dataSource, CollectBoxProgressRepository progressRepository)
         {
             _dataSource = dataSource;
             _progressRepository = progressRepository;

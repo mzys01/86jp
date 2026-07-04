@@ -37,7 +37,7 @@ namespace DfoServer.Network.Handlers
             FileLogger.Log($"[{ProtocolName}] MOVE fields: src=({request.SourceListType},slot{request.SourceSlotIndex},IV=0x{srcIV:X8},stk{srcStack}) dst=({request.DestinationListType},slot{request.DestinationSlotIndex},IV=0x{request.DestinationInstanceValue:X8},stk{dstStack})");
 
             var (cid, aid) = ResolveOwner(session);
-            if (!_sqliteSelectCharacterDataSource.TryMoveItem(cid, aid, request, out var result))
+            if (!_inventoryStore.TryMoveItem(cid, aid, request, out var result))
             {
                 FileLogger.Log($"[{ProtocolName}] MOVE_ITEMSPACE: FAILED src=({request.SourceListType},{request.SourceSlotIndex}) dst=({request.DestinationListType},{request.DestinationSlotIndex})");
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0013,
@@ -81,7 +81,7 @@ namespace DfoServer.Network.Handlers
             var (cid, aid) = ResolveOwner(session);
             try
             {
-                var ok = _sqliteSelectCharacterDataSource.TrySortItems(cid, aid, listType, category);
+                var ok = _inventoryStore.TrySortItems(cid, aid, listType, category);
                 FileLogger.Log($"[{ProtocolName}] SORT: TrySortItems({listType}, cat={category})={ok}");
                 if (!ok)
                     return;
@@ -108,7 +108,7 @@ namespace DfoServer.Network.Handlers
             var slotIndex = BitConverter.ToInt16(body, 1);
             var (cid, aid) = ResolveOwner(session);
 
-            if (!_sqliteSelectCharacterDataSource.TryToggleSortItemLock(cid, aid, listType, slotIndex, out var entry))
+            if (!_inventoryStore.TryToggleSortItemLock(cid, listType, slotIndex, out var entry))
                 return;
 
             if (entry.State == 0)
@@ -129,7 +129,7 @@ namespace DfoServer.Network.Handlers
             var slotIndex = BitConverter.ToInt16(body, 1);
             var (cid, aid) = ResolveOwner(session);
 
-            if (!_sqliteSelectCharacterDataSource.TryUnlockSortItemLock(cid, aid, listType, slotIndex))
+            if (!_inventoryStore.TryUnlockSortItemLock(cid, listType, slotIndex))
                 return;
 
             await SendSortItemUnlockAckAndRefresh(session, listType, slotIndex);

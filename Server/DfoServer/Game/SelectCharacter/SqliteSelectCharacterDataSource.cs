@@ -29,12 +29,12 @@ namespace DfoServer.Game.SelectCharacter
         private readonly string _databasePath;
         private readonly string _schemaFilePath;
 
-        public SqliteSelectCharacterDataSource(string databasePath, string schemaFilePath, ICharacterRepository characterRepository, IAssetService assetService = null)
+        public SqliteSelectCharacterDataSource(string databasePath, string schemaFilePath, ICharacterRepository characterRepository, IAssetService assetService = null, IInventoryStore inventoryStore = null)
         {
             _databasePath = databasePath;
             _schemaFilePath = schemaFilePath;
             _connectionString = Infrastructure.SqliteDatabaseBootstrap.Initialize(databasePath, schemaFilePath);
-            _inventoryStore = new SqliteInventoryStore(databasePath, schemaFilePath);
+            _inventoryStore = inventoryStore ?? new SqliteInventoryStore(databasePath, schemaFilePath);
             _assetService = assetService;
             _initDataRepository = new SqliteCharacterProgressRepository(databasePath, schemaFilePath);
             _userInfoBlobRepository = new SqliteUserInfoBlobRepository(databasePath, schemaFilePath);
@@ -316,205 +316,6 @@ namespace DfoServer.Game.SelectCharacter
                 });
             }
         }
-
-        public CharacterItemListSnapshot LoadItemListSnapshot(int characterId, int accountId)
-        {
-            if (_assetService != null)
-            {
-                using (var scope = _assetService.OpenScope(characterId, accountId))
-                    return _assetService.LoadSnapshot(scope);
-            }
-            return _inventoryStore.LoadCharacterItemListSnapshot(characterId, accountId);
-        }
-
-        public bool TryMoveItem(int characterId, int accountId, InventoryMoveRequest request, out InventoryMoveResult result)
-        {
-            return _inventoryStore.TryMoveItem(characterId, accountId, request, out result);
-        }
-
-        public bool TryDeleteItem(int characterId, int accountId, InventoryListType listType, short slotIndex, short deleteCount, out InventoryMutationResult result)
-        {
-            return _inventoryStore.TryDeleteItem(characterId, accountId, listType, slotIndex, deleteCount, out result);
-        }
-
-        public int CountItem(int characterId, int accountId, int itemTemplateId)
-        {
-            return _inventoryStore.CountItem(characterId, itemTemplateId);
-        }
-
-        public bool TryRemoveItemByTemplateId(int characterId, int accountId, int itemTemplateId, out short slotIndex, out InventoryMutationResult result,
-            Action<SqliteConnection, SqliteTransaction> alsoInSameTransaction = null)
-        {
-            return _inventoryStore.TryRemoveItemByTemplateId(characterId, accountId, itemTemplateId, out slotIndex, out result, alsoInSameTransaction);
-        }
-
-        public bool TryPickupItem(int characterId, int accountId, int itemTemplateId, int stackCount, out short assignedSlot, out int newStackCount,
-            Action<SqliteConnection, SqliteTransaction> alsoInSameTransaction = null)
-        {
-            return _inventoryStore.TryPickupItem(characterId, accountId, itemTemplateId, stackCount, out assignedSlot, out newStackCount, alsoInSameTransaction);
-        }
-
-        public bool TryOpenAvatarPackage(int characterId, int accountId, AvatarPackageOpenRequest request, out AvatarPackageOpenResult result)
-        {
-            return _inventoryStore.TryOpenAvatarPackage(characterId, accountId, request, out result);
-        }
-
-        public bool TryOpenSelectablePackage(int characterId, int accountId, SelectablePackageOpenRequest request, out SelectablePackageOpenResult result)
-        {
-            return _inventoryStore.TryOpenSelectablePackage(characterId, accountId, request, out result);
-        }
-
-        public bool TryUseBoosterItem(int characterId, int accountId, BoosterUseRequest request, out BoosterUseResult result)
-        {
-            return _inventoryStore.TryUseBoosterItem(characterId, accountId, request, out result);
-        }
-
-        public bool TryHatchCreatureEgg(int characterId, int accountId, InventoryListType listType, short slotIndex, int expectedItemTemplateId, out CreatureHatchResult result)
-        {
-            return _inventoryStore.TryHatchCreatureEgg(characterId, listType, slotIndex, expectedItemTemplateId, out result);
-        }
-
-        public bool TryOpenPackage0207(int characterId, int accountId, short slotIndex, IReadOnlyList<int> selectedItemTemplateIds, out BoosterUseResult result)
-        {
-            return _inventoryStore.TryOpenPackage0207(characterId, accountId, slotIndex, selectedItemTemplateIds, out result);
-        }
-
-        public bool TryBuyItem(int characterId, int accountId, int itemTemplateId, int buyCount, out InventoryMutationResult result)
-        {
-            return _inventoryStore.TryBuyItem(characterId, accountId, itemTemplateId, buyCount, out result);
-        }
-
-        public bool TryBuyCeraShopItem(int characterId, int accountId, int productId, int buyCount, int paymentMode, byte attributeValue, out InventoryMutationResult result)
-        {
-            return _inventoryStore.TryBuyCeraShopItem(characterId, accountId, productId, buyCount, paymentMode, attributeValue, out result);
-        }
-
-        public bool TrySellItem(int characterId, int accountId, InventoryListType listType, short slotIndex, short sellCount, out InventoryMutationResult result)
-        {
-            return _inventoryStore.TrySellItem(characterId, accountId, listType, slotIndex, sellCount, out result);
-        }
-
-        public bool TryRepairEquipment(int characterId, int accountId, InventoryListType listType, short slotIndex, bool quickRepair, bool freeRepair, out RepairEquipmentResult result)
-        {
-            return _inventoryStore.TryRepairEquipment(characterId, accountId, listType, slotIndex, quickRepair, freeRepair, out result);
-        }
-
-        public bool TryDisjointItem(int characterId, int accountId, DisjointItemRequest request, out DisjointItemResult result)
-        {
-            return _inventoryStore.TryDisjointItem(characterId, accountId, request, out result);
-        }
-
-        public bool TryEnchantByBead(int characterId, int accountId, EnchantByBeadCommand command, out EnchantByBeadResult result)
-        {
-            return _inventoryStore.TryEnchantByBead(characterId, accountId, command, out result);
-        }
-
-        public bool TryUpgradeItem(int characterId, int accountId, ItemUpgradeCommand command, out ItemUpgradeResult result)
-        {
-            return _inventoryStore.TryUpgradeItem(characterId, accountId, command, out result);
-        }
-
-        public bool TryCompoundAvatar(int characterId, int accountId, short slot1, short slot2, short consumeSlot,
-                Func<int, int, int, System.Collections.Generic.List<int>> resolveNewItemIds, byte newOption,
-                out System.Collections.Generic.List<int> newSlots, out int oldItemId1, out int oldItemId2, out System.Collections.Generic.List<int> newItemIds,
-                out int consumedItemTemplateId, out int consumedItemRemainingCount)
-        {
-            return _inventoryStore.TryCompoundAvatar(characterId, accountId, slot1, slot2, consumeSlot, resolveNewItemIds, newOption,
-                out newSlots, out oldItemId1, out oldItemId2, out newItemIds, out consumedItemTemplateId, out consumedItemRemainingCount);
-        }
-
-        public bool TryCompoundAvatarSet(int characterId, int accountId, short[] consumeSlots, int[] expectedItemIds, Func<int, int> resolveNewItemId, byte newOption,
-                short consumeStackableSlot, out int newSlot, out System.Collections.Generic.List<int> oldItemIds, out int newItemId,
-                out int consumedItemTemplateId, out int consumedItemRemainingCount)
-        {
-            return _inventoryStore.TryCompoundAvatarSet(characterId, accountId, consumeSlots, expectedItemIds, resolveNewItemId, newOption, consumeStackableSlot, out newSlot, out oldItemIds, out newItemId, out consumedItemTemplateId, out consumedItemRemainingCount);
-        }
-
-        public bool TryOpenEquipmentSocket(int characterId, int accountId, short targetSlotIndex, int targetItemTemplateId, short materialSlotIndex, out EquipmentSocketMutationResult result)
-        {
-            return _inventoryStore.TryOpenEquipmentSocket(characterId, targetSlotIndex, targetItemTemplateId, materialSlotIndex, out result);
-        }
-
-        public bool TrySetEquipmentEmblems(int characterId, int accountId, short targetSlotIndex, int targetItemTemplateId, IReadOnlyList<EquipmentEmblemApplyRequest> emblems, out EquipmentEmblemMutationResult result)
-        {
-            return _inventoryStore.TrySetEquipmentEmblems(characterId, targetSlotIndex, targetItemTemplateId, emblems, out result);
-        }
-
-        public bool TryOpenAvatarSocket(int characterId, int accountId, short targetSlotIndex, int targetItemTemplateId, short materialSlotIndex, out AvatarSocketMutationResult result)
-        {
-            return _inventoryStore.TryOpenAvatarSocket(characterId, targetSlotIndex, targetItemTemplateId, materialSlotIndex, out result);
-        }
-
-        public bool TrySetAvatarEmblems(int characterId, int accountId, short targetSlotIndex, int targetItemTemplateId, IReadOnlyList<EquipmentEmblemApplyRequest> emblems, out AvatarEmblemMutationResult result)
-        {
-            return _inventoryStore.TrySetAvatarEmblems(characterId, targetSlotIndex, targetItemTemplateId, emblems, out result);
-        }
-
-        public bool TrySortItems(int characterId, int accountId, InventoryListType listType, byte category)
-        {
-            return _inventoryStore.TrySortItems(characterId, accountId, listType, category);
-        }
-
-        public bool TryToggleSortItemLock(int characterId, int accountId, InventoryListType listType, short slotIndex, out SortItemLockEntry entry)
-        {
-            return _inventoryStore.TryToggleSortItemLock(characterId, listType, slotIndex, out entry);
-        }
-
-        public bool TryUnlockSortItemLock(int characterId, int accountId, InventoryListType listType, short slotIndex)
-        {
-            return _inventoryStore.TryUnlockSortItemLock(characterId, listType, slotIndex);
-        }
-
-        public IReadOnlyList<SortItemLockEntry> LoadSortItemLocks(int characterId, int accountId)
-        {
-            return _inventoryStore.LoadSortItemLocks(characterId);
-        }
-
-        public IReadOnlyList<SortItemLockEntry> LoadSortItemLocks(int characterId, int accountId, InventoryListType listType)
-        {
-            return _inventoryStore.LoadSortItemLocks(characterId, listType);
-        }
-
-        public bool TryLockEquipmentItem(int characterId, int accountId, InventoryListType listType, short slotIndex, out EquipmentItemLockResult result)
-        {
-            return _inventoryStore.TryLockEquipmentItem(characterId, listType, slotIndex, out result);
-        }
-
-        public bool TryUnlockEquipmentItem(int characterId, int accountId, InventoryListType listType, short slotIndex, out EquipmentItemLockResult result)
-        {
-            return _inventoryStore.TryUnlockEquipmentItem(characterId, listType, slotIndex, out result);
-        }
-
-        public bool TryCancelEquipmentItemUnlock(int characterId, int accountId, InventoryListType listType, short slotIndex, out EquipmentItemLockResult result)
-        {
-            return _inventoryStore.TryCancelEquipmentItemUnlock(characterId, listType, slotIndex, out result);
-        }
-
-        public IReadOnlyList<EquipmentItemLockEntry> LoadEquipmentItemLocks(int characterId, int accountId)
-        {
-            return _inventoryStore.LoadEquipmentItemLocks(characterId);
-        }
-
-        public IReadOnlyList<EquipmentItemLockEntry> LoadEquipmentItemLocks(int characterId, int accountId, InventoryListType listType)
-        {
-            return _inventoryStore.LoadEquipmentItemLocks(characterId, listType);
-        }
-
-        public CommonInventoryItem LoadCommonItemForRefresh(int characterId, int accountId, InventoryListType listType, short slotIndex)
-        {
-            return _inventoryStore.LoadCommonItemForRefresh(characterId, accountId, listType, slotIndex);
-        }
-
-        public AvatarInventoryItem LoadAvatarItemForRefresh(int characterId, int accountId, short slotIndex)
-        {
-            return _inventoryStore.LoadAvatarItemForRefresh(characterId, slotIndex);
-        }
-
-        public PetInventoryItem LoadPetItemForRefresh(int characterId, int accountId, short slotIndex)
-        {
-            return _inventoryStore.LoadPetItemForRefresh(characterId, slotIndex);
-        }
-
         public byte[] LoadCharacterInitBody(int characterId, ushort notiType, int occurrenceIndex = 0)
             => LoadInitBody(characterId, notiType, occurrenceIndex);
 
@@ -544,19 +345,6 @@ namespace DfoServer.Game.SelectCharacter
         public byte[] LoadAccountMainOption(int accountId)
             => _accountSettingsRepository.Load(accountId)?.MainGameOption;
 
-        public bool TryPickupRentalWeapon(
-            SqliteConnection connection,
-            SqliteTransaction transaction,
-            int characterId,
-            int accountId,
-            int itemTemplateId,
-            int expireTime,
-            out short assignedSlot,
-            out int instanceValue)
-        {
-            return _inventoryStore.TryPickupRentalWeapon(
-                connection, transaction, characterId, accountId, itemTemplateId, expireTime, out assignedSlot, out instanceValue);
-        }
 
         public void SaveRentalInfo(SqliteConnection connection, SqliteTransaction transaction, int characterId, RentalInfoSnapshot rental)
         {

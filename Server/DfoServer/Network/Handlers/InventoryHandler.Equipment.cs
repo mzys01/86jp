@@ -23,7 +23,7 @@ namespace DfoServer.Network.Handlers
 
             var (cid, aid) = ResolveOwner(session);
             var command = request.ToCommand();
-            if (!_sqliteSelectCharacterDataSource.TryEnchantByBead(cid, aid, command, out var result))
+            if (!_inventoryStore.TryEnchantByBead(cid, aid, command, out var result))
             {
                 var errorCode = result != null ? result.ErrorCode : EnchantByBeadResult.ErrorInvalidBead;
                 FileLogger.Log($"[{ProtocolName}] ENCHANT_BY_BEAD: FAILED error=0x{errorCode:X2}");
@@ -51,7 +51,7 @@ namespace DfoServer.Network.Handlers
 
             var (cid, aid) = ResolveOwner(session);
             var command = request.ToCommand();
-            if (!_sqliteSelectCharacterDataSource.TryUpgradeItem(cid, aid, command, out var result))
+            if (!_inventoryStore.TryUpgradeItem(cid, aid, command, out var result))
             {
                 var errorCode = result != null ? result.ErrorCode : ItemUpgradeResult.ErrorInvalidTarget;
                 FileLogger.Log($"[{ProtocolName}] UPGRADE_ITEM: FAILED error={errorCode} mode={request.Mode} targetSlot={request.TargetSlotIndex} materialSlot={request.MaterialSlotIndex}");
@@ -117,7 +117,7 @@ namespace DfoServer.Network.Handlers
             }
 
             var (cid, aid) = ResolveOwner(session);
-            if (!_sqliteSelectCharacterDataSource.TryOpenEquipmentSocket(cid, aid, targetSlot, targetItemId, materialSlot, out var result))
+            if (!_inventoryStore.TryOpenEquipmentSocket(cid, targetSlot, targetItemId, materialSlot, out var result))
             {
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x031D, new byte[] { 0x00, 0x04 }));
                 return;
@@ -153,7 +153,7 @@ namespace DfoServer.Network.Handlers
             }
 
             var (cid, aid) = ResolveOwner(session);
-            if (!_sqliteSelectCharacterDataSource.TrySetEquipmentEmblems(cid, aid, targetSlot, targetItemId, emblems, out var result))
+            if (!_inventoryStore.TrySetEquipmentEmblems(cid, targetSlot, targetItemId, emblems, out var result))
             {
                 if (await TryHandleAvatarEmblemAttach(session, 0x031C, targetSlot, targetItemId, emblems, cid, aid))
                     return;
@@ -185,7 +185,7 @@ namespace DfoServer.Network.Handlers
             }
 
             var (cid, aid) = ResolveOwner(session);
-            if (!_sqliteSelectCharacterDataSource.TryOpenAvatarSocket(cid, aid, targetSlot, targetItemId, materialSlot, out var result))
+            if (!_inventoryStore.TryOpenAvatarSocket(cid, targetSlot, targetItemId, materialSlot, out var result))
             {
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x00CE, new byte[] { 0x00, 0x04 }));
                 return;
@@ -222,7 +222,7 @@ namespace DfoServer.Network.Handlers
 
         private async Task<bool> TryHandleAvatarEmblemAttach(EnhancedClientSession session, ushort ackType, short targetSlot, int targetItemId, IReadOnlyList<EquipmentEmblemApplyRequest> emblems, int cid, int aid)
         {
-            if (!_sqliteSelectCharacterDataSource.TrySetAvatarEmblems(cid, aid, targetSlot, targetItemId, emblems, out var result))
+            if (!_inventoryStore.TrySetAvatarEmblems(cid, targetSlot, targetItemId, emblems, out var result))
                 return false;
 
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, ackType, BuildEmblemAttachAck(targetSlot, targetItemId, emblems.Count)));

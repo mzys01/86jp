@@ -11,12 +11,15 @@ namespace DfoServer.Network.Handlers
 {
     public sealed class CeraShopHandler
     {
+        // 购买/刷新走共享 store; 门面仅保留 premium 刷新用的全量选角快照 Load
+        private readonly Game.Inventory.IInventoryStore _inventoryStore;
         private readonly SqliteSelectCharacterDataSource _sqliteSelectCharacterDataSource;
 
         public string ProtocolName => "GameProtocol";
 
-        public CeraShopHandler(SqliteSelectCharacterDataSource sqliteSelectCharacterDataSource)
+        public CeraShopHandler(Game.Inventory.IInventoryStore inventoryStore, SqliteSelectCharacterDataSource sqliteSelectCharacterDataSource)
         {
+            _inventoryStore = inventoryStore ?? throw new ArgumentNullException(nameof(inventoryStore));
             _sqliteSelectCharacterDataSource = sqliteSelectCharacterDataSource ?? throw new ArgumentNullException(nameof(sqliteSelectCharacterDataSource));
         }
 
@@ -59,7 +62,7 @@ namespace DfoServer.Network.Handlers
                     continue;
                 }
 
-                if (_sqliteSelectCharacterDataSource.TryBuyCeraShopItem(cid, aid, commodityNo, 1, request.PaymentMode, attrValue, out var result))
+                if (_inventoryStore.TryBuyCeraShopItem(cid, aid, commodityNo, 1, request.PaymentMode, attrValue, out var result))
                 {
                     FileLogger.Log($"[{ProtocolName}] CERA_SHOP_BUY: OK commodityNo={commodityNo} slot={result.SlotIndex} item=0x{result.ItemTemplateId:X8} count={result.AppliedCount} coin={result.UpdatedCoin} extra={result.ExtraResults.Count}");
                     results.Add(result);
@@ -137,7 +140,7 @@ namespace DfoServer.Network.Handlers
 
             if (itemUpdateResults.Count > 0)
             {
-                var snapshot = _sqliteSelectCharacterDataSource.LoadItemListSnapshot(cid, aid);
+                var snapshot = _inventoryStore.LoadCharacterItemListSnapshot(cid, aid);
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000E,
                     ItemListUpdateBuilder.BuildCommonUpdates(BuildCommonItemUpdates(itemUpdateResults, snapshot))));
             }
@@ -219,7 +222,7 @@ namespace DfoServer.Network.Handlers
             var emptySlots = new List<short>();
             foreach (var slot in slots)
             {
-                var item = _sqliteSelectCharacterDataSource.LoadAvatarItemForRefresh(characterId, accountId, slot);
+                var item = _inventoryStore.LoadAvatarItemForRefresh(characterId, slot);
                 if (item != null)
                     updates.Add(item);
                 else
@@ -250,7 +253,7 @@ namespace DfoServer.Network.Handlers
             var emptySlots = new List<short>();
             foreach (var slot in slots)
             {
-                var item = _sqliteSelectCharacterDataSource.LoadPetItemForRefresh(characterId, accountId, slot);
+                var item = _inventoryStore.LoadPetItemForRefresh(characterId, slot);
                 if (item != null)
                     updates.Add(item);
                 else

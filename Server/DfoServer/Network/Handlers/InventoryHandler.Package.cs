@@ -25,7 +25,7 @@ namespace DfoServer.Network.Handlers
 
             var (cid, aid) = ResolveOwner(session);
 
-            var consumed = _sqliteSelectCharacterDataSource.TryDeleteItem(cid, aid, listType, slotIndex, 1, out var result);
+            var consumed = _inventoryStore.TryDeleteItem(cid, aid, listType, slotIndex, 1, out var result);
             var responsePlan = BuildUseStackableResponsePlan(consumed, result, listType, slotIndex, instanceValue, itemCode);
             if (!consumed)
             {
@@ -126,7 +126,7 @@ namespace DfoServer.Network.Handlers
             }
 
             var (cid, aid) = ResolveOwner(session);
-            if (!_sqliteSelectCharacterDataSource.TryHatchCreatureEgg(cid, aid, listType, slotIndex, expectedItemTemplateId, out var result))
+            if (!_inventoryStore.TryHatchCreatureEgg(cid, listType, slotIndex, expectedItemTemplateId, out var result))
             {
                 FileLogger.Log($"[{ProtocolName}] HATCH_CREATURE_EGG: failed type=0x{header.type:X4} list={listType} slot={slotIndex} expected=0x{expectedItemTemplateId:X8}");
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, header.type, new byte[] { 0x00 }));
@@ -169,7 +169,7 @@ namespace DfoServer.Network.Handlers
             else
             {
                 var (cid, aid) = ResolveOwner(session);
-                if (_sqliteSelectCharacterDataSource.TryOpenAvatarPackage(cid, aid, request, out var result))
+                if (_inventoryStore.TryOpenAvatarPackage(cid, aid, request, out var result))
                 {
                     await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0207, AvatarPackageAckBuilder.BuildSuccess(result.SlotIndex)));
                     if (result.GrantedItems.Count > 0)
@@ -181,7 +181,7 @@ namespace DfoServer.Network.Handlers
                     if (result.SourceRemainingStackCount <= 0)
                         await SendConsumedSourceItemUpdate(session, result.SlotIndex, result.PackageItemTemplateId);
 
-                    var snapshot = _sqliteSelectCharacterDataSource.LoadItemListSnapshot(cid, aid);
+                    var snapshot = _inventoryStore.LoadCharacterItemListSnapshot(cid, aid);
                     var mainUpdateBody = BuildGrantedMainItemUpdates(snapshot, result.GrantedItems, result.SlotIndex, result.PackageItemTemplateId, result.SourceRemainingStackCount > 0);
                     if (mainUpdateBody != null)
                         await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000E, mainUpdateBody));
@@ -213,14 +213,14 @@ namespace DfoServer.Network.Handlers
             else
             {
                 var (cid, aid) = ResolveOwner(session);
-                if (_sqliteSelectCharacterDataSource.TryOpenSelectablePackage(cid, aid, request, out var result))
+                if (_inventoryStore.TryOpenSelectablePackage(cid, aid, request, out var result))
                 {
                     await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x00A0, SelectablePackageAckBuilder.BuildSuccess(result.SlotIndex, result.GrantedItems)));
 
                     if (result.SourceRemainingStackCount <= 0)
                         await SendConsumedSourceItemUpdate(session, result.SlotIndex, result.PackageItemTemplateId);
 
-                    var snapshot = _sqliteSelectCharacterDataSource.LoadItemListSnapshot(cid, aid);
+                    var snapshot = _inventoryStore.LoadCharacterItemListSnapshot(cid, aid);
                     var mainUpdateBody = BuildGrantedMainItemUpdates(snapshot, result.GrantedItems, result.SlotIndex, result.PackageItemTemplateId, result.SourceRemainingStackCount > 0);
                     if (mainUpdateBody != null)
                         await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000E, mainUpdateBody));
@@ -266,7 +266,7 @@ namespace DfoServer.Network.Handlers
                 : 0;
 
             var (cid, aid) = ResolveOwner(session);
-            if (!_sqliteSelectCharacterDataSource.TryUseBoosterItem(
+            if (!_inventoryStore.TryUseBoosterItem(
                     cid,
                     aid,
                     new BoosterUseRequest
@@ -309,7 +309,7 @@ namespace DfoServer.Network.Handlers
                 : 0;
 
             var (cid, aid) = ResolveOwner(session);
-            if (!_sqliteSelectCharacterDataSource.TryUseBoosterItem(
+            if (!_inventoryStore.TryUseBoosterItem(
                     cid,
                     aid,
                     new BoosterUseRequest
@@ -366,7 +366,7 @@ namespace DfoServer.Network.Handlers
             }
 
             var (cid, aid) = ResolveOwner(session);
-            if (!_sqliteSelectCharacterDataSource.TryUseBoosterItem(cid, aid, new BoosterUseRequest
+            if (!_inventoryStore.TryUseBoosterItem(cid, aid, new BoosterUseRequest
             {
                 SlotIndex = slotIndex,
                 SelectedItemTemplateIds = selectedItemTemplateIds,
@@ -404,7 +404,7 @@ namespace DfoServer.Network.Handlers
             FileLogger.Log($"[{ProtocolName}] OPEN_PACKAGE_0207 raw({body.Length}B): {BitConverter.ToString(body)} slot={slotIndex} selected={string.Join(",", selectedItemTemplateIds.Select(id => $"0x{id:X8}"))}");
 
             var (cid, aid) = ResolveOwner(session);
-            if (!_sqliteSelectCharacterDataSource.TryOpenPackage0207(cid, aid, slotIndex, selectedItemTemplateIds, out var result))
+            if (!_inventoryStore.TryOpenPackage0207(cid, aid, slotIndex, selectedItemTemplateIds, out var result))
             {
                 FileLogger.Log($"[{ProtocolName}] OPEN_PACKAGE_0207: failed slot={slotIndex}");
                 return false;
@@ -456,7 +456,7 @@ namespace DfoServer.Network.Handlers
             if (result.SourceRemainingStackCount <= 0)
                 await SendConsumedSourceItemUpdate(session, result.SourceSlotIndex, result.SourceItemTemplateId);
 
-            var snapshot = _sqliteSelectCharacterDataSource.LoadItemListSnapshot(cid, aid);
+            var snapshot = _inventoryStore.LoadCharacterItemListSnapshot(cid, aid);
             var mainUpdateBody = BuildBoosterMainItemUpdates(snapshot, result, result.SourceRemainingStackCount > 0);
             if (mainUpdateBody != null)
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000E, mainUpdateBody));
@@ -728,7 +728,7 @@ namespace DfoServer.Network.Handlers
             var job = _characterRepository.GetById(cid)?.Job ?? 0;
             byte newOption = 0;
 
-            if (!_sqliteSelectCharacterDataSource.TryCompoundAvatar(cid, aid, slot1, slot2, consumeSlot,
+            if (!_inventoryStore.TryCompoundAvatar(cid, aid, slot1, slot2, consumeSlot,
                     (old1, old2, materialId) =>
                     {
                         var prob = CompoundAvatarProbabilityService.Resolve(job, old1, old2, materialId, reqItemId);
@@ -823,7 +823,7 @@ namespace DfoServer.Network.Handlers
                 return -1;
             }
 
-            if (!_sqliteSelectCharacterDataSource.TryCompoundAvatarSet(cid, aid, consumeSlots, consumeSlotItemIds, ResolveNewItemId, (byte)option,
+            if (!_inventoryStore.TryCompoundAvatarSet(cid, aid, consumeSlots, consumeSlotItemIds, ResolveNewItemId, (byte)option,
                     consumeStackableSlot, out int newSlot, out var oldItemIds, out int newItemId, out int consumedTemplateId, out int consumedRemaining))
             {
                 var err = new GamePacketWriter();

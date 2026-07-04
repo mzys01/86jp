@@ -38,7 +38,7 @@ namespace DfoServer.Network.Handlers
                 return;
             }
 
-            if (!_sqliteSelectCharacterDataSource.TryRepairEquipment(cid, aid, listType.Value, slot, quickRepair, freeRepair, out var result))
+            if (!_inventoryStore.TryRepairEquipment(cid, aid, listType.Value, slot, quickRepair, freeRepair, out var result))
             {
                 FileLogger.Log($"[{ProtocolName}] REPAIR_EQUIPMENT: FAILED inven_type={invenType} slot={slot}");
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0017, RepairEquipmentAckBuilder.BuildError(0x0A)));

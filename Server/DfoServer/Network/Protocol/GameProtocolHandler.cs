@@ -43,13 +43,16 @@ namespace DfoServer.Network
             var characterRepository = new SqliteCharacterRepository(databasePath, schemaFilePath);
             var accountRepository = new SqliteAccountRepository(databasePath, schemaFilePath);
 
-            _assetService = new SqliteAssetService(databasePath, schemaFilePath);
+            // 全程序共享一个 SqliteInventoryStore(无状态, 只持连接串): 旧版门面与 AssetService 各自 new 一个
+            var inventoryStore = new Game.Inventory.SqliteInventoryStore(databasePath, schemaFilePath);
+            _assetService = new SqliteAssetService(databasePath, schemaFilePath, inventoryStore);
 
             var sqliteSelectCharacterDataSource = new SqliteSelectCharacterDataSource(
                 databasePath,
                 schemaFilePath,
                 characterRepository,
-                _assetService);
+                _assetService,
+                inventoryStore);
 
             var userInfoBlobRepository = new Game.CharacterData.SqliteUserInfoBlobRepository(databasePath, schemaFilePath);
             var getUserInfoTemplate = userInfoBlobRepository.LoadGetUserInfoTemplate();
@@ -58,17 +61,17 @@ namespace DfoServer.Network
             _selectCharacterDataSource = sqliteSelectCharacterDataSource;
             _loginHandler = new LoginHandler(accountRepository);
             _characterSelectHandler = new CharacterSelectHandler(sqliteSelectCharacterDataSource, characterRepository, getUserInfoTemplate);
-            _inventoryHandler = new InventoryHandler(sqliteSelectCharacterDataSource, characterRepository, broadcastGamePacket);
-            _townHandler = new TownHandler(characterRepository, sqliteSelectCharacterDataSource);
+            _inventoryHandler = new InventoryHandler(inventoryStore, sqliteSelectCharacterDataSource, characterRepository, broadcastGamePacket);
+            _townHandler = new TownHandler(characterRepository, inventoryStore);
             _dungeonHandler = new DungeonHandler(_assetService);
             _skillHandler = new SkillHandler(characterRepository);
             _settingsHandler = new SettingsHandler();
-            _ceraShopHandler = new CeraShopHandler(sqliteSelectCharacterDataSource);
+            _ceraShopHandler = new CeraShopHandler(inventoryStore, sqliteSelectCharacterDataSource);
             _luckyStarHandler = new LuckyStarHandler(_assetService, sqliteSelectCharacterDataSource);
-            _rentalHandler = new RentalHandler(_assetService, sqliteSelectCharacterDataSource);
+            _rentalHandler = new RentalHandler(_assetService, inventoryStore, sqliteSelectCharacterDataSource);
             _mailboxHandler = new MailboxHandler();
             var collectBoxProgressRepository = new Game.Inventory.CollectBoxProgressRepository(databasePath, schemaFilePath);
-            _collectionBoxHandler = new CollectionBoxHandler(sqliteSelectCharacterDataSource, collectBoxProgressRepository);
+            _collectionBoxHandler = new CollectionBoxHandler(inventoryStore, collectBoxProgressRepository);
             _mercenaryHandler = new MercenaryHandler(characterRepository);
 
             _cmdDispatch = new Dictionary<ushort, Func<EnhancedClientSession, GamePacketHeader, byte[], Task>>();

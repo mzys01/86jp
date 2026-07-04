@@ -32,7 +32,7 @@ namespace DfoServer.Network.Handlers
                     var deleteCount = (short)BitConverter.ToInt32(body, offset + 8);
                     offset += 12;
 
-                    if (!_sqliteSelectCharacterDataSource.TryDeleteItem(cid, aid, listType, slotIndex, deleteCount, out var result))
+                    if (!_inventoryStore.TryDeleteItem(cid, aid, listType, slotIndex, deleteCount, out var result))
                     {
                         FileLogger.Log($"[{ProtocolName}] DELETE_ITEM(ext): failed at listType={listType} slot={slotIndex} count={deleteCount}");
                         var errAck = new byte[] { 0x00, 0x17, (byte)listType };
@@ -51,7 +51,7 @@ namespace DfoServer.Network.Handlers
             if (!TryParseDeleteOrSellRequest(body, out var lt, out var si, out var ic))
                 return;
 
-            if (!_sqliteSelectCharacterDataSource.TryDeleteItem(cid, aid, lt, si, ic, out var simpleResult))
+            if (!_inventoryStore.TryDeleteItem(cid, aid, lt, si, ic, out var simpleResult))
             {
                 var errAck = new byte[] { 0x00, 0x17, (byte)lt };
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0012, errAck));
@@ -72,7 +72,7 @@ namespace DfoServer.Network.Handlers
             FileLogger.Log($"[{ProtocolName}] BUY_ITEM: itemTemplateId=0x{itemTemplateId:X8} count={buyCount}");
 
             var (cid, aid) = ResolveOwner(session);
-            if (!_sqliteSelectCharacterDataSource.TryBuyItem(cid, aid, itemTemplateId, buyCount, out var result))
+            if (!_inventoryStore.TryBuyItem(cid, aid, itemTemplateId, buyCount, out var result))
             {
                 FileLogger.Log($"[{ProtocolName}] BUY_ITEM: FAILED itemTemplateId=0x{itemTemplateId:X8}");
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0015, BuyItemAckBuilder.BuildError(0x04)));
@@ -112,7 +112,7 @@ namespace DfoServer.Network.Handlers
             FileLogger.Log($"[{ProtocolName}] SELL_ITEM: listType={listType}({(byte)listType}) slot={slotIndex} count={sellCount}");
 
             var (cid, aid) = ResolveOwner(session);
-            if (!_sqliteSelectCharacterDataSource.TrySellItem(cid, aid, listType, slotIndex, sellCount, out var result))
+            if (!_inventoryStore.TrySellItem(cid, aid, listType, slotIndex, sellCount, out var result))
             {
                 FileLogger.Log($"[{ProtocolName}] SELL_ITEM: FAILED listType={listType} slot={slotIndex} count={sellCount}");
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0016, SellItemBuilder.BuildError(0x11)));

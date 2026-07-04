@@ -14,7 +14,7 @@ namespace DfoServer.Network.Handlers
                 return;
 
             var (cid, aid) = ResolveOwner(session);
-            var ok = _sqliteSelectCharacterDataSource.TryLockEquipmentItem(cid, aid, listType, slotIndex, out var result);
+            var ok = _inventoryStore.TryLockEquipmentItem(cid, listType, slotIndex, out var result);
             if (!ok || !result.Success)
             {
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x010B,
@@ -33,7 +33,7 @@ namespace DfoServer.Network.Handlers
                 return;
 
             var (cid, aid) = ResolveOwner(session);
-            var ok = _sqliteSelectCharacterDataSource.TryUnlockEquipmentItem(cid, aid, listType, slotIndex, out var result);
+            var ok = _inventoryStore.TryUnlockEquipmentItem(cid, listType, slotIndex, out var result);
             if (!ok || !result.Success)
             {
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x010C,
@@ -53,7 +53,7 @@ namespace DfoServer.Network.Handlers
                 return;
 
             var (cid, aid) = ResolveOwner(session);
-            var ok = _sqliteSelectCharacterDataSource.TryCancelEquipmentItemUnlock(cid, aid, listType, slotIndex, out var result);
+            var ok = _inventoryStore.TryCancelEquipmentItemUnlock(cid, listType, slotIndex, out var result);
             if (!ok || !result.Success)
             {
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x010D,
@@ -72,7 +72,7 @@ namespace DfoServer.Network.Handlers
                 return;
 
             var (cid, aid) = ResolveOwner(session);
-            var locks = _sqliteSelectCharacterDataSource.LoadEquipmentItemLocks(cid, aid);
+            var locks = _inventoryStore.LoadEquipmentItemLocks(cid);
             LogEquipmentItemLockList("ITEM_LOCK_LIST_REFRESH", locks);
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x00FB,
                 EquipmentItemLockBuilder.BuildLockList(locks)));
@@ -81,7 +81,7 @@ namespace DfoServer.Network.Handlers
         public async Task SendAllEquipmentItemLockListRefresh(EnhancedClientSession session)
         {
             var (cid, aid) = ResolveOwner(session);
-            var locks = _sqliteSelectCharacterDataSource.LoadEquipmentItemLocks(cid, aid);
+            var locks = _inventoryStore.LoadEquipmentItemLocks(cid);
             LogEquipmentItemLockList("ITEM_LOCK_LIST_ALL", locks);
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x00FB,
                 EquipmentItemLockBuilder.BuildLockList(locks)));

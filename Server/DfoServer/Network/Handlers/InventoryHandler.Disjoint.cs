@@ -22,7 +22,7 @@ namespace DfoServer.Network.Handlers
             FileLogger.Log($"[{ProtocolName}] DISJOINT_ITEM raw({body?.Length ?? 0}B): {(body != null ? BitConverter.ToString(body) : "null")} target=({request.ItemSpace},{request.TargetSlotIndex}) disjointSlot={request.DisjointItemSlotIndex} ctx=0x{request.ContextValue:X8}");
 
             var (cid, aid) = ResolveOwner(session);
-            if (!_sqliteSelectCharacterDataSource.TryDisjointItem(cid, aid, request, out var result))
+            if (!_inventoryStore.TryDisjointItem(cid, aid, request, out var result))
             {
                 var errorCode = result != null ? result.ErrorCode : DisjointItemResult.ErrorInvalidTarget;
                 FileLogger.Log($"[{ProtocolName}] DISJOINT_ITEM: FAILED error=0x{errorCode:X2} target=({request.ItemSpace},{request.TargetSlotIndex})");

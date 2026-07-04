@@ -11,13 +11,13 @@ namespace DfoServer.Game.Inventory
         private readonly string _connectionString;
         private readonly SqliteInventoryStore _store;
 
-        public SqliteAssetService(string databasePath, string schemaFilePath)
+        public SqliteAssetService(string databasePath, string schemaFilePath, SqliteInventoryStore store = null)
         {
             if (databasePath == null) throw new ArgumentNullException(nameof(databasePath));
             if (schemaFilePath == null) throw new ArgumentNullException(nameof(schemaFilePath));
 
             _connectionString = SqliteDatabaseBootstrap.BuildConnectionString(databasePath);
-            _store = new SqliteInventoryStore(databasePath, schemaFilePath);
+            _store = store ?? new SqliteInventoryStore(databasePath, schemaFilePath);
         }
 
         public DbScope OpenScope(int characterId, int accountId)

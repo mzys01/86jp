@@ -13,13 +13,16 @@ namespace DfoServer.Network.Handlers
         private const ushort NotiRental = 0x0357;
 
         private readonly IAssetService _assetService;
-        private readonly SqliteSelectCharacterDataSource _dataSource;
+        private readonly IInventoryStore _inventoryStore;
+        private readonly SqliteSelectCharacterDataSource _dataSource;   // 仅 init body 读写(0x0357 面板)
 
         public RentalHandler(
             IAssetService assetService,
+            IInventoryStore inventoryStore,
             SqliteSelectCharacterDataSource dataSource)
         {
             _assetService = assetService ?? throw new ArgumentNullException(nameof(assetService));
+            _inventoryStore = inventoryStore ?? throw new ArgumentNullException(nameof(inventoryStore));
             _dataSource = dataSource;
         }
 
@@ -65,7 +68,7 @@ namespace DfoServer.Network.Handlers
                     return;
                 }
 
-                pickupSucceeded = _dataSource.TryPickupRentalWeapon(
+                pickupSucceeded = _inventoryStore.TryPickupRentalWeapon(
                     scope.Connection, scope.Transaction, characterId, accountId, inventoryTemplateId, expireTime, out invSlot, out instanceValue);
 
                 if (pickupSucceeded)
@@ -96,7 +99,7 @@ namespace DfoServer.Network.Handlers
 
             if (invSlot >= 0)
             {
-                var itemSnapshot = _dataSource.LoadItemListSnapshot(characterId, accountId);
+                var itemSnapshot = _inventoryStore.LoadCharacterItemListSnapshot(characterId, accountId);
                 var pickedItem = itemSnapshot.MainItems.FirstOrDefault(i => i.SlotIndex == invSlot);
                 if (pickedItem != null)
                 {

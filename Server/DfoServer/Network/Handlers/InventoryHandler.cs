@@ -12,6 +12,8 @@ namespace DfoServer.Network.Handlers
 {
     public sealed partial class InventoryHandler
     {
+        // 背包操作直连共享 store; 门面只保留选角初始化本职(称号簿/成就/水晶契约/全量快照/宠物快照)
+        private readonly IInventoryStore _inventoryStore;
         private readonly SqliteSelectCharacterDataSource _sqliteSelectCharacterDataSource;
         private readonly ICharacterRepository _characterRepository;
         private readonly Func<byte[], Task> _broadcastGamePacket;
@@ -19,10 +21,12 @@ namespace DfoServer.Network.Handlers
         public string ProtocolName => "GameProtocol";
 
         public InventoryHandler(
+            IInventoryStore inventoryStore,
             SqliteSelectCharacterDataSource sqliteSelectCharacterDataSource,
             ICharacterRepository characterRepository,
             Func<byte[], Task> broadcastGamePacket = null)
         {
+            _inventoryStore = inventoryStore ?? throw new ArgumentNullException(nameof(inventoryStore));
             _sqliteSelectCharacterDataSource = sqliteSelectCharacterDataSource ?? throw new ArgumentNullException(nameof(sqliteSelectCharacterDataSource));
             _characterRepository = characterRepository ?? throw new ArgumentNullException(nameof(characterRepository));
             _broadcastGamePacket = broadcastGamePacket;
@@ -40,7 +44,7 @@ namespace DfoServer.Network.Handlers
         public async Task SendItemListRefresh(EnhancedClientSession session, params InventoryListType[] listTypes)
         {
             var (cid, aid) = ResolveOwner(session);
-            var snapshot = _sqliteSelectCharacterDataSource.LoadItemListSnapshot(cid, aid);
+            var snapshot = _inventoryStore.LoadCharacterItemListSnapshot(cid, aid);
 
             foreach (var listType in listTypes.Distinct().Select(MapToNotiListType).Distinct())
             {
@@ -69,7 +73,7 @@ namespace DfoServer.Network.Handlers
                 var updates = new List<CommonInventoryItem>();
                 foreach (var slotIndex in slots)
                 {
-                    var item = _sqliteSelectCharacterDataSource.LoadCommonItemForRefresh(cid, aid, itemSpace, slotIndex)
+                    var item = _inventoryStore.LoadCommonItemForRefresh(cid, aid, itemSpace, slotIndex)
                         ?? ItemListUpdateBuilder.CreateEmptyCommonItem(slotIndex);
                     updates.Add(item);
                 }
@@ -88,7 +92,7 @@ namespace DfoServer.Network.Handlers
                 var emptySlots = new List<short>();
                 foreach (var slotIndex in slots)
                 {
-                    var item = _sqliteSelectCharacterDataSource.LoadAvatarItemForRefresh(cid, aid, slotIndex);
+                    var item = _inventoryStore.LoadAvatarItemForRefresh(cid, slotIndex);
                     if (item != null)
                         updates.Add(item);
                     else
@@ -121,7 +125,7 @@ namespace DfoServer.Network.Handlers
                 var emptySlots = new List<short>();
                 foreach (var slotIndex in slots)
                 {
-                    var item = _sqliteSelectCharacterDataSource.LoadPetItemForRefresh(cid, aid, slotIndex);
+                    var item = _inventoryStore.LoadPetItemForRefresh(cid, slotIndex);
                     if (item != null)
                         updates.Add(item);
                     else
@@ -158,7 +162,7 @@ namespace DfoServer.Network.Handlers
         {
             var (cid, aid) = ResolveOwner(session);
             var refreshListType = MapToSortLockListType(listType);
-            var locks = _sqliteSelectCharacterDataSource.LoadSortItemLocks(cid, aid, refreshListType);
+            var locks = _inventoryStore.LoadSortItemLocks(cid, refreshListType);
             foreach (var entry in locks)
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x02CA, SortItemLockBuilder.BuildLock(entry)));
         }
@@ -166,7 +170,7 @@ namespace DfoServer.Network.Handlers
         public async Task SendAllSortItemLockRefresh(EnhancedClientSession session)
         {
             var (cid, aid) = ResolveOwner(session);
-            var locks = _sqliteSelectCharacterDataSource.LoadSortItemLocks(cid, aid);
+            var locks = _inventoryStore.LoadSortItemLocks(cid);
             foreach (var entry in locks)
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x02CA, SortItemLockBuilder.BuildLock(entry)));
         }

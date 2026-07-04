@@ -15,14 +15,14 @@ namespace DfoServer.Network.Handlers
         private static readonly TimeSpan PositionPersistThrottle = TimeSpan.FromSeconds(5);
 
         private readonly ICharacterRepository _characterRepository;
-        private readonly SqliteSelectCharacterDataSource _sqliteSelectCharacterDataSource;
+        private readonly Game.Inventory.IInventoryStore _inventoryStore;
 
         public string ProtocolName => "GameProtocol";
 
-        public TownHandler(ICharacterRepository characterRepository, SqliteSelectCharacterDataSource sqliteSelectCharacterDataSource)
+        public TownHandler(ICharacterRepository characterRepository, Game.Inventory.IInventoryStore inventoryStore)
         {
             _characterRepository = characterRepository ?? throw new ArgumentNullException(nameof(characterRepository));
-            _sqliteSelectCharacterDataSource = sqliteSelectCharacterDataSource ?? throw new ArgumentNullException(nameof(sqliteSelectCharacterDataSource));
+            _inventoryStore = inventoryStore ?? throw new ArgumentNullException(nameof(inventoryStore));
         }
 
         /// <summary>
@@ -124,7 +124,7 @@ namespace DfoServer.Network.Handlers
 
             var (cid, aid) = InventoryHandler.ResolveOwner(session);
             int remainingCount = 0;
-            var itemList = _sqliteSelectCharacterDataSource.LoadItemListSnapshot(cid, aid);
+            var itemList = _inventoryStore.LoadCharacterItemListSnapshot(cid, aid);
             short targetSlot = -1;
             foreach (var item in itemList.MainItems)
             {
@@ -138,7 +138,7 @@ namespace DfoServer.Network.Handlers
 
             if (targetSlot >= 0)
             {
-                if (_sqliteSelectCharacterDataSource.TryDeleteItem(cid, aid, InventoryListType.Main, targetSlot, 1, out var result))
+                if (_inventoryStore.TryDeleteItem(cid, aid, InventoryListType.Main, targetSlot, 1, out var result))
                 {
                     remainingCount = remainingCount > 0 ? remainingCount - 1 : 0;
                     FileLogger.Log($"[{ProtocolName}] TELEPORT: consumed 1x teleport item, remaining={remainingCount}");
