@@ -44,6 +44,7 @@ namespace DfoServer.Network.Handlers.Dungeon
                 FileLogger.Log($"[DungeonHandler] DIE_MONSTER: passive object code={req.LocalIndex}");
                 if (session.Player.CurClearCondition != null && session.Player.CurClearCondition.Check(0, req.LocalIndex))
                     await _settlement.TryClearDungeon(session, $"destroy object {req.LocalIndex}");
+                await _svc.CheckQuestPassiveObjectDrop(session, req.LocalIndex);
                 return;
             }
 

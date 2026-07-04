@@ -688,6 +688,30 @@ namespace DfoServer.Network.Handlers.Dungeon
         {
             if (session.Player.CurDungeon <= 0 || monsterCode <= 0) return;
 
+            await CheckQuestDrop(session, monsterCode, "monster", activeQuestIds =>
+                QuestDropProvider.CheckMonsterDrop(
+                    activeQuestIds, session.Player.CurDungeon, session.Player.CurDungeonDifficulty, monsterCode));
+        }
+
+        internal async Task CheckQuestPassiveObjectDrop(EnhancedClientSession session, int objectCode)
+        {
+            if (session.Player.CurDungeon <= 0 || objectCode <= 0) return;
+
+            await CheckQuestDrop(session, objectCode, "passive", activeQuestIds =>
+                QuestDropProvider.CheckEnemyDrop(
+                    activeQuestIds,
+                    session.Player.CurDungeon,
+                    session.Player.CurDungeonDifficulty,
+                    objectCode,
+                    QuestDropProvider.EnemyTypePassiveObject));
+        }
+
+        private async Task CheckQuestDrop(
+            EnhancedClientSession session,
+            int sourceCode,
+            string sourceName,
+            Func<ICollection<int>, List<QuestDropCandidate>> getCandidates)
+        {
             HashSet<int> activeQuestIds = null;
             try
             {
@@ -699,8 +723,7 @@ namespace DfoServer.Network.Handlers.Dungeon
             }
             catch { return; }
 
-            var candidates = QuestDropProvider.CheckMonsterDrop(
-                activeQuestIds, session.Player.CurDungeon, session.Player.CurDungeonDifficulty, monsterCode);
+            var candidates = getCandidates(activeQuestIds);
             if (candidates == null) return;
 
             var accountId = session.Account?.AccountId ?? 1;
@@ -720,16 +743,16 @@ namespace DfoServer.Network.Handlers.Dungeon
                 if (dropCount <= 0)
                 {
                     if (candidate.MaxStack != -1 && currentHeld >= candidate.MaxStack)
-                        FileLogger.Log($"[{ProtocolLogName}] QUEST_DROP: skipped maxStack monster={monsterCode} item={candidate.ItemId} held={currentHeld} max={candidate.MaxStack}");
+                        FileLogger.Log($"[{ProtocolLogName}] QUEST_DROP: skipped maxStack {sourceName}={sourceCode} item={candidate.ItemId} held={currentHeld} max={candidate.MaxStack}");
                     else if (candidate.DropRate >= 100)
-                        FileLogger.Log($"[{ProtocolLogName}] QUEST_DROP: skipped despite guaranteed rate monster={monsterCode} item={candidate.ItemId} held={currentHeld} count={candidate.Count}");
+                        FileLogger.Log($"[{ProtocolLogName}] QUEST_DROP: skipped despite guaranteed rate {sourceName}={sourceCode} item={candidate.ItemId} held={currentHeld} count={candidate.Count}");
                     continue;
                 }
 
                 short slot;
                 if (!TryPickupItemToInventory(session.Player.CharacterId, accountId, candidate.ItemId, dropCount, out slot))
                 {
-                    FileLogger.Log($"[{ProtocolLogName}] QUEST_DROP: failed to insert monster={monsterCode} item={candidate.ItemId} x{dropCount} held={currentHeld}");
+                    FileLogger.Log($"[{ProtocolLogName}] QUEST_DROP: failed to insert {sourceName}={sourceCode} item={candidate.ItemId} x{dropCount} held={currentHeld}");
                     continue;
                 }
 
@@ -741,7 +764,7 @@ namespace DfoServer.Network.Handlers.Dungeon
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000E, w.ToArray()));
 
                 grantedItemIds.Add(candidate.ItemId);
-                FileLogger.Log($"[{ProtocolLogName}] QUEST_DROP: monster={monsterCode} -> item={candidate.ItemId} x{dropCount} slot={slot} (held={currentHeld}->{currentHeld + dropCount})");
+                FileLogger.Log($"[{ProtocolLogName}] QUEST_DROP: {sourceName}={sourceCode} -> item={candidate.ItemId} x{dropCount} slot={slot} (held={currentHeld}->{currentHeld + dropCount})");
             }
 
             if (grantedItemIds.Count <= 0)

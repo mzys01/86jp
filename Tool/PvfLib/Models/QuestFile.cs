@@ -60,6 +60,7 @@ namespace PvfLib
         public string MonsterRewardItem { get; set; }
         public List<MonsterRewardItemEntry> MonsterRewardItems { get; set; } = new List<MonsterRewardItemEntry>();
         public string EnemyRewardItem { get; set; }
+        public List<EnemyRewardItemEntry> EnemyRewardItems { get; set; } = new List<EnemyRewardItemEntry>();
         public string DungeonInfo { get; set; }
         public string SubstitutiveNames { get; set; }
         public string RelationQuest { get; set; }
@@ -141,7 +142,10 @@ namespace PvfLib
                         qst.MonsterRewardItem = data;
                         qst.MonsterRewardItems = MonsterRewardItemEntry.ParseList(data);
                         break;
-                    case "enemy reward item": qst.EnemyRewardItem = data; break;
+                    case "enemy reward item":
+                        qst.EnemyRewardItem = data;
+                        qst.EnemyRewardItems = EnemyRewardItemEntry.ParseList(data);
+                        break;
                     case "dungeon info": qst.DungeonInfo = data; break;
                     case "substitutive names": qst.SubstitutiveNames = data; break;
                     case "relation quest": qst.RelationQuest = data; break;
@@ -202,6 +206,50 @@ namespace PvfLib
                     {
                         MonsterCode = mc, DungeonId = dg, Difficulty = diff,
                         ItemId = item, Count = cnt, DropRate = rate, MaxStack = max
+                    });
+                }
+            }
+            return result;
+        }
+    }
+
+    public class EnemyRewardItemEntry
+    {
+        public int EnemyCode { get; set; }
+        public int EnemyType { get; set; }
+        public int DungeonId { get; set; }
+        public int Difficulty { get; set; }
+        public int ItemId { get; set; }
+        public int Count { get; set; }
+        public int DropRate { get; set; }
+        public int MaxStack { get; set; }
+
+        public static List<EnemyRewardItemEntry> ParseList(string data)
+        {
+            var result = new List<EnemyRewardItemEntry>();
+            if (string.IsNullOrWhiteSpace(data)) return result;
+            var tokens = data.Split(new[] { ' ', '\t', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+            for (int i = 0; i + 7 < tokens.Length; i += 8)
+            {
+                if (int.TryParse(tokens[i], out var enemyCode) &&
+                    int.TryParse(tokens[i + 1], out var enemyType) &&
+                    int.TryParse(tokens[i + 2], out var dungeonId) &&
+                    int.TryParse(tokens[i + 3], out var difficulty) &&
+                    int.TryParse(tokens[i + 4], out var itemId) &&
+                    int.TryParse(tokens[i + 5], out var count) &&
+                    int.TryParse(tokens[i + 6], out var dropRate) &&
+                    int.TryParse(tokens[i + 7], out var maxStack))
+                {
+                    result.Add(new EnemyRewardItemEntry
+                    {
+                        EnemyCode = enemyCode,
+                        EnemyType = enemyType,
+                        DungeonId = dungeonId,
+                        Difficulty = difficulty,
+                        ItemId = itemId,
+                        Count = count,
+                        DropRate = dropRate,
+                        MaxStack = maxStack
                     });
                 }
             }

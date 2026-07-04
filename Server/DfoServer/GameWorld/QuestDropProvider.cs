@@ -13,6 +13,8 @@ namespace DfoServer.GameWorld
 
     public static class QuestDropProvider
     {
+        public const int EnemyTypePassiveObject = 3;
+
         private static readonly Random _rng = new Random();
 
         /// <summary>
@@ -40,9 +42,7 @@ namespace DfoServer.GameWorld
                     {
                         if (entry.MonsterCode != monsterCode)
                             continue;
-                        if (entry.DungeonId != -1 && entry.DungeonId != dungeonIndex)
-                            continue;
-                        if (entry.Difficulty >= 0 && entry.Difficulty != difficulty)
+                        if (!MatchesScope(entry.DungeonId, entry.Difficulty, dungeonIndex, difficulty))
                             continue;
 
                         results.Add(new QuestDropCandidate
@@ -58,6 +58,55 @@ namespace DfoServer.GameWorld
             }
 
             return results.Count > 0 ? results : null;
+        }
+
+        public static List<QuestDropCandidate> CheckEnemyDrop(
+            ICollection<int> activeQuestIds, int dungeonIndex, int difficulty, int enemyCode, int enemyType)
+        {
+            if (activeQuestIds == null || activeQuestIds.Count == 0)
+                return null;
+
+            var results = new List<QuestDropCandidate>();
+
+            foreach (var questId in activeQuestIds)
+            {
+                try
+                {
+                    var qst = QuestData.GetQuestFile(questId);
+                    if (qst == null || qst.EnemyRewardItems == null || qst.EnemyRewardItems.Count == 0)
+                        continue;
+
+                    foreach (var entry in qst.EnemyRewardItems)
+                    {
+                        if (entry.EnemyCode != enemyCode)
+                            continue;
+                        if (entry.EnemyType != enemyType)
+                            continue;
+                        if (!MatchesScope(entry.DungeonId, entry.Difficulty, dungeonIndex, difficulty))
+                            continue;
+
+                        results.Add(new QuestDropCandidate
+                        {
+                            ItemId = entry.ItemId,
+                            Count = entry.Count,
+                            DropRate = entry.DropRate,
+                            MaxStack = entry.MaxStack,
+                        });
+                    }
+                }
+                catch { }
+            }
+
+            return results.Count > 0 ? results : null;
+        }
+
+        private static bool MatchesScope(int dungeonId, int rewardDifficulty, int dungeonIndex, int difficulty)
+        {
+            if (dungeonId != -1 && dungeonId != dungeonIndex)
+                return false;
+            if (rewardDifficulty >= 0 && rewardDifficulty != difficulty)
+                return false;
+            return true;
         }
 
         /// <summary>

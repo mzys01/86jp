@@ -7,6 +7,7 @@ using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory;
 using DfoServer.Game.Quests;
 using DfoServer.Game.Session;
+using DfoServer.GameWorld;
 using DfoServer.Infrastructure;
 using Microsoft.Data.Sqlite;
 
@@ -21,6 +22,10 @@ namespace DfoServer.SelfTests
         private const int AganzoLetterItemId = 10089292;
         private const ushort NonCarryEventQuestId = 2578;
         private const int NonCarryEventItemId = 10100257;
+        private const ushort GreenStoneQuestId = 1849;
+        private const int GreenStonePassiveObjectCode = 52853;
+        private const int ChessboardDespairDungeonId = 160;
+        private const int GreenLightStoneFragmentItemId = 10099811;
 
         public static int Run()
         {
@@ -49,6 +54,43 @@ namespace DfoServer.SelfTests
             var connStr = SqliteDatabaseBootstrap.BuildConnectionString(dbPath);
             MarkQuestCleared(connStr, 2041);
             var failures = 0;
+
+            var greenStoneQuest = QuestData.GetQuestFile(GreenStoneQuestId);
+            Check("green stone quest parses passive object reward",
+                greenStoneQuest != null
+                    && greenStoneQuest.EnemyRewardItems.Exists(e =>
+                        e.EnemyCode == GreenStonePassiveObjectCode
+                        && e.EnemyType == QuestDropProvider.EnemyTypePassiveObject
+                        && e.DungeonId == ChessboardDespairDungeonId
+                        && e.ItemId == GreenLightStoneFragmentItemId
+                        && e.Count == 1
+                        && e.DropRate == 100
+                        && e.MaxStack == 5),
+                ref failures);
+
+            var greenStonePassiveCandidates = QuestDropProvider.CheckEnemyDrop(
+                new[] { (int)GreenStoneQuestId },
+                ChessboardDespairDungeonId,
+                0,
+                GreenStonePassiveObjectCode,
+                QuestDropProvider.EnemyTypePassiveObject);
+            Check("green stone passive object reward matches",
+                greenStonePassiveCandidates != null
+                    && greenStonePassiveCandidates.Count == 1
+                    && greenStonePassiveCandidates[0].ItemId == GreenLightStoneFragmentItemId
+                    && greenStonePassiveCandidates[0].Count == 1
+                    && greenStonePassiveCandidates[0].DropRate == 100
+                    && greenStonePassiveCandidates[0].MaxStack == 5,
+                ref failures);
+
+            var greenStoneMonsterCandidates = QuestDropProvider.CheckMonsterDrop(
+                new[] { (int)GreenStoneQuestId },
+                ChessboardDespairDungeonId,
+                0,
+                GreenStonePassiveObjectCode);
+            Check("green stone passive object is not monster reward",
+                greenStoneMonsterCandidates == null,
+                ref failures);
 
             QuestService.SaveActiveQuests(connStr, CharacterId, new List<ActiveQuest>
             {
