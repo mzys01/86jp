@@ -47,6 +47,12 @@ namespace DfoServer
                 return;
             }
 
+            if (Array.IndexOf(args, "--selftest-dungeon-room-progress") >= 0)
+            {
+                Environment.Exit(SelfTests.DungeonRoomProgressSelfTest.Run());
+                return;
+            }
+
             if (Array.IndexOf(args, "--selftest-character-option") >= 0)
             {
                 Environment.Exit(SelfTests.CharacterOptionSelfTest.Run());

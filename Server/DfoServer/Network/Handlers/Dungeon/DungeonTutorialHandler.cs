@@ -39,16 +39,19 @@ namespace DfoServer.Network.Handlers.Dungeon
             w.WriteByte(requestType);
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x00AA, w.ToArray()));
 
-            // After APC dialog ends: when room has APC and all non-APC monsters killed -> ClearDungeon
+            // After APC dialog ends: only non-blocking APC rooms may clear from dialog flow.
+            // Enemy APC/BOSS actors still block the room until their DIE_MONSTER is received.
             if (pauseFlag == 1 && session.Player.CurDungeon > 0)
             {
-                int apcCount = 0, normalCount = 0;
-                if (session.Player.CurRoomMonsters != null)
-                    foreach (var m in session.Player.CurRoomMonsters)
-                    { if (m.Type >= 5) apcCount++; else normalCount++; }
-
-                if (apcCount > 0 && session.Player.CurRoomKilledSeqIds.Count >= normalCount)
+                var progress = DungeonSharedServices.GetCurrentRoomProgress(session);
+                if (DungeonSharedServices.ShouldClearAfterApcDialog(progress))
+                {
                     await _settlement.TryClearDungeon(session, "APC dialog + all normals dead");
+                }
+                else if (progress.ApcCount > 0 && progress.KilledNormalCount >= progress.NormalCount)
+                {
+                    FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] STORY_PAUSE clear skipped: blockingRemaining={progress.BlockingRemainingCount} remaining={progress.RemainingCount}");
+                }
             }
         }
 
