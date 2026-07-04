@@ -131,6 +131,12 @@ namespace DfoServer
                 return;
             }
 
+            if (Array.IndexOf(args, "--selftest-clock") >= 0)
+            {
+                Environment.Exit(SelfTests.ClockSelfTest.Run());
+                return;
+            }
+
             GameNetworkConfig.Configure(args);
 
             PacketFileLogger.Initialize();
@@ -193,6 +199,8 @@ namespace DfoServer
             };
 
             server.Start(portConfigs);
+
+            Infrastructure.ClockService.Instance.Start();
 
             if (GameNetworkConfig.ProxyMode)
                 Console.WriteLine($"[ProxyMode] Server listening on {channelPort}(channel) / {gamePort}(game) – PvfProxy forwards 7001/10011 to these ports.");
