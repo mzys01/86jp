@@ -28,6 +28,7 @@ namespace DfoServer.GameWorld
         private static readonly Lazy<QuestIndex> Index = new Lazy<QuestIndex>(BuildQuestIndex);
         private static readonly Lazy<QuestParameterTable> Parameters = new Lazy<QuestParameterTable>(LoadParameters);
         private static readonly Lazy<Dictionary<int, HashSet<int>>> TrainingQuestNpcs = new Lazy<Dictionary<int, HashSet<int>>>(LoadTrainingQuestNpcs);
+        private static readonly Lazy<Dictionary<int, int>> QuestionAnswerCounts = new Lazy<Dictionary<int, int>>(BuildQuestionAnswerCounts);
         private static readonly Dictionary<int, QuestFile> _qstCache = new Dictionary<int, QuestFile>();
         private static readonly object _cacheLock = new object();
 
@@ -116,6 +117,34 @@ namespace DfoServer.GameWorld
             return result;
         }
 
+        private static Dictionary<int, int> BuildQuestionAnswerCounts()
+        {
+            var result = new Dictionary<int, int>();
+            foreach (var questId in Index.Value.OrderedIds)
+            {
+                var qst = GetQuestFile(questId);
+                if (qst == null)
+                    continue;
+
+                var preReqAns = ParseIntList(qst.PreRequiredQuestAnswer);
+                for (int i = 0; i + 1 < preReqAns.Count; i += 2)
+                {
+                    int questionQuestId = preReqAns[i];
+                    int answerIndex = preReqAns[i + 1];
+                    if (questionQuestId <= 0 || answerIndex < 0)
+                        continue;
+
+                    int nextCount = answerIndex + 1;
+                    int currentCount;
+                    if (!result.TryGetValue(questionQuestId, out currentCount) || nextCount > currentCount)
+                        result[questionQuestId] = nextCount;
+                }
+            }
+
+            FileLogger.Log($"[QuestData] QuestionAnswerCounts: {result.Count} question quests with answer-dependent successors");
+            return result;
+        }
+
         internal static bool IsThereDailyTrainingQuestList(int level, int npcIndex)
         {
             if (level <= 0 || level > 70) return false;
@@ -171,6 +200,39 @@ namespace DfoServer.GameWorld
             if (qst == null) return new List<int>();
             var values = ParseIntList(qst.PreRequiredQuest);
             return values;
+        }
+
+        internal static bool IsQuestionQuest(int questId)
+        {
+            return IsQuestionQuest(GetQuestFile(questId));
+        }
+
+        internal static int GetQuestionAnswerCount(int questId)
+        {
+            int count;
+            return QuestionAnswerCounts.Value.TryGetValue(questId, out count) ? count : 0;
+        }
+
+        internal static int GetRequiredQuestAnswerFlagValue(int answerIndex)
+        {
+            return answerIndex >= 0 ? answerIndex + 1 : 0;
+        }
+
+        internal static bool DoesClearedFlagMatchRequiredQuestAnswer(
+            Dictionary<int, int> clearedFlags,
+            int requiredQuestId,
+            int requiredAnswerIndex)
+        {
+            if (requiredQuestId <= 0)
+                return true;
+
+            int requiredFlag = GetRequiredQuestAnswerFlagValue(requiredAnswerIndex);
+            if (requiredFlag <= 0 || clearedFlags == null)
+                return false;
+
+            int flagValue;
+            return clearedFlags.TryGetValue(requiredQuestId, out flagValue)
+                && flagValue == requiredFlag;
         }
 
         public static List<ushort> ComputeAcceptableQuests(int characterLevel, int characterJob, int growType, HashSet<int> clearedQuestIds, Dictionary<int, int> clearedFlags)
@@ -263,9 +325,7 @@ namespace DfoServer.GameWorld
                 {
                     int reqQid = preReqAns[pi];
                     int reqAnswer = preReqAns[pi + 1];
-                    if (reqQid <= 0) continue;
-                    int flagVal;
-                    if (!clearedFlags.TryGetValue(reqQid, out flagVal) || flagVal <= reqAnswer)
+                    if (!DoesClearedFlagMatchRequiredQuestAnswer(clearedFlags, reqQid, reqAnswer))
                     { preAnsOk = false; break; }
                 }
                 if (!preAnsOk) continue;
@@ -456,6 +516,11 @@ namespace DfoServer.GameWorld
         {
             var tag = NormalizeQuestTag(qst?.Type);
             return tag == "quest clear" || tag == "clear quest";
+        }
+
+        private static bool IsQuestionQuest(QuestFile qst)
+        {
+            return NormalizeQuestTag(qst?.Type) == "question";
         }
 
         private static string NormalizeQuestTag(string value)

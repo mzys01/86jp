@@ -101,6 +101,12 @@ namespace DfoServer
                 return;
             }
 
+            if (Array.IndexOf(args, "--selftest-question-quest-branch") >= 0)
+            {
+                Environment.Exit(SelfTests.QuestionQuestBranchSelfTest.Run());
+                return;
+            }
+
             if (Array.IndexOf(args, "--selftest-striker-skill") >= 0)
             {
                 Environment.Exit(SelfTests.StrikerSkillSelfTest.Run());
