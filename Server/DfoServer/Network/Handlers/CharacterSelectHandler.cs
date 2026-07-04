@@ -423,13 +423,8 @@ namespace DfoServer.Network.Handlers
                 foreach (var a in appearances)
                     UserInfoSubtype0Builder.WriteAppearanceEntry(writer, a);
 
-                // entry trailer (32 bytes, from 2.md)
-                writer.WriteZeroBytes(24);              // reservedTail0~6
-                writer.WriteByte(0x03);                 // fixedTailValue0
-                writer.WriteByte(0x00);                 // reservedTail5
-                writer.WriteByte(0x00);                 // reservedTail6
-                writer.WriteByte(0x04);                 // fixedTailValue1
-                writer.WriteZeroBytes(4);               // reservedTail7
+                var cloneTitleItemId = AppearanceService.LoadCloneTitleItemId(ch.CharacterId);
+                UserInfoType2RosterTailBuilder.Write(writer, cloneTitleItemId > 0 ? (uint)cloneTitleItemId : 0);
             }
 
             return writer.ToArray();

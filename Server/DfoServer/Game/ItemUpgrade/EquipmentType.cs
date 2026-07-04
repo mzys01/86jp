@@ -5,7 +5,6 @@ namespace DfoServer.Game.ItemUpgrade
 {
     public enum EquipmentType
     {
-        Unknown = -1,
         HatAvatar = 0,
         HairAvatar = 1,
         FaceAvatar = 2,
@@ -29,10 +28,14 @@ namespace DfoServer.Game.ItemUpgrade
         Ring = 20,
         Support = 21,
         MagicStone = 22,
-        Creature = 23,
-        ArtifactRed = 24,
-        ArtifactBlue = 25,
-        ArtifactGreen = 26,
+        SupportWeapon = 23,
+        Creature = 24,
+        ArtifactRed = 25,
+        ArtifactBlue = 26,
+        ArtifactGreen = 27,
+        NameTag = 28,
+        Charm = 29,
+        Unknown = 30,
     }
 
     public static class EquipmentTypeInfo
@@ -62,10 +65,13 @@ namespace DfoServer.Game.ItemUpgrade
             ["[ring]"] = EquipmentType.Ring,
             ["[support]"] = EquipmentType.Support,
             ["[magic stone]"] = EquipmentType.MagicStone,
+            ["[support weapon]"] = EquipmentType.SupportWeapon,
             ["[creature]"] = EquipmentType.Creature,
             ["[artifact red]"] = EquipmentType.ArtifactRed,
             ["[artifact blue]"] = EquipmentType.ArtifactBlue,
             ["[artifact green]"] = EquipmentType.ArtifactGreen,
+            ["[name tag]"] = EquipmentType.NameTag,
+            ["[charm]"] = EquipmentType.Charm,
         };
 
         private static readonly Dictionary<EquipmentType, string> TypeToText = BuildReverseMap();
