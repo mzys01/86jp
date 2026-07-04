@@ -28,9 +28,9 @@ namespace DfoServer.Network.Builders
             Register(new BuyRestrictItemListBodyBuilder());             
 
             
-            Register(new SimpleByteBodyBuilder(0x00B1, s => s.ShopCoinEventFlag));
+            Register(new SimpleByteBodyBuilder(0x00B1, s => 0));  // shop_coin_event_flag: seed=0
             Register(new SimpleByteBodyBuilder(0x01A8, s => s.PcRoomPlayTimeState));
-            Register(new SimpleByteBodyBuilder(0x0331, s => s.Level60UiState));
+            Register(new SimpleByteBodyBuilder(0x0331, s => 0));  // level60_ui_state: seed=0
 
             
             Register(new EmptyBodyBuilder(0x007C));

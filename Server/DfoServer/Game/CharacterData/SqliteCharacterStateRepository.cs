@@ -33,16 +33,12 @@ namespace DfoServer.Game.CharacterData
             {
                 conn.Open();
                 using (var cmd = new SqliteCommand(
-                    @"SELECT shop_coin_event_flag, level60_ui_state, pc_room_state, expert_job_blob, champion_break_blob,
-                             boss_tower_placeholder, mailbox_loaded_count, mailbox_mode, mailbox_not_loaded_count, mailbox_unknown_count_c,
-                             event_info_tail_byte, hotkey_key_type,
-                             main_game_option_blob, quickchat_bank0, quickchat_bank1, charac_invisible_falgs_payload_len,
-                             racing_dungeon_current_enter_count, racing_dungeon_group_flags,
-                             character_option_blob,
-                             ack_account_reg_time, ack_premium_blob, ack_quest_display_ids,
+                    @"SELECT pc_room_state, expert_job_blob, champion_break_blob,
+                             character_option_blob, charac_invisible_falgs_payload_len,
+                             racing_dungeon_current_enter_count,
                              ack_char_slot_index, ack_fatigue_battery, ack_fatigue_grownup_buff,
                              ack_trade_punish_flag, ack_extra_field_86jp, ack_reserved_8b,
-                             ack_tutorial_skipable, ack_post_tutorial_u16, ack_unread_tail
+                             ack_tutorial_skipable
                       FROM character_init_flags WHERE character_id = @cid", conn))
                 {
                     cmd.Parameters.AddWithValue("@cid", characterId);
@@ -50,58 +46,27 @@ namespace DfoServer.Game.CharacterData
                     {
                         if (!reader.Read())
                             return;
-                        snapshot.ShopCoinEventFlag = (byte)reader.GetInt32(0);
-                        snapshot.Level60UiState = (byte)reader.GetInt32(1);
-                        snapshot.PcRoomPlayTimeState = (byte)reader.GetInt32(2);
+                        snapshot.PcRoomPlayTimeState = (byte)reader.GetInt32(0);
 
-                        var expertBlob = reader.IsDBNull(3) ? null : (byte[])reader[3];
+                        var expertBlob = reader.IsDBNull(1) ? null : (byte[])reader[1];
                         if (expertBlob != null)
                             DeserializeExpertJobInfo(expertBlob, snapshot.ExpertJobInfo);
 
-                        var championBlob = reader.IsDBNull(4) ? null : (byte[])reader[4];
+                        var championBlob = reader.IsDBNull(2) ? null : (byte[])reader[2];
                         if (championBlob != null && championBlob.Length >= 9)
                             DeserializeChampionBreak(championBlob, snapshot.ChampionBreakSystem);
 
-                        if (!reader.IsDBNull(5))
-                            snapshot.BossTowerPlaceholder = reader.GetInt32(5);
+                        snapshot.CharacterOptionBlob = reader.IsDBNull(3) ? null : (byte[])reader[3];
+                        snapshot.CharacInvisibleFalgsPayloadLen = reader.IsDBNull(4) ? 0u : (uint)reader.GetInt64(4);
+                        snapshot.RacingDungeonCurrentEnterCount = reader.IsDBNull(5) ? 0u : (uint)reader.GetInt64(5);
 
-                        snapshot.LoadedMailCount = reader.IsDBNull(6) ? (byte)0 : (byte)reader.GetInt32(6);
-                        snapshot.MailboxMode = reader.IsDBNull(7) ? (byte)0 : (byte)reader.GetInt32(7);
-                        snapshot.NotLoadedMailCount = reader.IsDBNull(8) ? (ushort)0 : (ushort)reader.GetInt32(8);
-                        snapshot.MailboxUnknownCountC = reader.IsDBNull(9) ? (ushort)0 : (ushort)reader.GetInt32(9);
-
-                        snapshot.EventInfoTailByte = reader.IsDBNull(10) ? (byte)0 : (byte)reader.GetInt32(10);
-                        snapshot.HotkeyKeyType = reader.IsDBNull(11) ? (byte)0 : (byte)reader.GetInt32(11);
-
-                        snapshot.MainGameOptionBlob = reader.IsDBNull(12) ? null : (byte[])reader[12];
-                        snapshot.QuickchatBank0 = reader.IsDBNull(13) ? null : (byte[])reader[13];
-                        snapshot.QuickchatBank1 = reader.IsDBNull(14) ? null : (byte[])reader[14];
-                        snapshot.CharacInvisibleFalgsPayloadLen = reader.IsDBNull(15) ? 0u : (uint)reader.GetInt64(15);
-
-                        snapshot.RacingDungeonCurrentEnterCount = reader.IsDBNull(16) ? 0u : (uint)reader.GetInt64(16);
-                        if (!reader.IsDBNull(17))
-                        {
-                            var flagsBlob = (byte[])reader[17];
-                            Buffer.BlockCopy(flagsBlob, 0, snapshot.RacingDungeonGroupFlags, 0, Math.Min(flagsBlob.Length, snapshot.RacingDungeonGroupFlags.Length));
-                        }
-
-
-                        snapshot.CharacterOptionBlob = reader.IsDBNull(18) ? null : (byte[])reader[18];
-
-                        snapshot.AckAccountRegTime = reader.IsDBNull(19) ? 0 : (int)reader.GetInt64(19);
-                        var premBlob = reader.IsDBNull(20) ? null : (byte[])reader[20];
-                        if (premBlob != null)
-                            DeserializeAckPremiums(premBlob, snapshot.AckPremiums);
-                        snapshot.AckQuestDisplayIds = reader.IsDBNull(21) ? null : (byte[])reader[21];
-                        snapshot.AckCharSlotIndex = reader.IsDBNull(22) ? (byte)0 : (byte)reader.GetInt32(22);
-                        snapshot.AckFatigueBattery = reader.IsDBNull(23) ? (ushort)0 : (ushort)reader.GetInt32(23);
-                        snapshot.AckFatigueGrownUpBuff = reader.IsDBNull(24) ? (ushort)0 : (ushort)reader.GetInt32(24);
-                        snapshot.AckTradePunishFlag = reader.IsDBNull(25) ? (byte)0 : (byte)reader.GetInt32(25);
-                        snapshot.AckExtraField86JP = reader.IsDBNull(26) ? (ushort)0 : (ushort)reader.GetInt32(26);
-                        snapshot.AckReserved8B = reader.IsDBNull(27) ? null : (byte[])reader[27];
-                        snapshot.AckTutorialSkipable = reader.IsDBNull(28) ? (byte)0 : (byte)reader.GetInt32(28);
-                        snapshot.AckPostTutorialU16 = reader.IsDBNull(29) ? (ushort)0 : (ushort)reader.GetInt32(29);
-                        snapshot.AckUnreadTail = reader.IsDBNull(30) ? null : (byte[])reader[30];
+                        snapshot.AckCharSlotIndex = reader.IsDBNull(6) ? (byte)0 : (byte)reader.GetInt32(6);
+                        snapshot.AckFatigueBattery = reader.IsDBNull(7) ? (ushort)0 : (ushort)reader.GetInt32(7);
+                        snapshot.AckFatigueGrownUpBuff = reader.IsDBNull(8) ? (ushort)0 : (ushort)reader.GetInt32(8);
+                        snapshot.AckTradePunishFlag = reader.IsDBNull(9) ? (byte)0 : (byte)reader.GetInt32(9);
+                        snapshot.AckExtraField86JP = reader.IsDBNull(10) ? (ushort)0 : (ushort)reader.GetInt32(10);
+                        snapshot.AckReserved8B = reader.IsDBNull(11) ? null : (byte[])reader[11];
+                        snapshot.AckTutorialSkipable = reader.IsDBNull(12) ? (byte)0 : (byte)reader.GetInt32(12);
                     }
                 }
 
@@ -313,83 +278,40 @@ VALUES (@cid, (SELECT COALESCE(MAX(sort_order),0)+1 FROM character_dungeon_permi
                 {
                     using (var cmd = new SqliteCommand(
                         @"INSERT INTO character_init_flags
-                          (character_id, shop_coin_event_flag, level60_ui_state, pc_room_state, expert_job_blob, champion_break_blob,
-                           boss_tower_placeholder, mailbox_loaded_count, mailbox_mode, mailbox_not_loaded_count, mailbox_unknown_count_c,
-                           event_info_tail_byte, hotkey_key_type,
-                           main_game_option_blob, quickchat_bank0, quickchat_bank1, charac_invisible_falgs_payload_len,
-                           racing_dungeon_current_enter_count, racing_dungeon_group_flags,
-                           character_option_blob,
-                           ack_account_reg_time, ack_premium_blob, ack_quest_display_ids,
+                          (character_id, pc_room_state, expert_job_blob, champion_break_blob,
+                           character_option_blob, charac_invisible_falgs_payload_len,
+                           racing_dungeon_current_enter_count,
                            ack_char_slot_index, ack_fatigue_battery, ack_fatigue_grownup_buff,
                            ack_trade_punish_flag, ack_extra_field_86jp, ack_reserved_8b,
-                           ack_tutorial_skipable, ack_post_tutorial_u16, ack_unread_tail)
-                          VALUES (@cid, @scef, @l60, @pcr, @expert, @champ,
-                                  @btp, @mlc, @mm, @mnlc, @mukc,
-                                  @eitb, @hkt,
-                                  @mgo, @qb0, @qb1, @ciplen,
-                                  @rdcc, @rdgf,
-                                  @charOpt,
-                                  @ackRegTime, @ackPremBlob, @ackQuestDisp,
+                           ack_tutorial_skipable)
+                          VALUES (@cid, @pcr, @expert, @champ,
+                                  @charOpt, @ciplen,
+                                  @rdcc,
                                   @ackSlot, @ackFatBat, @ackFatGrown,
                                   @ackTrade, @ackExtra86, @ackRes8b,
-                                  @ackTutSkip, @ackPostTut, @ackTail)
+                                  @ackTutSkip)
                           ON CONFLICT(character_id) DO UPDATE SET
-                            shop_coin_event_flag=excluded.shop_coin_event_flag,
-                            level60_ui_state=excluded.level60_ui_state,
                             pc_room_state=excluded.pc_room_state,
                             expert_job_blob=excluded.expert_job_blob,
                             champion_break_blob=excluded.champion_break_blob,
-                            boss_tower_placeholder=excluded.boss_tower_placeholder,
-                            mailbox_loaded_count=excluded.mailbox_loaded_count,
-                            mailbox_mode=excluded.mailbox_mode,
-                            mailbox_not_loaded_count=excluded.mailbox_not_loaded_count,
-                            mailbox_unknown_count_c=excluded.mailbox_unknown_count_c,
-                            event_info_tail_byte=excluded.event_info_tail_byte,
-                            hotkey_key_type=excluded.hotkey_key_type,
-                            main_game_option_blob=excluded.main_game_option_blob,
-                            quickchat_bank0=excluded.quickchat_bank0,
-                            quickchat_bank1=excluded.quickchat_bank1,
+                            character_option_blob=COALESCE(excluded.character_option_blob, character_init_flags.character_option_blob),
                             charac_invisible_falgs_payload_len=excluded.charac_invisible_falgs_payload_len,
                             racing_dungeon_current_enter_count=excluded.racing_dungeon_current_enter_count,
-                            racing_dungeon_group_flags=excluded.racing_dungeon_group_flags,
-                            character_option_blob=COALESCE(excluded.character_option_blob, character_init_flags.character_option_blob),
-                            ack_account_reg_time=excluded.ack_account_reg_time,
-                            ack_premium_blob=excluded.ack_premium_blob,
-                            ack_quest_display_ids=excluded.ack_quest_display_ids,
                             ack_char_slot_index=excluded.ack_char_slot_index,
                             ack_fatigue_battery=excluded.ack_fatigue_battery,
                             ack_fatigue_grownup_buff=excluded.ack_fatigue_grownup_buff,
                             ack_trade_punish_flag=excluded.ack_trade_punish_flag,
                             ack_extra_field_86jp=excluded.ack_extra_field_86jp,
                             ack_reserved_8b=excluded.ack_reserved_8b,
-                            ack_tutorial_skipable=excluded.ack_tutorial_skipable,
-                            ack_post_tutorial_u16=excluded.ack_post_tutorial_u16,
-                            ack_unread_tail=excluded.ack_unread_tail", conn, tx))
+                            ack_tutorial_skipable=excluded.ack_tutorial_skipable", conn, tx))
                     {
                         cmd.Parameters.AddWithValue("@cid", characterId);
-                        cmd.Parameters.AddWithValue("@scef", (int)snapshot.ShopCoinEventFlag);
-                        cmd.Parameters.AddWithValue("@l60", (int)snapshot.Level60UiState);
                         cmd.Parameters.AddWithValue("@pcr", (int)snapshot.PcRoomPlayTimeState);
                         cmd.Parameters.AddWithValue("@expert", SerializeExpertJobInfo(snapshot.ExpertJobInfo));
                         cmd.Parameters.AddWithValue("@champ", SerializeChampionBreak(snapshot.ChampionBreakSystem));
-                        cmd.Parameters.AddWithValue("@btp", snapshot.BossTowerPlaceholder);
-                        cmd.Parameters.AddWithValue("@mlc", (int)snapshot.LoadedMailCount);
-                        cmd.Parameters.AddWithValue("@mm", (int)snapshot.MailboxMode);
-                        cmd.Parameters.AddWithValue("@mnlc", (int)snapshot.NotLoadedMailCount);
-                        cmd.Parameters.AddWithValue("@mukc", (int)snapshot.MailboxUnknownCountC);
-                        cmd.Parameters.AddWithValue("@eitb", (int)snapshot.EventInfoTailByte);
-                        cmd.Parameters.AddWithValue("@hkt", (int)snapshot.HotkeyKeyType);
-                        cmd.Parameters.AddWithValue("@mgo", (object)snapshot.MainGameOptionBlob ?? DBNull.Value);
-                        cmd.Parameters.AddWithValue("@qb0", (object)snapshot.QuickchatBank0 ?? DBNull.Value);
-                        cmd.Parameters.AddWithValue("@qb1", (object)snapshot.QuickchatBank1 ?? DBNull.Value);
+                        cmd.Parameters.AddWithValue("@charOpt", (object)snapshot.CharacterOptionBlob ?? DBNull.Value);
                         cmd.Parameters.AddWithValue("@ciplen", (long)snapshot.CharacInvisibleFalgsPayloadLen);
                         cmd.Parameters.AddWithValue("@rdcc", (long)snapshot.RacingDungeonCurrentEnterCount);
-                        cmd.Parameters.AddWithValue("@rdgf", (object)snapshot.RacingDungeonGroupFlags ?? DBNull.Value);
-                        cmd.Parameters.AddWithValue("@charOpt", (object)snapshot.CharacterOptionBlob ?? DBNull.Value);
-
-                        cmd.Parameters.AddWithValue("@ackRegTime", (long)snapshot.AckAccountRegTime);
-                        cmd.Parameters.AddWithValue("@ackPremBlob", (object)SerializeAckPremiums(snapshot.AckPremiums) ?? DBNull.Value);
-                        cmd.Parameters.AddWithValue("@ackQuestDisp", (object)snapshot.AckQuestDisplayIds ?? DBNull.Value);
                         cmd.Parameters.AddWithValue("@ackSlot", (int)snapshot.AckCharSlotIndex);
                         cmd.Parameters.AddWithValue("@ackFatBat", (int)snapshot.AckFatigueBattery);
                         cmd.Parameters.AddWithValue("@ackFatGrown", (int)snapshot.AckFatigueGrownUpBuff);
@@ -397,8 +319,6 @@ VALUES (@cid, (SELECT COALESCE(MAX(sort_order),0)+1 FROM character_dungeon_permi
                         cmd.Parameters.AddWithValue("@ackExtra86", (int)snapshot.AckExtraField86JP);
                         cmd.Parameters.AddWithValue("@ackRes8b", (object)snapshot.AckReserved8B ?? DBNull.Value);
                         cmd.Parameters.AddWithValue("@ackTutSkip", (int)snapshot.AckTutorialSkipable);
-                        cmd.Parameters.AddWithValue("@ackPostTut", (int)snapshot.AckPostTutorialU16);
-                        cmd.Parameters.AddWithValue("@ackTail", (object)snapshot.AckUnreadTail ?? DBNull.Value);
                         cmd.ExecuteNonQuery();
                     }
 
@@ -730,38 +650,5 @@ ON CONFLICT(character_id) DO UPDATE SET character_option_blob = @body", conn))
             snapshot.Value = BitConverter.ToInt32(blob, 5);
         }
 
-        private static byte[] SerializeAckPremiums(List<AckPremiumEntrySnapshot> premiums)
-        {
-            if (premiums == null || premiums.Count == 0)
-                return new byte[] { 0 };
-            var buf = new byte[1 + premiums.Count * 9];
-            buf[0] = (byte)premiums.Count;
-            for (int i = 0; i < premiums.Count; i++)
-            {
-                int off = 1 + i * 9;
-                buf[off] = premiums[i].PremiumType;
-                if (premiums[i].EndTime != null)
-                    Buffer.BlockCopy(premiums[i].EndTime, 0, buf, off + 1, Math.Min(premiums[i].EndTime.Length, 8));
-            }
-            return buf;
-        }
-
-        private static void DeserializeAckPremiums(byte[] blob, List<AckPremiumEntrySnapshot> premiums)
-        {
-            premiums.Clear();
-            if (blob == null || blob.Length < 1) return;
-            int count = blob[0];
-            for (int i = 0; i < count && 1 + (i + 1) * 9 <= blob.Length; i++)
-            {
-                int off = 1 + i * 9;
-                var entry = new AckPremiumEntrySnapshot
-                {
-                    PremiumType = blob[off],
-                    EndTime = new byte[8],
-                };
-                Buffer.BlockCopy(blob, off + 1, entry.EndTime, 0, 8);
-                premiums.Add(entry);
-            }
-        }
     }
 }

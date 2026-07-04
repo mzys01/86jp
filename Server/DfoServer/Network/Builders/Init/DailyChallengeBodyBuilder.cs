@@ -11,7 +11,7 @@ namespace DfoServer.Network.Builders
         {
             var init = snapshot.InitializationSnapshot;
             var groups = init.RacingDungeonGroups;
-            var groupFlags = init.RacingDungeonGroupFlags ?? new byte[0];
+            var groupFlags = new byte[6]; // racing_dungeon_group_flags: seed=6B all-zero
             var tailIds = init.RacingDungeonTailIds;
 
             var groupCount = groups?.Count ?? 0;

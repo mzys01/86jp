@@ -24,8 +24,8 @@ namespace DfoServer.Network.Builders
             // [0] u8 resultCode
             writer.WriteByte(1);
 
-            // [1] u32 accountRegTime
-            writer.WriteInt32(initSnap.AckAccountRegTime);
+            // [1] u32 accountRegTime — seed=0
+            writer.WriteInt32(0);
 
             // [5] u32 characterCreatedTime
             if (record != null)
@@ -82,11 +82,9 @@ namespace DfoServer.Network.Builders
                 }
             }
 
-            {
-                var p = initSnap.AckQuestDisplayIds;
-                for (int j = 0; j < 16; j++)
-                    writer.WriteByte(p != null && j < p.Length ? p[j] : (byte)0);
-            }
+            // ack_quest_display_ids: seed=16B all-zero
+            for (int j = 0; j < 16; j++)
+                writer.WriteByte(0);
 
             writer.WriteByte(initSnap.AckCharSlotIndex);
 
@@ -112,13 +110,11 @@ namespace DfoServer.Network.Builders
                     writer.WriteByte(r != null && j < r.Length ? r[j] : (byte)0);
             }
             writer.WriteByte(initSnap.AckTutorialSkipable);
-            writer.WriteUInt16(initSnap.AckPostTutorialU16);
-            {
-                var tail = initSnap.AckUnreadTail;
-                int tailLen = tail != null ? tail.Length : 22;
-                for (int j = 0; j < tailLen; j++)
-                    writer.WriteByte(tail != null && j < tail.Length ? tail[j] : (byte)0);
-            }
+            // ack_post_tutorial_u16: seed=0
+            writer.WriteUInt16(0);
+            // ack_unread_tail: seed=3B all-zero; original code defaulted to 22B when null
+            for (int j = 0; j < 22; j++)
+                writer.WriteByte(0);
 
             body = writer.ToArray();
             return true;

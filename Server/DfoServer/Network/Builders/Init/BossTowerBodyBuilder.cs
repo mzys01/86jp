@@ -9,7 +9,7 @@ namespace DfoServer.Network.Builders
 
         public bool TryBuild(SelectCharacterDataSnapshot snapshot, int occurrenceIndex, out byte[] body)
         {
-            body = BitConverter.GetBytes(snapshot.InitializationSnapshot.BossTowerPlaceholder);
+            body = BitConverter.GetBytes(0); // boss_tower_placeholder: seed=0
             return true;
         }
     }

@@ -94,7 +94,41 @@ namespace DfoServer.Sqlite
             // 点券=accounts.cera), 留着只会误导调试。schema 已同步移除。
             (12, "characters 删除影子列 gold/coin", conn =>
                 SqliteSchemaMigrator.DropColumnsIfExist(conn, "characters", "gold", "coin")),
+
+            // character_init_flags 18列死数据清理(d85b887, 种子DB验证):
+            // A) 被 account_settings/account_premiums 覆盖: hotkey_key_type, main_game_option_blob,
+            //    quickchat_bank0/1, ack_premium_blob
+            // B) 种子值全零且无动态写入: 其余13列(mailbox_*×4, ack_*等)
+            (13, "character_init_flags 删除18列死数据", conn =>
+                SqliteSchemaMigrator.DropColumnsIfExist(conn, "character_init_flags",
+                    "hotkey_key_type", "main_game_option_blob", "quickchat_bank0", "quickchat_bank1",
+                    "ack_premium_blob",
+                    "shop_coin_event_flag", "level60_ui_state", "boss_tower_placeholder",
+                    "event_info_tail_byte", "mailbox_loaded_count", "mailbox_mode",
+                    "mailbox_not_loaded_count", "mailbox_unknown_count_c", "ack_account_reg_time",
+                    "ack_quest_display_ids", "racing_dungeon_group_flags", "ack_post_tutorial_u16",
+                    "ack_unread_tail")),
+
+            // 高频点查缺失索引 + audit_log 溯源索引(只写表, 人工查账用)
+            (14, "补齐点查索引 + audit_log 索引", conn => ExecuteBatch(conn, @"
+CREATE INDEX IF NOT EXISTS idx_character_items_char_template
+    ON character_items(character_id, list_type, item_template_id);
+CREATE INDEX IF NOT EXISTS idx_character_creatures_key
+    ON character_creatures(character_id, creature_key);
+CREATE INDEX IF NOT EXISTS idx_dungeon_permissions_dungeon
+    ON character_dungeon_permissions(character_id, dungeon_id);
+CREATE INDEX IF NOT EXISTS idx_item_audit_log_char_time
+    ON item_audit_log(character_id, created_at);")),
         };
+
+        private static void ExecuteBatch(SqliteConnection connection, string sql)
+        {
+            using (var cmd = connection.CreateCommand())
+            {
+                cmd.CommandText = sql;
+                cmd.ExecuteNonQuery();
+            }
+        }
 
         public static void Apply(SqliteConnection connection)
         {

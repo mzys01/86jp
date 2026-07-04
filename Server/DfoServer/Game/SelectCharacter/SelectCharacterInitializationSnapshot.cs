@@ -5,8 +5,6 @@ namespace DfoServer.Game.SelectCharacter
 {
     public sealed class SelectCharacterInitializationSnapshot
     {
-        public byte ShopCoinEventFlag { get; set; }
-
         public ExpertJobInfoSnapshot ExpertJobInfo { get; set; } = new ExpertJobInfoSnapshot();
 
         public ItemLockListSnapshot ItemLockList { get; set; } = new ItemLockListSnapshot();
@@ -14,16 +12,6 @@ namespace DfoServer.Game.SelectCharacter
         public byte PcRoomPlayTimeState { get; set; }
 
         public ChampionBreakSystemSnapshot ChampionBreakSystem { get; set; } = new ChampionBreakSystemSnapshot();
-
-        public byte Level60UiState { get; set; }
-
-        public int BossTowerPlaceholder { get; set; }
-
-        
-        public byte LoadedMailCount { get; set; }
-        public byte MailboxMode { get; set; }
-        public ushort NotLoadedMailCount { get; set; }
-        public ushort MailboxUnknownCountC { get; set; }
 
         
         public List<byte> GrowthWeaponStageIds { get; } = new List<byte>();
@@ -37,9 +25,6 @@ namespace DfoServer.Game.SelectCharacter
         
         public List<EventInfoEntrySnapshot> EventInfoEntries { get; } = new List<EventInfoEntrySnapshot>();
 
-        public byte EventInfoTailByte { get; set; }
-
-        
         public byte HotkeyKeyType { get; set; }
 
         public List<ushort> HotkeyConfigSlots { get; } = new List<ushort>();
@@ -69,8 +54,6 @@ namespace DfoServer.Game.SelectCharacter
         public uint RacingDungeonCurrentEnterCount { get; set; }
 
         public List<RacingDungeonGroupSnapshot> RacingDungeonGroups { get; } = new List<RacingDungeonGroupSnapshot>();
-
-        public byte[] RacingDungeonGroupFlags { get; set; } = new byte[6];
 
         public List<uint> RacingDungeonTailIds { get; } = new List<uint>();
 
@@ -121,13 +104,11 @@ namespace DfoServer.Game.SelectCharacter
         
         public int AckCharCreatedTime { get; set; }
         public ushort AckUniqueId { get; set; }
-        public int AckAccountRegTime { get; set; }
         public List<AckPremiumEntrySnapshot> AckPremiums { get; } = new List<AckPremiumEntrySnapshot>();
         public int AckCera { get; set; }
         public int AckTokenCera { get; set; }
         public int AckHappyTokenCera { get; set; }
         public AckQuestShopEntrySnapshot[] AckQuestShopEntries { get; set; }
-        public byte[] AckQuestDisplayIds { get; set; }
         public byte AckCharSlotIndex { get; set; }
         public byte AckTutorialSkipable { get; set; } = 0;
         public ushort AckFatigueBattery { get; set; }
@@ -135,8 +116,6 @@ namespace DfoServer.Game.SelectCharacter
         public byte AckTradePunishFlag { get; set; }
         public ushort AckExtraField86JP { get; set; }
         public byte[] AckReserved8B { get; set; }
-        public ushort AckPostTutorialU16 { get; set; }
-        public byte[] AckUnreadTail { get; set; }
 
         
         public ushort PremiumServiceType { get; set; }

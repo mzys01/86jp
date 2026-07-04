@@ -97,6 +97,9 @@ CREATE INDEX IF NOT EXISTS idx_character_items_template
 CREATE INDEX IF NOT EXISTS idx_character_items_character
     ON character_items(character_id, list_type, slot_index);
 
+CREATE INDEX IF NOT EXISTS idx_character_items_char_template
+    ON character_items(character_id, list_type, item_template_id);
+
 CREATE TABLE IF NOT EXISTS account_cargo_state (
     account_id INTEGER PRIMARY KEY,
     selection_key INTEGER NOT NULL DEFAULT 0,
@@ -148,6 +151,9 @@ CREATE TABLE IF NOT EXISTS item_audit_log (
     payload_json TEXT NOT NULL DEFAULT '{}',
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE INDEX IF NOT EXISTS idx_item_audit_log_char_time
+    ON item_audit_log(character_id, created_at);
 
 CREATE TABLE IF NOT EXISTS character_skills (
     character_id INTEGER NOT NULL,
@@ -209,40 +215,32 @@ CREATE TABLE IF NOT EXISTS character_creatures (
     FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
 );
 
+CREATE INDEX IF NOT EXISTS idx_character_creatures_key
+    ON character_creatures(character_id, creature_key);
+
+-- Removed 18 columns verified via seed DB (DfoDbGenerator) as safe:
+--   A) Overwritten by account_settings/account_premiums: hotkey_key_type, main_game_option_blob,
+--      quickchat_bank0, quickchat_bank1, ack_premium_blob
+--   B) Seed value = 0/all-zero, no dynamic write: shop_coin_event_flag, level60_ui_state,
+--      boss_tower_placeholder, event_info_tail_byte, mailbox_loaded_count, mailbox_mode,
+--      mailbox_not_loaded_count, mailbox_unknown_count_c, ack_account_reg_time,
+--      ack_quest_display_ids, racing_dungeon_group_flags, ack_post_tutorial_u16, ack_unread_tail
 CREATE TABLE IF NOT EXISTS character_init_flags (
     character_id INTEGER PRIMARY KEY,
-    shop_coin_event_flag INTEGER NOT NULL DEFAULT 0,
-    level60_ui_state INTEGER NOT NULL DEFAULT 0,
-    pc_room_state INTEGER NOT NULL DEFAULT 0,
-    expert_job_blob BLOB,
-    champion_break_blob BLOB,
-    boss_tower_placeholder INTEGER NOT NULL DEFAULT 0,
-    mailbox_loaded_count INTEGER NOT NULL DEFAULT 0,
-    mailbox_mode INTEGER NOT NULL DEFAULT 0,
-    mailbox_not_loaded_count INTEGER NOT NULL DEFAULT 0,
-    mailbox_unknown_count_c INTEGER NOT NULL DEFAULT 0,
-    event_info_tail_byte INTEGER NOT NULL DEFAULT 0,
-    hotkey_key_type INTEGER NOT NULL DEFAULT 0,
-    main_game_option_blob BLOB,
-    quickchat_bank0 BLOB,
-    quickchat_bank1 BLOB,
-    character_option_blob BLOB,       -- NOTI 0x0187 CHARACTER_OPTION, saved by CMD 0x01C0 SAVE_CHARACTER_OPTION
-    charac_invisible_falgs_payload_len INTEGER NOT NULL DEFAULT 0,  -- IDA 正名: CLEAR_QUEST_LIST payload 长度
-    racing_dungeon_current_enter_count INTEGER NOT NULL DEFAULT 0,  -- IDA 正名: DAILY_CHALLENGE 当日进入次数
-    racing_dungeon_group_flags BLOB,  -- IDA 正名: DAILY_CHALLENGE 组标志
-    -- CMD 0x0004 SELECT_CHARACTER ACK 结构化字段
-    ack_account_reg_time INTEGER NOT NULL DEFAULT 0,
-    ack_premium_blob BLOB,           -- premiumCount(1) + N×(type(1)+endTime(8))
-    ack_quest_display_ids BLOB,      -- 4×u32 (sub_A44480 消费的16B)
-    ack_char_slot_index INTEGER NOT NULL DEFAULT 0,
-    ack_fatigue_battery INTEGER NOT NULL DEFAULT 0,
-    ack_fatigue_grownup_buff INTEGER NOT NULL DEFAULT 0,
-    ack_trade_punish_flag INTEGER NOT NULL DEFAULT 0,
-    ack_extra_field_86jp INTEGER NOT NULL DEFAULT 0,
-    ack_reserved_8b BLOB,            -- 8B 客户端不读取但需保留
-    ack_tutorial_skipable INTEGER NOT NULL DEFAULT 0,
-    ack_post_tutorial_u16 INTEGER NOT NULL DEFAULT 0,
-    ack_unread_tail BLOB,            -- 剩余尾部 客户端不读取
+    pc_room_state INTEGER NOT NULL DEFAULT 0,                       -- seed=2
+    expert_job_blob BLOB,                                           -- QuestService writes on job change
+    champion_break_blob BLOB,                                       -- seed has data
+    character_option_blob BLOB,                                     -- CMD 0x01C0 SAVE_CHARACTER_OPTION
+    charac_invisible_falgs_payload_len INTEGER NOT NULL DEFAULT 0,  -- QuestService writes; seed=21000
+    racing_dungeon_current_enter_count INTEGER NOT NULL DEFAULT 0,  -- seed=5
+    -- CMD 0x0004 SELECT_CHARACTER ACK (non-zero seeds retained)
+    ack_char_slot_index INTEGER NOT NULL DEFAULT 0,                 -- overwritten by TownId at runtime; seed=2
+    ack_fatigue_battery INTEGER NOT NULL DEFAULT 0,                 -- seed=3073
+    ack_fatigue_grownup_buff INTEGER NOT NULL DEFAULT 0,            -- seed=513
+    ack_trade_punish_flag INTEGER NOT NULL DEFAULT 0,               -- seed=30
+    ack_extra_field_86jp INTEGER NOT NULL DEFAULT 0,                -- seed=9247
+    ack_reserved_8b BLOB,                                           -- seed has data
+    ack_tutorial_skipable INTEGER NOT NULL DEFAULT 0,               -- DungeonTutorialHandler writes
     FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
 );
 
@@ -292,6 +290,9 @@ CREATE TABLE IF NOT EXISTS character_dungeon_permissions (
     PRIMARY KEY (character_id, sort_order),
     FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
 );
+
+CREATE INDEX IF NOT EXISTS idx_dungeon_permissions_dungeon
+    ON character_dungeon_permissions(character_id, dungeon_id);
 
 CREATE TABLE IF NOT EXISTS character_event_info (
     character_id INTEGER NOT NULL,
