@@ -262,8 +262,10 @@ namespace PvfLib
                         maze.Greed = StripBacktick(data);
                         break;
                     case "map specification":
-                        maze.MapSpecification = data;
-                        maze.MapSpecifications = ParseMapSpecifications(data);
+                        maze.MapSpecification = string.IsNullOrEmpty(maze.MapSpecification)
+                            ? data
+                            : maze.MapSpecification + " " + data;
+                        maze.MapSpecifications.AddRange(ParseMapSpecifications(data));
                         break;
                     case "start map":
                         maze.StartMap = ParseIntArray(data);
