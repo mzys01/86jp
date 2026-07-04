@@ -55,19 +55,20 @@ namespace DfoServer.Game.Premium
                 }
                 if (cid <= 0) return false;
 
-                var wallet = CurrencyService.LoadWallet(conn, null, cid);
-                if (wallet.Cera < ceraPrice)
-                {
-                    FileLogger.Log($"[PremiumService] Devil slot {slotIndex} rejected: cera {wallet.Cera} < {ceraPrice}");
-                    return false;
-                }
-                updatedCera = wallet.Cera - ceraPrice;
-                tokenCera = wallet.TokenCera;
-                happyTokenCera = wallet.HappyTokenCera;
-
+                // 读余额、条件扣减、写到期时间放同一事务; 旧版事务外读+绝对值覆写会与
+                // CeraShop 购物车里其他商品的扣费交错, 产生点券丢失更新。
                 using (var tx = conn.BeginTransaction())
                 {
-                    CurrencyService.UpdateCera(conn, tx, cid, updatedCera);
+                    var wallet = CurrencyService.LoadWallet(conn, tx, cid);
+                    if (!CurrencyService.TrySpendCera(conn, tx, cid, ceraPrice))
+                    {
+                        FileLogger.Log($"[PremiumService] Devil slot {slotIndex} rejected: cera {wallet.Cera} < {ceraPrice}");
+                        return false;
+                    }
+                    updatedCera = wallet.Cera - ceraPrice;
+                    tokenCera = wallet.TokenCera;
+                    happyTokenCera = wallet.HappyTokenCera;
+
                     UpsertPremiumExpire(conn, tx, accountId, premiumType, now, duration);
                     tx.Commit();
                 }

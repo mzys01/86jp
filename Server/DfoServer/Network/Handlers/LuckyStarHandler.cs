@@ -68,8 +68,13 @@ namespace DfoServer.Network.Handlers
 
                 newGold = wallet.Gold - totalGoldCost;
                 newLuckyStar = (ushort)(wallet.LuckyStar + buyCount);
-                _assetService.AddGold(scope, -totalGoldCost);
-                _assetService.AddLuckyStar(scope, buyCount);
+                if (!_assetService.TrySpendGold(scope, totalGoldCost))
+                {
+                    FileLogger.Log($"[LuckyStar] BUY: TrySpendGold refused need={totalGoldCost} char={characterId}");
+                    await Send0373Error(session);
+                    return;
+                }
+                _assetService.GrantLuckyStar(scope, buyCount);
                 scope.Commit();
             }
 

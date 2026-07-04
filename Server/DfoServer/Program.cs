@@ -113,6 +113,12 @@ namespace DfoServer
                 return;
             }
 
+            if (Array.IndexOf(args, "--selftest-currency") >= 0)
+            {
+                Environment.Exit(SelfTests.CurrencySelfTest.Run());
+                return;
+            }
+
             GameNetworkConfig.Configure(args);
 
             PacketFileLogger.Initialize();

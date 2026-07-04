@@ -281,7 +281,7 @@ ORDER BY slot_index;";
                         Durability = 0,
                         UpdatedGold = cubeWallet.Gold,
                         UpdatedSp = cubeWallet.Sp,
-                        UpdatedCoin = cubeWallet.Coin,
+                        UpdatedCoin = cubeWallet.Cera,
                         RequestedCount = deleteCount,
                         AppliedCount = deleteCount,
                     };
@@ -332,7 +332,7 @@ ORDER BY slot_index;";
                     Durability = item.Durability,
                     UpdatedGold = wallet.Gold,
                     UpdatedSp = wallet.Sp,
-                    UpdatedCoin = wallet.Coin,
+                    UpdatedCoin = wallet.Cera,
                     RequestedCount = deleteCount,
                     AppliedCount = (short)appliedCount,
                     PetCreatureKey = satietyMutation.CreatureKey,
@@ -773,19 +773,6 @@ WHERE character_id = @characterId
             public byte EquipmentLockId { get; set; }
 
             public string ExtraJson { get; set; } = "{}";
-        }
-
-        internal sealed class WalletState
-        {
-            public int Gold { get; set; }
-
-            public int Sp { get; set; }
-
-            public int Coin { get; set; }
-
-            public int TokenCera { get; set; }
-
-            public int HappyTokenCera { get; set; }
         }
     }
 }

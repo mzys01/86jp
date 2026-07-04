@@ -44,17 +44,6 @@ namespace DfoServer.Network.Handlers
             }
 
             var inventoryTemplateId = (int)parsedInventoryId;
-            ushort currentLuckyStar;
-            using (var readScope = _assetService.OpenScope(characterId, accountId))
-            {
-                currentLuckyStar = _assetService.LoadWallet(readScope).LuckyStar;
-            }
-            if (currentLuckyStar < starCost)
-            {
-                FileLogger.Log($"[Rental] RENT_WEAPON: insufficient stars need={starCost} have={currentLuckyStar} char={characterId}");
-                await Send0372Error(session);
-                return;
-            }
 
             var rental = LoadRentalInfo(characterId);
             var expireTime = (int)ResolveRentalExpireTime();
@@ -63,19 +52,29 @@ namespace DfoServer.Network.Handlers
             short invSlot = -1;
             int instanceValue = 0;
             var pickupSucceeded = false;
-            var luckyStar = (ushort)Math.Max(0, currentLuckyStar - starCost);
+            ushort luckyStar = 0;
 
+            // 余额检查与扣减在同一事务内(条件扣减), 不足额直接失败, 不再有跨scope的检查/扣减竞态
             using (var scope = _assetService.OpenScope(characterId, accountId))
             {
+                var currentLuckyStar = _assetService.LoadWallet(scope).LuckyStar;
+                if (!_assetService.TrySpendLuckyStar(scope, starCost))
+                {
+                    FileLogger.Log($"[Rental] RENT_WEAPON: insufficient stars need={starCost} have={currentLuckyStar} char={characterId}");
+                    await Send0372Error(session);
+                    return;
+                }
+
                 pickupSucceeded = _dataSource.TryPickupRentalWeapon(
                     scope.Connection, scope.Transaction, characterId, accountId, inventoryTemplateId, expireTime, out invSlot, out instanceValue);
 
                 if (pickupSucceeded)
                 {
                     _dataSource.SaveRentalInfo(scope.Connection, scope.Transaction, characterId, rental);
-                    _assetService.AddLuckyStar(scope, -starCost);
+                    luckyStar = (ushort)Math.Max(0, currentLuckyStar - starCost);
                     scope.Commit();
                 }
+                // pickup 失败: 不提交, 星币扣减随事务回滚
             }
 
             if (!pickupSucceeded)

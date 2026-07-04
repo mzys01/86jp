@@ -725,10 +725,9 @@ DELETE FROM character_items WHERE item_uid = @itemUid;";
 
         // ── Wallet ─────────────────────────────────────────────
 
-        internal SqliteInventoryStore.WalletState LoadWallet(SqliteConnection connection, SqliteTransaction transaction, int characterId)
+        internal WalletSnapshot LoadWallet(SqliteConnection connection, SqliteTransaction transaction, int characterId)
         {
-            var snap = CurrencyService.LoadWallet(connection, transaction, characterId);
-            var w = new SqliteInventoryStore.WalletState { Gold = snap.Gold, Coin = snap.Cera, TokenCera = snap.TokenCera, HappyTokenCera = snap.HappyTokenCera };
+            var w = CurrencyService.LoadWallet(connection, transaction, characterId);
             using (var cmd = connection.CreateCommand())
             {
                 cmd.Transaction = transaction;
@@ -739,12 +738,6 @@ DELETE FROM character_items WHERE item_uid = @itemUid;";
                     w.Sp = Convert.ToInt32(result);
             }
             return w;
-        }
-
-        internal void UpdateWallet(SqliteConnection connection, SqliteTransaction transaction, int characterId, int gold, int coin)
-        {
-            CurrencyService.UpdateGold(connection, transaction, characterId, gold);
-            CurrencyService.UpdateCera(connection, transaction, characterId, coin);
         }
 
         // ── Tool ───────────────────────────────────────────────

@@ -310,10 +310,13 @@ namespace DfoServer.Network.Handlers
                     var wallet = CurrencyService.LoadWallet(conn, tx, cid);
                     int cargoGold = LoadCargoStateField(conn, tx, aid, "value32");
 
+                    // 角色金币与金库列均为条件增减, 任一步失败直接错误ACK并return(不提交→回滚)。
+                    // 修复旧版隐患: 金库行不存在时 SaveCargoGold 命中0行, 存款会扣角色钱但金库没进账。
                     int newCharGold, newCargoGold;
                     if (isDeposit)
                     {
-                        if (wallet.Gold < amount)
+                        if (!CurrencyService.TrySpendGold(conn, tx, cid, amount) ||
+                            !TryAddCargoGold(conn, tx, aid, amount))
                         {
                             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, wireType, new byte[] { 0x00, 0x0A }));
                             return;
@@ -323,17 +326,16 @@ namespace DfoServer.Network.Handlers
                     }
                     else
                     {
-                        if (cargoGold < amount)
+                        if (!TrySpendCargoGold(conn, tx, aid, amount))
                         {
                             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, wireType, new byte[] { 0x00, 0x0A }));
                             return;
                         }
+                        CurrencyService.GrantGold(conn, tx, cid, amount);
                         newCargoGold = cargoGold - amount;
                         newCharGold = wallet.Gold + amount;
                     }
 
-                    CurrencyService.UpdateGold(conn, tx, cid, newCharGold);
-                    SaveCargoGold(conn, tx, aid, newCargoGold);
                     tx.Commit();
 
                     var ack = new GamePacketWriter();
@@ -361,15 +363,29 @@ namespace DfoServer.Network.Handlers
             }
         }
 
-        private static void SaveCargoGold(Microsoft.Data.Sqlite.SqliteConnection conn, Microsoft.Data.Sqlite.SqliteTransaction tx, int accountId, int gold)
+        // 金库入账: 原子增量; 金库行不存在(未开通)命中0行返回false
+        private static bool TryAddCargoGold(Microsoft.Data.Sqlite.SqliteConnection conn, Microsoft.Data.Sqlite.SqliteTransaction tx, int accountId, int amount)
         {
             using (var cmd = conn.CreateCommand())
             {
                 cmd.Transaction = tx;
-                cmd.CommandText = "UPDATE account_cargo_state SET value32=@gold, updated_at=CURRENT_TIMESTAMP WHERE account_id=@aid;";
-                cmd.Parameters.AddWithValue("@gold", gold);
+                cmd.CommandText = "UPDATE account_cargo_state SET value32=value32+@amt, updated_at=CURRENT_TIMESTAMP WHERE account_id=@aid;";
+                cmd.Parameters.AddWithValue("@amt", amount);
                 cmd.Parameters.AddWithValue("@aid", accountId);
-                cmd.ExecuteNonQuery();
+                return cmd.ExecuteNonQuery() > 0;
+            }
+        }
+
+        // 金库取出: 条件扣减, 余额不足或未开通返回false
+        private static bool TrySpendCargoGold(Microsoft.Data.Sqlite.SqliteConnection conn, Microsoft.Data.Sqlite.SqliteTransaction tx, int accountId, int amount)
+        {
+            using (var cmd = conn.CreateCommand())
+            {
+                cmd.Transaction = tx;
+                cmd.CommandText = "UPDATE account_cargo_state SET value32=value32-@amt, updated_at=CURRENT_TIMESTAMP WHERE account_id=@aid AND value32>=@amt;";
+                cmd.Parameters.AddWithValue("@amt", amount);
+                cmd.Parameters.AddWithValue("@aid", accountId);
+                return cmd.ExecuteNonQuery() > 0;
             }
         }
         public async Task Handle_CREATE_ACCOUNT_CARGO(EnhancedClientSession session, GamePacketHeader header, byte[] body)

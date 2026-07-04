@@ -111,7 +111,7 @@ namespace DfoServer.Network.Handlers.Dungeon
             {
                 using (var scope = _assetService.OpenScope(characterId, accountId))
                 {
-                    _assetService.AddGold(scope, goldGained);
+                    _assetService.GrantGold(scope, goldGained);
                     scope.Commit();
                 }
             }
@@ -170,8 +170,12 @@ namespace DfoServer.Network.Handlers.Dungeon
                     }
 
                     updatedGold = wallet.Gold - cost;
-                    if (cost > 0)
-                        _assetService.AddGold(scope, -cost);
+                    if (cost > 0 && !_assetService.TrySpendGold(scope, cost))
+                    {
+                        await SendRecoverStaminaErrorAsync(session, 22);
+                        FileLogger.Log($"[{ProtocolLogName}] RECOVER_STAMINA: TrySpendGold refused cid={characterId} need={cost}");
+                        return;
+                    }
                     scope.Commit();
                 }
 
@@ -253,11 +257,10 @@ namespace DfoServer.Network.Handlers.Dungeon
                     var wallet = _assetService.LoadWallet(scope);
                     currentGold = wallet.Gold;
                     updatedGold = wallet.Gold;
-                    if (wallet.Gold < goldCost)
+                    if (!_assetService.TrySpendGold(scope, goldCost))
                         return false;
 
                     updatedGold = wallet.Gold - goldCost;
-                    _assetService.AddGold(scope, -goldCost);
                     scope.Commit();
                     return true;
                 }

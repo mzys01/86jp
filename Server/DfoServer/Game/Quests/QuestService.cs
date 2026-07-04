@@ -769,7 +769,7 @@ namespace DfoServer.Game.Quests
 
                 goldReward = reward.Gold * multiplier;
                 if (goldReward > 0)
-                    assetService.AddGold(scope, (int)goldReward);
+                    assetService.GrantGold(scope, (int)goldReward);
 
                 if (reward.ChainType == 0)
                 {

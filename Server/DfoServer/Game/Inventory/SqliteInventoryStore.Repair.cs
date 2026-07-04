@@ -83,10 +83,10 @@ namespace DfoServer.Game.Inventory
             }
 
             var cost = freeRepair ? 0 : EquipmentRepairPriceProvider.CalcRepairCost(equ.RepairPrice, equ.Grade, maxDura, item.Durability, item.EnchantUpgradeCount, quickRepair);
-            if (cost > wallet.Gold) return false;
+            if (!CurrencyService.TrySpendGold(connection, transaction, characterId, cost))
+                return false;
 
             var newGold = wallet.Gold - cost;
-            CurrencyService.UpdateGold(connection, transaction, characterId, newGold);
             // 原地只改耐久2字节, 保留装备强化/属性
             UpdateEquippedEntryRaw(connection, transaction, characterId, slotIndex, PatchDurabilityInPlace(entry.Raw, (ushort)maxDura));
 
@@ -140,11 +140,10 @@ namespace DfoServer.Game.Inventory
 
             var cost = freeRepair ? 0 : EquipmentRepairPriceProvider.CalcRepairCost(
                 equ.RepairPrice, equ.Grade, maxDura, bagItem.Durability, 0, quickRepair);
-            if (cost > wallet.Gold)
+            if (!CurrencyService.TrySpendGold(connection, transaction, characterId, cost))
                 return false;
 
             var newGold = wallet.Gold - cost;
-            CurrencyService.UpdateGold(connection, transaction, characterId, newGold);
 
             UpdateBagItemDurability(connection, transaction, characterId, slotIndex, (ushort)maxDura);
 
@@ -216,8 +215,6 @@ namespace DfoServer.Game.Inventory
             }
 
             FileLogger.Log($"[Repair] All: {toRepair.Count} items totalCost={totalCost} walletGold={wallet.Gold}");
-            if (totalCost > wallet.Gold)
-                return false;
 
             // 全满或无可修装备: 成功但金币不变。
             if (toRepair.Count == 0)
@@ -226,8 +223,10 @@ namespace DfoServer.Game.Inventory
                 return true;
             }
 
+            if (!CurrencyService.TrySpendGold(connection, transaction, characterId, totalCost))
+                return false;
+
             var newGold = wallet.Gold - totalCost;
-            CurrencyService.UpdateGold(connection, transaction, characterId, newGold);
 
             foreach (var (slot, itemId, maxDura, isEquipped, raw) in toRepair)
             {

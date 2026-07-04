@@ -233,9 +233,81 @@ WHERE c.character_id = @cid;";
             return w;
         }
 
-        public static void UpdateLuckyStar(SqliteConnection connection, SqliteTransaction transaction, int accountId, ushort luckyStar)
+        // ── Grant / TrySpend ──────────────────────────────────────────────
+        // 货币写入唯一入口。发放=SQL原子增量; 扣费=条件扣减(余额不足返回false, 绝不clamp到0)。
+        // 绝对值SET的旧 Update* 已全部删除, 任何路径不得整值覆盖钱包列。
+
+        public static void GrantGold(SqliteConnection connection, SqliteTransaction transaction, int characterId, int amount)
         {
-            if (connection == null || transaction == null || accountId <= 0)
+            if (amount < 0)
+                throw new ArgumentOutOfRangeException(nameof(amount), amount, "GrantGold amount must be >= 0; use TrySpendGold to deduct");
+            if (amount == 0)
+                return;
+
+            using (var cmd = connection.CreateCommand())
+            {
+                cmd.Transaction = transaction;
+                cmd.CommandText = @"
+UPDATE character_items
+SET stack_count = stack_count + @amt,
+    instance_value = instance_value + @amt
+WHERE character_id = @cid AND list_type = 0 AND slot_index = 0;";
+                cmd.Parameters.AddWithValue("@amt", amount);
+                cmd.Parameters.AddWithValue("@cid", characterId);
+                if (cmd.ExecuteNonQuery() > 0)
+                    return;
+            }
+
+            // 金币行不存在(新角色): 建行, 初值即发放额
+            InsertCurrencySlotRow(connection, transaction, characterId, 0, amount);
+        }
+
+        public static bool TrySpendGold(SqliteConnection connection, SqliteTransaction transaction, int characterId, int amount)
+        {
+            if (amount < 0)
+                throw new ArgumentOutOfRangeException(nameof(amount), amount, "TrySpendGold amount must be >= 0");
+            if (amount == 0)
+                return true;
+
+            using (var cmd = connection.CreateCommand())
+            {
+                cmd.Transaction = transaction;
+                cmd.CommandText = @"
+UPDATE character_items
+SET stack_count = stack_count - @amt,
+    instance_value = instance_value - @amt
+WHERE character_id = @cid AND list_type = 0 AND slot_index = 0
+  AND stack_count >= @amt;";
+                cmd.Parameters.AddWithValue("@amt", amount);
+                cmd.Parameters.AddWithValue("@cid", characterId);
+                return cmd.ExecuteNonQuery() > 0;
+            }
+        }
+
+        public static void GrantCera(SqliteConnection connection, SqliteTransaction transaction, int characterId, int amount)
+            => GrantAccountCurrency(connection, transaction, characterId, "cera", amount);
+
+        public static bool TrySpendCera(SqliteConnection connection, SqliteTransaction transaction, int characterId, int amount)
+            => TrySpendAccountCurrency(connection, transaction, characterId, "cera", amount);
+
+        public static void GrantTokenCera(SqliteConnection connection, SqliteTransaction transaction, int characterId, int amount)
+            => GrantAccountCurrency(connection, transaction, characterId, "token_cera", amount);
+
+        public static bool TrySpendTokenCera(SqliteConnection connection, SqliteTransaction transaction, int characterId, int amount)
+            => TrySpendAccountCurrency(connection, transaction, characterId, "token_cera", amount);
+
+        public static void GrantHappyTokenCera(SqliteConnection connection, SqliteTransaction transaction, int characterId, int amount)
+            => GrantAccountCurrency(connection, transaction, characterId, "happy_token_cera", amount);
+
+        public static bool TrySpendHappyTokenCera(SqliteConnection connection, SqliteTransaction transaction, int characterId, int amount)
+            => TrySpendAccountCurrency(connection, transaction, characterId, "happy_token_cera", amount);
+
+        // 幸运星按账号ID直接寻址(accounts.lucky_star), 上限999在SQL内钳制
+        public static void GrantLuckyStar(SqliteConnection connection, SqliteTransaction transaction, int accountId, int amount)
+        {
+            if (amount < 0)
+                throw new ArgumentOutOfRangeException(nameof(amount), amount, "GrantLuckyStar amount must be >= 0; use TrySpendLuckyStar to deduct");
+            if (amount == 0)
                 return;
 
             using (var cmd = connection.CreateCommand())
@@ -243,11 +315,72 @@ WHERE c.character_id = @cid;";
                 cmd.Transaction = transaction;
                 cmd.CommandText = @"
 UPDATE accounts
-SET lucky_star = @luckyStar
+SET lucky_star = MIN(999, lucky_star + @amt)
 WHERE account_id = @aid;";
-                cmd.Parameters.AddWithValue("@luckyStar", (int)luckyStar);
+                cmd.Parameters.AddWithValue("@amt", amount);
                 cmd.Parameters.AddWithValue("@aid", accountId);
                 cmd.ExecuteNonQuery();
+            }
+        }
+
+        public static bool TrySpendLuckyStar(SqliteConnection connection, SqliteTransaction transaction, int accountId, int amount)
+        {
+            if (amount < 0)
+                throw new ArgumentOutOfRangeException(nameof(amount), amount, "TrySpendLuckyStar amount must be >= 0");
+            if (amount == 0)
+                return true;
+
+            using (var cmd = connection.CreateCommand())
+            {
+                cmd.Transaction = transaction;
+                cmd.CommandText = @"
+UPDATE accounts
+SET lucky_star = lucky_star - @amt
+WHERE account_id = @aid AND lucky_star >= @amt;";
+                cmd.Parameters.AddWithValue("@amt", amount);
+                cmd.Parameters.AddWithValue("@aid", accountId);
+                return cmd.ExecuteNonQuery() > 0;
+            }
+        }
+
+        private static void GrantAccountCurrency(SqliteConnection connection, SqliteTransaction transaction, int characterId, string column, int amount)
+        {
+            if (amount < 0)
+                throw new ArgumentOutOfRangeException(nameof(amount), amount, $"Grant {column} amount must be >= 0; use TrySpend to deduct");
+            if (amount == 0)
+                return;
+
+            using (var cmd = connection.CreateCommand())
+            {
+                cmd.Transaction = transaction;
+                cmd.CommandText = $@"
+UPDATE accounts
+SET {column} = {column} + @amt
+WHERE account_id = (SELECT account_id FROM characters WHERE character_id = @cid);";
+                cmd.Parameters.AddWithValue("@amt", amount);
+                cmd.Parameters.AddWithValue("@cid", characterId);
+                cmd.ExecuteNonQuery();
+            }
+        }
+
+        private static bool TrySpendAccountCurrency(SqliteConnection connection, SqliteTransaction transaction, int characterId, string column, int amount)
+        {
+            if (amount < 0)
+                throw new ArgumentOutOfRangeException(nameof(amount), amount, $"TrySpend {column} amount must be >= 0");
+            if (amount == 0)
+                return true;
+
+            using (var cmd = connection.CreateCommand())
+            {
+                cmd.Transaction = transaction;
+                cmd.CommandText = $@"
+UPDATE accounts
+SET {column} = {column} - @amt
+WHERE account_id = (SELECT account_id FROM characters WHERE character_id = @cid)
+  AND {column} >= @amt;";
+                cmd.Parameters.AddWithValue("@amt", amount);
+                cmd.Parameters.AddWithValue("@cid", characterId);
+                return cmd.ExecuteNonQuery() > 0;
             }
         }
 
@@ -260,80 +393,14 @@ WHERE account_id = @aid;";
             return (ushort)value;
         }
 
-        public static void UpdateGold(SqliteConnection connection, SqliteTransaction transaction, int characterId, int newGold)
-        {
-            UpdateCurrencySlot(connection, transaction, characterId, 0, newGold);
-        }
-
-        public static void UpdateCera(SqliteConnection connection, SqliteTransaction transaction, int characterId, int newCera)
+        // 前置条件: 同事务内已确认该槽位无行(UPDATE命中0行)。
+        // 用普通INSERT而非OR REPLACE: REPLACE会把未列出的列(pet_serial_or_handle/equipment_lock_id/extra_json)清掉。
+        private static void InsertCurrencySlotRow(SqliteConnection connection, SqliteTransaction transaction, int characterId, int slot, int value)
         {
             using (var cmd = connection.CreateCommand())
             {
                 cmd.Transaction = transaction;
-                cmd.CommandText = @"
-UPDATE accounts
-SET cera = @val
-WHERE account_id = (SELECT account_id FROM characters WHERE character_id = @cid);";
-                cmd.Parameters.AddWithValue("@val", newCera);
-                cmd.Parameters.AddWithValue("@cid", characterId);
-                cmd.ExecuteNonQuery();
-            }
-        }
-
-        // 代币券(token cera): 账号级 accounts.token_cera。
-        public static void UpdateTokenCera(SqliteConnection connection, SqliteTransaction transaction, int characterId, int newValue)
-        {
-            using (var cmd = connection.CreateCommand())
-            {
-                cmd.Transaction = transaction;
-                cmd.CommandText = @"
-UPDATE accounts
-SET token_cera = @val
-WHERE account_id = (SELECT account_id FROM characters WHERE character_id = @cid);";
-                cmd.Parameters.AddWithValue("@val", newValue);
-                cmd.Parameters.AddWithValue("@cid", characterId);
-                cmd.ExecuteNonQuery();
-            }
-        }
-
-        // 欢乐代币券(happy token cera): 账号级 accounts.happy_token_cera。
-        public static void UpdateHappyTokenCera(SqliteConnection connection, SqliteTransaction transaction, int characterId, int newValue)
-        {
-            using (var cmd = connection.CreateCommand())
-            {
-                cmd.Transaction = transaction;
-                cmd.CommandText = @"
-UPDATE accounts
-SET happy_token_cera = @val
-WHERE account_id = (SELECT account_id FROM characters WHERE character_id = @cid);";
-                cmd.Parameters.AddWithValue("@val", newValue);
-                cmd.Parameters.AddWithValue("@cid", characterId);
-                cmd.ExecuteNonQuery();
-            }
-        }
-
-        private static void UpdateCurrencySlot(SqliteConnection connection, SqliteTransaction transaction, int characterId, int slot, int value)
-        {
-            using (var cmd = connection.CreateCommand())
-            {
-                cmd.Transaction = transaction;
-                cmd.CommandText = @"
-UPDATE character_items
-SET stack_count = @val,
-    instance_value = @val
-WHERE character_id = @cid AND list_type = 0 AND slot_index = @slot;";
-                cmd.Parameters.AddWithValue("@val", value);
-                cmd.Parameters.AddWithValue("@slot", slot);
-                cmd.Parameters.AddWithValue("@cid", characterId);
-                var updated = cmd.ExecuteNonQuery();
-                if (updated > 0)
-                    return;
-            }
-
-            using (var cmd = connection.CreateCommand())
-            {
-                cmd.Transaction = transaction;
-                cmd.CommandText = @"INSERT OR REPLACE INTO character_items
+                cmd.CommandText = @"INSERT INTO character_items
 (owner_scope, owner_id, character_id, list_type, slot_index, item_template_id, item_kind, stack_count, instance_value, durability, seal_flag, option_value, expire_time, marker_16)
 VALUES ('character', @cid, @cid, 0, @slot, 0, 'special', @val, @val, 0, 0, 0, 0, 0);";
                 cmd.Parameters.AddWithValue("@val", value);
@@ -349,6 +416,9 @@ VALUES ('character', @cid, @cid, 0, @slot, 0, 'special', @val, @val, 0, 0, 0, 0,
     {
         public int Gold { get; set; }
         public int Cera { get; set; }
+
+        // 技能点(character_items slot 2), 仅 InventoryDbPrimitives.LoadWallet 填充
+        public int Sp { get; set; }
 
         public int TokenCera { get; set; }
 

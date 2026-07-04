@@ -78,6 +78,11 @@ namespace DfoServer.Game.Inventory
             public int NewCera;
             public int NewTokenCera;
             public int NewHappyTokenCera;
+            // 各币种实际扣减额(瀑布分摊结果), 落库用条件扣减而非绝对值覆盖
+            public int SpentGold;
+            public int SpentCera;
+            public int SpentTokenCera;
+            public int SpentHappyTokenCera;
         }
 
         private static InventoryMutationResult ToInventoryMutationResult(BoosterRewardResult reward)
@@ -96,13 +101,13 @@ namespace DfoServer.Game.Inventory
 
         // 计算扣费后的各币余额。金币与点券分别结算; 点券按 mode 在 {欢乐券, 代币券, 点券} 内瀑布扣减。
         // 若任一币种(在允许的币池内)余额不足, 返回 Ok=false 且不改动余额。
-        private static CeraShopPaymentPlan ComputeCeraShopPayment(SqliteInventoryStore.WalletState w, int goldCost, int ceraCost, CeraPayMode mode)
+        private static CeraShopPaymentPlan ComputeCeraShopPayment(WalletSnapshot w, int goldCost, int ceraCost, CeraPayMode mode)
         {
             var plan = new CeraShopPaymentPlan
             {
                 Ok = false,
                 NewGold = w.Gold,
-                NewCera = w.Coin,
+                NewCera = w.Cera,
                 NewTokenCera = w.TokenCera,
                 NewHappyTokenCera = w.HappyTokenCera,
             };
@@ -112,6 +117,7 @@ namespace DfoServer.Game.Inventory
                 if (w.Gold < goldCost)
                     return plan;
                 plan.NewGold = w.Gold - goldCost;
+                plan.SpentGold = goldCost;
             }
 
             if (ceraCost > 0)
@@ -122,9 +128,9 @@ namespace DfoServer.Game.Inventory
 
                 var remaining = ceraCost;
                 int happy = plan.NewHappyTokenCera, token = plan.NewTokenCera, cera = plan.NewCera;
-                if (useHappy && remaining > 0) { var t = Math.Min(remaining, happy); happy -= t; remaining -= t; }
-                if (useToken && remaining > 0) { var t = Math.Min(remaining, token); token -= t; remaining -= t; }
-                if (useCera && remaining > 0) { var t = Math.Min(remaining, cera); cera -= t; remaining -= t; }
+                if (useHappy && remaining > 0) { var t = Math.Min(remaining, happy); happy -= t; remaining -= t; plan.SpentHappyTokenCera = t; }
+                if (useToken && remaining > 0) { var t = Math.Min(remaining, token); token -= t; remaining -= t; plan.SpentTokenCera = t; }
+                if (useCera && remaining > 0) { var t = Math.Min(remaining, cera); cera -= t; remaining -= t; plan.SpentCera = t; }
                 if (remaining > 0)
                     return plan; // 允许的币池内不够付
 
@@ -137,24 +143,30 @@ namespace DfoServer.Game.Inventory
             return plan;
         }
 
-        // 落库: 把四种货币的扣费后余额写入。
-        private void ApplyCeraShopPayment(SqliteConnection connection, SqliteTransaction transaction, int characterId, CeraShopPaymentPlan plan)
+        // 落库: 按计划扣减额条件扣减(WHERE col>=amt)。任一币种拒绝即返回 false, 调用方 return false 令外层事务回滚。
+        // Compute 与本方法在同一事务内, 正常情况下不会失败; 失败即余额被并发改动, 宁可整单失败也不覆盖。
+        private bool TryApplyCeraShopPayment(SqliteConnection connection, SqliteTransaction transaction, int characterId, CeraShopPaymentPlan plan)
         {
-            CurrencyService.UpdateGold(connection, transaction, characterId, plan.NewGold);
-            CurrencyService.UpdateCera(connection, transaction, characterId, plan.NewCera);
-            CurrencyService.UpdateTokenCera(connection, transaction, characterId, plan.NewTokenCera);
-            CurrencyService.UpdateHappyTokenCera(connection, transaction, characterId, plan.NewHappyTokenCera);
+            if (plan.SpentGold > 0 && !CurrencyService.TrySpendGold(connection, transaction, characterId, plan.SpentGold))
+                return false;
+            if (plan.SpentHappyTokenCera > 0 && !CurrencyService.TrySpendHappyTokenCera(connection, transaction, characterId, plan.SpentHappyTokenCera))
+                return false;
+            if (plan.SpentTokenCera > 0 && !CurrencyService.TrySpendTokenCera(connection, transaction, characterId, plan.SpentTokenCera))
+                return false;
+            if (plan.SpentCera > 0 && !CurrencyService.TrySpendCera(connection, transaction, characterId, plan.SpentCera))
+                return false;
+            return true;
         }
 
         // ============================================================
-        // 兑换券扣减: 与 ApplyCeraShopPayment 在同一事务内执行
+        // 兑换券扣减: 与 TryApplyCeraShopPayment 在同一事务内执行
         // ============================================================
         // 若 couponItemUid>0, 则扣减1个兑换券:
         //   - 扣后栈数>0 → UpdateStackCount
         //   - 扣后栈数=0 → DeleteItem (整行删除)
-        // 此方法必须在 ApplyCeraShopPayment 之后调用, 确保事务内顺序为:
+        // 此方法必须在 TryApplyCeraShopPayment 之后调用, 确保事务内顺序为:
         //   1) ComputeCeraShopPayment (计算不扣费)
-        //   2) ApplyCeraShopPayment (扣点券, 若 paymentMode=0)
+        //   2) TryApplyCeraShopPayment (扣点券, 若 paymentMode=0)
         //   3) DeductCouponIfNeeded (扣兑换券, 若 paymentMode=1)
         // 若任意步骤失败, 事务回滚, 已扣点券/已扣兑换券均回滚。
         private void DeductCouponIfNeeded(SqliteConnection connection, SqliteTransaction transaction, long couponItemUid, int couponNewStackCount)
@@ -237,8 +249,8 @@ namespace DfoServer.Game.Inventory
                         return false;
                 }
 
-                if (totalGoldCost > 0)
-                    _db.UpdateWallet(connection, transaction, characterId, wallet.Gold - totalGoldCost, wallet.Coin);
+                if (totalGoldCost > 0 && !CurrencyService.TrySpendGold(connection, transaction, characterId, totalGoldCost))
+                    return false;
                 CurrencyService.AddCubeFragment(connection, transaction, accountId, itemTemplateId, buyCount);
                 _auditLogger.WriteBuyAuditLog(connection, transaction, characterId, itemTemplateId, (short)CurrencyService.GetCubeFragmentSlot(itemTemplateId), totalGoldCost, 0);
                 result = new InventoryMutationResult
@@ -250,7 +262,7 @@ namespace DfoServer.Game.Inventory
                     InstanceValue = buyCount,
                     UpdatedGold = wallet.Gold - totalGoldCost,
                     UpdatedSp = wallet.Sp,
-                    UpdatedCoin = wallet.Coin,
+                    UpdatedCoin = wallet.Cera,
                     RequestedCount = (short)buyCount,
                     AppliedCount = (short)buyCount,
                     CostItemTemplateId = metadata.IsMaterialExchange ? metadata.NeedMaterialId : 0,
@@ -325,8 +337,8 @@ namespace DfoServer.Game.Inventory
                     matTargetSlot = targetItem.SlotIndex;
                 }
 
-                if (totalGoldCost > 0)
-                    _db.UpdateWallet(connection, transaction, characterId, wallet.Gold - totalGoldCost, wallet.Coin);
+                if (totalGoldCost > 0 && !CurrencyService.TrySpendGold(connection, transaction, characterId, totalGoldCost))
+                    return false;
                 var goldAfterBuy = wallet.Gold - totalGoldCost;
                 _auditLogger.WriteBuyAuditLog(connection, transaction, characterId, itemTemplateId, matTargetSlot, totalGoldCost, 0);
 
@@ -340,7 +352,7 @@ namespace DfoServer.Game.Inventory
                     Durability = 0,
                     UpdatedGold = goldAfterBuy,
                     UpdatedSp = wallet.Sp,
-                    UpdatedCoin = wallet.Coin,
+                    UpdatedCoin = wallet.Cera,
                     RequestedCount = (short)buyCount,
                     AppliedCount = (short)buyCount,
                     CostItemTemplateId = metadata.NeedMaterialId,
@@ -351,7 +363,7 @@ namespace DfoServer.Game.Inventory
             }
 
             var walletCheck = _db.LoadWallet(connection, transaction, characterId);
-            if (walletCheck.Gold < metadata.BuyGold || walletCheck.Coin < metadata.BuyCoin)
+            if (walletCheck.Gold < metadata.BuyGold || walletCheck.Cera < metadata.BuyCoin)
                 return false;
 
             // For stackable items, try to stack onto existing item first
@@ -362,7 +374,7 @@ namespace DfoServer.Game.Inventory
                 {
                     var totalCostGold = metadata.BuyGold * buyCount;
                     var totalCostCoin = metadata.BuyCoin * buyCount;
-                    if (walletCheck.Gold < totalCostGold || walletCheck.Coin < totalCostCoin)
+                    if (walletCheck.Gold < totalCostGold || walletCheck.Cera < totalCostCoin)
                         return false;
                     var newStackCount = existingItem.StackCount + buyCount;
                     if (isPetConsumable)
@@ -370,9 +382,11 @@ namespace DfoServer.Game.Inventory
                     else
                         _db.UpdateStackCount(connection, transaction, existingItem.ItemUid, newStackCount);
                     var updGold = walletCheck.Gold - totalCostGold;
-                    var updCoin = walletCheck.Coin - totalCostCoin;
-                    if (totalCostGold > 0 || totalCostCoin > 0)
-                        _db.UpdateWallet(connection, transaction, characterId, updGold, updCoin);
+                    var updCoin = walletCheck.Cera - totalCostCoin;
+                    if (totalCostGold > 0 && !CurrencyService.TrySpendGold(connection, transaction, characterId, totalCostGold))
+                        return false;
+                    if (totalCostCoin > 0 && !CurrencyService.TrySpendCera(connection, transaction, characterId, totalCostCoin))
+                        return false;
                     _auditLogger.WriteBuyAuditLog(connection, transaction, characterId, itemTemplateId, existingItem.SlotIndex, totalCostGold, totalCostCoin);
 
                     result = new InventoryMutationResult
@@ -396,7 +410,7 @@ namespace DfoServer.Game.Inventory
             var effectiveCount = metadata.IsStackable ? buyCount : 1;
             var totalBuyGold = metadata.BuyGold * effectiveCount;
             var totalBuyCoin = metadata.BuyCoin * effectiveCount;
-            if (walletCheck.Gold < totalBuyGold || walletCheck.Coin < totalBuyCoin)
+            if (walletCheck.Gold < totalBuyGold || walletCheck.Cera < totalBuyCoin)
                 return false;
 
             int slotStart, slotEnd;
@@ -448,8 +462,11 @@ namespace DfoServer.Game.Inventory
                 "{}");
 
             var updatedGold = walletCheck.Gold - totalBuyGold;
-            var updatedCoin = walletCheck.Coin - totalBuyCoin;
-            _db.UpdateWallet(connection, transaction, characterId, updatedGold, updatedCoin);
+            var updatedCoin = walletCheck.Cera - totalBuyCoin;
+            if (totalBuyGold > 0 && !CurrencyService.TrySpendGold(connection, transaction, characterId, totalBuyGold))
+                return false;
+            if (totalBuyCoin > 0 && !CurrencyService.TrySpendCera(connection, transaction, characterId, totalBuyCoin))
+                return false;
             _auditLogger.WriteBuyAuditLog(connection, transaction, characterId, itemTemplateId, (short)targetSlot, totalBuyGold, totalBuyCoin);
 
             result = new InventoryMutationResult
@@ -513,7 +530,7 @@ namespace DfoServer.Game.Inventory
             var wallet = _db.LoadWallet(connection, transaction, characterId);
             var goldDelta = metadata.SellGold * appliedCount;
             var updatedGold = wallet.Gold + goldDelta;
-            _db.UpdateWallet(connection, transaction, characterId, updatedGold, wallet.Coin);
+            CurrencyService.GrantGold(connection, transaction, characterId, goldDelta);
             _auditLogger.WriteSellAuditLog(connection, transaction, characterId, item, appliedCount, goldDelta);
 
             result = new InventoryMutationResult
@@ -526,7 +543,7 @@ namespace DfoServer.Game.Inventory
                 Durability = item.Durability,
                 UpdatedGold = updatedGold,
                 UpdatedSp = wallet.Sp,
-                UpdatedCoin = wallet.Coin,
+                UpdatedCoin = wallet.Cera,
                 RequestedCount = sellCount,
                 AppliedCount = (short)appliedCount,
             };
@@ -627,9 +644,9 @@ namespace DfoServer.Game.Inventory
             //   - 在角色背包中查找该兑换券是否存在, 不存在则拒绝交易。
             //   - 将 totalCeraCost 和 ceraPrice 置零, 后续 ComputeCeraShopPayment
             //     传入 ceraCost=0, 因此不会扣任何点券, ComputeCeraShopPayment 必然 Ok。
-            //     这样保证了兑换券支付与点券支付走同一套 ComputeCeraShopPayment + ApplyCeraShopPayment
+            //     这样保证了兑换券支付与点券支付走同一套 ComputeCeraShopPayment + TryApplyCeraShopPayment
             //     流程, 仅在兑换券扣减时走 DeductCouponIfNeeded, 两条路径互不干扰。
-            //   - 兑换券扣减 (DeductCouponIfNeeded) 与 ApplyCeraShopPayment 在同一事务内,
+            //   - 兑换券扣减 (DeductCouponIfNeeded) 与 TryApplyCeraShopPayment 在同一事务内,
             //     任一步骤失败整体回滚, 不会出现"券已扣但装扮未发"。
             var couponItemUid = 0L;
             var couponSlotIndex = (short)0;
@@ -660,7 +677,7 @@ namespace DfoServer.Game.Inventory
 
             var wallet = _db.LoadWallet(connection, transaction, characterId);
             var plan = ComputeCeraShopPayment(wallet, totalGoldCost, totalCeraCost, ceraMode);
-            FileLogger.Log($"  [CeraShopBuy] product=0x{productId:X8} -> item=0x{itemTemplateId:X8} section={product.Section} kind={itemKind} count={effectiveCount} gold={totalGoldCost} cera={totalCeraCost} mode={ceraMode} payMode={paymentMode} wallet(g={wallet.Gold},c={wallet.Coin},t={wallet.TokenCera},h={wallet.HappyTokenCera}) ok={plan.Ok}");
+            FileLogger.Log($"  [CeraShopBuy] product=0x{productId:X8} -> item=0x{itemTemplateId:X8} section={product.Section} kind={itemKind} count={effectiveCount} gold={totalGoldCost} cera={totalCeraCost} mode={ceraMode} payMode={paymentMode} wallet(g={wallet.Gold},c={wallet.Cera},t={wallet.TokenCera},h={wallet.HappyTokenCera}) ok={plan.Ok}");
             if (!plan.Ok)
             {
                 FileLogger.Log($"  [CeraShopBuy] REJECT: insufficient funds gold={totalGoldCost} cera={totalCeraCost} mode={ceraMode}");
@@ -670,7 +687,8 @@ namespace DfoServer.Game.Inventory
 
             if (Premium.PremiumCatalog.Load().TryGetValue(itemTemplateId, out _, out _))
             {
-                ApplyCeraShopPayment(connection, transaction, characterId, plan);
+                if (!TryApplyCeraShopPayment(connection, transaction, characterId, plan))
+                    return false;
                 _auditLogger.WriteBuyAuditLog(connection, transaction, characterId, itemTemplateId, 0, totalGoldCost, totalCeraCost);
                 result = new InventoryMutationResult
                 {
@@ -709,7 +727,8 @@ namespace DfoServer.Game.Inventory
                 if (openedResults.Count == 0)
                     return false;
 
-                ApplyCeraShopPayment(connection, transaction, characterId, plan);
+                if (!TryApplyCeraShopPayment(connection, transaction, characterId, plan))
+                    return false;
                 DeductCouponIfNeeded(connection, transaction, couponItemUid, couponNewStackCount);
                 _auditLogger.WriteBuyAuditLog(connection, transaction, characterId, itemTemplateId, 0, totalGoldCost, totalCeraCost);
                 foreach (var rewardResult in openedResults)
@@ -757,7 +776,8 @@ namespace DfoServer.Game.Inventory
                         _db.UpdatePetStackCount(connection, transaction, existingItem.ItemUid, newStackCount);
                     else
                         _db.UpdateStackCount(connection, transaction, existingItem.ItemUid, newStackCount);
-                    ApplyCeraShopPayment(connection, transaction, characterId, plan);
+                    if (!TryApplyCeraShopPayment(connection, transaction, characterId, plan))
+                        return false;
                     DeductCouponIfNeeded(connection, transaction, couponItemUid, couponNewStackCount);
                     _auditLogger.WriteBuyAuditLog(connection, transaction, characterId, itemTemplateId, existingItem.SlotIndex, totalGoldCost, totalCeraCost);
 
@@ -899,7 +919,8 @@ namespace DfoServer.Game.Inventory
                     "{}");
             }
 
-            ApplyCeraShopPayment(connection, transaction, characterId, plan);
+            if (!TryApplyCeraShopPayment(connection, transaction, characterId, plan))
+                return false;
             DeductCouponIfNeeded(connection, transaction, couponItemUid, couponNewStackCount);
             _auditLogger.WriteBuyAuditLog(connection, transaction, characterId, itemTemplateId, (short)targetSlot, totalGoldCost, totalCeraCost);
 
