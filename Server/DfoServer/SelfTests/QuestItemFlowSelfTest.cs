@@ -2,9 +2,11 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
+using System.Threading.Tasks;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory;
 using DfoServer.Game.Quests;
+using DfoServer.Game.Session;
 using DfoServer.Infrastructure;
 using Microsoft.Data.Sqlite;
 
@@ -123,6 +125,17 @@ namespace DfoServer.SelfTests
                 assetService);
             Check("finish 2043 succeeds", IsSuccessAck(finish2043), ref failures);
             Check("letter consumed by seek quest finish", CountItem(assetService, AganzoLetterItemId) == 0, ref failures);
+
+            QuestService.SaveActiveQuests(connStr, CharacterId, new List<ActiveQuest>
+            {
+                new ActiveQuest { Slot = 0, QuestId = UseLetterQuestId, TriggerValue = 1 },
+            });
+            AddItem(assetService, AganzoLetterItemId, 1);
+            var sender = new RecordingQuestSender(CharacterId, AccountId);
+            var questManager = new QuestManager(sender, connStr, assetService);
+            questManager.SyncItemSeekingQuestProgressAsync(new[] { AganzoLetterItemId }).GetAwaiter().GetResult();
+            Check("generic item-seeking sync clears active quest item channel", LoadTrigger(connStr, UseLetterQuestId) == 0, ref failures);
+            Check("generic item-seeking sync sends active quest refresh", sender.LastNotiType == 0x023F && sender.NotiCount == 1, ref failures);
 
             AddItem(assetService, NonCarryEventItemId, 1);
             QuestService.SaveActiveQuests(connStr, CharacterId, new List<ActiveQuest>
@@ -311,6 +324,38 @@ VALUES (@cid, @qid, 1);";
             Console.WriteLine($"[{(ok ? "OK" : "FAIL")}] {name}");
             if (!ok)
                 failures++;
+        }
+
+        private sealed class RecordingQuestSender : ISessionPacketSender
+        {
+            public RecordingQuestSender(int characterId, int accountId)
+            {
+                CharacterId = characterId;
+                AccountId = accountId;
+            }
+
+            public int CharacterId { get; }
+            public int AccountId { get; }
+            public PlayerContext Player => null;
+            public int NotiCount { get; private set; }
+            public ushort LastNotiType { get; private set; }
+
+            public Task SendPacketAsync(byte[] rawPacket)
+            {
+                return Task.CompletedTask;
+            }
+
+            public Task SendNotiAsync(ushort notiType, byte[] body)
+            {
+                NotiCount++;
+                LastNotiType = notiType;
+                return Task.CompletedTask;
+            }
+
+            public Task SendCmdAckAsync(ushort cmdType, byte[] body)
+            {
+                return Task.CompletedTask;
+            }
         }
     }
 }
