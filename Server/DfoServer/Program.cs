@@ -125,6 +125,12 @@ namespace DfoServer
                 return;
             }
 
+            if (Array.IndexOf(args, "--selftest-revive-coin") >= 0)
+            {
+                Environment.Exit(SelfTests.ReviveCoinSelfTest.Run());
+                return;
+            }
+
             GameNetworkConfig.Configure(args);
 
             PacketFileLogger.Initialize();

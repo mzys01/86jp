@@ -17,7 +17,6 @@ namespace DfoServer.Game.Inventory
     {
         internal const int DefaultAvatarUnknownFixed30 = 0x00001E00;
         internal const ushort DefaultAvatarUnknownFixed4 = 0x0400;
-        private const short ReviveCoinSlotIndex = 1;
         internal static readonly object StackableItemCacheLock = new object();
         internal static readonly Dictionary<int, PvfLib.StackableItemFile> StackableItemCache = new Dictionary<int, PvfLib.StackableItemFile>();
 
@@ -117,11 +116,12 @@ INSERT OR IGNORE INTO character_items (
     stack_count, instance_value, durability, seal_flag, option_value, expire_time, marker_16,
     pet_serial_or_handle, extra_json)
 VALUES (
-    'character', @cid, @cid, 0, @slotIndex, 1, 'stackable',
+    'character', @cid, @cid, 0, @slotIndex, @itemId, 'stackable',
     0, 0, 0, 0, 0, 0, 0,
     0, '{}');";
                 cmd.Parameters.AddWithValue("@cid", characterId);
-                cmd.Parameters.AddWithValue("@slotIndex", ReviveCoinSlotIndex);
+                cmd.Parameters.AddWithValue("@slotIndex", Game.ReviveCoin.ReviveCoinService.WalletSlot);
+                cmd.Parameters.AddWithValue("@itemId", Game.ReviveCoin.ReviveCoinService.ItemId);
                 cmd.ExecuteNonQuery();
             }
         }

@@ -28,7 +28,7 @@ namespace DfoServer.Network.Builders
             Register(new BuyRestrictItemListBodyBuilder());             
 
             
-            Register(new SimpleByteBodyBuilder(0x00B1, s => 0));  // shop_coin_event_flag: seed=0
+            Register(new SimpleByteBodyBuilder(0x00B1, s => s.ShopCoinEventFlag));  // 复活币当日领取标记(character_daily_reset)
             Register(new SimpleByteBodyBuilder(0x01A8, s => s.PcRoomPlayTimeState));
             Register(new SimpleByteBodyBuilder(0x0331, s => 0));  // level60_ui_state: seed=0
 

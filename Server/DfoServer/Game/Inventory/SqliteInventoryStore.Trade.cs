@@ -29,6 +29,7 @@ namespace DfoServer.Game.Inventory
             }
         }
 
+
         internal const int QuickSlotStart = 3;
         internal const int QuickSlotEnd = 8;
         internal const int RentalBagSlotStart = 9;
@@ -85,6 +86,27 @@ namespace DfoServer.Game.Inventory
             {
                 CurrencyService.AddCubeFragment(connection, transaction, accountId, itemTemplateId, stackCount);
                 assignedSlot = (short)CurrencyService.GetCubeFragmentSlot(itemTemplateId);
+                return true;
+            }
+
+            // 复活币固定 slot1; 行被扣光删除后重建仍回 slot1(必须在 metadata Resolve 之前, 证据见 ReviveCoinService)
+            if (itemTemplateId == Game.ReviveCoin.ReviveCoinService.ItemId)
+            {
+                var existingCoin = _db.FindItemByTemplateIdInRange(
+                    connection, transaction, characterId, InventoryListType.Main,
+                    Game.ReviveCoin.ReviveCoinService.ItemId,
+                    Game.ReviveCoin.ReviveCoinService.WalletSlot, Game.ReviveCoin.ReviveCoinService.WalletSlot);
+                if (existingCoin != null)
+                {
+                    _db.UpdateStackCount(connection, transaction, existingCoin.ItemUid, existingCoin.StackCount + stackCount);
+                }
+                else
+                {
+                    _db.InsertCharacterItem(
+                        connection, transaction, characterId, InventoryListType.Main, Game.ReviveCoin.ReviveCoinService.WalletSlot,
+                        Game.ReviveCoin.ReviveCoinService.ItemId, "stackable", stackCount, stackCount, 0, 0, 0, 0, 0, 0, "{}");
+                }
+                assignedSlot = Game.ReviveCoin.ReviveCoinService.WalletSlot;
                 return true;
             }
 

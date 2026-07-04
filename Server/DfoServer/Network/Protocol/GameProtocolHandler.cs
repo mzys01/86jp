@@ -27,6 +27,7 @@ namespace DfoServer.Network
         private readonly RentalHandler _rentalHandler;
         private readonly MailboxHandler _mailboxHandler;
         private readonly CollectionBoxHandler _collectionBoxHandler;
+        private readonly ShopCoinEventHandler _shopCoinEventHandler;
         private readonly InventoryRefreshSender _inventoryRefreshSender;
         private readonly MercenaryHandler _mercenaryHandler;
         private readonly ICharacterRepository _characterRepository;
@@ -65,7 +66,9 @@ namespace DfoServer.Network
             _inventoryRefreshSender = new InventoryRefreshSender(inventoryStore, sqliteSelectCharacterDataSource, characterRepository);
             _inventoryHandler = new InventoryHandler(inventoryStore, sqliteSelectCharacterDataSource, characterRepository, _inventoryRefreshSender, broadcastGamePacket);
             _townHandler = new TownHandler(characterRepository, inventoryStore);
-            _dungeonHandler = new DungeonHandler(_assetService);
+            var dailyResetService = new Game.DailyReset.DailyResetService(databasePath, schemaFilePath);
+            var reviveCoinService = new Game.ReviveCoin.ReviveCoinService(inventoryStore, _assetService, dailyResetService);
+            _dungeonHandler = new DungeonHandler(_assetService, reviveCoinService);
             _skillHandler = new SkillHandler(characterRepository);
             _settingsHandler = new SettingsHandler();
             _ceraShopHandler = new CeraShopHandler(inventoryStore, sqliteSelectCharacterDataSource);
@@ -74,6 +77,7 @@ namespace DfoServer.Network
             _mailboxHandler = new MailboxHandler();
             var collectBoxProgressRepository = new Game.Inventory.CollectBoxProgressRepository(databasePath, schemaFilePath);
             _collectionBoxHandler = new CollectionBoxHandler(inventoryStore, collectBoxProgressRepository);
+            _shopCoinEventHandler = new ShopCoinEventHandler(reviveCoinService, _inventoryRefreshSender);
             _mercenaryHandler = new MercenaryHandler(characterRepository);
 
             _cmdDispatch = new Dictionary<ushort, Func<EnhancedClientSession, GamePacketHeader, byte[], Task>>();
@@ -95,6 +99,7 @@ namespace DfoServer.Network
             RegisterCollectionBoxHandlers(_cmdDispatch);
             RegisterMercenaryHandlers(_cmdDispatch);
             RegisterMiscHandlers(_cmdDispatch);
+            _cmdDispatch[0x00CF] = _shopCoinEventHandler.HandleShopCoinEvent;   // 207 SHOP_COIN_EVENT 每日免费复活币
         }
 
         public override async Task OnClientConnected(EnhancedClientSession session)

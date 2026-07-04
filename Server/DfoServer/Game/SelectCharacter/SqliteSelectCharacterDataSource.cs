@@ -23,6 +23,7 @@ namespace DfoServer.Game.SelectCharacter
         private readonly ICharacterRepository _characterRepository;
         private readonly AccountSettingsRepository _accountSettingsRepository;
         private readonly CharacterTitleBookRepository _titleBookRepository;
+        private readonly DailyReset.DailyResetService _dailyResetService;
         private readonly TitleBookMutationService _titleBookMutationService;
         private readonly CharacterAchievementProgressRepository _achievementProgressRepository;
         private readonly string _connectionString;
@@ -44,6 +45,7 @@ namespace DfoServer.Game.SelectCharacter
             _characterRepository = characterRepository;
             _accountSettingsRepository = new AccountSettingsRepository(databasePath, schemaFilePath);
             _titleBookRepository = new CharacterTitleBookRepository(_connectionString);
+            _dailyResetService = new DailyReset.DailyResetService(databasePath, schemaFilePath);
             _titleBookMutationService = new TitleBookMutationService(_connectionString);
             _achievementProgressRepository = new CharacterAchievementProgressRepository(_connectionString);
         }
@@ -160,6 +162,7 @@ namespace DfoServer.Game.SelectCharacter
 
 
             initSnapshot.ServerEventPhaseBitmap = _initFlagsRepository.LoadServerEventPhaseBitmap();
+            initSnapshot.ShopCoinEventFlag = _dailyResetService.IsClaimed(characterId, ReviveCoin.ReviveCoinService.DailyClaimKey) ? (byte)1 : (byte)0;
 
             initSnapshot.PremiumServiceType = 1;
             initSnapshot.PremiumServiceData = Premium.PremiumService.BuildPremiumServiceData(

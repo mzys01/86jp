@@ -383,7 +383,7 @@ namespace DfoServer.Network.Handlers.Dungeon
             if (baseMonsterExp == 0)
                 return 0;
 
-            var accountId = session.Account?.AccountId ?? 1;
+            var accountId = session.Account?.AccountId ?? 0;
             var connStr = SqliteDatabaseBootstrap.Initialize(ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
             return PremiumService.HasActivePremium(connStr, accountId, GrowthContractPremiumType)
                 ? ToUInt32Floor(baseMonsterExp * GrowthContractMonsterBonusRate)
@@ -407,7 +407,22 @@ namespace DfoServer.Network.Handlers.Dungeon
         {
             // df_game_r: read = u16 targetActorId
             ushort targetId = body.Length >= 2 ? BitConverter.ToUInt16(body, 0) : session.Player.UserId;
-            FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] USE_COIN: uid={session.Player.UserId} target={targetId}");
+            var characterId = session.Player?.CharacterId ?? 0;
+            var accountId = session.Account?.AccountId ?? 1;
+            FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] USE_COIN: uid={session.Player.UserId} target={targetId} cid={characterId}");
+
+            // 先扣复活币, 成功才发复活通知(旧实现不扣币白送复活)
+            short coinSlot;
+            int coinRemaining;
+            if (characterId <= 0 || !_svc.ReviveCoin.TryConsume(characterId, accountId, out coinSlot, out coinRemaining))
+            {
+                var err = new GamePacketWriter();
+                err.WriteByte(0x00);
+                err.WriteUInt16(targetId);
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0029, err.ToArray()));
+                FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] USE_COIN: no coin cid={characterId}");
+                return;
+            }
 
             // 1. NOTI 0x0020 DIE_STATE: set_charac_live(user, 1=revive)
             //    df_game_r body = u16 actorId + u8 state; 86JP has extra u8 flag
@@ -418,10 +433,12 @@ namespace DfoServer.Network.Handlers.Dungeon
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0020, noti.ToArray()));
 
             // 2. CMD ACK 0x0029: resultCode=1 + u16 targetActorId
+            //    不补发 0x000E: 客户端使用复活币时本地已预扣显示(PR#338 实测说明), 全量列表随下次进城刷新
             var ack = new GamePacketWriter();
             ack.WriteByte(0x01);           // resultCode = success
             ack.WriteUInt16(targetId);     // targetActorId
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0029, ack.ToArray()));
+            FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] USE_COIN: OK cid={characterId} slot={coinSlot} remaining={coinRemaining}");
         }
 
         internal async Task HandleGetItem(EnhancedClientSession session, GamePacketHeader header, byte[] body)

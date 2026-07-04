@@ -21,9 +21,12 @@ namespace DfoServer.Network.Handlers.Dungeon
 
         private readonly IAssetService _assetService;
 
-        internal DungeonSharedServices(IAssetService assetService)
+        internal Game.ReviveCoin.ReviveCoinService ReviveCoin { get; }
+
+        internal DungeonSharedServices(IAssetService assetService, Game.ReviveCoin.ReviveCoinService reviveCoin)
         {
             _assetService = assetService ?? throw new ArgumentNullException(nameof(assetService));
+            ReviveCoin = reviveCoin ?? throw new ArgumentNullException(nameof(reviveCoin));
         }
 
         public static void ResetDungeonState(EnhancedClientSession session)

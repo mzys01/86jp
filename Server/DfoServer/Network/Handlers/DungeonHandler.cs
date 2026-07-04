@@ -15,9 +15,9 @@ namespace DfoServer.Network.Handlers
         private readonly DungeonSettlementHandler _settlement;
         private readonly DungeonTutorialHandler _tutorial;
 
-        public DungeonHandler(IAssetService assetService)
+        public DungeonHandler(IAssetService assetService, Game.ReviveCoin.ReviveCoinService reviveCoinService)
         {
-            _services = new DungeonSharedServices(assetService);
+            _services = new DungeonSharedServices(assetService, reviveCoinService);
             _settlement = new DungeonSettlementHandler(_services);
             _map = new DungeonMapHandler(_services);
             _entry = new DungeonEntryHandler(_services, _map);

@@ -11,6 +11,9 @@ namespace DfoServer.Game.SelectCharacter
 
         public byte PcRoomPlayTimeState { get; set; }
 
+        // 0x00B1: 复活币当日已领取标记(character_daily_reset bit0)
+        public byte ShopCoinEventFlag { get; set; }
+
         public ChampionBreakSystemSnapshot ChampionBreakSystem { get; set; } = new ChampionBreakSystemSnapshot();
 
         
