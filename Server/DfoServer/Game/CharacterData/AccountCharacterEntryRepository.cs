@@ -51,14 +51,6 @@ namespace DfoServer.Game.CharacterData
             using (var conn = new SqliteConnection(_connectionString))
             {
                 conn.Open();
-                Sqlite.SqliteSchemaMigrator.EnsureColumns(conn, "account_character_entries", new[]
-                {
-                    ("entry_index", "INTEGER NOT NULL DEFAULT 0"),
-                    ("slot_index", "INTEGER NOT NULL DEFAULT 0"),
-                    ("name", "TEXT NOT NULL DEFAULT ''"),
-                    ("name_bytes", "BLOB"),
-                    ("body_after_name", "BLOB NOT NULL DEFAULT X''"),
-                });
                 using (var tx = conn.BeginTransaction())
                 {
                     using (var del = new SqliteCommand("DELETE FROM account_character_entries", conn, tx))

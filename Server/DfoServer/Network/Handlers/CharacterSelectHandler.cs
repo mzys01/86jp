@@ -297,8 +297,6 @@ namespace DfoServer.Network.Handlers
                     Job = job,
                     GrowType = 0,
                     Level = 1,
-                    Gold = 0,
-                    Coin = 0,
                     TownId = 1,
                     AreaId = 0,
                     PosX = 474,

@@ -10,8 +10,6 @@ namespace DfoServer.Game.Inventory
     {
         int CountItem(int characterId, int itemTemplateId);
 
-        void RunMigrations();
-
         void EnsureDatabase(int characterId, int accountId, CharacterItemListSnapshot seedSnapshot);
 
         void EnsureContainerState(int characterId, int accountId);

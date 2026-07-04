@@ -46,10 +46,6 @@ namespace DfoServer.Game.CharacterData
             using (var conn = new SqliteConnection(_connectionString))
             {
                 conn.Open();
-                DfoServer.Sqlite.SqliteSchemaMigrator.EnsureColumns(conn, "get_userinfo_template", new[]
-                {
-                    ("response_blob", "BLOB"),
-                });
                 using (var cmd = new SqliteCommand("UPDATE get_userinfo_template SET response_blob=@b WHERE id=1", conn))
                 {
                     cmd.Parameters.AddWithValue("@b", blob != null ? (object)blob : System.DBNull.Value);

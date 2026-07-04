@@ -137,12 +137,8 @@ namespace DfoServer.SelfTests
 INSERT OR IGNORE INTO accounts (account_id, m_id, password_hash)
 VALUES (@accountId, 'inventory-sale-selftest', '');
 
-INSERT OR IGNORE INTO characters (character_id, account_id, name, gold)
-VALUES (@characterId, @accountId, 'inventory-sale-selftest', @gold);
-
-UPDATE characters
-SET gold = @gold
-WHERE character_id = @characterId;
+INSERT OR IGNORE INTO characters (character_id, account_id, name)
+VALUES (@characterId, @accountId, 'inventory-sale-selftest');
 
 INSERT OR REPLACE INTO character_container_state (character_id, list_type, list_param16)
 VALUES (@characterId, 0, 24);

@@ -29,8 +29,7 @@ CREATE TABLE IF NOT EXISTS characters (
     pvp_grade INTEGER NOT NULL DEFAULT 0,
     pvp_rating_grade INTEGER NOT NULL DEFAULT 0,
     user_state INTEGER NOT NULL DEFAULT 0,
-    gold INTEGER NOT NULL DEFAULT 0,
-    coin INTEGER NOT NULL DEFAULT 0,
+    -- 货币不在本表: 金币=character_items slot0, 点券系=accounts.cera等 (旧 gold/coin 影子列已由迁移v12删除)
     town_id INTEGER NOT NULL DEFAULT 0,
     area_id INTEGER NOT NULL DEFAULT 0,
     pos_x INTEGER NOT NULL DEFAULT 0,
@@ -41,6 +40,10 @@ CREATE TABLE IF NOT EXISTS characters (
     appearance_blob BLOB,
     clone_title_item_id INTEGER NOT NULL DEFAULT 0,
     delete_flag INTEGER NOT NULL DEFAULT 0,
+    exp INTEGER NOT NULL DEFAULT 0,
+    ex_equip_slot_stat INTEGER NOT NULL DEFAULT 0,
+    bonus_sp INTEGER NOT NULL DEFAULT 0,
+    bonus_tp INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (account_id) REFERENCES accounts(account_id) ON DELETE CASCADE

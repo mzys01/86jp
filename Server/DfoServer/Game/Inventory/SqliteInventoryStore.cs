@@ -30,7 +30,6 @@ namespace DfoServer.Game.Inventory
         private readonly InventoryPackageStore _packageStore;
         private readonly InventoryShopStore _shopStore;
         internal readonly InventoryEquipmentStore _equipStore;
-        private readonly InventoryMigrationRunner _migrationRunner;
 
         public SqliteInventoryStore(string databasePath, string schemaFilePath)
         {
@@ -49,7 +48,6 @@ namespace DfoServer.Game.Inventory
             _packageStore = new InventoryPackageStore(_db, _auditLogger);
             _shopStore = new InventoryShopStore(_db, _auditLogger);
             _equipStore = new InventoryEquipmentStore(_db, _auditLogger);
-            _migrationRunner = new InventoryMigrationRunner();
         }
 
         public int CountItem(int characterId, int itemTemplateId)
@@ -68,22 +66,11 @@ namespace DfoServer.Game.Inventory
             }
         }
 
-
-        public void RunMigrations()
-        {
-            using (var connection = new SqliteConnection(_connectionString))
-            {
-                connection.Open();
-                _migrationRunner.RunMigrations(connection);
-            }
-        }
-
         public void EnsureDatabase(int characterId, int accountId, CharacterItemListSnapshot seedSnapshot)
         {
             using (var connection = new SqliteConnection(_connectionString))
             {
                 connection.Open();
-                _migrationRunner.RunMigrationsInternal(connection);
 
                 if (HasSeedData(connection, characterId))
                     return;

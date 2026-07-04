@@ -37,8 +37,6 @@ namespace DfoServer.SelfTests
                 Job = 0,
                 GrowType = 0,
                 Level = 65,
-                Gold = 1000000,
-                Coin = 0,
             });
 
             var assetService = new SqliteAssetService(dbPath, schemaPath);

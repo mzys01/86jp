@@ -24,29 +24,8 @@ namespace DfoServer.Game.Characters
             if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
                 Directory.CreateDirectory(directory);
 
+            // schema+迁移由 Initialize 统一执行(SqliteMigrations v2 覆盖本仓库旧散装补列)
             _connectionString = SqliteDatabaseBootstrap.Initialize(databasePath, schemaFilePath);
-
-            using (var conn = new SqliteConnection(_connectionString))
-            {
-                conn.Open();
-                SqliteSchemaMigrator.MigrateCharactersNameUniqueIndex(conn);
-                SqliteSchemaMigrator.EnsureColumns(conn, "characters", new[]
-                {
-                    ("direction", "INTEGER NOT NULL DEFAULT 5"),
-                    ("area_state", "INTEGER NOT NULL DEFAULT 3"),
-                    ("name_bytes", "BLOB"),
-                    ("appearance_blob", "BLOB"),
-                    ("delete_flag", "INTEGER NOT NULL DEFAULT 0"),
-                    ("exp", "INTEGER NOT NULL DEFAULT 0"),
-                    ("ex_equip_slot_stat", "INTEGER NOT NULL DEFAULT 0"),
-                    ("pvp_grade", "INTEGER NOT NULL DEFAULT 0"),
-                    ("pvp_rating_grade", "INTEGER NOT NULL DEFAULT 0"),
-                    ("user_state", "INTEGER NOT NULL DEFAULT 0"),
-                    ("bonus_sp", "INTEGER NOT NULL DEFAULT 0"),
-                    ("bonus_tp", "INTEGER NOT NULL DEFAULT 0"),
-                    ("clone_title_item_id", "INTEGER NOT NULL DEFAULT 0"),
-                });
-            }
         }
 
         public CharacterRecord GetById(int characterId)
@@ -88,10 +67,10 @@ namespace DfoServer.Game.Characters
             {
                 cmd.CommandText = @"
 INSERT INTO characters
-    (character_id, account_id, name, job, grow_type, level, gold, coin,
+    (character_id, account_id, name, job, grow_type, level,
      town_id, area_id, pos_x, pos_y, direction, area_state, appearance_blob, delete_flag)
 VALUES
-    (@cid, @aid, @name, @job, @grow, @lvl, @gold, @coin,
+    (@cid, @aid, @name, @job, @grow, @lvl,
      @town, @area, @px, @py, @dir, @astate, @blob, 0);
 SELECT character_id FROM characters WHERE rowid = last_insert_rowid();";
 
@@ -105,8 +84,6 @@ SELECT character_id FROM characters WHERE rowid = last_insert_rowid();";
                 cmd.Parameters.AddWithValue("@job", record.Job);
                 cmd.Parameters.AddWithValue("@grow", record.GrowType);
                 cmd.Parameters.AddWithValue("@lvl", record.Level);
-                cmd.Parameters.AddWithValue("@gold", record.Gold);
-                cmd.Parameters.AddWithValue("@coin", record.Coin);
                 cmd.Parameters.AddWithValue("@town", record.TownId);
                 cmd.Parameters.AddWithValue("@area", record.AreaId);
                 cmd.Parameters.AddWithValue("@px", record.PosX);
@@ -231,7 +208,7 @@ SELECT character_id FROM characters WHERE rowid = last_insert_rowid();";
         }
 
         private const string SelectColumns = @"
-SELECT character_id, account_id, CAST(name AS BLOB), job, grow_type, level, gold, coin,
+SELECT character_id, account_id, CAST(name AS BLOB), job, grow_type, level,
        town_id, area_id, pos_x, pos_y, direction, area_state, appearance_blob,
        delete_flag, created_at, updated_at, exp, ex_equip_slot_stat,
        pvp_grade, pvp_rating_grade, user_state, bonus_sp, bonus_tp
@@ -239,7 +216,7 @@ FROM characters";
 
         private static CharacterRecord Map(IDataRecord r)
         {
-            var appearBlob = r.IsDBNull(14) ? null : (byte[])r.GetValue(14);
+            var appearBlob = r.IsDBNull(12) ? null : (byte[])r.GetValue(12);
             return new CharacterRecord
             {
                 CharacterId = r.GetInt32(0),
@@ -248,25 +225,23 @@ FROM characters";
                 Job = (byte)r.GetInt32(3),
                 GrowType = (byte)r.GetInt32(4),
                 Level = (byte)r.GetInt32(5),
-                Gold = r.GetInt64(6),
-                Coin = r.GetInt64(7),
-                TownId = (byte)r.GetInt32(8),
-                AreaId = (byte)r.GetInt32(9),
-                PosX = (short)r.GetInt32(10),
-                PosY = (short)r.GetInt32(11),
-                Direction = (byte)r.GetInt32(12),
-                AreaState = (byte)r.GetInt32(13),
+                TownId = (byte)r.GetInt32(6),
+                AreaId = (byte)r.GetInt32(7),
+                PosX = (short)r.GetInt32(8),
+                PosY = (short)r.GetInt32(9),
+                Direction = (byte)r.GetInt32(10),
+                AreaState = (byte)r.GetInt32(11),
                 Appearance = CharacterAppearanceCodec.Decode(appearBlob),
-                Deleted = r.GetInt32(15) != 0,
-                CreatedAt = ParseDate(r.GetString(16)),
-                UpdatedAt = ParseDate(r.GetString(17)),
-                Exp = r.FieldCount > 18 && !r.IsDBNull(18) ? (uint)r.GetInt64(18) : 0u,
-                ExEquipSlotStat = r.FieldCount > 19 && !r.IsDBNull(19) ? (byte)r.GetInt32(19) : (byte)0,
-                PvpGrade = r.FieldCount > 20 && !r.IsDBNull(20) ? (byte)r.GetInt32(20) : (byte)0,
-                PvpRatingGrade = r.FieldCount > 21 && !r.IsDBNull(21) ? (byte)r.GetInt32(21) : (byte)0,
-                UserState = r.FieldCount > 22 && !r.IsDBNull(22) ? (byte)r.GetInt32(22) : (byte)0,
-                BonusSp = r.FieldCount > 23 && !r.IsDBNull(23) ? r.GetInt32(23) : 0,
-                BonusTp = r.FieldCount > 24 && !r.IsDBNull(24) ? r.GetInt32(24) : 0,
+                Deleted = r.GetInt32(13) != 0,
+                CreatedAt = ParseDate(r.GetString(14)),
+                UpdatedAt = ParseDate(r.GetString(15)),
+                Exp = r.FieldCount > 16 && !r.IsDBNull(16) ? (uint)r.GetInt64(16) : 0u,
+                ExEquipSlotStat = r.FieldCount > 17 && !r.IsDBNull(17) ? (byte)r.GetInt32(17) : (byte)0,
+                PvpGrade = r.FieldCount > 18 && !r.IsDBNull(18) ? (byte)r.GetInt32(18) : (byte)0,
+                PvpRatingGrade = r.FieldCount > 19 && !r.IsDBNull(19) ? (byte)r.GetInt32(19) : (byte)0,
+                UserState = r.FieldCount > 20 && !r.IsDBNull(20) ? (byte)r.GetInt32(20) : (byte)0,
+                BonusSp = r.FieldCount > 21 && !r.IsDBNull(21) ? r.GetInt32(21) : 0,
+                BonusTp = r.FieldCount > 22 && !r.IsDBNull(22) ? r.GetInt32(22) : 0,
             };
         }
 
