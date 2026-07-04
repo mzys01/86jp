@@ -119,6 +119,12 @@ namespace DfoServer
                 return;
             }
 
+            if (Array.IndexOf(args, "--selftest-daily-reset") >= 0)
+            {
+                Environment.Exit(SelfTests.DailyResetSelfTest.Run());
+                return;
+            }
+
             GameNetworkConfig.Configure(args);
 
             PacketFileLogger.Initialize();

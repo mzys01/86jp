@@ -657,6 +657,29 @@ CREATE TABLE IF NOT EXISTS character_active_quests (
     FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
 );
 
+-- 每日/周常门控。日界=北京时间06:00, 周界=ISO周一(DailyResetService)。
+-- 本表只记录"该角色的周期状态属于哪一天/哪一周"; 所有具体状态(标记/次数)
+-- 一律存 character_daily_counters, 不在本表加任何业务列。
+CREATE TABLE IF NOT EXISTS character_daily_reset (
+    character_id INTEGER PRIMARY KEY,
+    day_id       INTEGER NOT NULL DEFAULT 0,
+    week_id      INTEGER NOT NULL DEFAULT 0,
+    FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
+);
+
+-- 每日/周常状态账本: 一功能一 key, 新功能零 schema 改动。
+-- counter_key 用自描述蛇形名(如 'tower_entry_used'); 布尔标记=cap1计数(领取即 value=1)。
+-- period 决定清理周期: 跨天删 'day' 行 / 跨周删 'week' 行(DailyResetService.EnsureRowAndRollover)。
+-- 同一 key 的 period 以首次写入为准, 调用方必须始终传同一值。
+CREATE TABLE IF NOT EXISTS character_daily_counters (
+    character_id INTEGER NOT NULL,
+    counter_key  TEXT    NOT NULL,
+    period       TEXT    NOT NULL DEFAULT 'day' CHECK (period IN ('day', 'week')),
+    value        INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (character_id, counter_key),
+    FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS account_settings (
     account_id INTEGER PRIMARY KEY,
     main_game_option BLOB,

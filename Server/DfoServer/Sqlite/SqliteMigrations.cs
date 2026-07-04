@@ -119,6 +119,23 @@ CREATE INDEX IF NOT EXISTS idx_dungeon_permissions_dungeon
     ON character_dungeon_permissions(character_id, dungeon_id);
 CREATE INDEX IF NOT EXISTS idx_item_audit_log_char_time
     ON item_audit_log(character_id, created_at);")),
+
+            // 每日/周常重置状态表(复活币每日领取等), 见 DailyResetService
+            (15, "character_daily_reset/counters 每日重置", conn => ExecuteBatch(conn, @"
+CREATE TABLE IF NOT EXISTS character_daily_reset (
+    character_id INTEGER PRIMARY KEY,
+    day_id       INTEGER NOT NULL DEFAULT 0,
+    week_id      INTEGER NOT NULL DEFAULT 0,
+    FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS character_daily_counters (
+    character_id INTEGER NOT NULL,
+    counter_key  TEXT    NOT NULL,
+    period       TEXT    NOT NULL DEFAULT 'day' CHECK (period IN ('day', 'week')),
+    value        INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (character_id, counter_key),
+    FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
+);")),
         };
 
         private static void ExecuteBatch(SqliteConnection connection, string sql)
