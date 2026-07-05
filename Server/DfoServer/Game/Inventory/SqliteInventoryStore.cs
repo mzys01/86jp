@@ -21,6 +21,7 @@ namespace DfoServer.Game.Inventory
         internal static readonly Dictionary<int, PvfLib.StackableItemFile> StackableItemCache = new Dictionary<int, PvfLib.StackableItemFile>();
 
         private readonly string _connectionString;
+        private readonly ScopedStoreContext _context;
         internal string ConnectionString => _connectionString;
         private readonly InventoryAuditLogger _auditLogger;
         internal readonly InventoryDbPrimitives _db;
@@ -40,6 +41,7 @@ namespace DfoServer.Game.Inventory
                 Directory.CreateDirectory(directory);
 
             _connectionString = SqliteDatabaseBootstrap.Initialize(databasePath, schemaFilePath);
+            _context = new ScopedStoreContext(_connectionString);
             _auditLogger = new InventoryAuditLogger();
             _db = new InventoryDbPrimitives();
             _enchantStore = new InventoryEnchantStore(_db, _auditLogger);
@@ -48,6 +50,8 @@ namespace DfoServer.Game.Inventory
             _shopStore = new InventoryShopStore(_db, _auditLogger);
             _equipStore = new InventoryEquipmentStore(_db, _auditLogger);
         }
+
+        public IDisposable BeginScope(int characterId, int accountId) => _context.BeginScope(characterId, accountId);
 
         public int CountItem(int characterId, int itemTemplateId)
         {
@@ -212,6 +216,9 @@ ORDER BY slot_index;";
             }
         }
 
+        public CharacterItemListSnapshot LoadCharacterItemListSnapshot()
+            => LoadCharacterItemListSnapshot(_context.CharacterId, _context.AccountId);
+
         public int DeleteExpiredRentalEquipment(int characterId, int accountId)
         {
             using (var connection = new SqliteConnection(_connectionString))
@@ -225,6 +232,9 @@ ORDER BY slot_index;";
                 }
             }
         }
+
+        public int DeleteExpiredRentalEquipment()
+            => DeleteExpiredRentalEquipment(_context.CharacterId, _context.AccountId);
 
         public bool TryDeleteItem(int characterId, int accountId, InventoryListType listType, short slotIndex, short deleteCount, out InventoryMutationResult result)
         {
@@ -302,11 +312,12 @@ ORDER BY slot_index;";
                 return false;
             }
 
-            var appliedCount = NormalizeRemovalCount(item, deleteCount);
-            var itemRemainingCount = Math.Max(0, item.StackCount - appliedCount);
             var isStackCountedRecord = IsStackCountedRecord(item);
+            var itemCurrentCount = GetStackCountedRecordCount(item);
+            var appliedCount = NormalizeRemovalCount(item, deleteCount);
+            var itemRemainingCount = Math.Max(0, itemCurrentCount - appliedCount);
             var satietyMutation = default(PetSatietyMutation);
-            if (isStackCountedRecord && appliedCount < item.StackCount)
+            if (isStackCountedRecord && appliedCount < itemCurrentCount)
             {
                 if (IsPetConsumableRecord(item))
                     _db.UpdatePetStackCount(connection, transaction, item.ItemUid, itemRemainingCount);
@@ -341,6 +352,7 @@ ORDER BY slot_index;";
                 PetSatietyBefore = satietyMutation.Before,
                 PetSatietyAfter = satietyMutation.After,
                 PetSatietyChanged = satietyMutation.Changed,
+                PetFeedUsed = satietyMutation.FeedUsed,
             };
             return true;
         }
@@ -435,10 +447,22 @@ ORDER BY slot_index;";
             if (!IsStackCountedRecord(source))
                 return 1;
 
-            if (requestedCount <= 0 || requestedCount >= source.StackCount)
-                return source.StackCount;
+            var currentCount = GetStackCountedRecordCount(source);
+            if (requestedCount <= 0 || requestedCount >= currentCount)
+                return currentCount;
 
             return requestedCount;
+        }
+
+        internal static int GetStackCountedRecordCount(ItemRecord source)
+        {
+            if (source == null)
+                return 0;
+
+            if (IsPetConsumableRecord(source))
+                return Math.Max(source.StackCount, Math.Max(source.InstanceValue, source.PetSerialOrHandle));
+
+            return Math.Max(0, source.StackCount);
         }
 
         internal static bool IsStackCountedRecord(ItemRecord source)
@@ -456,7 +480,7 @@ ORDER BY slot_index;";
 
             return source.ListType == InventoryListType.Pet
                 && source.ItemKind == "pet"
-                && source.StackCount > 0
+                && Math.Max(source.StackCount, Math.Max(source.InstanceValue, source.PetSerialOrHandle)) > 0
                 && source.SlotIndex >= PetConsumableSlotStart
                 && source.SlotIndex <= PetConsumableSlotEnd;
         }
@@ -634,12 +658,11 @@ LIMIT 1;";
         {
             mutation = default(PetSatietyMutation);
             var before = 0;
-            var visibleBefore = 0;
             using (var select = connection.CreateCommand())
             {
                 select.Transaction = transaction;
                 select.CommandText = @"
-SELECT field04, field_after_value
+SELECT field04
 FROM character_creatures
 WHERE character_id = @characterId
   AND creature_key = @creatureKey
@@ -653,28 +676,26 @@ LIMIT 1;";
                         return false;
 
                     before = Math.Max(0, Math.Min(100, reader.GetInt32(0)));
-                    visibleBefore = Math.Max(0, Math.Min(100, reader.GetInt32(1)));
                 }
             }
 
-            if (before >= 100 && visibleBefore == before)
-                return false;
-
-            var after = before >= 100 ? before : Math.Min(100, before + delta);
-            using (var update = connection.CreateCommand())
+            var after = Math.Min(100, before + delta);
+            if (after != before)
             {
-                update.Transaction = transaction;
-                update.CommandText = @"
+                using (var update = connection.CreateCommand())
+                {
+                    update.Transaction = transaction;
+                    update.CommandText = @"
 UPDATE character_creatures
-SET field04 = @after,
-    field_after_value = @after
+SET field04 = @after
 WHERE character_id = @characterId
   AND creature_key = @creatureKey;";
-                update.Parameters.AddWithValue("@after", after);
-                update.Parameters.AddWithValue("@before", before);
-                update.Parameters.AddWithValue("@characterId", characterId);
-                update.Parameters.AddWithValue("@creatureKey", creatureKey);
-                update.ExecuteNonQuery();
+                    update.Parameters.AddWithValue("@after", after);
+                    update.Parameters.AddWithValue("@before", before);
+                    update.Parameters.AddWithValue("@characterId", characterId);
+                    update.Parameters.AddWithValue("@creatureKey", creatureKey);
+                    update.ExecuteNonQuery();
+                }
             }
 
             mutation = new PetSatietyMutation
@@ -682,10 +703,11 @@ WHERE character_id = @characterId
                 CreatureKey = creatureKey,
                 Before = before,
                 After = after,
-                Changed = after != before || visibleBefore != after,
+                Changed = after != before,
+                FeedUsed = true,
             };
 
-            return mutation.Changed;
+            return true;
         }
 
         private struct PetSatietyMutation
@@ -697,6 +719,8 @@ WHERE character_id = @characterId
             public int After;
 
             public bool Changed;
+
+            public bool FeedUsed;
         }
 
 

@@ -9,6 +9,11 @@ namespace DfoServer.Network.Builders
             return new byte[] { 0x01 };
         }
 
+        public static byte[] BuildCmdError(byte errorCode)
+        {
+            return new byte[] { 0x00, errorCode };
+        }
+
         public static byte[] BuildInt32Value(int value)
         {
             var writer = new GamePacketWriter();

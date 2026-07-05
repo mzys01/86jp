@@ -152,6 +152,7 @@ namespace DfoServer.Network.Handlers.Dungeon
                     Seed = seed,
                     Lcg = lcg,
                 };
+                session.Player.CurDungeonPetFatigueConsumed++;
 
                 byte layeredFlag = (byte)(overrideMapId > 0 ? 1 : 0);
 

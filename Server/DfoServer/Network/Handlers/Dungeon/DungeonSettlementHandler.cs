@@ -1,4 +1,5 @@
 using DfoServer.Game.Dungeon;
+using DfoServer.Game.Inventory;
 using DfoServer.Game.Premium;
 using DfoServer.Game.Skills;
 using DfoServer.Infrastructure;
@@ -559,6 +560,7 @@ namespace DfoServer.Network.Handlers.Dungeon
             session.Player.CurDungeonCleared = true;
             session.Player.CurBossKilled = true;
             if (bossCode != 0) session.Player.CurBossCode = bossCode;
+            await SendPetCreatureClearExperience(session);
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x001F, DungeonNotificationBuilder.BuildEnableClearDungeon()));
             var npcId = SecretShopNpcIds[DungeonSharedServices.SeedGen.Next(SecretShopNpcIds.Length)];
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0117, BitConverter.GetBytes(npcId)));
@@ -577,6 +579,42 @@ namespace DfoServer.Network.Handlers.Dungeon
                 }
             }
             FileLogger.Log($"[DungeonHandler] ClearDungeon: {reason} secretShopNpc={npcId}");
+        }
+
+        private static async Task SendPetCreatureClearExperience(EnhancedClientSession session)
+        {
+            if (session?.Player == null || session.Player.CharacterId <= 0 || session.Player.CurDungeonPetFatigueConsumed <= 0)
+                return;
+
+            var consumedFatigue = session.Player.CurDungeonPetFatigueConsumed;
+            PetCreatureExperienceUpdate update;
+            try
+            {
+                update = PetCreatureExperienceService.ApplyDungeonClearExperience(
+                    ServerPaths.DatabasePath,
+                    ServerPaths.SchemaFilePath,
+                    session.Player.CharacterId,
+                    consumedFatigue);
+            }
+            catch (Exception ex)
+            {
+                FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] PetCreatureExp: failed cid={session.Player.CharacterId} dungeon={session.Player.CurDungeon} fatigue={consumedFatigue}: {ex.Message}");
+                return;
+            }
+
+            if (!update.Changed)
+            {
+                FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] PetCreatureExp: skipped cid={session.Player.CharacterId} dungeon={session.Player.CurDungeon} key={update.CreatureKey} fatigue={consumedFatigue}");
+                return;
+            }
+
+            var writer = new GamePacketWriter();
+            writer.WriteByte((byte)Math.Max(1, Math.Min(255, update.AfterLevel)));
+            writer.WriteByte(0);
+            writer.WriteInt32(update.AfterExperience);
+            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0066, writer.ToArray()));
+
+            FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] PetCreatureExp: GAIN_EXP_CREATURE cid={session.Player.CharacterId} key={update.CreatureKey} fatigue={consumedFatigue} exp={update.BeforeExperience}->{update.AfterExperience} gained={update.GainedExperience} level={update.BeforeLevel}->{update.AfterLevel}");
         }
 
         private static int ResolveCurrentMapId(EnhancedClientSession session)
@@ -617,7 +655,7 @@ namespace DfoServer.Network.Handlers.Dungeon
         private async Task ReturnToVillage(EnhancedClientSession session)
         {
             CancelAutoFlip(session);
-            DungeonSharedServices.ResetDungeonState(session);
+            await DungeonSharedServices.ResetDungeonStateAsync(session);
             session.Player.UserState = 0x00;
 
             var snapshot = TownAreaNotificationBuilder.CreateCurrentSnapshot(session.Player);

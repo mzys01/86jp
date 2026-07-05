@@ -72,11 +72,11 @@ namespace DfoServer.Network.Builders
             writer.WriteByte(t.IsPrivateStore);             
             writer.WriteByte(t.IsPremiumPcRoom);            
             writer.WriteByte(t.ServerGroupId);              
-            writer.WriteUInt32(t.BlackCount);               
-            writer.WriteByte(t.GuildLevel);                 
-            writer.WriteUInt32(t.ChaosPoint);               
-            writer.WriteByte(1);                            
-            writer.WriteByte(t.DisguiseKind);               
+            writer.WriteUInt32(t.BlackCount);
+            writer.WriteByte(t.GuildLevel);
+            writer.WriteUInt32(t.ChaosPoint);
+            writer.WriteByte(t.PetCreatureAliveFlag);
+            writer.WriteByte(t.DisguiseKind);
             writer.WriteByte(t.IsDisguised);                
             writer.WriteByte(t.ExpertJobType);              
             writer.WriteUInt32(t.ExpertJobExp);             

@@ -1,5 +1,6 @@
 using DfoServer.Game.Inventory;
 using DfoServer.Network.Builders;
+using DfoServer.Network.Handlers.Dungeon;
 using System;
 using System.Threading.Tasks;
 
@@ -64,8 +65,44 @@ namespace DfoServer.Network.Handlers
                 await _refresh.SendSortItemLockRefresh(session, request.DestinationListType);
 
 
-            if (result.Mutated && (request.SourceListType == InventoryListType.Equipment || request.DestinationListType == InventoryListType.Equipment))
-                await _refresh.SendNoti2AppearanceUpdate(session);
+            if (result.Mutated
+                && !result.PetCreatureStateChanged
+                && !result.PetItemStateChanged
+                && (request.SourceListType == InventoryListType.Equipment || request.DestinationListType == InventoryListType.Equipment))
+            {
+                if (TouchesTitleEquipmentSlot(request))
+                {
+                    _refresh.ReloadSubtype0Tail(session);
+                    await _refresh.SendSubtype0PetStateRefresh(session);
+                }
+                else
+                {
+                    await _refresh.SendNoti2AppearanceUpdate(session);
+                }
+            }
+
+            if (result.PetCreatureStateChanged)
+            {
+                _refresh.ReloadSubtype0Tail(session);
+                await _refresh.SendCreatureItemListRefresh(session);
+                await _refresh.SendSubtype0PetStateRefresh(session);
+                await _refresh.SendSubtype1Refresh(session);
+            }
+
+            if (result.PetItemStateChanged)
+            {
+                await _refresh.SendSubtype1Refresh(session);
+                if (!result.PetCreatureStateChanged)
+                    await _refresh.SendCreatureItemListRefresh(session);
+
+                if (result.PetItemFullRefresh)
+                    await _refresh.SendItemListRefresh(session, InventoryListType.Pet);
+                else
+                    await _refresh.SendPetItemSlotRefresh(session, result.PetCreatureRefreshSlots);
+            }
+
+            if (result.PetCreatureStateChanged)
+                await DungeonSharedServices.HandlePetCreatureChangedInDungeonAsync(session, "pet_creature_move");
         }
 
         public async Task Handle_ENUM_CMDPACKET_SORT_ITEM(EnhancedClientSession session, GamePacketHeader header, byte[] body)
@@ -97,6 +134,13 @@ namespace DfoServer.Network.Handlers
                 FileLogger.Log($"[{ProtocolName}] SORT EXCEPTION: {ex}");
                 throw;
             }
+        }
+
+        private static bool TouchesTitleEquipmentSlot(InventoryMoveRequest request)
+        {
+            const short titleEquipmentSlot = 12;
+            return (request.SourceListType == InventoryListType.Equipment && request.SourceSlotIndex == titleEquipmentSlot)
+                || (request.DestinationListType == InventoryListType.Equipment && request.DestinationSlotIndex == titleEquipmentSlot);
         }
 
         public async Task Handle_ENUM_CMDPACKET_TOGGLE_SORT_ITEM_LOCK(EnhancedClientSession session, GamePacketHeader header, byte[] body)
