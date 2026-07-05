@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
@@ -43,6 +43,7 @@ namespace DfoServer.SelfTests
 
             var assetService = new SqliteAssetService(dbPath, schemaPath);
             var connStr = SqliteDatabaseBootstrap.BuildConnectionString(dbPath);
+            var questService = new QuestService(connStr, assetService);
             var failures = 0;
 
             Check("1826 is quest-clear parent", GameWorld.QuestData.IsQuestClearQuest(ParentQuestId), ref failures);
@@ -51,12 +52,8 @@ namespace DfoServer.SelfTests
                 ref failures);
 
             MarkQuestCleared(connStr, 1825);
-            var acceptParent = QuestService.HandleAcceptQuest(
-                connStr,
-                CharacterId,
-                BuildQuestBody(ParentQuestId),
-                assetService,
-                AccountId);
+            var acceptParent = questService.HandleAcceptQuest(CharacterId,
+                BuildQuestBody(ParentQuestId), AccountId);
             Check("accept parent succeeds", IsSuccessAck(acceptParent), ref failures);
             Check("accept parent trigger starts with two missing subquests",
                 TryReadAcceptTrigger(acceptParent, out var initTrigger) && initTrigger == 2,
@@ -69,11 +66,8 @@ namespace DfoServer.SelfTests
                 new ActiveQuest { Slot = 0, QuestId = ParentQuestId, TriggerValue = 2 },
                 new ActiveQuest { Slot = 1, QuestId = SampleQuestId, TriggerValue = 0 },
             });
-            var finishSample = QuestService.HandleFinishQuest(
-                connStr,
-                CharacterId,
-                BuildQuestBody(SampleQuestId),
-                assetService);
+            var finishSample = questService.HandleFinishQuest(CharacterId,
+                BuildQuestBody(SampleQuestId));
             Check("finishing last missing child succeeds", IsSuccessAck(finishSample), ref failures);
             Check("parent trigger syncs to zero", LoadTrigger(connStr, ParentQuestId) == 0, ref failures);
 
@@ -83,11 +77,8 @@ namespace DfoServer.SelfTests
             {
                 new ActiveQuest { Slot = 0, QuestId = ParentQuestId, TriggerValue = 1 },
             });
-            var blockedParent = QuestService.HandleFinishQuest(
-                connStr,
-                CharacterId,
-                BuildQuestBody(ParentQuestId),
-                assetService);
+            var blockedParent = questService.HandleFinishQuest(CharacterId,
+                BuildQuestBody(ParentQuestId));
             Check("parent finish fails while a subquest is missing", IsFailAck(blockedParent, 22), ref failures);
 
             ResetQuestState(connStr);
@@ -96,11 +87,8 @@ namespace DfoServer.SelfTests
             {
                 new ActiveQuest { Slot = 0, QuestId = ParentQuestId, TriggerValue = 0 },
             });
-            var triggerZeroButMissingChild = QuestService.HandleFinishQuest(
-                connStr,
-                CharacterId,
-                BuildQuestBody(ParentQuestId),
-                assetService);
+            var triggerZeroButMissingChild = questService.HandleFinishQuest(CharacterId,
+                BuildQuestBody(ParentQuestId));
             Check("parent finish still checks children when trigger is already zero",
                 IsFailAck(triggerZeroButMissingChild, 22),
                 ref failures);
@@ -112,11 +100,8 @@ namespace DfoServer.SelfTests
             {
                 new ActiveQuest { Slot = 0, QuestId = ParentQuestId, TriggerValue = 2 },
             });
-            var staleParent = QuestService.HandleFinishQuest(
-                connStr,
-                CharacterId,
-                BuildQuestBody(ParentQuestId),
-                assetService);
+            var staleParent = questService.HandleFinishQuest(CharacterId,
+                BuildQuestBody(ParentQuestId));
             Check("stale nonzero parent trigger can finish after all subquests cleared", IsSuccessAck(staleParent), ref failures);
 
             Console.WriteLine(failures == 0 ? "PASS" : $"FAIL: {failures}");

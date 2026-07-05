@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
@@ -64,6 +64,7 @@ namespace DfoServer.SelfTests
 
             var assetService = new SqliteAssetService(dbPath, schemaPath);
             var connStr = SqliteDatabaseBootstrap.BuildConnectionString(dbPath);
+            var questService = new QuestService(connStr, assetService);
             MarkQuestCleared(connStr, 2041);
             var failures = 0;
 
@@ -108,11 +109,8 @@ namespace DfoServer.SelfTests
             {
                 new ActiveQuest { Slot = 0, QuestId = GiveLetterQuestId, TriggerValue = 0 },
             });
-            var legacyFinish2042 = QuestService.HandleFinishQuest(
-                connStr,
-                CharacterId,
-                BuildQuestBody(GiveLetterQuestId),
-                assetService);
+            var legacyFinish2042 = questService.HandleFinishQuest(CharacterId,
+                BuildQuestBody(GiveLetterQuestId));
             Check("legacy active 2042 finish succeeds", IsSuccessAck(legacyFinish2042), ref failures);
             Check("legacy active 2042 finish grants missing letter", CountItem(assetService, AganzoLetterItemId) == 1, ref failures);
             Check("legacy active 2042 finish ack inserts letter",
@@ -123,12 +121,8 @@ namespace DfoServer.SelfTests
 
             ClearIssue135State(connStr);
 
-            var accept2042 = QuestService.HandleAcceptQuest(
-                connStr,
-                CharacterId,
-                BuildQuestBody(GiveLetterQuestId),
-                assetService,
-                AccountId);
+            var accept2042 = questService.HandleAcceptQuest(CharacterId,
+                BuildQuestBody(GiveLetterQuestId), AccountId);
             Check("accept 2042 succeeds", IsSuccessAck(accept2042), ref failures);
             Check("accept 2042 gives letter event item", TryReadAcceptEventItem(accept2042, out var slot, out var itemId, out var count)
                 && slot > 0
@@ -142,41 +136,27 @@ namespace DfoServer.SelfTests
                 new ActiveQuest { Slot = 0, QuestId = GiveLetterQuestId, TriggerValue = 0 },
             });
 
-            var finish2042 = QuestService.HandleFinishQuest(
-                connStr,
-                CharacterId,
-                BuildQuestBody(GiveLetterQuestId),
-                assetService);
+            var finish2042 = questService.HandleFinishQuest(CharacterId,
+                BuildQuestBody(GiveLetterQuestId));
             Check("finish 2042 succeeds", IsSuccessAck(finish2042), ref failures);
             Check("letter remains for next quest after finish 2042", CountItem(assetService, AganzoLetterItemId) == 1, ref failures);
 
-            var accept2043 = QuestService.HandleAcceptQuest(
-                connStr,
-                CharacterId,
-                BuildQuestBody(UseLetterQuestId),
-                assetService,
-                AccountId);
+            var accept2043 = questService.HandleAcceptQuest(CharacterId,
+                BuildQuestBody(UseLetterQuestId), AccountId);
             Check("accept 2043 succeeds", IsSuccessAck(accept2043), ref failures);
             Check("accept 2043 starts with only npc trigger after held letter is counted", TryReadAcceptTrigger(accept2043, out var initTrigger) && initTrigger == 512, ref failures);
 
-            var matched = QuestService.SyncMonsterRewardItemProgress(
-                connStr,
-                CharacterId,
-                assetService,
-                AccountId,
+            var matched = questService.SyncMonsterRewardItemProgress(CharacterId, AccountId,
                 new[] { AganzoLetterItemId });
             Check("letter progress sync matches active quest", matched, ref failures);
             Check("letter progress clears only item channel", LoadTrigger(connStr, UseLetterQuestId) == 512, ref failures);
 
-            var setNpcTrigger = QuestService.HandleSetTrigger(connStr, CharacterId, BuildSetTriggerBody(UseLetterQuestId, 0x20, false));
+            var setNpcTrigger = questService.HandleSetTrigger(CharacterId, BuildSetTriggerBody(UseLetterQuestId, 0x20, false));
             Check("npc trigger ack succeeds", IsSuccessAck(setNpcTrigger), ref failures);
             Check("npc trigger clears remaining channel", LoadTrigger(connStr, UseLetterQuestId) == 0, ref failures);
 
-            var finish2043 = QuestService.HandleFinishQuest(
-                connStr,
-                CharacterId,
-                BuildQuestBody(UseLetterQuestId),
-                assetService);
+            var finish2043 = questService.HandleFinishQuest(CharacterId,
+                BuildQuestBody(UseLetterQuestId));
             Check("finish 2043 succeeds", IsSuccessAck(finish2043), ref failures);
             Check("letter consumed by seek quest finish", CountItem(assetService, AganzoLetterItemId) == 0, ref failures);
 
@@ -196,11 +176,8 @@ namespace DfoServer.SelfTests
             {
                 new ActiveQuest { Slot = 0, QuestId = NonCarryEventQuestId, TriggerValue = 0 },
             });
-            var finishNonCarryEventQuest = QuestService.HandleFinishQuest(
-                connStr,
-                CharacterId,
-                BuildQuestBody(NonCarryEventQuestId),
-                assetService);
+            var finishNonCarryEventQuest = questService.HandleFinishQuest(CharacterId,
+                BuildQuestBody(NonCarryEventQuestId));
             Check("non-carry event item quest finish succeeds", IsSuccessAck(finishNonCarryEventQuest), ref failures);
             Check("non-carry event item is consumed on finish", CountItem(assetService, NonCarryEventItemId) == 0, ref failures);
 

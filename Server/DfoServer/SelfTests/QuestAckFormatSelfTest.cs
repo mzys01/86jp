@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
@@ -49,57 +49,49 @@ namespace DfoServer.SelfTests
 
             var assetService = new SqliteAssetService(dbPath, schemaPath);
             var connStr = SqliteDatabaseBootstrap.BuildConnectionString(dbPath);
+            var questService = new QuestService(connStr, assetService);
             var failures = 0;
 
             // --- 接取: 前置未完成 -> 失败 ACK ---
-            var acceptFail = QuestAckBuilder.BuildAccept(QuestService.HandleAcceptQuest(
-                connStr, CharacterId, BuildAcceptBody(LetterQuestId), assetService, AccountId));
+            var acceptFail = QuestAckBuilder.BuildAccept(questService.HandleAcceptQuest(CharacterId, BuildAcceptBody(LetterQuestId), AccountId));
             CheckBytes("accept fails while prerequisite missing",
                 "00-15", acceptFail, ref failures);
 
             // --- 接取: 前置补齐 -> 成功 ACK (含初始触发器 + 事件道具发放) ---
             MarkQuestCleared(connStr, PrerequisiteQuestId);
-            var acceptOk = QuestAckBuilder.BuildAccept(QuestService.HandleAcceptQuest(
-                connStr, CharacterId, BuildAcceptBody(LetterQuestId), assetService, AccountId));
+            var acceptOk = QuestAckBuilder.BuildAccept(questService.HandleAcceptQuest(CharacterId, BuildAcceptBody(LetterQuestId), AccountId));
             CheckBytes("accept success ack bytes",
                 "01-FA-07-01-00-00-00-01-B1-00-4C-F3-99-00-01-00-00-00", acceptOk, ref failures);
 
             // --- 重复接取 -> 失败 ACK ---
-            var acceptDup = QuestAckBuilder.BuildAccept(QuestService.HandleAcceptQuest(
-                connStr, CharacterId, BuildAcceptBody(LetterQuestId), assetService, AccountId));
+            var acceptDup = QuestAckBuilder.BuildAccept(questService.HandleAcceptQuest(CharacterId, BuildAcceptBody(LetterQuestId), AccountId));
             CheckBytes("duplicate accept rejected",
                 "00-12", acceptDup, ref failures);
 
             // --- 触发器: 对无触发器任务设置 -> 按现实现返回 ---
-            var trigger = QuestAckBuilder.BuildSetTrigger(QuestService.HandleSetTrigger(
-                connStr, CharacterId, BuildSetTriggerBody(LetterQuestId, 0, false)));
+            var trigger = QuestAckBuilder.BuildSetTrigger(questService.HandleSetTrigger(CharacterId, BuildSetTriggerBody(LetterQuestId, 0, false)));
             CheckBytes("set trigger ack bytes",
                 "01-FA-07-00-00-00-00", trigger, ref failures);
 
             // --- 完成: 触发器归零 -> 成功 ACK (经验/金币/消耗/奖励段) ---
-            var finishOk = QuestAckBuilder.BuildFinish(QuestService.HandleFinishQuest(
-                connStr, CharacterId, BuildFinishBody(LetterQuestId), assetService));
+            var finishOk = QuestAckBuilder.BuildFinish(questService.HandleFinishQuest(CharacterId, BuildFinishBody(LetterQuestId)));
             CheckBytes("finish success ack bytes",
                 "01-FA-07-00-AB-B4-00-00-00-00-00-00-00-00-00", finishOk, ref failures);
 
             // --- 完成: 任务已完成且不在身上, 再次请求被拒绝(不能重复领奖励) ---
-            var finishAgain = QuestAckBuilder.BuildFinish(QuestService.HandleFinishQuest(
-                connStr, CharacterId, BuildFinishBody(LetterQuestId), assetService));
+            var finishAgain = QuestAckBuilder.BuildFinish(questService.HandleFinishQuest(CharacterId, BuildFinishBody(LetterQuestId)));
             CheckBytes("finish repeated rejected",
                 "00-16", finishAgain, ref failures);
 
             // --- 放弃: 重新接取后放弃 -> 成功 ACK ---
             DeleteQuestCleared(connStr, LetterQuestId);
-            QuestService.HandleAcceptQuest(
-                connStr, CharacterId, BuildAcceptBody(LetterQuestId), assetService, AccountId);
-            var giveup = QuestAckBuilder.BuildGiveup(QuestService.HandleGiveupQuest(
-                connStr, CharacterId, BuildGiveupBody(LetterQuestId)));
+            questService.HandleAcceptQuest(CharacterId, BuildAcceptBody(LetterQuestId), AccountId);
+            var giveup = QuestAckBuilder.BuildGiveup(questService.HandleGiveupQuest(CharacterId, BuildGiveupBody(LetterQuestId)));
             CheckBytes("giveup success ack bytes",
                 "01-FA-07", giveup, ref failures);
 
             // --- 放弃: 不在身上 -> 失败 ACK ---
-            var giveupFail = QuestAckBuilder.BuildGiveup(QuestService.HandleGiveupQuest(
-                connStr, CharacterId, BuildGiveupBody(LetterQuestId)));
+            var giveupFail = QuestAckBuilder.BuildGiveup(questService.HandleGiveupQuest(CharacterId, BuildGiveupBody(LetterQuestId)));
             CheckBytes("giveup missing quest rejected",
                 "00-13", giveupFail, ref failures);
 

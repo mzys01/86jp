@@ -393,7 +393,7 @@ namespace DfoServer.Network.Handlers.Dungeon
                 if (questId <= 0)
                     continue;
 
-                if (questId > ushort.MaxValue || !QuestService.IsQuestCleared(connStr, characterId, (ushort)questId))
+                if (questId > ushort.MaxValue || !new QuestRepository(connStr).IsQuestCleared(characterId, (ushort)questId))
                 {
                     missingQuestId = questId;
                     return false;

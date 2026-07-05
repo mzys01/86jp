@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.IO;
 using System.Text;
 using DfoServer.Game.Characters;
@@ -45,6 +45,7 @@ namespace DfoServer.SelfTests
 
             var assetService = new SqliteAssetService(dbPath, schemaPath);
             var connStr = SqliteDatabaseBootstrap.BuildConnectionString(dbPath);
+            var questService = new QuestService(connStr, assetService);
             var failures = 0;
 
             Check("1791 hunt-enemy single target starts at 1",
@@ -74,12 +75,8 @@ namespace DfoServer.SelfTests
                 ref failures);
 
             MarkQuestCleared(connStr, SadBellQuestId);
-            var acceptSurvivor = QuestService.HandleAcceptQuest(
-                connStr,
-                CharacterId,
-                BuildQuestBody(SurvivorQuestId),
-                assetService,
-                AccountId);
+            var acceptSurvivor = questService.HandleAcceptQuest(CharacterId,
+                BuildQuestBody(SurvivorQuestId), AccountId);
             Check("accepting 1836 succeeds", IsSuccessAck(acceptSurvivor), ref failures);
             Check("accepting 1836 stores packed hunt-enemy counts",
                 TryReadAcceptTrigger(acceptSurvivor, out var acceptTrigger) && acceptTrigger == 513,

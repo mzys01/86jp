@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
@@ -44,6 +44,7 @@ namespace DfoServer.SelfTests
 
             var assetService = new SqliteAssetService(dbPath, schemaPath);
             var connStr = SqliteDatabaseBootstrap.BuildConnectionString(dbPath);
+            var questService = new QuestService(connStr, assetService);
             var failures = 0;
 
             Check("1862 is question quest", GameWorld.QuestData.IsQuestionQuest(BranchQuestionQuestId), ref failures);
@@ -51,59 +52,37 @@ namespace DfoServer.SelfTests
 
             ResetBranchState(connStr);
             MarkQuestCleared(connStr, PrerequisiteQuestId, 1);
-            var acceptQuestionForPrincess = QuestService.HandleAcceptQuest(
-                connStr,
-                CharacterId,
-                BuildQuestBody(BranchQuestionQuestId),
-                assetService,
-                AccountId);
+            var acceptQuestionForPrincess = questService.HandleAcceptQuest(CharacterId,
+                BuildQuestBody(BranchQuestionQuestId), AccountId);
             Check("accept 1862 for princess branch succeeds", IsSuccessAck(acceptQuestionForPrincess), ref failures);
             Check("1862 starts with trigger 1", TryReadAcceptTrigger(acceptQuestionForPrincess, out var firstInitTrigger) && firstInitTrigger == 1, ref failures);
 
-            QuestService.HandleSetTrigger(connStr, CharacterId, BuildSetTriggerBody(BranchQuestionQuestId, increment: false));
-            var finishPrincessChoice = QuestService.HandleFinishQuest(
-                connStr,
-                CharacterId,
-                BuildFinishBody(BranchQuestionQuestId, ushort.MaxValue),
-                assetService);
+            questService.HandleSetTrigger(CharacterId, BuildSetTriggerBody(BranchQuestionQuestId, increment: false));
+            var finishPrincessChoice = questService.HandleFinishQuest(CharacterId,
+                BuildFinishBody(BranchQuestionQuestId, ushort.MaxValue));
             Check("finish 1862 after first answer succeeds", IsSuccessAck(finishPrincessChoice), ref failures);
             Check("1862 stores first answer as flag 1", LoadQuestFlag(connStr, BranchQuestionQuestId) == 1, ref failures);
             Check("first answer exposes 1863 only", IsAcceptableBranch(connStr, PrincessBranchQuestId) && !IsAcceptableBranch(connStr, PrinceBranchQuestId), ref failures);
 
             ResetBranchState(connStr);
             MarkQuestCleared(connStr, PrerequisiteQuestId, 1);
-            var acceptQuestionForPrince = QuestService.HandleAcceptQuest(
-                connStr,
-                CharacterId,
-                BuildQuestBody(BranchQuestionQuestId),
-                assetService,
-                AccountId);
+            var acceptQuestionForPrince = questService.HandleAcceptQuest(CharacterId,
+                BuildQuestBody(BranchQuestionQuestId), AccountId);
             Check("accept 1862 for prince branch succeeds", IsSuccessAck(acceptQuestionForPrince), ref failures);
 
-            QuestService.HandleSetTrigger(connStr, CharacterId, BuildSetTriggerBody(BranchQuestionQuestId, increment: true));
-            var finishPrinceChoice = QuestService.HandleFinishQuest(
-                connStr,
-                CharacterId,
-                BuildFinishBody(BranchQuestionQuestId, 0),
-                assetService);
+            questService.HandleSetTrigger(CharacterId, BuildSetTriggerBody(BranchQuestionQuestId, increment: true));
+            var finishPrinceChoice = questService.HandleFinishQuest(CharacterId,
+                BuildFinishBody(BranchQuestionQuestId, 0));
             Check("finish 1862 after second answer succeeds even with reward index zero", IsSuccessAck(finishPrinceChoice), ref failures);
             Check("1862 stores second answer trigger as flag 2", LoadQuestFlag(connStr, BranchQuestionQuestId) == 2, ref failures);
             Check("second answer exposes 1864 only", !IsAcceptableBranch(connStr, PrincessBranchQuestId) && IsAcceptableBranch(connStr, PrinceBranchQuestId), ref failures);
 
-            var acceptWrongBranch = QuestService.HandleAcceptQuest(
-                connStr,
-                CharacterId,
-                BuildQuestBody(PrincessBranchQuestId),
-                assetService,
-                AccountId);
+            var acceptWrongBranch = questService.HandleAcceptQuest(CharacterId,
+                BuildQuestBody(PrincessBranchQuestId), AccountId);
             Check("direct accept of unchosen 1863 is rejected", IsFailAck(acceptWrongBranch, 21), ref failures);
 
-            var acceptCorrectBranch = QuestService.HandleAcceptQuest(
-                connStr,
-                CharacterId,
-                BuildQuestBody(PrinceBranchQuestId),
-                assetService,
-                AccountId);
+            var acceptCorrectBranch = questService.HandleAcceptQuest(CharacterId,
+                BuildQuestBody(PrinceBranchQuestId), AccountId);
             Check("direct accept of chosen 1864 succeeds", IsSuccessAck(acceptCorrectBranch), ref failures);
 
             Console.WriteLine(failures == 0 ? "PASS" : $"FAIL: {failures}");

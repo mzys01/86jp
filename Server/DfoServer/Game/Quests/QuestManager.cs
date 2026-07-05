@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using DfoServer.Game.Characters;
@@ -18,12 +18,14 @@ namespace DfoServer.Game.Quests
         private readonly ISessionPacketSender _sender;
         private readonly string _connStr;
         private readonly IAssetService _assetService;
+        private readonly QuestService _service;
 
         public QuestManager(ISessionPacketSender sender, string connStr, IAssetService assetService)
         {
             _sender = sender;
             _connStr = connStr;
             _assetService = assetService;
+            _service = new QuestService(connStr, assetService);
         }
 
         private static byte[] StripEcho(byte[] body)
@@ -40,7 +42,7 @@ namespace DfoServer.Game.Quests
             FileLogger.Log($"[GameProtocol] ACCEPT_QUEST payload: {(qBody != null ? BitConverter.ToString(qBody) : "null")} ({qBody?.Length ?? 0}B)");
             int cid = _sender.CharacterId;
             if (cid <= 0) return;
-            var result = QuestService.HandleAcceptQuest(_connStr, cid, qBody, _assetService, _sender.AccountId);
+            var result = _service.HandleAcceptQuest(cid, qBody, _sender.AccountId);
             await _sender.SendCmdAckAsync(wireType, QuestAckBuilder.BuildAccept(result));
         }
 
@@ -49,7 +51,7 @@ namespace DfoServer.Game.Quests
             var qBody = StripEcho(body);
             int cid = _sender.CharacterId;
             if (cid <= 0) return;
-            var result = QuestService.HandleGiveupQuest(_connStr, cid, qBody);
+            var result = _service.HandleGiveupQuest(cid, qBody);
             await _sender.SendCmdAckAsync(wireType, QuestAckBuilder.BuildGiveup(result));
         }
 
@@ -66,7 +68,7 @@ namespace DfoServer.Game.Quests
                 return;
             }
 
-            var result = QuestService.HandleSetTrigger(_connStr, cid, qBody);
+            var result = _service.HandleSetTrigger(cid, qBody);
             await _sender.SendCmdAckAsync(wireType, QuestAckBuilder.BuildSetTrigger(result));
         }
 
@@ -75,7 +77,7 @@ namespace DfoServer.Game.Quests
             var qBody = StripEcho(body);
             int cid = _sender.CharacterId;
             if (cid <= 0) return;
-            var result = QuestService.HandleFinishQuest(_connStr, cid, qBody, _assetService);
+            var result = _service.HandleFinishQuest(cid, qBody);
             await _sender.SendCmdAckAsync(wireType, QuestAckBuilder.BuildFinish(result));
 
             if (!result.Success)
@@ -174,8 +176,7 @@ namespace DfoServer.Game.Quests
             int cid = _sender.CharacterId;
             if (cid <= 0) return;
 
-            bool matched = QuestService.SyncItemSeekingQuestProgress(
-                _connStr, cid, _assetService, _sender.AccountId, itemFilter);
+            bool matched = _service.SyncItemSeekingQuestProgress(cid, _sender.AccountId, itemFilter);
             if (!matched)
                 return;
 
@@ -188,8 +189,7 @@ namespace DfoServer.Game.Quests
             int cid = _sender.CharacterId;
             if (cid <= 0) return;
 
-            bool changed = QuestService.SyncClearMapQuestProgress(
-                _connStr, cid, dungeonId, mapId);
+            bool changed = _service.SyncClearMapQuestProgress(cid, dungeonId, mapId);
             if (!changed)
                 return;
 

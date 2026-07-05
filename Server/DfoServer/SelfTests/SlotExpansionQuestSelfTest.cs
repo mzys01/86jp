@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.IO;
 using System.Text;
 using DfoServer.Game.Characters;
@@ -41,10 +41,11 @@ namespace DfoServer.SelfTests
 
             var assetService = new SqliteAssetService(dbPath, schemaPath);
             var connStr = SqliteDatabaseBootstrap.BuildConnectionString(dbPath);
+            var questService = new QuestService(connStr, assetService);
 
             var failures = 0;
 
-            var supportAck = QuestService.HandleFinishQuest(connStr, CharacterId, BuildFinishBody(SupportSlotQuestId), assetService);
+            var supportAck = questService.HandleFinishQuest(CharacterId, BuildFinishBody(SupportSlotQuestId));
             Check("support quest success", IsSuccessAck(supportAck), ref failures);
             Check("support quest chainType is slot expansion",
                 TryReadChain(supportAck, out var supportChainType, out var supportSlotId)
@@ -53,7 +54,7 @@ namespace DfoServer.SelfTests
                 ref failures);
             Check("support slot flag persisted", LoadExEquipSlotStat(dbPath) == 0x01, ref failures);
 
-            var magicAck = QuestService.HandleFinishQuest(connStr, CharacterId, BuildFinishBody(MagicStoneQuestId), assetService);
+            var magicAck = questService.HandleFinishQuest(CharacterId, BuildFinishBody(MagicStoneQuestId));
             Check("magic stone quest success", IsSuccessAck(magicAck), ref failures);
             Check("magic stone quest chainType is slot expansion",
                 TryReadChain(magicAck, out var magicChainType, out var magicSlotId)
