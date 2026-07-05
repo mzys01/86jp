@@ -176,8 +176,15 @@ namespace DfoServer.Network.Handlers
 
             if (result.EquipmentChanged)
             {
-                _refresh.ReloadSubtype0Tail(session);
-                await _refresh.SendSubtype0PetStateRefresh(session);
+                if (ShouldSuppressSelfUserInfoRefresh(session))
+                {
+                    FileLogger.Log($"[{ProtocolName}] TITLE_BOOK: skipped self NOTI 2 appearance refresh");
+                }
+                else
+                {
+                    _refresh.ReloadSubtype0Tail(session);
+                    await _refresh.SendSubtype0PetStateRefresh(session);
+                }
             }
 
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(

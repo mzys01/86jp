@@ -64,13 +64,18 @@ namespace DfoServer.Network.Handlers
             if (InventoryRefreshSender.MapToSortLockListType(request.SourceListType) != InventoryRefreshSender.MapToSortLockListType(request.DestinationListType))
                 await _refresh.SendSortItemLockRefresh(session, request.DestinationListType);
 
+            var suppressSelfUserInfoRefresh = ShouldSuppressSelfUserInfoRefresh(session);
 
             if (result.Mutated
                 && !result.PetCreatureStateChanged
                 && !result.PetItemStateChanged
                 && (request.SourceListType == InventoryListType.Equipment || request.DestinationListType == InventoryListType.Equipment))
             {
-                if (TouchesTitleEquipmentSlot(request))
+                if (suppressSelfUserInfoRefresh)
+                {
+                    FileLogger.Log($"[{ProtocolName}] MOVE_ITEMSPACE: skipped self NOTI 2 appearance refresh");
+                }
+                else if (TouchesTitleEquipmentSlot(request))
                 {
                     _refresh.ReloadSubtype0Tail(session);
                     await _refresh.SendSubtype0PetStateRefresh(session);
@@ -91,9 +96,16 @@ namespace DfoServer.Network.Handlers
 
             if (result.PetItemStateChanged)
             {
-                await _refresh.SendSubtype1Refresh(session);
-                if (!result.PetCreatureStateChanged)
-                    await _refresh.SendCreatureItemListRefresh(session);
+                if (!suppressSelfUserInfoRefresh)
+                {
+                    await _refresh.SendSubtype1Refresh(session);
+                    if (!result.PetCreatureStateChanged)
+                        await _refresh.SendCreatureItemListRefresh(session);
+                }
+                else if (!result.PetCreatureStateChanged)
+                {
+                    FileLogger.Log($"[{ProtocolName}] MOVE_ITEMSPACE: skipped self pet artifact NOTI 2/0x0069 refresh");
+                }
 
                 if (result.PetItemFullRefresh)
                     await _refresh.SendItemListRefresh(session, InventoryListType.Pet);
@@ -103,6 +115,14 @@ namespace DfoServer.Network.Handlers
 
             if (result.PetCreatureStateChanged)
                 await DungeonSharedServices.HandlePetCreatureChangedInDungeonAsync(session, "pet_creature_move");
+        }
+
+        private static bool ShouldSuppressSelfUserInfoRefresh(EnhancedClientSession session)
+        {
+            // TW df_game_r sends equipment USERINFO/basic_info through GameWorld::send_all(..., self),
+            // so the actor does not receive a self NOTI2 that recreates the active creature.
+            // Keep self creature reloads only for real pet body changes.
+            return session?.Player != null;
         }
 
         public async Task Handle_ENUM_CMDPACKET_SORT_ITEM(EnhancedClientSession session, GamePacketHeader header, byte[] body)
