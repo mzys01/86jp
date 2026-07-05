@@ -187,6 +187,12 @@ namespace DfoServer.Network.Handlers.Dungeon
                 }
                 catch { }
 
+                if (leveledUp)
+                {
+                    await _svc.SendUserInfoSubtype0Broadcast(session);
+                    await _svc.SendUserInfoBroadcast(session);
+                }
+
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0025,
                     ExpNotificationBuilder.Build(session.Player.Level, session.Player.Exp, remainSp, remainTp,
                         premiumBonusExp: growthContractBonusExp)));
@@ -195,7 +201,6 @@ namespace DfoServer.Network.Handlers.Dungeon
                 {
                     FileLogger.Log($"[DungeonHandler] LEVEL UP: cid={session.Player.CharacterId} {prevLevel}->{session.Player.Level} exp={session.Player.Exp}");
                     await _svc.SendQuestListRefresh(session);
-                    await _svc.SendUserInfoBroadcast(session);
                 }
 
             }

@@ -164,11 +164,13 @@ namespace DfoServer.Network.Handlers.Dungeon
             }
             catch { }
 
+            await _svc.SendUserInfoSubtype0Broadcast(session);
+            await _svc.SendUserInfoBroadcast(session);
+
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0025,
                 ExpNotificationBuilder.Build(session.Player.Level, session.Player.Exp, remainSp, remainTp)));
 
             await _svc.SendQuestListRefresh(session);
-            await _svc.SendUserInfoBroadcast(session);
 
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x01E4, new byte[] { 0x01 }));
         }

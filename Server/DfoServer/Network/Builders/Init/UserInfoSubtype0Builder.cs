@@ -20,6 +20,20 @@ namespace DfoServer.Network.Builders
     
     public static class UserInfoSubtype0Builder
     {
+        public static byte[] BuildNotificationBody(CharacterRecord record)
+        {
+            if (record == null)
+                throw new ArgumentNullException(nameof(record));
+
+            var writer = new GamePacketWriter();
+            writer.WriteByte(0);
+            writer.WriteUInt16(1);
+            writer.WriteUInt16((ushort)record.CharacterId);
+            writer.WriteDstr(record.Name);
+            writer.WriteBytes(BuildRemainingBytes(record));
+            return writer.ToArray();
+        }
+
         
         
         

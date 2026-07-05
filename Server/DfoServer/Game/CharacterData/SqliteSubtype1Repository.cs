@@ -15,6 +15,16 @@ namespace DfoServer.Game.CharacterData
             _connectionString = SqliteDatabaseBootstrap.Initialize(databasePath, schemaFilePath);
         }
 
+        private SqliteSubtype1Repository(string connectionString)
+        {
+            _connectionString = connectionString ?? throw new ArgumentNullException(nameof(connectionString));
+        }
+
+        public static SqliteSubtype1Repository FromConnectionString(string connectionString)
+        {
+            return new SqliteSubtype1Repository(connectionString);
+        }
+
         public bool HasData(int characterId)
         {
             using (var conn = Open())
@@ -297,11 +307,11 @@ ON CONFLICT(character_id) DO UPDATE SET skill_tree_index=@idx;", conn))
         public int UpdateCombatStats(int characterId, byte[] statBlob)
         {
             using (var conn = Open())
-                return UpdateCombatStats(conn, characterId, statBlob);
+                return UpdateCombatStatsOnConnection(conn, characterId, statBlob);
         }
 
         /// <summary>同连接版本, 供 RecomputeAllCombatStats 在单连接内顺序执行避免锁冲突。</summary>
-        internal int UpdateCombatStats(SqliteConnection conn, int characterId, byte[] statBlob)
+        internal static int UpdateCombatStatsOnConnection(SqliteConnection conn, int characterId, byte[] statBlob)
         {
             var f = CombatStatFields.Parse(statBlob);
             using (var cmd = new SqliteCommand(@"
@@ -354,7 +364,7 @@ JOIN characters c ON c.character_id = s.character_id;", conn))
                     {
                         DfoServer.Game.Characters.CharacterStatComputer.DecodeGrowType(grow, out int first, out int second);
                         var blob = DfoServer.Game.Characters.CharacterStatComputer.BuildAdditionalInfo(job, level, first, second);
-                        if (UpdateCombatStats(conn, cid, blob) > 0)
+                        if (UpdateCombatStatsOnConnection(conn, cid, blob) > 0)
                             repaired++;
                     }
                     catch (Exception ex)

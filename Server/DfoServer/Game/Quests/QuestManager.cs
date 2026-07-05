@@ -95,8 +95,11 @@ namespace DfoServer.Game.Quests
 
                         try
                         {
-                            var repo = new SqliteCharacterRepository(ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
-                            repo.UpdateLevelAndExp(cid, player.Level, player.Exp);
+                            CharacterProgressService.PersistLevelAndExp(
+                                _connStr,
+                                cid,
+                                player.Level,
+                                player.Exp);
                         }
                         catch (Exception ex)
                         {
@@ -108,16 +111,19 @@ namespace DfoServer.Game.Quests
                 ushort remainSp = 0, remainTp = 0;
                 try
                 {
-                    var charRepo = new SqliteCharacterRepository(ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
-                    var rec = charRepo.GetById(cid);
-                    var skillRepo = new SqliteCharacterProgressRepository(ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
+                    CharacterRecord rec;
+                    using (var conn = new Microsoft.Data.Sqlite.SqliteConnection(_connStr))
+                    {
+                        conn.Open();
+                        rec = SqliteCharacterRepository.LoadById(conn, cid);
+                    }
+                    var skillRepo = SqliteCharacterProgressRepository.FromConnectionString(_connStr);
                     if (rec != null)
                     {
                         var synced = SkillStateService.LoadAndSync(
                             skillRepo, cid, rec.Job, player.Level, rec.BonusSp, rec.BonusTp, persist: player.Level > prevLevel);
                         var skillTreeIndex = player.Subtype0Tail?.SkillTreeIndex
-                            ?? new SqliteSubtype1Repository(ServerPaths.DatabasePath, ServerPaths.SchemaFilePath)
-                                .LoadSkillTreeIndex(cid)
+                            ?? SqliteSubtype1Repository.FromConnectionString(_connStr).LoadSkillTreeIndex(cid)
                             ?? 0;
                         remainSp = SkillStateService.GetPageRemainingSp(synced.Skills, synced.Points, skillTreeIndex == 1 ? 1 : 0);
                         remainTp = (ushort)synced.Points.RemainingTp;
@@ -125,13 +131,19 @@ namespace DfoServer.Game.Quests
                 }
                 catch (Exception ex) { FileLogger.Log($"[QuestManager] SP calc ERROR: {ex.Message}"); }
 
+                var leveledUp = player.Level > prevLevel;
+                if (leveledUp)
+                {
+                    await SendUserInfoSubtype0Broadcast(cid, "LevelUp");
+                    await SendUserInfoBroadcast(cid);
+                }
+
                 await _sender.SendNotiAsync(0x0025,
                     ExpNotificationBuilder.Build(player.Level, player.Exp, remainSp, remainTp));
 
-                if (player.Level > prevLevel)
+                if (leveledUp)
                 {
-                    FileLogger.Log($"[QuestManager] LEVEL UP from quest: cid={cid} {prevLevel}→{player.Level} exp={player.Exp}");
-                    await SendUserInfoBroadcast(cid);
+                    FileLogger.Log($"[QuestManager] LEVEL UP from quest: cid={cid} {prevLevel}->{player.Level} exp={player.Exp}");
                 }
 
                 if (ack.Length >= 13)
@@ -320,11 +332,14 @@ namespace DfoServer.Game.Quests
         {
             try
             {
-                var charRepo = new SqliteCharacterRepository(ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
-                var record = charRepo.GetById(characterId);
-                var subtype1Repo = new SqliteSubtype1Repository(ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
-                var addition = subtype1Repo.HasData(characterId) ? subtype1Repo.Load(characterId) : null;
-                var skillRepo = new SqliteCharacterProgressRepository(ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
+                CharacterRecord record;
+                using (var conn = new Microsoft.Data.Sqlite.SqliteConnection(_connStr))
+                {
+                    conn.Open();
+                    record = SqliteCharacterRepository.LoadById(conn, characterId);
+                }
+                var addition = SqliteSubtype1Repository.FromConnectionString(_connStr).Load(characterId);
+                var skillRepo = SqliteCharacterProgressRepository.FromConnectionString(_connStr);
 
                 if (record != null && addition != null)
                 {
@@ -344,6 +359,29 @@ namespace DfoServer.Game.Quests
             }
         }
 
+        private async Task SendUserInfoSubtype0Broadcast(int characterId, string reason)
+        {
+            try
+            {
+                byte[] body;
+                using (var conn = new Microsoft.Data.Sqlite.SqliteConnection(_connStr))
+                {
+                    conn.Open();
+                    var record = SqliteCharacterRepository.LoadById(conn, characterId);
+                    if (record == null) return;
+                    record.Subtype0Tail = SqliteSubtype0FieldsRepository.Load(conn, characterId);
+                    body = UserInfoSubtype0Builder.BuildNotificationBody(record);
+                }
+
+                await _sender.SendNotiAsync(0x0002, body);
+                FileLogger.Log($"[QuestManager] {reason} NOTI 2 subtype0 sent: cid={characterId}");
+            }
+            catch (Exception ex)
+            {
+                FileLogger.Log($"[QuestManager] SendUserInfoSubtype0Broadcast ERROR: {ex.Message}");
+            }
+        }
+
         private async Task SendJobChangeNotification(int characterId)
         {
             try
@@ -356,13 +394,7 @@ namespace DfoServer.Game.Quests
 
                 _sender.Player.GrowType = record.GrowType;
 
-                var w = new Network.GamePacketWriter();
-                w.WriteByte(0);
-                w.WriteUInt16(1);
-                w.WriteUInt16((ushort)record.CharacterId);
-                w.WriteDstr(record.Name);
-                w.WriteBytes(UserInfoSubtype0Builder.BuildRemainingBytes(record));
-                await _sender.SendNotiAsync(0x0002, w.ToArray());
+                await _sender.SendNotiAsync(0x0002, UserInfoSubtype0Builder.BuildNotificationBody(record));
 
                 FileLogger.Log($"[QuestManager] JobChange NOTI 2 subtype0 sent: cid={characterId} growType=0x{record.GrowType:X2}");
             }
