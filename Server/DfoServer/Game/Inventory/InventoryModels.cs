@@ -35,6 +35,16 @@ namespace DfoServer.Game.Inventory
         public bool Mutated { get; set; }
 
         public bool AckError { get; set; }
+
+        public bool PetCreatureStateChanged { get; set; }
+
+        public bool PetItemStateChanged { get; set; }
+
+        public bool PetItemFullRefresh { get; set; }
+
+        public List<short> PetCreatureRefreshSlots { get; } = new List<short>();
+
+        public List<short> EquipmentRefreshSlots { get; } = new List<short>();
     }
 
     internal enum EquipOutcome
@@ -94,6 +104,8 @@ namespace DfoServer.Game.Inventory
         public int PetSatietyAfter { get; set; }
 
         public bool PetSatietyChanged { get; set; }
+
+        public bool PetFeedUsed { get; set; }
     }
 
     public enum PersonalCargoUpgradeTicketStatus
@@ -175,6 +187,32 @@ namespace DfoServer.Game.Inventory
         public short SlotIndex { get; set; }
         public int UpdatedGold { get; set; }
         public int Cost { get; set; }
+    }
+
+    public sealed class PetCreatureRenameRequest
+    {
+        public InventoryListType SourceListType { get; set; } = InventoryListType.Pet;
+
+        public short SourceSlotIndex { get; set; }
+
+        public byte[] NameBytes { get; set; } = Array.Empty<byte>();
+    }
+
+    public sealed class PetCreatureRenameResult
+    {
+        public InventoryListType SourceListType { get; set; } = InventoryListType.Pet;
+
+        public short SourceSlotIndex { get; set; }
+
+        public int PetItemTemplateId { get; set; }
+
+        public int CreatureSerial { get; set; }
+
+        public byte[] NameBytes { get; set; } = Array.Empty<byte>();
+
+        public bool SourceItemConsumed { get; set; }
+
+        public int SourceRemainingCount { get; set; }
     }
 
     public sealed class BoosterRewardResult

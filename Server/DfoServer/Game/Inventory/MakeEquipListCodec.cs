@@ -269,8 +269,7 @@ namespace DfoServer.Game.Inventory
                 }
                 if (slot >= 24 && CreatureExtraResolver.HasCreatureExtra(itemId))
                 {
-                    var creatureExtra = f.CreatureExtra != 0 ? f.CreatureExtra : f.InstanceValue;
-                    bw.Write(creatureExtra);
+                    bw.Write(f.CreatureExtra);
                 }
                 
                 bw.Write((byte)0);           

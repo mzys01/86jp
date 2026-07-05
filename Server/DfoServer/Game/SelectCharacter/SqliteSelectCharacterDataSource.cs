@@ -6,6 +6,7 @@ using DfoServer.Game.Inventory;
 using DfoServer.Game.ItemUpgrade;
 using DfoServer.Game.Settings;
 using DfoServer.Game.TitleBook;
+using DfoServer.GameWorld;
 using System;
 using System.Collections.Generic;
 using Microsoft.Data.Sqlite;
@@ -88,11 +89,101 @@ namespace DfoServer.Game.SelectCharacter
             return result.Success;
         }
 
+        public byte[] LoadEquippedPetCreatureNameBytes(int characterId)
+        {
+            if (characterId <= 0)
+                return null;
+
+            using (var conn = new SqliteConnection(_connectionString))
+            {
+                conn.Open();
+                var creatureKey = ResolveEquippedCreatureKey(conn, characterId);
+                if (creatureKey <= 0)
+                    return null;
+
+                using (var cmd = new SqliteCommand(@"
+SELECT creature_text
+FROM character_creatures
+WHERE character_id = @cid
+  AND creature_key = @key
+LIMIT 1;", conn))
+                {
+                    cmd.Parameters.AddWithValue("@cid", characterId);
+                    cmd.Parameters.AddWithValue("@key", creatureKey);
+                    return cmd.ExecuteScalar() as byte[];
+                }
+            }
+        }
+
+        private static int ResolveEquippedCreatureKey(SqliteConnection conn, int characterId)
+        {
+            var candidates = new List<int>();
+            using (var cmd = new SqliteCommand(@"
+SELECT raw_entry
+FROM character_equipped_entries
+WHERE character_id = @cid
+  AND slot = 24
+LIMIT 1;", conn))
+            {
+                cmd.Parameters.AddWithValue("@cid", characterId);
+                var raw = cmd.ExecuteScalar() as byte[];
+                AddCreatureKeyCandidate(candidates, raw, 5, littleEndian: true);
+                AddCreatureKeyCandidate(candidates, raw, 5, littleEndian: false);
+            }
+
+            foreach (var candidate in candidates)
+            {
+                using (var cmd = new SqliteCommand(@"
+SELECT 1
+FROM character_creatures
+WHERE character_id = @cid
+  AND creature_key = @key
+LIMIT 1;", conn))
+                {
+                    cmd.Parameters.AddWithValue("@cid", characterId);
+                    cmd.Parameters.AddWithValue("@key", candidate);
+                    if (cmd.ExecuteScalar() != null)
+                        return candidate;
+                }
+            }
+
+            return 0;
+        }
+
+        private static void AddCreatureKeyCandidate(List<int> candidates, byte[] buffer, int offset, bool littleEndian)
+        {
+            if (buffer == null || buffer.Length < offset + 4)
+                return;
+
+            int value;
+            if (littleEndian)
+            {
+                value = buffer[offset]
+                    | (buffer[offset + 1] << 8)
+                    | (buffer[offset + 2] << 16)
+                    | (buffer[offset + 3] << 24);
+            }
+            else
+            {
+                value = (buffer[offset] << 24)
+                    | (buffer[offset + 1] << 16)
+                    | (buffer[offset + 2] << 8)
+                    | buffer[offset + 3];
+            }
+
+            if (value > 0 && value < 1000000 && !candidates.Contains(value))
+                candidates.Add(value);
+        }
+
         public SelectCharacterDataSnapshot Load(int characterId, int accountId)
         {
             CharacterItemListSnapshot itemList;
-            _inventoryStore.DeleteExpiredRentalEquipment(characterId, accountId);
-            itemList = _inventoryStore.LoadCharacterItemListSnapshot(characterId, accountId);
+            using (_inventoryStore.BeginScope(characterId, accountId))
+            {
+                _inventoryStore.DeleteExpiredRentalEquipment();
+                _inventoryStore.RepairPetCreatureState();
+                itemList = _inventoryStore.LoadCharacterItemListSnapshot();
+            }
 
             var initSnapshot = new SelectCharacterInitializationSnapshot();
 
@@ -171,10 +262,13 @@ namespace DfoServer.Game.SelectCharacter
             
             
             
+            Game.Appearance.AppearanceService.RepairLegacyTitleAppearanceBlobIfNeeded(characterId);
             CharacterRecord characterRecord = _characterRepository?.GetById(characterId);
-            if (characterRecord != null)
+            if (characterRecord != null &&
+                (characterRecord.Appearance == null || characterRecord.Appearance.Length == 0))
             {
-                // 选角初始化 USERINFO 同样必须使用当前穿戴栏重建外观，避免 characters.appearance_blob在新建角色或换装后滞留为空/旧值，导致城镇模型和选人/副本显示不一致。
+                // Keep migrated USERINFO subtype0 appearance bytes stable. Pet body activation is carried by the
+                // subtype0 tail; rebuilding this segment for old characters can make the client reject creature state.
                 characterRecord.Appearance = Game.Appearance.AppearanceService.LoadAppearanceFromEquipEntries(characterId);
             }
 
@@ -189,6 +283,7 @@ namespace DfoServer.Game.SelectCharacter
             {
                 var tailSnap = new CharacterData.SqliteSubtype0FieldsRepository(
                     Infrastructure.ServerPaths.DatabasePath, Infrastructure.ServerPaths.SchemaFilePath).Load(characterId);
+                ApplyPetCreatureAliveFlag(characterId, tailSnap);
                 if (tailSnap != null)
                     characterRecord.Subtype0Tail = tailSnap;
 
@@ -326,6 +421,36 @@ namespace DfoServer.Game.SelectCharacter
                 });
             }
         }
+        public bool TryRenameEquippedPetCreature(int characterId, int accountId, PetCreatureRenameRequest request, out PetCreatureRenameResult result)
+        {
+            using (_inventoryStore.BeginScope(characterId, accountId))
+                return _inventoryStore.TryRenameEquippedPetCreature(request, out result);
+        }
+
+        public UserInfoMinimumTailSnapshot LoadSubtype0TailSnapshot(int characterId)
+        {
+            return new CharacterData.SqliteSubtype0FieldsRepository(_databasePath, _schemaFilePath)
+                .Load(characterId);
+        }
+
+        private void ApplyPetCreatureAliveFlag(int characterId, UserInfoMinimumTailSnapshot tail)
+        {
+            if (tail == null || characterId <= 0)
+                return;
+
+            try
+            {
+                tail.PetCreatureAliveFlag = PetCreatureSatietyService.LoadEquippedCreatureAliveFlag(
+                    _databasePath,
+                    _schemaFilePath,
+                    characterId);
+            }
+            catch (Exception ex)
+            {
+                FileLogger.Log($"[SelectCharacterData] pet alive flag fallback cid={characterId}: {ex.Message}");
+            }
+        }
+
         public byte[] LoadCharacterInitBody(int characterId, ushort notiType, int occurrenceIndex = 0)
             => LoadInitBody(characterId, notiType, occurrenceIndex);
 

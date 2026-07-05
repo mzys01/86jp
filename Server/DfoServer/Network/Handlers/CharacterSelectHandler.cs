@@ -1,8 +1,11 @@
 using DfoServer.Game.Appearance;
 using DfoServer.Game.Characters;
+using DfoServer.Game.Inventory;
+using DfoServer.Game.Names;
 using DfoServer.Game.SelectCharacter;
 using DfoServer.GameWorld;
 using DfoServer.Network.Builders;
+using DfoServer.Network.Handlers.Dungeon;
 using DfoServer.Network.Parsers;
 using System;
 using System.Text;
@@ -32,6 +35,9 @@ namespace DfoServer.Network.Handlers
         {
             try
             {
+                DungeonSharedServices.PersistPetCreatureSatiety(session, "select_character");
+                DungeonSharedServices.PersistPetCreatureTownRecovery(session, "select_character");
+
                 int slot = 0;
                 if (body != null && body.Length >= 2)
                 {
@@ -69,6 +75,8 @@ namespace DfoServer.Network.Handlers
                 {
                     try
                     {
+                        AppearanceService.RepairLegacyTitleAppearanceBlobIfNeeded(record.CharacterId);
+                        record = _characterRepository.GetById(record.CharacterId) ?? record;
                         var tail = new Game.CharacterData.SqliteSubtype0FieldsRepository(
                             Infrastructure.ServerPaths.DatabasePath,
                             Infrastructure.ServerPaths.SchemaFilePath).Load(record.CharacterId);
@@ -81,11 +89,18 @@ namespace DfoServer.Network.Handlers
                             tail.SkillTreeIndex = skillTreeIndex.Value;
                         }
                         if (tail != null)
+                            tail.PetCreatureAliveFlag = PetCreatureSatietyService.LoadEquippedCreatureAliveFlag(
+                                Infrastructure.ServerPaths.DatabasePath,
+                                Infrastructure.ServerPaths.SchemaFilePath,
+                                record.CharacterId);
+                        if (tail != null)
                             record.Subtype0Tail = tail;
 
-                        // 城镇模型使用会话内的 AppearanceEntries；不要使用可能过期/空的 characters.appearance_blob，
-                        // 每次选角都从当前穿戴栏重建，避免角色选人/副本正确但城镇武器外观错误。
-                        record.Appearance = AppearanceService.LoadAppearanceFromEquipEntries(record.CharacterId);
+                        // USERINFO subtype0/minimum is sensitive to the byte-stable appearance blob migrated from the
+                        // old server. Pet body state lives in the subtype0 tail, so rebuild appearance only for fresh
+                        // characters that do not have a stored blob yet.
+                        if (record.Appearance == null || record.Appearance.Length == 0)
+                            record.Appearance = AppearanceService.LoadAppearanceFromEquipEntries(record.CharacterId);
                     }
                     catch (Exception ex)
                     {
@@ -101,6 +116,7 @@ namespace DfoServer.Network.Handlers
                         session.Player.CurPosY,
                         session.Player.CurDirection,
                         session.Player.CurAreaState);
+                    DungeonSharedServices.BeginPetCreatureTownRecovery(session);
                     FileLogger.Log($"[{ProtocolName}] Select character hydrated session {session.SessionId} slot={slot} <- character_id={record.CharacterId} name={record.DisplayName} town={session.Player.CurTownId} area={session.Player.CurAreaId} pos=({session.Player.CurPosX},{session.Player.CurPosY})");
                 }
                 else
@@ -125,6 +141,32 @@ namespace DfoServer.Network.Handlers
                 0x0239,
                 AppearanceService.BuildCloneTitleAckBody(cloneTitle, suppressMessage: 1)));
             FileLogger.Log($"[{ProtocolName}] SELECT_CHARACTER clone title restore: char={ownerCharId} cloneTitle=0x{cloneTitle:X8}");
+
+            await SendEquippedPetCreatureNameNoti(session, ownerCharId);
+        }
+
+        private async Task SendEquippedPetCreatureNameNoti(EnhancedClientSession session, int characterId)
+        {
+            byte[] nameBytes;
+            try
+            {
+                nameBytes = _selectCharacterDataSource.LoadEquippedPetCreatureNameBytes(characterId);
+            }
+            catch (Exception ex)
+            {
+                FileLogger.Log($"[{ProtocolName}] Select character pet rename load failed: {ex.Message}");
+                return;
+            }
+
+            if (nameBytes == null || nameBytes.Length == 0)
+                return;
+
+            // 0x0065 is enough for the client to repaint the equipped creature custom name on login.
+            var writer = new GamePacketWriter();
+            writer.WriteUInt16(session?.Player?.UserId ?? 0);
+            writer.WriteRawDstr(nameBytes);
+            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0065, writer.ToArray()));
+            FileLogger.Log($"[{ProtocolName}] Select character pet rename refresh: character_id={characterId} len={nameBytes.Length}");
         }
 
         public async Task Handle_ENUM_CMDPACKET_GET_USERINFO(EnhancedClientSession session, GamePacketHeader header, byte[] body)
@@ -233,7 +275,18 @@ namespace DfoServer.Network.Handlers
                 return;
             }
 
-            var name = Encoding.UTF8.GetString(body, 4, nameLen);
+            var nameRaw = new byte[nameLen];
+            Buffer.BlockCopy(body, 4, nameRaw, 0, nameLen);
+            if (!NameInputValidator.TryValidateRawName(nameRaw, minBytes: 2, maxBytes: 30, out var name, out var failure))
+            {
+                FileLogger.Log($"[{ProtocolName}] CHECK_NAME: invalid name reason={failure}");
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
+                    0x01,
+                    0x02B5,
+                    CommonPacketBodyBuilder.BuildCmdError(NameInputValidator.InvalidNameErrorCode)));
+                return;
+            }
+
             var existing = _characterRepository.GetByName(name);
             if (existing != null)
             {
@@ -269,7 +322,15 @@ namespace DfoServer.Network.Handlers
 
             var nameRaw = new byte[nameLen];
             Buffer.BlockCopy(body, 5, nameRaw, 0, nameLen);
-            var nameStr = Encoding.UTF8.GetString(nameRaw);
+            if (!NameInputValidator.TryValidateRawName(nameRaw, minBytes: 2, maxBytes: 18, out var nameStr, out var nameFailure))
+            {
+                FileLogger.Log($"[{ProtocolName}] CREATE_CHARACTER: invalid name reason={nameFailure}");
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
+                    0x01,
+                    0x0005,
+                    CommonPacketBodyBuilder.BuildCmdError(NameInputValidator.InvalidNameErrorCode)));
+                return;
+            }
 
             var accountId = session.Account?.AccountId ?? 1;
 

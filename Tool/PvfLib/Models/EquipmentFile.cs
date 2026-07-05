@@ -57,6 +57,7 @@ namespace PvfLib
         public int MagicalCriticalHit { get; set; }
         public int HitRecovery { get; set; }
         public int AttackSuccess { get; set; }
+        public int CreatureFoodConsumeRate { get; set; }
 
         #endregion
 
@@ -155,6 +156,7 @@ namespace PvfLib
                     case "magical critical hit": equ.MagicalCriticalHit = ParseInt(data); break;
                     case "hit recovery": equ.HitRecovery = ParseInt(data); break;
                     case "attack success": equ.AttackSuccess = ParseInt(data); break;
+                    case "creature food consume rate": equ.CreatureFoodConsumeRate = ParseInt(data); break;
 
                     
                     case "price": equ.Price = ParseInt(data); break;

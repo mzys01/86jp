@@ -106,6 +106,7 @@ namespace DfoServer.Network.Handlers.Dungeon
             session.Player.CurMoveMapU15 = 0;
             session.Player.CurMoveMapU19 = 0;
             session.Player.CurDungeonTotalExp = 0;
+            session.Player.CurDungeonPetFatigueConsumed = 0;
             session.Player.CurDungeonBossTotalExp = 0;
             session.Player.CurDungeonChampionTotalExp = 0;
             session.Player.CurDungeonSuperChampionTotalExp = 0;
@@ -119,6 +120,7 @@ namespace DfoServer.Network.Handlers.Dungeon
             session.Player.CurDungeonRidableObjects.Clear();
             session.Player.CurBossKilled = false;
             session.Player.CurBossCode = 0;
+            DungeonSharedServices.BeginPetCreatureSatiety(session);
 
             WarmUpDropConfigs(session.Player.CurDungeonHellMode);
 

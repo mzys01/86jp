@@ -183,7 +183,7 @@ namespace DfoServer.Network.Handlers.Dungeon
 
         private async Task ReturnToVillage(EnhancedClientSession session)
         {
-            DungeonSharedServices.ResetDungeonState(session);
+            await DungeonSharedServices.ResetDungeonStateAsync(session);
             session.Player.UserState = 0x00;
 
             var snapshot = TownAreaNotificationBuilder.CreateCurrentSnapshot(session.Player);
