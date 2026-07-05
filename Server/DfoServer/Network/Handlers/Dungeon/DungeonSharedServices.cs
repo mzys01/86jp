@@ -7,6 +7,7 @@ using DfoServer.Game.Skills;
 using DfoServer.GameWorld;
 using DfoServer.Infrastructure;
 using DfoServer.Network.Builders;
+using Microsoft.Data.Sqlite;
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
@@ -237,6 +238,47 @@ namespace DfoServer.Network.Handlers.Dungeon
                 }
             }
             catch { return 0; }
+        }
+
+        private static readonly Dictionary<int, int> GoldBonusEquipments = new()
+        {
+            {100320775, 12},
+            {24191, 10},
+            {100341606, 30},
+            {100331240, 10},
+            {100331319, 3},
+            {26626, 3},
+            {26627, 4},
+            {26341, 3},
+            {26342, 4},
+            {26115, 3},
+            {104000181, 3},
+            {101020286, 3},
+            {101020526, 3},
+            {109000133, 3}
+        };
+
+        internal int GetEquippedGoldBonus(int characterId)
+        {
+            var totalBonus = 0;
+            try
+            {
+                using (var scope = _assetService.OpenScope(characterId, 0))
+                {
+                    using var cmd = scope.Connection.CreateCommand();
+                    cmd.CommandText = "SELECT item_id FROM character_equipped_entries WHERE character_id = @cid";
+                    cmd.Parameters.AddWithValue("@cid", characterId);
+                    using var reader = cmd.ExecuteReader();
+                    while (reader.Read())
+                    {
+                        var itemId = reader.GetInt32(0);
+                        if (GoldBonusEquipments.TryGetValue(itemId, out var bonus))
+                            totalBonus += bonus;
+                    }
+                }
+            }
+            catch { }
+            return totalBonus;
         }
 
         internal async Task HandleRecoverStaminaAsync(EnhancedClientSession session, byte[] body)

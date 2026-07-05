@@ -70,7 +70,7 @@ namespace DfoServer.Network.Builders
         
         
         
-        public static byte[] BuildPickupGold(ushort srcSlot, ushort pickerActorId, int goldAmount)
+        public static byte[] BuildPickupGold(ushort srcSlot, ushort pickerActorId, int goldAmount, int extraGold = 0)
         {
             var w = new GamePacketWriter();
 
@@ -81,7 +81,7 @@ namespace DfoServer.Network.Builders
             w.WriteByte(1);                    
             w.WriteUInt32((uint)goldAmount);   
             w.WriteByte(1);
-            w.WriteUInt32(0);
+            w.WriteUInt32((uint)extraGold);
             w.WriteUInt32(0);
 
             for (int i = 1; i < 8; i++)
