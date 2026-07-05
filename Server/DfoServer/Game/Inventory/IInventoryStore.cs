@@ -8,8 +8,6 @@ namespace DfoServer.Game.Inventory
 {
     public interface IInventoryStore
     {
-        IDisposable BeginScope(int characterId, int accountId);
-
         int CountItem(int characterId, int itemTemplateId);
 
         void EnsureDatabase(int characterId, int accountId, CharacterItemListSnapshot seedSnapshot);
@@ -18,13 +16,7 @@ namespace DfoServer.Game.Inventory
 
         CharacterItemListSnapshot LoadCharacterItemListSnapshot(int characterId, int accountId);
 
-        void RepairPetCreatureState();
-
-        CharacterItemListSnapshot LoadCharacterItemListSnapshot();
-
         int DeleteExpiredRentalEquipment(int characterId, int accountId);
-
-        int DeleteExpiredRentalEquipment();
 
         bool TryDeleteItem(int characterId, int accountId, InventoryListType listType, short slotIndex, short deleteCount, out InventoryMutationResult result);
 
@@ -114,8 +106,6 @@ namespace DfoServer.Game.Inventory
 
         bool TryMoveItem(int characterId, int accountId, InventoryMoveRequest request, out InventoryMoveResult result);
 
-        bool TryRenameEquippedPetCreature(PetCreatureRenameRequest request, out PetCreatureRenameResult result);
-
         bool TrySortItems(int characterId, int accountId, InventoryListType listType, byte category);
 
         bool TryToggleSortItemLock(int characterId, InventoryListType listType, short slotIndex, out SortItemLockEntry entry);
@@ -131,10 +121,6 @@ namespace DfoServer.Game.Inventory
         bool TryUnlockEquipmentItem(int characterId, InventoryListType listType, short slotIndex, out EquipmentItemLockResult result);
 
         bool TryCancelEquipmentItemUnlock(int characterId, InventoryListType listType, short slotIndex, out EquipmentItemLockResult result);
-
-        AvatarInventoryItem LoadEquipmentItemForRefresh(short slotIndex);
-
-        PetInventoryItem LoadPetItemForRefresh(short slotIndex);
 
         IReadOnlyList<EquipmentItemLockEntry> LoadEquipmentItemLocks(int characterId);
 

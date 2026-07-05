@@ -52,32 +52,6 @@ namespace DfoServer.Network.Builders
             return writer.ToArray();
         }
 
-        public static byte[] BuildPetSlotUpdates(
-            IReadOnlyList<PetInventoryItem> items,
-            IReadOnlyList<short> emptySlots)
-        {
-            var itemCount = items != null ? items.Count : 0;
-            var emptyCount = emptySlots != null ? emptySlots.Count : 0;
-            var writer = new GamePacketWriter();
-
-            writer.WriteByte((byte)InventoryListType.Pet);
-            writer.WriteUInt16((ushort)(itemCount + emptyCount));
-
-            if (items != null)
-            {
-                foreach (var item in items)
-                    ItemListPacketBuilder.WritePetEntry(writer, item);
-            }
-
-            if (emptySlots != null)
-            {
-                foreach (var slotIndex in emptySlots)
-                    WriteEmptyPetEntry(writer, slotIndex);
-            }
-
-            return writer.ToArray();
-        }
-
         public static byte[] BuildAvatarUpdates(IReadOnlyList<AvatarInventoryItem> items)
             => BuildAvatarUpdates(InventoryListType.Avatar, items);
 
@@ -225,11 +199,6 @@ namespace DfoServer.Network.Builders
             writer.WriteInt16(slotIndex);
             writer.WriteInt32(-1);
             WriteEmptyEntryTail(writer, entrySize);
-        }
-
-        private static void WriteEmptyPetEntry(GamePacketWriter writer, short slotIndex)
-        {
-            WriteEmptyEntry(writer, slotIndex, GetUpdateEntrySize(InventoryListType.Pet));
         }
 
         private static void WriteEmptyEntryTail(GamePacketWriter writer, int entrySize)

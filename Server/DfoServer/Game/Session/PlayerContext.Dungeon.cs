@@ -34,15 +34,10 @@ namespace DfoServer.Game.Session
         public HashSet<ushort> CurRoomKilledSeqIds { get; set; } = new HashSet<ushort>();
         public bool CurBossKilled { get; set; }
         public bool CurDungeonCleared { get; set; }
-        public DateTime PetCreatureSatietyDungeonStartUtc { get; set; } = DateTime.MinValue;
-        public short PetCreatureSatietyDungeonId { get; set; }
-        public int PetCreatureDeathTimerVersion { get; set; }
-        public DateTime PetCreatureSatietyTownStartUtc { get; set; } = DateTime.MinValue;
         public Game.Dungeon.ClearConditionState CurClearCondition { get; set; }
         public int CurBossCode { get; set; }
         public int[] CurBossMapPos { get; set; }
         public uint CurDungeonTotalExp { get; set; }
-        public int CurDungeonPetFatigueConsumed { get; set; }
         public uint CurDungeonBossTotalExp { get; set; }
         public uint CurDungeonChampionTotalExp { get; set; }
         public uint CurDungeonSuperChampionTotalExp { get; set; }

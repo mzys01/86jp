@@ -154,7 +154,7 @@ namespace DfoServer.Network.Handlers
 
         public async Task Handle_ENUM_CMDPACKET_GIVEUP_GAME(EnhancedClientSession session, GamePacketHeader header, byte[] body)
         {
-            await DungeonHandler.ResetDungeonStateAsync(session);
+            DungeonHandler.ResetDungeonState(session);
             session.Player.UserState = 0x00;
 
             var list = new List<byte>();

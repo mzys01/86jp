@@ -1,7 +1,6 @@
 using DfoServer.Game.Inventory;
 using DfoServer.Game.SelectCharacter;
 using DfoServer.Network.Builders;
-using DfoServer.Network.Handlers.Dungeon;
 using DfoServer.Network.Parsers.Inventory;
 using System;
 using System.Collections.Generic;
@@ -25,9 +24,6 @@ namespace DfoServer.Network.Handlers
             var itemCode = body.Length >= 11 ? BitConverter.ToInt32(body, 7) : 0;
 
             var (cid, aid) = ResolveOwner(session);
-            var petFeedRequest = IsPetFeedUseRequest(listType, slotIndex, itemCode);
-            if (petFeedRequest)
-                DungeonSharedServices.PersistPetCreatureSatiety(session, "pet_feed_before");
 
             if (_inventoryStore.TryUseAccountCargoUpgradeTool(cid, aid, listType, slotIndex, out var accountCargoToolResult)
                 && accountCargoToolResult.Handled)
@@ -51,8 +47,6 @@ namespace DfoServer.Network.Handlers
                     ? $"[{ProtocolName}] USE_STACKABLE: stale pet consumable use acknowledged item 0x{itemCode:X8} at listType={listType} slot={slotIndex}"
                     : $"[{ProtocolName}] USE_STACKABLE: failed to consume item 0x{itemCode:X8} at listType={listType} slot={slotIndex}");
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x002C, responsePlan.AckBody));
-                if (petFeedRequest)
-                    await DungeonSharedServices.HandlePetCreatureChangedInDungeonAsync(session, "pet_feed_failed");
                 return;
             }
 
@@ -65,22 +59,21 @@ namespace DfoServer.Network.Handlers
                 await _refresh.SendUpdateItemList(session, InventoryListType.Pet, result.SlotIndex);
             }
 
-            if (result.PetFeedUsed && result.PetCreatureKey > 0)
+            if (result.PetSatietyChanged)
             {
-                if (result.PetSatietyBefore <= 0 && result.PetSatietyAfter > 0)
-                    await SendCreatureRevivalNoti(session);
+                var creatureStateBody = BuildCreatureStateRefreshBody(cid, result.PetCreatureKey);
+                if (creatureStateBody != null)
+                    await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0067, creatureStateBody));
 
-                var creatureStateBody = BuildCreatureStateRefreshBody(result.PetCreatureKey, result.PetSatietyAfter);
-                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0067, creatureStateBody));
-
-                await DungeonSharedServices.HandlePetCreatureChangedInDungeonAsync(session, "pet_feed");
+                var creatureListBody = BuildCreatureListRefreshBody(cid);
+                if (creatureListBody != null)
+                    await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0069, creatureListBody));
             }
 
             var petSatietyLog = result.PetSatietyChanged
                 ? $" petSatiety key={result.PetCreatureKey} {result.PetSatietyBefore}->{result.PetSatietyAfter}"
                 : string.Empty;
-            var petFeedLog = result.PetFeedUsed ? " petFeed=1" : string.Empty;
-            FileLogger.Log($"[{ProtocolName}] USE_STACKABLE: consumed 1x item 0x{itemCode:X8} from slot {slotIndex}, remaining={result.RemainingStackCount}{petSatietyLog}{petFeedLog}");
+            FileLogger.Log($"[{ProtocolName}] USE_STACKABLE: consumed 1x item 0x{itemCode:X8} from slot {slotIndex}, remaining={result.RemainingStackCount}{petSatietyLog}");
         }
 
         private async Task SendPersonalCargoUpgradeTicketResponse(
@@ -169,21 +162,14 @@ namespace DfoServer.Network.Handlers
             return new CreatureListBodyBuilder().TryBuild(snapshot, 0, out var body) ? body : null;
         }
 
-        internal static byte[] BuildCreatureStateRefreshBody(int creatureKey, int satiety)
+        internal byte[] BuildCreatureStateRefreshBody(int characterId, int creatureKey)
         {
-            var writer = new GamePacketWriter();
-            writer.WriteInt32(creatureKey);
-            writer.WriteInt32(Math.Max(0, Math.Min(100, satiety)));
-            return writer.ToArray();
-        }
+            if (creatureKey <= 0)
+                return null;
 
-        private static async Task SendCreatureRevivalNoti(EnhancedClientSession session)
-        {
-            var writer = new GamePacketWriter();
-            writer.WriteUInt16(session?.Player?.UserId ?? 0);
-            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x006B, writer.ToArray()));
-            if (session?.Player?.Subtype0Tail != null)
-                session.Player.Subtype0Tail.PetCreatureAliveFlag = 1;
+            var snapshot = _sqliteSelectCharacterDataSource.LoadCreatureItemListSnapshot(characterId);
+            var entry = snapshot.Entries.FirstOrDefault(x => x.CreatureKey == creatureKey);
+            return entry != null ? CreatureListBodyBuilder.BuildCreatureStateBody(entry) : null;
         }
 
         private static bool IsPetConsumableSlot(InventoryListType listType, short slotIndex)
@@ -191,13 +177,6 @@ namespace DfoServer.Network.Handlers
             return listType == InventoryListType.Pet
                 && slotIndex >= SqliteInventoryStore.PetConsumableSlotStart
                 && slotIndex <= SqliteInventoryStore.PetConsumableSlotEnd;
-        }
-
-        private static bool IsPetFeedUseRequest(InventoryListType listType, short slotIndex, int itemCode)
-        {
-            return IsPetConsumableSlot(listType, slotIndex)
-                && itemCode > 0
-                && SqliteInventoryStore.TryResolvePetFeedSatietyDelta(itemCode, out _);
         }
 
         internal sealed class UseStackableResponsePlan

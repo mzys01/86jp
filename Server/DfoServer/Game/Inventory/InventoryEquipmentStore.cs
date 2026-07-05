@@ -580,6 +580,8 @@ VALUES (@accountId, @selectionKey, @value32, @itemCount, CURRENT_TIMESTAMP);";
                         AmplifyType = prefix.Length >= 6 ? prefix[5] : (byte)0,
                         AmplifyValue = prefix.Length >= 8 ? BitConverter.ToUInt16(prefix, 6) : (ushort)0,
                     };
+                    if (isPet && petSerialOrHandle != 0 && CreatureExtraResolver.HasCreatureExtra(itemTemplateId))
+                        f.CreatureExtra = unchecked((uint)petSerialOrHandle);
                     // emblem from tail[0..8]
                     if (tail.Length > 0)
                     {

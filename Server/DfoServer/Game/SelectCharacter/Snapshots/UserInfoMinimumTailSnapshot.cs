@@ -25,13 +25,12 @@ namespace DfoServer.Game.SelectCharacter
         public uint FatiguePenalty { get; set; }             
         public byte IsEventCharacter { get; set; }           
         public uint PcRoomId { get; set; } = 0x00010001;     
-        public byte IsPrivateStore { get; set; }
+        public byte IsPrivateStore { get; set; }             
         public byte IsPremiumPcRoom { get; set; }            
         public byte ServerGroupId { get; set; }              
         public uint BlackCount { get; set; }                 
         public byte GuildLevel { get; set; }                 
-        public uint ChaosPoint { get; set; }
-        public byte PetCreatureAliveFlag { get; set; } = 1;
+        public uint ChaosPoint { get; set; }                 
         public byte DisguiseKind { get; set; }               
         public byte IsDisguised { get; set; }                
         public byte ExpertJobType { get; set; }              
@@ -95,7 +94,7 @@ namespace DfoServer.Game.SelectCharacter
                 BlackCount = BitConverter.ToUInt32(t, 29),
                 GuildLevel = t[33],
                 ChaosPoint = BitConverter.ToUInt32(t, 34),
-                PetCreatureAliveFlag = t[38],
+                
                 DisguiseKind = t[39],
                 IsDisguised = t[40],
                 ExpertJobType = t[41],

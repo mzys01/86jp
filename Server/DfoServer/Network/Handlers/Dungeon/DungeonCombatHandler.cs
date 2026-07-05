@@ -384,9 +384,6 @@ namespace DfoServer.Network.Handlers.Dungeon
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0020, w.ToArray()));
         }
 
-        internal Task HandleUseSkill(EnhancedClientSession session, GamePacketHeader header, byte[] body)
-            => _svc.HandleUseSkillAsync(session, body);
-
         private static uint CalculateGrowthContractMonsterBonus(EnhancedClientSession session, uint baseMonsterExp)
         {
             if (baseMonsterExp == 0)

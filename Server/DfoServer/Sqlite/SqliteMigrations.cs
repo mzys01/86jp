@@ -136,23 +136,7 @@ CREATE TABLE IF NOT EXISTS character_daily_counters (
     PRIMARY KEY (character_id, counter_key),
     FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
 );")),
-
-            // Legacy seed DBs store subtype0/subtype1 as blobs. Pet activation depends on
-            // creature_buffer, equipped_creature_level, and equip slot 24 after migration.
-            (16, "legacy subtype blob migration for pet state", MigrateLegacySubtypeBlobs),
         };
-
-        private static void MigrateLegacySubtypeBlobs(SqliteConnection connection)
-        {
-            SqliteSchemaMigrator.EnsureColumns(connection, "character_subtype1_fields", new[]
-            {
-                ("name_tag_item_id", "INTEGER NOT NULL DEFAULT 0"),
-                ("name_tag_expire_time", "INTEGER NOT NULL DEFAULT 0"),
-            });
-
-            DfoServer.Game.CharacterData.Subtype1BlobMigrator.MigrateAllIfNeeded(connection);
-            DfoServer.Game.CharacterData.SqliteSubtype0FieldsRepository.MigrateFromBlobIfNeeded(connection);
-        }
 
         private static void ExecuteBatch(SqliteConnection connection, string sql)
         {

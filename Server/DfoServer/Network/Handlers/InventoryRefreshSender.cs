@@ -1,10 +1,7 @@
 using DfoServer.Game.Appearance;
-using DfoServer.Game.CharacterData;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory;
-using DfoServer.Game.Skills;
 using DfoServer.Game.SelectCharacter;
-using DfoServer.Infrastructure;
 using DfoServer.Network.Builders;
 using System;
 using System.Collections.Generic;
@@ -42,135 +39,6 @@ namespace DfoServer.Network.Handlers
                 session.Player, _dataSource, _characterRepository, cid, aid);
             FileLogger.Log($"[{ProtocolName}] NOTI 2 appearance update: {session.Player.AppearanceEntries.Length} entries, body={noti2Body.Length}B");
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0002, noti2Body));
-        }
-
-        public void ReloadSubtype0Tail(EnhancedClientSession session)
-        {
-            var (cid, _) = SessionOwnerResolver.Resolve(session);
-            var tail = _dataSource.LoadSubtype0TailSnapshot(cid);
-            if (tail != null && session?.Player != null)
-                session.Player.Subtype0Tail = tail;
-        }
-
-        public async Task SendCreatureItemListRefresh(EnhancedClientSession session)
-        {
-            var (cid, _) = SessionOwnerResolver.Resolve(session);
-            var list = _dataSource.LoadCreatureItemListSnapshot(cid);
-            var writer = new GamePacketWriter();
-            writer.WriteByte((byte)(list?.Entries.Count ?? 0));
-            if (list != null)
-            {
-                foreach (var entry in list.Entries)
-                    CreatureListBodyBuilder.WriteCreatureEntry(writer, entry);
-            }
-
-            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0069, writer.ToArray()));
-        }
-
-        public async Task SendSubtype0PetStateRefresh(EnhancedClientSession session)
-        {
-            var player = session?.Player;
-            if (player == null)
-                return;
-
-            var appearanceEntries = player.AppearanceEntries;
-            try
-            {
-                AppearanceService.RepairLegacyTitleAppearanceBlobIfNeeded(player.CharacterId);
-                var storedRecord = _characterRepository.GetById(player.CharacterId);
-                if (storedRecord?.Appearance != null && storedRecord.Appearance.Length > 0)
-                    appearanceEntries = storedRecord.Appearance;
-            }
-            catch (Exception ex)
-            {
-                FileLogger.Log($"[{ProtocolName}] NOTI 2 pet state appearance fallback failed: {ex.Message}");
-            }
-
-            var record = new CharacterRecord
-            {
-                CharacterId = player.CharacterId,
-                Name = player.Name,
-                Job = player.Job,
-                GrowType = player.GrowType,
-                Level = player.Level,
-                UserState = player.UserState,
-                Appearance = appearanceEntries,
-                Subtype0Tail = player.Subtype0Tail,
-            };
-
-            // Pet body changes use NOTI2 USERINFO subtype0 (body mode 0) with one minimum record.
-            // Do not send the roster subtype2 form here; PR #376 clone-title roster fixes stay in that path.
-            var writer = new GamePacketWriter();
-            writer.WriteByte(0x00);
-            writer.WriteUInt16(0x0001);
-            writer.WriteUInt16(player.UserId);
-            writer.WriteDstr(player.Name);
-            writer.WriteBytes(UserInfoSubtype0Builder.BuildRemainingBytes(record));
-            var body = writer.ToArray();
-            FileLogger.Log($"[{ProtocolName}] NOTI 2 pet state update: petFlag={player.Subtype0Tail?.PetDisplayFlag ?? 0} body={body.Length}B");
-            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0002, body));
-        }
-
-        public async Task SendSubtype1Refresh(EnhancedClientSession session)
-        {
-            var (cid, _) = SessionOwnerResolver.Resolve(session);
-            if (cid <= 0)
-                return;
-
-            var subtype1Repo = new SqliteSubtype1Repository(ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
-            if (!subtype1Repo.HasData(cid))
-                return;
-
-            var addition = subtype1Repo.Load(cid);
-            if (addition == null)
-                return;
-
-            var record = _characterRepository.GetById(cid);
-            var skillRepo = new SqliteCharacterProgressRepository(ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
-            var skills = skillRepo.HasSkills(cid)
-                ? SkillStateService.LoadAndSync(
-                    skillRepo,
-                    cid,
-                    record?.Job ?? session.Player.Job,
-                    record?.Level ?? session.Player.Level,
-                    record?.BonusSp ?? 0,
-                    record?.BonusTp ?? 0,
-                    persist: false).Skills
-                : null;
-
-            var writer = new GamePacketWriter();
-            writer.WriteByte(1);
-            writer.WriteUInt16(1);
-            writer.WriteUInt16((ushort)cid);
-            writer.WriteBytes(UserInfoSubtype1Builder.BuildFromSnapshot(addition, skills));
-            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0002, writer.ToArray()));
-        }
-
-        public async Task SendPetItemSlotRefresh(EnhancedClientSession session, IReadOnlyList<short> slotIndexes)
-        {
-            if (slotIndexes == null || slotIndexes.Count == 0)
-                return;
-
-            var (cid, _) = SessionOwnerResolver.Resolve(session);
-            var updates = new List<PetInventoryItem>();
-            var seen = new HashSet<short>();
-            foreach (var slotIndex in slotIndexes)
-            {
-                if (SqliteInventoryStore.IsPetServerStorageSlot(slotIndex) || !seen.Add(slotIndex))
-                    continue;
-
-                var item = _inventoryStore.LoadPetItemForRefresh(cid, slotIndex);
-                if (item != null)
-                    updates.Add(item);
-            }
-
-            if (updates.Count == 0)
-                return;
-
-            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
-                0x00,
-                0x000E,
-                ItemListUpdateBuilder.BuildPetUpdates(updates)));
         }
 
         public async Task SendItemListRefresh(EnhancedClientSession session, params InventoryListType[] listTypes)

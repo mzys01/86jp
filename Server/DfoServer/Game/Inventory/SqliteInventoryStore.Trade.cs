@@ -114,15 +114,6 @@ namespace DfoServer.Game.Inventory
             if (metadata.ItemKind == "special")
                 return false;
 
-            if (TryInsertPetInventoryEquipmentFallback(
-                    connection,
-                    transaction,
-                    characterId,
-                    metadata,
-                    itemTemplateId,
-                    out assignedSlot))
-                return true;
-
             bool isConsumable = metadata.IsStackable
                 && metadata.StackableType != null
                 && metadata.StackableType.IndexOf("[waste]", System.StringComparison.OrdinalIgnoreCase) >= 0;

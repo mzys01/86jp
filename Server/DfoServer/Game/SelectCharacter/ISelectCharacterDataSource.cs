@@ -13,8 +13,6 @@ namespace DfoServer.Game.SelectCharacter
         
         SelectCharacterDataSnapshot Load(int characterId, int accountId);
 
-        byte[] LoadEquippedPetCreatureNameBytes(int characterId);
-
         int GetSeedCharacterId();
 
         void InitializeNewCharacter(int characterId, int accountId, byte job);

@@ -7,7 +7,6 @@ using DfoServer.Infrastructure;
 using DfoServer.GameWorld;
 using DfoServer.Network.Builders;
 using DfoServer.Network.Handlers;
-using DfoServer.Network.Handlers.Dungeon;
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
@@ -31,7 +30,6 @@ namespace DfoServer.Network
         private readonly ShopCoinEventHandler _shopCoinEventHandler;
         private readonly InventoryRefreshSender _inventoryRefreshSender;
         private readonly MercenaryHandler _mercenaryHandler;
-        private readonly CreatureScriptMessageHandler _creatureScriptMessageHandler;
         private readonly ICharacterRepository _characterRepository;
         private readonly SqliteSelectCharacterDataSource _selectCharacterDataSource;
         private readonly SqliteAssetService _assetService;
@@ -81,7 +79,6 @@ namespace DfoServer.Network
             _collectionBoxHandler = new CollectionBoxHandler(inventoryStore, collectBoxProgressRepository);
             _shopCoinEventHandler = new ShopCoinEventHandler(reviveCoinService, _inventoryRefreshSender);
             _mercenaryHandler = new MercenaryHandler(characterRepository);
-            _creatureScriptMessageHandler = new CreatureScriptMessageHandler(broadcastGamePacket);
 
             _cmdDispatch = new Dictionary<ushort, Func<EnhancedClientSession, GamePacketHeader, byte[], Task>>();
             RegisterLoginHandlers(_cmdDispatch);
@@ -114,8 +111,6 @@ namespace DfoServer.Network
         public override Task OnClientDisconnected(EnhancedClientSession session)
         {
             FileLogger.Log($"[{ProtocolName}] Admin client disconnected: {session.SessionId}");
-            DungeonSharedServices.PersistPetCreatureSatiety(session, "disconnect");
-            DungeonSharedServices.PersistPetCreatureTownRecovery(session, "disconnect");
             _townHandler.PersistPosition(session, forceImmediate: true, source: "disconnect");
             return Task.CompletedTask;
         }
@@ -195,7 +190,6 @@ namespace DfoServer.Network
             d[0x002C] = _inventoryHandler.Handle_ENUM_CMDPACKET_USE_STACKABLE;
             d[0x00D0] = _inventoryHandler.Handle_OPEN_MAGIC_BOX_SINGLE;
             d[0x0050] = _inventoryHandler.Handle_ENUM_CMDPACKET_UPGRADE_ITEM;      //80
-            d[0x0064] = _inventoryHandler.Handle_ENUM_CMDPACKET_RENAME_CREATURE;   //100
             d[0x0066] = _inventoryHandler.Handle_HATCH_CREATURE_EGG;                //102
             d[0x00A0] = _inventoryHandler.Handle_OPEN_SELECTABLE_PACKAGE;
             d[0x00AD] = _inventoryHandler.Handle_HATCH_CREATURE_EGG;                //173
@@ -253,7 +247,6 @@ namespace DfoServer.Network
         {
             d[0x000F] = _dungeonHandler.Handle_ENUM_CMDPACKET_ENTER_SELECT_DUNGEON;
             d[0x0010] = _dungeonHandler.Handle_ENUM_CMDPACKET_SELECT_DUNGEON;
-            d[0x0026] = _dungeonHandler.Handle_ENUM_CMDPACKET_USE_SKILL;
             d[0x0027] = _dungeonHandler.Handle_ENUM_CMDPACKET_DIE_MONSTER;
             d[0x0028] = _dungeonHandler.Handle_ENUM_CMDPACKET_DIE_CHARACTER;       //40
             d[0x0029] = _dungeonHandler.Handle_ENUM_CMDPACKET_USE_COIN;
@@ -349,8 +342,6 @@ namespace DfoServer.Network
             d[0x0003] = (s, h, b) =>
                 s.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0003, CommonPacketBodyBuilder.BuildSuccessAck()));
             d[0x0040] = _ceraShopHandler.HandleCeraShopPurchase;                   //64
-            // 0x007A is the client creature line request; handler replies with local 0x0077 notifications for single-player.
-            d[0x007A] = _creatureScriptMessageHandler.Handle_ENUM_CMDPACKET_CREATURE_SCRIPT_MESSAGE;
             d[0x01A1] = _inventoryHandler.Handle_ACHIEVEMENT_TRIGGER;              //417
             d[0x01DE] = (s, h, b) =>                                               //478
                 s.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x01DE, CommonPacketBodyBuilder.BuildSuccessAck()));

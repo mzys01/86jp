@@ -1,6 +1,5 @@
 using DfoServer.Game.Inventory;
 using DfoServer.Network.Builders;
-using DfoServer.Network.Handlers.Dungeon;
 using System;
 using System.Threading.Tasks;
 
@@ -64,65 +63,9 @@ namespace DfoServer.Network.Handlers
             if (InventoryRefreshSender.MapToSortLockListType(request.SourceListType) != InventoryRefreshSender.MapToSortLockListType(request.DestinationListType))
                 await _refresh.SendSortItemLockRefresh(session, request.DestinationListType);
 
-            var suppressSelfUserInfoRefresh = ShouldSuppressSelfUserInfoRefresh(session);
 
-            if (result.Mutated
-                && !result.PetCreatureStateChanged
-                && !result.PetItemStateChanged
-                && (request.SourceListType == InventoryListType.Equipment || request.DestinationListType == InventoryListType.Equipment))
-            {
-                if (suppressSelfUserInfoRefresh)
-                {
-                    FileLogger.Log($"[{ProtocolName}] MOVE_ITEMSPACE: skipped self NOTI 2 appearance refresh");
-                }
-                else if (TouchesTitleEquipmentSlot(request))
-                {
-                    _refresh.ReloadSubtype0Tail(session);
-                    await _refresh.SendSubtype0PetStateRefresh(session);
-                }
-                else
-                {
-                    await _refresh.SendNoti2AppearanceUpdate(session);
-                }
-            }
-
-            if (result.PetCreatureStateChanged)
-            {
-                _refresh.ReloadSubtype0Tail(session);
-                await _refresh.SendCreatureItemListRefresh(session);
-                await _refresh.SendSubtype0PetStateRefresh(session);
-                await _refresh.SendSubtype1Refresh(session);
-            }
-
-            if (result.PetItemStateChanged)
-            {
-                if (!suppressSelfUserInfoRefresh)
-                {
-                    await _refresh.SendSubtype1Refresh(session);
-                    if (!result.PetCreatureStateChanged)
-                        await _refresh.SendCreatureItemListRefresh(session);
-                }
-                else if (!result.PetCreatureStateChanged)
-                {
-                    FileLogger.Log($"[{ProtocolName}] MOVE_ITEMSPACE: skipped self pet artifact NOTI 2/0x0069 refresh");
-                }
-
-                if (result.PetItemFullRefresh)
-                    await _refresh.SendItemListRefresh(session, InventoryListType.Pet);
-                else
-                    await _refresh.SendPetItemSlotRefresh(session, result.PetCreatureRefreshSlots);
-            }
-
-            if (result.PetCreatureStateChanged)
-                await DungeonSharedServices.HandlePetCreatureChangedInDungeonAsync(session, "pet_creature_move");
-        }
-
-        private static bool ShouldSuppressSelfUserInfoRefresh(EnhancedClientSession session)
-        {
-            // TW df_game_r sends equipment USERINFO/basic_info through GameWorld::send_all(..., self),
-            // so the actor does not receive a self NOTI2 that recreates the active creature.
-            // Keep self creature reloads only for real pet body changes.
-            return session?.Player != null;
+            if (result.Mutated && (request.SourceListType == InventoryListType.Equipment || request.DestinationListType == InventoryListType.Equipment))
+                await _refresh.SendNoti2AppearanceUpdate(session);
         }
 
         public async Task Handle_ENUM_CMDPACKET_SORT_ITEM(EnhancedClientSession session, GamePacketHeader header, byte[] body)
@@ -154,13 +97,6 @@ namespace DfoServer.Network.Handlers
                 FileLogger.Log($"[{ProtocolName}] SORT EXCEPTION: {ex}");
                 throw;
             }
-        }
-
-        private static bool TouchesTitleEquipmentSlot(InventoryMoveRequest request)
-        {
-            const short titleEquipmentSlot = 12;
-            return (request.SourceListType == InventoryListType.Equipment && request.SourceSlotIndex == titleEquipmentSlot)
-                || (request.DestinationListType == InventoryListType.Equipment && request.DestinationSlotIndex == titleEquipmentSlot);
         }
 
         public async Task Handle_ENUM_CMDPACKET_TOGGLE_SORT_ITEM_LOCK(EnhancedClientSession session, GamePacketHeader header, byte[] body)

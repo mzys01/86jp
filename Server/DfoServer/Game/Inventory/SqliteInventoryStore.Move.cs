@@ -37,7 +37,6 @@ namespace DfoServer.Game.Inventory
                 return true;
             }
 
-            using (BeginScope(characterId, accountId))
             using (var connection = OpenConnection())
             using (var transaction = connection.BeginTransaction())
             {
@@ -52,16 +51,6 @@ namespace DfoServer.Game.Inventory
                     : _db.LoadItemRecord(connection, transaction, characterId, dbDstList, request.DestinationSlotIndex);
 
                 FileLogger.Log($"  [MoveItem] source={(source != null ? $"uid={source.ItemUid} kind={source.ItemKind} tmpl=0x{source.ItemTemplateId:X8}" : "null")}, destination={(destination != null ? $"uid={destination.ItemUid} kind={destination.ItemKind} tmpl=0x{destination.ItemTemplateId:X8}" : "null")}");
-
-                if (request.SourceListType == InventoryListType.Pet && source != null)
-                    source = NormalizePetInventoryEquipmentSourceFallback(connection, transaction, characterId, source);
-
-                if (TryHandlePetCreatureEquipMove(connection, transaction, request, source, destination, out result))
-                {
-                    if (result != null && result.Mutated)
-                        transaction.Commit();
-                    return true;
-                }
 
                 if (request.DestinationListType == InventoryListType.Equipment)
                 {
@@ -444,9 +433,6 @@ ORDER BY sort_order;";
             using (var transaction = connection.BeginTransaction())
                 return _db.LoadPetItem(connection, transaction, characterId, slotIndex);
         }
-
-        public PetInventoryItem LoadPetItemForRefresh(short slotIndex)
-            => LoadPetItemForRefresh(_context.CharacterId, slotIndex);
 
         private void UpsertSortItemLock(int characterId, SqliteConnection connection, SqliteTransaction transaction, InventoryListType listType, short slotIndex, byte state)
         {

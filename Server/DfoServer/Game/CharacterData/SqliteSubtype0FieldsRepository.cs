@@ -185,62 +185,9 @@ namespace DfoServer.Game.CharacterData
             }
         }
 
-        public static void MigrateFromBlobIfNeeded(SqliteConnection conn)
-        {
-            try
-            {
-                using (var cmd = conn.CreateCommand())
-                {
-                    cmd.CommandText = "SELECT COUNT(*) FROM character_subtype0_fields;";
-                    if (Convert.ToInt32(cmd.ExecuteScalar()) > 0)
-                        return;
-                }
-
-                using (var cmd = new SqliteCommand(
-                    "SELECT character_id, remaining_bytes FROM character_userinfo_blobs WHERE user_info_type=0 AND gate_or_count>0", conn))
-                using (var reader = cmd.ExecuteReader())
-                {
-                    var pending = new System.Collections.Generic.List<(int CharacterId, byte[] Blob)>();
-                    while (reader.Read())
-                        pending.Add((reader.GetInt32(0), (byte[])reader.GetValue(1)));
-                    reader.Close();
-
-                    var migrated = new System.Collections.Generic.HashSet<int>();
-                    foreach (var (characterId, blob) in pending)
-                    {
-                        if (migrated.Contains(characterId))
-                            continue;
-
-                        const int headerFields = 7;
-                        const int appearanceEntrySize = 23;
-                        const int tailLength = UserInfoMinimumTailSnapshot.TailLength;
-                        if (blob == null || blob.Length < headerFields + tailLength)
-                            continue;
-
-                        int appearanceCount = blob[6];
-                        int tailStart = headerFields + appearanceCount * appearanceEntrySize;
-                        if (tailStart + tailLength > blob.Length)
-                            continue;
-
-                        var tail = new byte[tailLength];
-                        Buffer.BlockCopy(blob, tailStart, tail, 0, tailLength);
-                        Save(conn, characterId, UserInfoMinimumTailSnapshot.FromBytes(tail));
-                        migrated.Add(characterId);
-                        FileLogger.Log($"[Subtype0FieldsMigrator] char {characterId}: 104B tail -> character_subtype0_fields OK");
-
-                        int extraBytes = blob.Length - (tailStart + tailLength);
-                        if (extraBytes > 0)
-                        {
-                            FileLogger.Log(
-                                $"[Subtype0FieldsMigrator] WARNING char {characterId}: blob has {extraBytes}B town broadcast suffix; runtime does not replay it");
-                        }
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                FileLogger.Log($"[Subtype0FieldsMigrator] ERROR: {ex}");
-            }
-        }
+        
+        
+        
+        
     }
 }

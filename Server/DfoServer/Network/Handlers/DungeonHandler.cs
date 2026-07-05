@@ -28,9 +28,6 @@ namespace DfoServer.Network.Handlers
         public static void ResetDungeonState(EnhancedClientSession session)
             => DungeonSharedServices.ResetDungeonState(session);
 
-        public static Task ResetDungeonStateAsync(EnhancedClientSession session)
-            => DungeonSharedServices.ResetDungeonStateAsync(session);
-
         public Task Handle_ENUM_CMDPACKET_ENTER_SELECT_DUNGEON(EnhancedClientSession session, GamePacketHeader header, byte[] body)
             => _entry.HandleEnterSelectDungeon(session, header, body);
 
@@ -48,9 +45,6 @@ namespace DfoServer.Network.Handlers
 
         public Task Handle_ENUM_CMDPACKET_DIE_MONSTER(EnhancedClientSession session, GamePacketHeader header, byte[] body)
             => _combat.HandleDieMonster(session, header, body);
-
-        public Task Handle_ENUM_CMDPACKET_USE_SKILL(EnhancedClientSession session, GamePacketHeader header, byte[] body)
-            => _combat.HandleUseSkill(session, header, body);
 
         public Task Handle_ENUM_CMDPACKET_DIE_CHARACTER(EnhancedClientSession session, GamePacketHeader header, byte[] body)
             => _combat.HandleDieCharacter(session, header, body);
