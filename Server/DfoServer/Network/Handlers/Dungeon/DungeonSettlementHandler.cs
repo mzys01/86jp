@@ -94,12 +94,6 @@ namespace DfoServer.Network.Handlers.Dungeon
             }
             catch { }
 
-            if (leveledUp)
-            {
-                await _svc.SendUserInfoSubtype0Broadcast(session);
-                await _svc.SendUserInfoBroadcast(session);
-            }
-
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0025,
                 DungeonNotificationBuilder.BuildExp(session.Player.Level, session.Player.Exp, remainSp, remainTp)));
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0023,
@@ -120,6 +114,8 @@ namespace DfoServer.Network.Handlers.Dungeon
             {
                 FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] LEVEL UP from dungeon clear: cid={session.Player.CharacterId} {prevLevel}->{session.Player.Level} exp={session.Player.Exp}");
                 await _svc.SendQuestListRefresh(session);
+                // 结算仍在副本场景内: 只补属性(subtype1), 不发角色状态包(subtype0), 理由同击杀路径。
+                await _svc.SendUserInfoBroadcast(session);
             }
 
             // Card layout is deferred: 2 s timer -> layout, then 4 s -> auto-flip free card.

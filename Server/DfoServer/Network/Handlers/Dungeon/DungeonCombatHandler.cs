@@ -188,12 +188,6 @@ namespace DfoServer.Network.Handlers.Dungeon
                 }
                 catch { }
 
-                if (leveledUp)
-                {
-                    await _svc.SendUserInfoSubtype0Broadcast(session);
-                    await _svc.SendUserInfoBroadcast(session);
-                }
-
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0025,
                     ExpNotificationBuilder.Build(session.Player.Level, session.Player.Exp, remainSp, remainTp,
                         premiumBonusExp: growthContractBonusExp)));
@@ -202,6 +196,10 @@ namespace DfoServer.Network.Handlers.Dungeon
                 {
                     FileLogger.Log($"[DungeonHandler] LEVEL UP: cid={session.Player.CharacterId} {prevLevel}->{session.Player.Level} exp={session.Player.Exp}");
                     await _svc.SendQuestListRefresh(session);
+                    // 副本内升级只在经验包之后补发属性(subtype1)。
+                    // 不发角色状态包(subtype0): 它会打乱客户端的副本内角色状态,
+                    // 实测导致清房后无法进下一个门。
+                    await _svc.SendUserInfoBroadcast(session);
                 }
 
             }

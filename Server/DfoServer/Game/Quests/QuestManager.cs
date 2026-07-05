@@ -132,7 +132,11 @@ namespace DfoServer.Game.Quests
                 catch (Exception ex) { FileLogger.Log($"[QuestManager] SP calc ERROR: {ex.Message}"); }
 
                 var leveledUp = player.Level > prevLevel;
-                if (leveledUp)
+                var inDungeon = player.CurDungeon > 0;
+                // 城镇内升级: 先推角色状态(subtype0)+属性(subtype1)再发经验包, 面板即时刷新。
+                // 副本内升级绝不能发角色状态包(subtype0) -- 它会打乱客户端的副本内角色状态,
+                // 实测导致清房后无法进下一个门; 副本内沿用旧时序(经验包之后只补属性)。
+                if (leveledUp && !inDungeon)
                 {
                     await SendUserInfoSubtype0Broadcast(cid, "LevelUp");
                     await SendUserInfoBroadcast(cid);
@@ -143,7 +147,9 @@ namespace DfoServer.Game.Quests
 
                 if (leveledUp)
                 {
-                    FileLogger.Log($"[QuestManager] LEVEL UP from quest: cid={cid} {prevLevel}->{player.Level} exp={player.Exp}");
+                    FileLogger.Log($"[QuestManager] LEVEL UP from quest: cid={cid} {prevLevel}->{player.Level} exp={player.Exp} inDungeon={inDungeon}");
+                    if (inDungeon)
+                        await SendUserInfoBroadcast(cid);
                 }
 
                 if (ack.Length >= 13)
