@@ -94,6 +94,13 @@ namespace DfoServer.Network.Handlers.Dungeon
                 }
             }
             catch { }
+
+            if (leveledUp)
+            {
+                await _svc.SendUserInfoSubtype0Broadcast(session);
+                await _svc.SendUserInfoBroadcast(session);
+            }
+
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0025,
                 DungeonNotificationBuilder.BuildExp(session.Player.Level, session.Player.Exp, remainSp, remainTp)));
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0023,
@@ -114,7 +121,6 @@ namespace DfoServer.Network.Handlers.Dungeon
             {
                 FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] LEVEL UP from dungeon clear: cid={session.Player.CharacterId} {prevLevel}->{session.Player.Level} exp={session.Player.Exp}");
                 await _svc.SendQuestListRefresh(session);
-                await _svc.SendUserInfoBroadcast(session);
             }
 
             // Card layout is deferred: 2 s timer -> layout, then 4 s -> auto-flip free card.
@@ -336,15 +342,17 @@ namespace DfoServer.Network.Handlers.Dungeon
                 BuildCardInfoAck(session)));
 
             bool hasPaid = HasPaidCardReward(session.Player.CurCardRewards);
-            if (!hasPaid)
+            bool paidAlreadyFlipped = hasPaid && session.Player.CurPaidCardSlots[0] != 0xFF;
+            if (!hasPaid || paidAlreadyFlipped)
             {
-                // No paid card: deliver free rewards and clear cards so EPLP works.
+                // No paid card, or paid card was already manually flipped:
+                // deliver all rewards and clear cards so EPLP works.
                 await DeliverCardRewards(session);
                 session.Player.CurCardRewards = null;
             }
             else
             {
-                // Paid card pending: only deliver free card rewards; keep cards alive.
+                // Paid card still pending: only deliver free card rewards; keep cards alive.
                 await DeliverFreeCardRewardsOnly(session);
             }
         }
@@ -371,10 +379,14 @@ namespace DfoServer.Network.Handlers.Dungeon
                 return;
             }
 
-            CancelAutoFlip(session);
-
             // Only card flips here; EPLP goes through CMD 0x0048.
             if (cardType > 1 || cardIndex > 3) return;
+
+            // Only cancel auto-flip timer when user manually flips a free card.
+            // Flipping a paid card must not cancel the timer so the free card
+            // still gets auto-flipped when the timer expires.
+            if (cardType == 0)
+                CancelAutoFlip(session);
 
             session.Player.CurCardFlipCount++;
             FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] SELECT_CARD flip#{session.Player.CurCardFlipCount} type={cardType} idx={cardIndex}");

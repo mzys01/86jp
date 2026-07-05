@@ -728,6 +728,7 @@ namespace DfoServer.Game.Quests
             int playerJob = GetCharacterJob(connStr, characterId);
             int playerGrowType = GetCharacterGrowType(connStr, characterId);
             var reward = GameWorld.QuestData.GetRewardExp(questId, rewardSelectIdx, playerLevel, playerJob, playerGrowType);
+            bool isTitleRewardQuest = GameWorld.QuestData.IsTitleRewardQuest(questId);
             var consumedEntries = new List<ConsumedItemEntry>();
             var insertedEntries = new List<InsertedItemEntry>();
 
@@ -798,6 +799,12 @@ namespace DfoServer.Game.Quests
                         foreach (var ri in reward.Items)
                         {
                             if (ri.ItemId <= 0) continue;
+                            if (isTitleRewardQuest)
+                            {
+                                FileLogger.Log($"[QuestService] FINISH title reward skipped from inventory: quest={questId} item={ri.ItemId}");
+                                continue;
+                            }
+
                             int count = ri.Count * multiplier;
                             short assignedSlot;
                             if (assetService.TryAddItem(scope, ri.ItemId, count, out assignedSlot))

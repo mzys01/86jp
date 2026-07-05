@@ -101,6 +101,8 @@ namespace DfoServer.Network.Handlers
             var petSlots = new HashSet<short>();
             var itemUpdateResults = new System.Collections.Generic.List<InventoryMutationResult>();
             InventoryMutationResult goldResult = null;
+            var refreshAccountCargo = false;
+            var refreshPersonalCargo = false;
             foreach (var result in results)
             {
                 var resultGroup = new System.Collections.Generic.List<InventoryMutationResult> { result };
@@ -109,7 +111,13 @@ namespace DfoServer.Network.Handlers
                 foreach (var updateResult in resultGroup)
                 {
                     if (updateResult.ConsumedOnPurchase)
+                    {
+                        if (updateResult.ListType == InventoryListType.AccountCargo)
+                            refreshAccountCargo = true;
+                        else if (updateResult.ListType == InventoryListType.PersonalCargo)
+                            refreshPersonalCargo = true;
                         continue;
+                    }
                     if (updateResult.ListType == InventoryListType.Avatar)
                     {
                         avatarSlots.Add(updateResult.SlotIndex);
@@ -136,6 +144,26 @@ namespace DfoServer.Network.Handlers
                     RemainingStackCount = goldResult.UpdatedGold,
                 });
                 FileLogger.Log($"[{ProtocolName}] CERA_SHOP_BUY: gold refresh queued gold={goldResult.UpdatedGold}");
+            }
+
+            if (refreshAccountCargo)
+            {
+                var snapshot = _inventoryStore.LoadCharacterItemListSnapshot(cid, aid);
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0132,
+                    CommonPacketBodyBuilder.BuildSuccessAck()));
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000D,
+                    ItemListPacketBuilder.BuildBody(snapshot, InventoryListType.AccountCargo)));
+                FileLogger.Log($"[{ProtocolName}] CERA_SHOP_BUY: account cargo upgrade ACK and ITEM_LIST refresh sent");
+            }
+
+            if (refreshPersonalCargo)
+            {
+                var snapshot = _inventoryStore.LoadCharacterItemListSnapshot(cid, aid);
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0198,
+                    CommonPacketBodyBuilder.BuildSuccessAck()));
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000D,
+                    ItemListPacketBuilder.BuildBody(snapshot, InventoryListType.PersonalCargo)));
+                FileLogger.Log($"[{ProtocolName}] CERA_SHOP_BUY: personal cargo upgrade ACK and ITEM_LIST refresh sent");
             }
 
             if (itemUpdateResults.Count > 0)
@@ -191,7 +219,7 @@ namespace DfoServer.Network.Handlers
             }
 
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0035,
-                BuildCeraUpdate(last.UpdatedCoin, last.UpdatedTokenCera, last.UpdatedHappyTokenCera)));
+                CeraUpdateBuilder.Build(last.UpdatedCoin, last.UpdatedTokenCera, last.UpdatedHappyTokenCera)));
         }
 
         private async Task SendPremiumServiceRefresh(EnhancedClientSession session, int characterId, int accountId)
@@ -310,16 +338,6 @@ namespace DfoServer.Network.Handlers
                 return null;
 
             return snapshot.MainItems.Find(item => item.SlotIndex == update.SlotIndex);
-        }
-
-        private static byte[] BuildCeraUpdate(int cera, int tokenCera, int happyTokenCera)
-        {
-            var writer = new GamePacketWriter();
-            writer.WriteByte(1);       // [0]    ok
-            writer.WriteInt32(cera);   // [1..4] cera point
-            writer.WriteInt32(tokenCera);      // [5..8] token/event cera point
-            writer.WriteInt32(happyTokenCera); // [9..12] happy token/event cera point
-            return writer.ToArray();
         }
 
     }

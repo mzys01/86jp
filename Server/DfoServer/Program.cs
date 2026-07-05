@@ -23,6 +23,12 @@ namespace DfoServer
                 return;
             }
 
+            if (Array.IndexOf(args, "--selftest-cerashop") >= 0)
+            {
+                Environment.Exit(SelfTests.CeraShopSelfTest.Run());
+                return;
+            }
+
             if (Array.IndexOf(args, "--selftest-selectable-package") >= 0)
             {
                 Environment.Exit(SelfTests.SelectablePackageSelfTest.Run());
@@ -38,6 +44,12 @@ namespace DfoServer
             if (Array.IndexOf(args, "--selftest-inventory-sale") >= 0)
             {
                 Environment.Exit(SelfTests.InventorySaleSelfTest.Run());
+                return;
+            }
+
+            if (Array.IndexOf(args, "--selftest-personal-cargo") >= 0)
+            {
+                Environment.Exit(SelfTests.PersonalCargoSelfTest.Run());
                 return;
             }
 

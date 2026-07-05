@@ -17,6 +17,7 @@ namespace DfoServer.Game.Inventory
     {
         internal const int DefaultAvatarUnknownFixed30 = 0x00001E00;
         internal const ushort DefaultAvatarUnknownFixed4 = 0x0400;
+        internal const ushort DefaultPersonalCargoCapacity = 8;
         internal static readonly object StackableItemCacheLock = new object();
         internal static readonly Dictionary<int, PvfLib.StackableItemFile> StackableItemCache = new Dictionary<int, PvfLib.StackableItemFile>();
 
@@ -100,7 +101,7 @@ namespace DfoServer.Game.Inventory
                     {
                         _equipStore.UpsertContainerState(connection, tx, characterId, accountId, InventoryListType.Main, 24);
                         _equipStore.UpsertContainerState(connection, tx, characterId, accountId, InventoryListType.Avatar, 0);
-                        _equipStore.UpsertContainerState(connection, tx, characterId, accountId, InventoryListType.PersonalCargo, 0);
+                        _equipStore.UpsertContainerState(connection, tx, characterId, accountId, InventoryListType.PersonalCargo, DefaultPersonalCargoCapacity);
                     }
 
                     EnsureReviveCoinSlot(connection, tx, characterId);
@@ -139,7 +140,7 @@ VALUES (
                 var listParams = _equipStore.LoadContainerState(connection, null, characterId, accountId);
                 snapshot.MainListParam16 = GetListParam(listParams, InventoryListType.Main);
                 snapshot.AvatarListParam16 = GetListParam(listParams, InventoryListType.Avatar);
-                snapshot.PersonalCargoListParam16 = GetListParam(listParams, InventoryListType.PersonalCargo);
+                snapshot.PersonalCargoListParam16 = NormalizePersonalCargoListParam(GetListParam(listParams, InventoryListType.PersonalCargo));
                 snapshot.AccountCargoState = _equipStore.LoadAccountCargoState(connection, null, characterId, accountId);
 
                 using (var command = connection.CreateCommand())
@@ -285,6 +286,38 @@ ORDER BY slot_index;";
                     return true;
                 }
 
+                    // 金币槽(主背包 slot=0, item_template_id=0): 客户端用 DELETE_ITEM 同步"消耗金币"
+                    // (例如消耗金币的技能), 走通用 TryDeleteItemCore 会把整行物理删除导致余额归零。
+                    // 这里像 cube fragment 一样按数量增减, 而非删行。
+                    // 只对主背包(Main)生效; avatar/equipment/pet 的 slot=0 不是金币, 不能误判。
+                    if (slotIndex == 0 && listType == InventoryListType.Main)
+                    {
+                        if (deleteCount <= 0)
+                            return false;
+
+                        if (!CurrencyService.TrySpendGold(connection, transaction, characterId, deleteCount))
+                            return false;
+
+                        var goldWallet = _db.LoadWallet(connection, transaction, characterId);
+                        transaction.Commit();
+
+                        result = new InventoryMutationResult
+                        {
+                            ListType = listType,
+                            SlotIndex = slotIndex,
+                            ItemTemplateId = 0,
+                            RemainingStackCount = goldWallet.Gold,
+                            InstanceValue = goldWallet.Gold,
+                            Durability = 0,
+                            UpdatedGold = goldWallet.Gold,
+                            UpdatedSp = goldWallet.Sp,
+                            UpdatedCoin = goldWallet.Cera,
+                            RequestedCount = deleteCount,
+                            AppliedCount = deleteCount,
+                        };
+                        return true;
+                    }
+
 
                 var ok = TryDeleteItemCore(connection, transaction, characterId, listType, dbListType, slotIndex, deleteCount, out result);
                 if (ok)
@@ -373,7 +406,7 @@ ORDER BY slot_index;";
             {
                 _equipStore.UpsertContainerState(connection, transaction, characterId, accountId, InventoryListType.Main, snapshot.MainListParam16);
                 _equipStore.UpsertContainerState(connection, transaction, characterId, accountId, InventoryListType.Avatar, snapshot.AvatarListParam16);
-                _equipStore.UpsertContainerState(connection, transaction, characterId, accountId, InventoryListType.PersonalCargo, snapshot.PersonalCargoListParam16);
+                _equipStore.UpsertContainerState(connection, transaction, characterId, accountId, InventoryListType.PersonalCargo, NormalizePersonalCargoListParam(snapshot.PersonalCargoListParam16));
                 _equipStore.UpsertContainerState(connection, transaction, characterId, accountId, InventoryListType.Pet, 0);
                 _equipStore.UpsertAccountCargoState(connection, transaction, characterId, accountId, snapshot.AccountCargoState);
 

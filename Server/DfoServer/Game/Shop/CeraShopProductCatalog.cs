@@ -58,6 +58,11 @@ namespace DfoServer.Game.Shop
             ParseStandardSection(content, "recoveryitem", 9, entries);
             ParseStandardSection(content, "visual", 8, entries);
             ParseStandardSection(content, "package", 11, entries);
+            // [regular package]: 与 [package] 同为 stride=11 布局(价格在 col4),
+            // 收录商城中的常规礼包/幸运礼盒等商品(如 强化成功幸运礼盒 102661 / 增幅成功幸运礼盒 102660)。
+            // 缺此解析会导致该段商品在 TryResolve 时"product not found in cerashop.etc",
+            // 购买直接失败并被客户端显示为通用"物品栏空间不足"错误。
+            ParseStandardSection(content, "regular package", 11, entries);
             ParseAvatarSection(content, entries);
 
             var data = new CatalogData
@@ -107,7 +112,7 @@ namespace DfoServer.Game.Shop
                 if (!TryParseInt(tokens[i + 2], out var count) || count <= 0)
                     count = 1;
 
-                var priceIndex = section == "package" ? i + 4 : i + 5;
+                var priceIndex = (section == "package" || section == "regular package") ? i + 4 : i + 5;
                 if (!TryParseInt(tokens[priceIndex], out var coinPrice) || coinPrice < 0)
                     coinPrice = 0;
 

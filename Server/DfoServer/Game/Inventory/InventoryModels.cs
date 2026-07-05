@@ -108,6 +108,67 @@ namespace DfoServer.Game.Inventory
         public bool PetFeedUsed { get; set; }
     }
 
+    public enum PersonalCargoUpgradeTicketStatus
+    {
+        NotApplicable,
+        Upgraded,
+        MissingItem,
+        Maxed,
+        Locked,
+    }
+
+    public sealed class PersonalCargoUpgradeTicketResult
+    {
+        public PersonalCargoUpgradeTicketStatus Status { get; set; }
+
+        public InventoryListType ListType { get; set; }
+
+        public short SlotIndex { get; set; }
+
+        public int ItemTemplateId { get; set; }
+
+        public ushort PreviousListParam16 { get; set; }
+
+        public ushort NewListParam16 { get; set; }
+
+        public InventoryMutationResult ConsumedItem { get; set; }
+
+        public bool Handled => Status != PersonalCargoUpgradeTicketStatus.NotApplicable;
+
+        public bool Success => Status == PersonalCargoUpgradeTicketStatus.Upgraded;
+    }
+
+    public enum AccountCargoUpgradeToolStatus
+    {
+        NotApplicable,
+        Upgraded,
+        MissingItem,
+        Maxed,
+        NotOpened,
+        Locked,
+    }
+
+    public sealed class AccountCargoUpgradeToolResult
+    {
+        public AccountCargoUpgradeToolStatus Status { get; set; }
+
+        public InventoryListType ListType { get; set; }
+
+        public short SlotIndex { get; set; }
+
+        public int ItemTemplateId { get; set; }
+
+        public int PreviousSelectionKey { get; set; }
+
+        public int NewSelectionKey { get; set; }
+
+        public InventoryMutationResult ConsumedItem { get; set; }
+
+        public bool Handled => Status != AccountCargoUpgradeToolStatus.NotApplicable;
+
+        public bool Success => Status == AccountCargoUpgradeToolStatus.Upgraded;
+    }
+
     public sealed class CreatureHatchResult
     {
         public InventoryListType ListType { get; set; }

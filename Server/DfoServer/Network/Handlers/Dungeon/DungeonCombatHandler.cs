@@ -44,6 +44,7 @@ namespace DfoServer.Network.Handlers.Dungeon
                 FileLogger.Log($"[DungeonHandler] DIE_MONSTER: passive object code={req.LocalIndex}");
                 if (session.Player.CurClearCondition != null && session.Player.CurClearCondition.Check(0, req.LocalIndex))
                     await _settlement.TryClearDungeon(session, $"destroy object {req.LocalIndex}");
+                await _svc.CheckQuestPassiveObjectDrop(session, req.LocalIndex);
                 return;
             }
 
@@ -187,6 +188,12 @@ namespace DfoServer.Network.Handlers.Dungeon
                 }
                 catch { }
 
+                if (leveledUp)
+                {
+                    await _svc.SendUserInfoSubtype0Broadcast(session);
+                    await _svc.SendUserInfoBroadcast(session);
+                }
+
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0025,
                     ExpNotificationBuilder.Build(session.Player.Level, session.Player.Exp, remainSp, remainTp,
                         premiumBonusExp: growthContractBonusExp)));
@@ -195,7 +202,6 @@ namespace DfoServer.Network.Handlers.Dungeon
                 {
                     FileLogger.Log($"[DungeonHandler] LEVEL UP: cid={session.Player.CharacterId} {prevLevel}->{session.Player.Level} exp={session.Player.Exp}");
                     await _svc.SendQuestListRefresh(session);
-                    await _svc.SendUserInfoBroadcast(session);
                 }
 
             }
@@ -460,12 +466,14 @@ namespace DfoServer.Network.Handlers.Dungeon
 
             if (matchedDrop.IsGold)
             {
-                var goldAmount = (int)matchedDrop.StackCount;
-                _svc.PersistGold(session.Player.CharacterId, accountId, goldAmount);
+                var baseGold = (int)matchedDrop.StackCount;
+                var totalBonusPct = _svc.GetEquippedGoldBonus(session.Player.CharacterId);
+                var extraGold = baseGold * totalBonusPct / 100;
+                _svc.PersistGold(session.Player.CharacterId, accountId, baseGold + extraGold);
                 session.Player.CurDungeonDrops.Remove(req.SrcSlot);
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0027,
-                    DropItemBuilder.BuildPickupGold(req.SrcSlot, session.Player.UserId, goldAmount)));
-                FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] GET_ITEM: gold pickup srcSlot={req.SrcSlot} amount={goldAmount}");
+                    DropItemBuilder.BuildPickupGold(req.SrcSlot, session.Player.UserId, baseGold + extraGold, extraGold)));
+                FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] GET_ITEM: gold pickup srcSlot={req.SrcSlot} baseGold={baseGold} extraGold={extraGold}");
             }
             else
             {

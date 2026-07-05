@@ -7,6 +7,7 @@ using DfoServer.Game.Skills;
 using DfoServer.GameWorld;
 using DfoServer.Infrastructure;
 using DfoServer.Network.Builders;
+using Microsoft.Data.Sqlite;
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
@@ -22,11 +23,13 @@ namespace DfoServer.Network.Handlers.Dungeon
         private readonly IAssetService _assetService;
 
         internal Game.ReviveCoin.ReviveCoinService ReviveCoin { get; }
+        internal Game.DeathTower.DeathTowerHandler DeathTower { get; }
 
         internal DungeonSharedServices(IAssetService assetService, Game.ReviveCoin.ReviveCoinService reviveCoin)
         {
             _assetService = assetService ?? throw new ArgumentNullException(nameof(assetService));
             ReviveCoin = reviveCoin ?? throw new ArgumentNullException(nameof(reviveCoin));
+            DeathTower = new Game.DeathTower.DeathTowerHandler();
         }
 
         internal static DungeonRoomProgress GetCurrentRoomProgress(EnhancedClientSession session)
@@ -136,6 +139,7 @@ namespace DfoServer.Network.Handlers.Dungeon
             await CheckPetCreatureDeathAsync(session, "reset_dungeon_state");
             PersistPetCreatureSatiety(session, "reset_dungeon_state");
             await TryRevivePetCreatureOnTownReturnAsync(session, "reset_dungeon_state");
+            Game.DeathTower.DeathTowerHandler.ClearTowerState(session);
             session.Player.CurDungeon = 0;
             session.Player.CurDungeonClearState = 0;
             session.Player.CurDungeonTotalExp = 0;
@@ -534,21 +538,7 @@ namespace DfoServer.Network.Handlers.Dungeon
         {
             try
             {
-                var repo = new SqliteCharacterRepository(
-                    ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
-                repo.UpdateLevelAndExp(characterId, level, exp);
-
-                // After level-up, recompute combat stats for the new level and persist subtype1.
-                // growType selects the growth table (15-49 advancement / 50+ awakening); it must come from the character record.
-                var rec = repo.GetById(characterId);
-                if (rec != null)
-                {
-                    CharacterStatComputer.DecodeGrowType(rec.GrowType, out int first, out int second);
-                    var blob = CharacterStatComputer.BuildAdditionalInfo(rec.Job, level, first, second);
-                    new SqliteSubtype1Repository(
-                        ServerPaths.DatabasePath, ServerPaths.SchemaFilePath)
-                        .UpdateCombatStats(characterId, blob);
-                }
+                CharacterProgressService.PersistLevelAndExp(characterId, level, exp);
             }
             catch (Exception ex)
             {
@@ -584,6 +574,47 @@ namespace DfoServer.Network.Handlers.Dungeon
                 }
             }
             catch { return 0; }
+        }
+
+        private static readonly Dictionary<int, int> GoldBonusEquipments = new()
+        {
+            {100320775, 12},
+            {24191, 10},
+            {100341606, 30},
+            {100331240, 10},
+            {100331319, 3},
+            {26626, 3},
+            {26627, 4},
+            {26341, 3},
+            {26342, 4},
+            {26115, 3},
+            {104000181, 3},
+            {101020286, 3},
+            {101020526, 3},
+            {109000133, 3}
+        };
+
+        internal int GetEquippedGoldBonus(int characterId)
+        {
+            var totalBonus = 0;
+            try
+            {
+                using (var scope = _assetService.OpenScope(characterId, 0))
+                {
+                    using var cmd = scope.Connection.CreateCommand();
+                    cmd.CommandText = "SELECT item_id FROM character_equipped_entries WHERE character_id = @cid";
+                    cmd.Parameters.AddWithValue("@cid", characterId);
+                    using var reader = cmd.ExecuteReader();
+                    while (reader.Read())
+                    {
+                        var itemId = reader.GetInt32(0);
+                        if (GoldBonusEquipments.TryGetValue(itemId, out var bonus))
+                            totalBonus += bonus;
+                    }
+                }
+            }
+            catch { }
+            return totalBonus;
         }
 
         internal async Task HandleRecoverStaminaAsync(EnhancedClientSession session, byte[] body)
@@ -990,6 +1021,29 @@ namespace DfoServer.Network.Handlers.Dungeon
             }
         }
 
+        internal async Task SendUserInfoSubtype0Broadcast(EnhancedClientSession session)
+        {
+            try
+            {
+                int cid = session.Player.CharacterId;
+                var charRepo = new SqliteCharacterRepository(
+                    ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
+                var record = charRepo.GetById(cid);
+                if (record == null)
+                    return;
+
+                record.Subtype0Tail = new SqliteSubtype0FieldsRepository(
+                    ServerPaths.DatabasePath, ServerPaths.SchemaFilePath).Load(cid);
+
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
+                    0x00, 0x0002, UserInfoSubtype0Builder.BuildNotificationBody(record)));
+            }
+            catch (Exception ex)
+            {
+                FileLogger.Log($"[DungeonHandler] SendUserInfoSubtype0Broadcast ERROR: {ex.Message}");
+            }
+        }
+
         internal bool TryPickupItemToInventory(int characterId, int accountId, int itemTemplateId, int stackCount, out short assignedSlot)
         {
             assignedSlot = -1;
@@ -1038,6 +1092,30 @@ namespace DfoServer.Network.Handlers.Dungeon
         {
             if (session.Player.CurDungeon <= 0 || monsterCode <= 0) return;
 
+            await CheckQuestDrop(session, monsterCode, "monster", activeQuestIds =>
+                QuestDropProvider.CheckMonsterDrop(
+                    activeQuestIds, session.Player.CurDungeon, session.Player.CurDungeonDifficulty, monsterCode));
+        }
+
+        internal async Task CheckQuestPassiveObjectDrop(EnhancedClientSession session, int objectCode)
+        {
+            if (session.Player.CurDungeon <= 0 || objectCode <= 0) return;
+
+            await CheckQuestDrop(session, objectCode, "passive", activeQuestIds =>
+                QuestDropProvider.CheckEnemyDrop(
+                    activeQuestIds,
+                    session.Player.CurDungeon,
+                    session.Player.CurDungeonDifficulty,
+                    objectCode,
+                    QuestDropProvider.EnemyTypePassiveObject));
+        }
+
+        private async Task CheckQuestDrop(
+            EnhancedClientSession session,
+            int sourceCode,
+            string sourceName,
+            Func<ICollection<int>, List<QuestDropCandidate>> getCandidates)
+        {
             HashSet<int> activeQuestIds = null;
             try
             {
@@ -1049,8 +1127,7 @@ namespace DfoServer.Network.Handlers.Dungeon
             }
             catch { return; }
 
-            var candidates = QuestDropProvider.CheckMonsterDrop(
-                activeQuestIds, session.Player.CurDungeon, session.Player.CurDungeonDifficulty, monsterCode);
+            var candidates = getCandidates(activeQuestIds);
             if (candidates == null) return;
 
             var accountId = session.Account?.AccountId ?? 1;
@@ -1070,16 +1147,16 @@ namespace DfoServer.Network.Handlers.Dungeon
                 if (dropCount <= 0)
                 {
                     if (candidate.MaxStack != -1 && currentHeld >= candidate.MaxStack)
-                        FileLogger.Log($"[{ProtocolLogName}] QUEST_DROP: skipped maxStack monster={monsterCode} item={candidate.ItemId} held={currentHeld} max={candidate.MaxStack}");
+                        FileLogger.Log($"[{ProtocolLogName}] QUEST_DROP: skipped maxStack {sourceName}={sourceCode} item={candidate.ItemId} held={currentHeld} max={candidate.MaxStack}");
                     else if (candidate.DropRate >= 100)
-                        FileLogger.Log($"[{ProtocolLogName}] QUEST_DROP: skipped despite guaranteed rate monster={monsterCode} item={candidate.ItemId} held={currentHeld} count={candidate.Count}");
+                        FileLogger.Log($"[{ProtocolLogName}] QUEST_DROP: skipped despite guaranteed rate {sourceName}={sourceCode} item={candidate.ItemId} held={currentHeld} count={candidate.Count}");
                     continue;
                 }
 
                 short slot;
                 if (!TryPickupItemToInventory(session.Player.CharacterId, accountId, candidate.ItemId, dropCount, out slot))
                 {
-                    FileLogger.Log($"[{ProtocolLogName}] QUEST_DROP: failed to insert monster={monsterCode} item={candidate.ItemId} x{dropCount} held={currentHeld}");
+                    FileLogger.Log($"[{ProtocolLogName}] QUEST_DROP: failed to insert {sourceName}={sourceCode} item={candidate.ItemId} x{dropCount} held={currentHeld}");
                     continue;
                 }
 
@@ -1091,7 +1168,7 @@ namespace DfoServer.Network.Handlers.Dungeon
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000E, w.ToArray()));
 
                 grantedItemIds.Add(candidate.ItemId);
-                FileLogger.Log($"[{ProtocolLogName}] QUEST_DROP: monster={monsterCode} -> item={candidate.ItemId} x{dropCount} slot={slot} (held={currentHeld}->{currentHeld + dropCount})");
+                FileLogger.Log($"[{ProtocolLogName}] QUEST_DROP: {sourceName}={sourceCode} -> item={candidate.ItemId} x{dropCount} slot={slot} (held={currentHeld}->{currentHeld + dropCount})");
             }
 
             if (grantedItemIds.Count <= 0)

@@ -64,9 +64,26 @@ namespace DfoServer.Game.Inventory
 
         bool TryWithdrawCargoGold(int characterId, int accountId, int amount, out int newCharGold, out int newCargoGold);
 
-        bool TryCreateAccountCargo(int accountId);
+        bool TryCreateAccountCargo(int characterId, int accountId, out InventoryMutationResult costResult, out byte errorCode);
 
-        bool TryUpgradeAccountCargo(int accountId, out byte errorCode);
+        bool TryUpgradeAccountCargo(int characterId, int accountId, out InventoryMutationResult costResult, out byte errorCode);
+
+        bool TryUpgradePersonalCargo(int characterId, int accountId, out ushort newListParam16, out byte errorCode);
+
+        bool TryUsePersonalCargoUpgradeTicket(
+            int characterId,
+            int accountId,
+            InventoryListType listType,
+            short slotIndex,
+            int expectedItemTemplateId,
+            out PersonalCargoUpgradeTicketResult result);
+
+        bool TryUseAccountCargoUpgradeTool(
+            int characterId,
+            int accountId,
+            InventoryListType listType,
+            short slotIndex,
+            out AccountCargoUpgradeToolResult result);
 
         bool TrySellItem(int characterId, int accountId, InventoryListType listType, short slotIndex, short sellCount, out InventoryMutationResult result);
 

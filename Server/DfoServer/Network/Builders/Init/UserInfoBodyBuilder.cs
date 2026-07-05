@@ -42,12 +42,8 @@ namespace DfoServer.Network.Builders
 
             if (occurrenceIndex == 0 || occurrenceIndex == 2)
             {
-                var w = new GamePacketWriter();
-                w.WriteByte(0); w.WriteUInt16(1);
-                w.WriteUInt16((ushort)c.CharacterId);
-                w.WriteDstr(c.Name);
-                w.WriteBytes(UserInfoSubtype0Builder.BuildRemainingBytes(c));
-                body = w.ToArray(); return true;
+                body = UserInfoSubtype0Builder.BuildNotificationBody(c);
+                return true;
             }
 
             
