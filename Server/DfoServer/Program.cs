@@ -41,6 +41,12 @@ namespace DfoServer
                 return;
             }
 
+            if (Array.IndexOf(args, "--selftest-personal-cargo") >= 0)
+            {
+                Environment.Exit(SelfTests.PersonalCargoSelfTest.Run());
+                return;
+            }
+
             if (Array.IndexOf(args, "--selftest-dungeon-map-fallback") >= 0)
             {
                 Environment.Exit(SelfTests.DungeonMapFallbackSelfTest.Run());

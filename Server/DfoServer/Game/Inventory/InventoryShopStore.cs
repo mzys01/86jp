@@ -101,6 +101,16 @@ namespace DfoServer.Game.Inventory
 
         // 计算扣费后的各币余额。金币与点券分别结算; 点券按 mode 在 {欢乐券, 代币券, 点券} 内瀑布扣减。
         // 若任一币种(在允许的币池内)余额不足, 返回 Ok=false 且不改动余额。
+        private static bool IsAccountCargoUpgradeTool(int itemTemplateId)
+        {
+            return SqliteInventoryStore.IsAccountCargoUpgradeToolItem(itemTemplateId);
+        }
+
+        private static bool TryResolvePersonalCargoUpgradeToolTarget(int itemTemplateId, out ushort targetListParam16)
+        {
+            return SqliteInventoryStore.TryResolvePersonalCargoUpgradeTarget(itemTemplateId, out targetListParam16);
+        }
+
         private static CeraShopPaymentPlan ComputeCeraShopPayment(WalletSnapshot w, int goldCost, int ceraCost, CeraPayMode mode)
         {
             var plan = new CeraShopPaymentPlan
@@ -684,6 +694,110 @@ namespace DfoServer.Game.Inventory
                 return false;
             }
             var goldSpent = totalGoldCost > 0;
+
+            if (TryResolvePersonalCargoUpgradeToolTarget(itemTemplateId, out var personalCargoTargetListParam16))
+            {
+                if (effectiveCount != 1)
+                {
+                    FileLogger.Log($"  [CeraShopBuy] REJECT: personal cargo upgrade only supports single purchase product=0x{productId:X8} item=0x{itemTemplateId:X8} count={effectiveCount}");
+                    return false;
+                }
+
+                if (!SqliteInventoryStore.TryUpgradePersonalCargoToCapacityCore(connection, transaction, characterId, accountId, personalCargoTargetListParam16, out var previousListParam16, out var newListParam16, out var personalCargoErrorCode))
+                {
+                    FileLogger.Log($"  [CeraShopBuy] REJECT: personal cargo upgrade product=0x{productId:X8} item=0x{itemTemplateId:X8} target={personalCargoTargetListParam16} error=0x{personalCargoErrorCode:X2}");
+                    return false;
+                }
+
+                if (!TryApplyCeraShopPayment(connection, transaction, characterId, plan))
+                    return false;
+                DeductCouponIfNeeded(connection, transaction, couponItemUid, couponNewStackCount);
+                _auditLogger.WriteBuyAuditLog(connection, transaction, characterId, itemTemplateId, -1, totalGoldCost, totalCeraCost);
+
+                result = new InventoryMutationResult
+                {
+                    ListType = InventoryListType.PersonalCargo,
+                    SlotIndex = -1,
+                    ItemTemplateId = itemTemplateId,
+                    RemainingStackCount = newListParam16,
+                    InstanceValue = newListParam16,
+                    UpdatedGold = plan.NewGold,
+                    UpdatedSp = wallet.Sp,
+                    UpdatedCoin = plan.NewCera,
+                    UpdatedTokenCera = plan.NewTokenCera,
+                    UpdatedHappyTokenCera = plan.NewHappyTokenCera,
+                    GoldSpent = goldSpent,
+                    ConsumedOnPurchase = true,
+                    RequestedCount = 1,
+                    AppliedCount = 1,
+                };
+                if (couponItemUid > 0)
+                {
+                    result.ExtraResults.Add(new InventoryMutationResult
+                    {
+                        ListType = InventoryListType.Main,
+                        SlotIndex = couponSlotIndex,
+                        ItemTemplateId = couponId,
+                        RemainingStackCount = couponNewStackCount,
+                        InstanceValue = couponNewStackCount,
+                    });
+                }
+
+                FileLogger.Log($"  [CeraShopBuy] personal cargo upgrade consumed on purchase: product=0x{productId:X8} item=0x{itemTemplateId:X8} personalCargo={previousListParam16}->{newListParam16}");
+                return true;
+            }
+
+            if (IsAccountCargoUpgradeTool(itemTemplateId))
+            {
+                if (effectiveCount != 1)
+                {
+                    FileLogger.Log($"  [CeraShopBuy] REJECT: account cargo upgrade only supports single purchase product=0x{productId:X8} item=0x{itemTemplateId:X8} count={effectiveCount}");
+                    return false;
+                }
+
+                if (!SqliteInventoryStore.TryUpgradeAccountCargoCore(connection, transaction, accountId, out var previousSelectionKey, out var newSelectionKey, out var accountCargoErrorCode))
+                {
+                    FileLogger.Log($"  [CeraShopBuy] REJECT: account cargo upgrade product=0x{productId:X8} item=0x{itemTemplateId:X8} error=0x{accountCargoErrorCode:X2}");
+                    return false;
+                }
+
+                if (!TryApplyCeraShopPayment(connection, transaction, characterId, plan))
+                    return false;
+                DeductCouponIfNeeded(connection, transaction, couponItemUid, couponNewStackCount);
+                _auditLogger.WriteBuyAuditLog(connection, transaction, characterId, itemTemplateId, -1, totalGoldCost, totalCeraCost);
+
+                result = new InventoryMutationResult
+                {
+                    ListType = InventoryListType.AccountCargo,
+                    SlotIndex = -1,
+                    ItemTemplateId = itemTemplateId,
+                    RemainingStackCount = newSelectionKey,
+                    InstanceValue = newSelectionKey,
+                    UpdatedGold = plan.NewGold,
+                    UpdatedSp = wallet.Sp,
+                    UpdatedCoin = plan.NewCera,
+                    UpdatedTokenCera = plan.NewTokenCera,
+                    UpdatedHappyTokenCera = plan.NewHappyTokenCera,
+                    GoldSpent = goldSpent,
+                    ConsumedOnPurchase = true,
+                    RequestedCount = 1,
+                    AppliedCount = 1,
+                };
+                if (couponItemUid > 0)
+                {
+                    result.ExtraResults.Add(new InventoryMutationResult
+                    {
+                        ListType = InventoryListType.Main,
+                        SlotIndex = couponSlotIndex,
+                        ItemTemplateId = couponId,
+                        RemainingStackCount = couponNewStackCount,
+                        InstanceValue = couponNewStackCount,
+                    });
+                }
+
+                FileLogger.Log($"  [CeraShopBuy] account cargo upgrade consumed on purchase: product=0x{productId:X8} item=0x{itemTemplateId:X8} selectionKey={previousSelectionKey}->{newSelectionKey}");
+                return true;
+            }
 
             if (Premium.PremiumCatalog.Load().TryGetValue(itemTemplateId, out _, out _))
             {

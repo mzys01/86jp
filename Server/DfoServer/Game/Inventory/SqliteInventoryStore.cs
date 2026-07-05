@@ -17,6 +17,7 @@ namespace DfoServer.Game.Inventory
     {
         internal const int DefaultAvatarUnknownFixed30 = 0x00001E00;
         internal const ushort DefaultAvatarUnknownFixed4 = 0x0400;
+        internal const ushort DefaultPersonalCargoCapacity = 8;
         internal static readonly object StackableItemCacheLock = new object();
         internal static readonly Dictionary<int, PvfLib.StackableItemFile> StackableItemCache = new Dictionary<int, PvfLib.StackableItemFile>();
 
@@ -96,7 +97,7 @@ namespace DfoServer.Game.Inventory
                     {
                         _equipStore.UpsertContainerState(connection, tx, characterId, accountId, InventoryListType.Main, 24);
                         _equipStore.UpsertContainerState(connection, tx, characterId, accountId, InventoryListType.Avatar, 0);
-                        _equipStore.UpsertContainerState(connection, tx, characterId, accountId, InventoryListType.PersonalCargo, 0);
+                        _equipStore.UpsertContainerState(connection, tx, characterId, accountId, InventoryListType.PersonalCargo, DefaultPersonalCargoCapacity);
                     }
 
                     EnsureReviveCoinSlot(connection, tx, characterId);
@@ -135,7 +136,7 @@ VALUES (
                 var listParams = _equipStore.LoadContainerState(connection, null, characterId, accountId);
                 snapshot.MainListParam16 = GetListParam(listParams, InventoryListType.Main);
                 snapshot.AvatarListParam16 = GetListParam(listParams, InventoryListType.Avatar);
-                snapshot.PersonalCargoListParam16 = GetListParam(listParams, InventoryListType.PersonalCargo);
+                snapshot.PersonalCargoListParam16 = NormalizePersonalCargoListParam(GetListParam(listParams, InventoryListType.PersonalCargo));
                 snapshot.AccountCargoState = _equipStore.LoadAccountCargoState(connection, null, characterId, accountId);
 
                 using (var command = connection.CreateCommand())
@@ -361,7 +362,7 @@ ORDER BY slot_index;";
             {
                 _equipStore.UpsertContainerState(connection, transaction, characterId, accountId, InventoryListType.Main, snapshot.MainListParam16);
                 _equipStore.UpsertContainerState(connection, transaction, characterId, accountId, InventoryListType.Avatar, snapshot.AvatarListParam16);
-                _equipStore.UpsertContainerState(connection, transaction, characterId, accountId, InventoryListType.PersonalCargo, snapshot.PersonalCargoListParam16);
+                _equipStore.UpsertContainerState(connection, transaction, characterId, accountId, InventoryListType.PersonalCargo, NormalizePersonalCargoListParam(snapshot.PersonalCargoListParam16));
                 _equipStore.UpsertContainerState(connection, transaction, characterId, accountId, InventoryListType.Pet, 0);
                 _equipStore.UpsertAccountCargoState(connection, transaction, characterId, accountId, snapshot.AccountCargoState);
 

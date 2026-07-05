@@ -25,6 +25,20 @@ namespace DfoServer.Network.Handlers
 
             var (cid, aid) = ResolveOwner(session);
 
+            if (_inventoryStore.TryUseAccountCargoUpgradeTool(cid, aid, listType, slotIndex, out var accountCargoToolResult)
+                && accountCargoToolResult.Handled)
+            {
+                await SendAccountCargoUpgradeToolResponse(session, listType, slotIndex, instanceValue, itemCode, accountCargoToolResult);
+                return;
+            }
+
+            if (_inventoryStore.TryUsePersonalCargoUpgradeTicket(cid, aid, listType, slotIndex, itemCode, out var cargoTicketResult)
+                && cargoTicketResult.Handled)
+            {
+                await SendPersonalCargoUpgradeTicketResponse(session, listType, slotIndex, instanceValue, itemCode, cargoTicketResult);
+                return;
+            }
+
             var consumed = _inventoryStore.TryDeleteItem(cid, aid, listType, slotIndex, 1, out var result);
             var responsePlan = BuildUseStackableResponsePlan(consumed, result, listType, slotIndex, instanceValue, itemCode);
             if (!consumed)
@@ -60,6 +74,64 @@ namespace DfoServer.Network.Handlers
                 ? $" petSatiety key={result.PetCreatureKey} {result.PetSatietyBefore}->{result.PetSatietyAfter}"
                 : string.Empty;
             FileLogger.Log($"[{ProtocolName}] USE_STACKABLE: consumed 1x item 0x{itemCode:X8} from slot {slotIndex}, remaining={result.RemainingStackCount}{petSatietyLog}");
+        }
+
+        private async Task SendPersonalCargoUpgradeTicketResponse(
+            EnhancedClientSession session,
+            InventoryListType listType,
+            short slotIndex,
+            int instanceValue,
+            int itemCode,
+            PersonalCargoUpgradeTicketResult result)
+        {
+            var responseItemCode = itemCode != 0 ? itemCode : result.ItemTemplateId;
+            var ackBody = result.Success
+                ? UseStackableAckBuilder.BuildSuccess(slotIndex, (byte)listType, instanceValue, responseItemCode)
+                : UseStackableAckBuilder.BuildError((byte)listType, responseItemCode, instanceValue);
+
+            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x002C, ackBody));
+
+            if (!result.Success)
+            {
+                FileLogger.Log($"[{ProtocolName}] USE_STACKABLE upgrade-cargo: failed status={result.Status} item=0x{result.ItemTemplateId:X8} listType={listType} slot={slotIndex} current={result.PreviousListParam16}");
+                return;
+            }
+
+            if (result.ConsumedItem != null)
+                await _refresh.SendUpdateItemList(session, result.ConsumedItem.ListType, result.ConsumedItem.SlotIndex);
+
+            await _refresh.SendItemListRefresh(session, InventoryListType.PersonalCargo);
+            FileLogger.Log($"[{ProtocolName}] USE_STACKABLE upgrade-cargo: item=0x{result.ItemTemplateId:X8} slot={slotIndex} personalCargo={result.PreviousListParam16}->{result.NewListParam16} remaining={result.ConsumedItem?.RemainingStackCount ?? 0}");
+        }
+
+        private async Task SendAccountCargoUpgradeToolResponse(
+            EnhancedClientSession session,
+            InventoryListType listType,
+            short slotIndex,
+            int instanceValue,
+            int itemCode,
+            AccountCargoUpgradeToolResult result)
+        {
+            var responseItemCode = itemCode != 0 ? itemCode : result.ItemTemplateId;
+            var ackBody = result.Success
+                ? UseStackableAckBuilder.BuildSuccess(slotIndex, (byte)listType, instanceValue, responseItemCode)
+                : UseStackableAckBuilder.BuildError((byte)listType, responseItemCode, instanceValue);
+
+            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x002C, ackBody));
+
+            if (!result.Success)
+            {
+                FileLogger.Log($"[{ProtocolName}] USE_STACKABLE account-cargo-upgrade: failed status={result.Status} item=0x{result.ItemTemplateId:X8} listType={listType} slot={slotIndex} current={result.PreviousSelectionKey}");
+                return;
+            }
+
+            if (result.ConsumedItem != null)
+                await _refresh.SendUpdateItemList(session, result.ConsumedItem.ListType, result.ConsumedItem.SlotIndex);
+
+            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0132,
+                CommonPacketBodyBuilder.BuildSuccessAck()));
+            await _refresh.SendItemListRefresh(session, InventoryListType.AccountCargo);
+            FileLogger.Log($"[{ProtocolName}] USE_STACKABLE account-cargo-upgrade: item=0x{result.ItemTemplateId:X8} slot={slotIndex} accountCargo={result.PreviousSelectionKey}->{result.NewSelectionKey} remaining={result.ConsumedItem?.RemainingStackCount ?? 0}");
         }
 
         internal static UseStackableResponsePlan BuildUseStackableResponsePlan(
