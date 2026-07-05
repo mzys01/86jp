@@ -3,6 +3,13 @@ using System.Collections.Generic;
 
 namespace DfoServer.Game.Inventory
 {
+    // 装备实例的品质常量。服务端生成装备统一写这个种子:
+    // 999999998 = 最上级(真机实证); 0 会导致修理后装备消失, 禁用。
+    public static class ItemQuality
+    {
+        public const uint TopQualitySeed = 999999998u;
+    }
+
     public sealed class InventoryMoveRequest
     {
         public InventoryListType SourceListType { get; set; }

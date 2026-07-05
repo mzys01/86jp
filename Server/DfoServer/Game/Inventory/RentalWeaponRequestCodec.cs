@@ -9,7 +9,7 @@ namespace DfoServer.Game.Inventory
         public const ushort RentalWeaponDurability = 100;
         public const int RentalDurationSeconds = 86400;
         /// 租赁武器固定品级 seed（wire @6，与任务/初始装备一致，客户端显示 90%% 以上）。
-        public const int RentalWeaponQualitySeed = 999999998;
+        public const int RentalWeaponQualitySeed = (int)ItemQuality.TopQualitySeed;
 
         private const int ShopOffset = 0;
         private const int InventoryTemplateOffset = 13;

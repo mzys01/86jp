@@ -62,7 +62,11 @@ namespace DfoServer.Game.Quests
                 if (quests.Count > 0)
                     activeQuestIds = new HashSet<int>(quests.ConvertAll(q => (int)q.QuestId));
             }
-            catch { return; }
+            catch (Exception ex)
+            {
+                FileLogger.Log($"[{ProtocolLogName}] QUEST_DROP ERROR: active quest load failed, drop check skipped: {sourceName}={sourceCode}: {ex.Message}");
+                return;
+            }
 
             var candidates = getCandidates(activeQuestIds);
             if (candidates == null) return;
@@ -78,7 +82,10 @@ namespace DfoServer.Game.Quests
                     using (var scope = _assetService.OpenScope(session.Player.CharacterId, accountId))
                         currentHeld = _assetService.CountItem(scope, candidate.ItemId);
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    FileLogger.Log($"[{ProtocolLogName}] QUEST_DROP ERROR: held count read failed, assuming 0: item={candidate.ItemId}: {ex.Message}");
+                }
 
                 int dropCount = QuestDropProvider.RollDrop(candidate, currentHeld);
                 if (dropCount <= 0)

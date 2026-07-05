@@ -53,7 +53,12 @@ namespace DfoServer.GameWorld
                 lock (_cacheLock) { _qstCache[questId] = qst; }
                 return qst;
             }
-            catch { return null; }
+            catch (Exception ex)
+            {
+                // 解析失败的任务会从可接列表和奖励结算里凭空消失, 是最难排查的一类问题 -- 必须大声。
+                FileLogger.Log($"[QuestData] ERROR: quest {questId} parse failed, quest will be MISSING: path={path}: {ex.Message}");
+                return null;
+            }
         }
 
         private static QuestParameterTable LoadParameters()
@@ -701,8 +706,9 @@ namespace DfoServer.GameWorld
 
                 return new QuestReward { Exp = exp, Gold = gold, ChainType = chainType, GrowNumber = growNumber, Items = items, ConsumeItems = consumeItems };
             }
-            catch
+            catch (Exception ex)
             {
+                FileLogger.Log($"[QuestData] ERROR: reward calc failed, returning EMPTY reward: quest={questId}: {ex.Message}");
                 return empty;
             }
         }

@@ -54,42 +54,54 @@ namespace DfoServer.Game.Characters
         {
             using (var tx = conn.BeginTransaction())
             {
-                using (var cmd = conn.CreateCommand())
-                {
-                    cmd.Transaction = tx;
-                    cmd.CommandText = @"
-UPDATE characters
-SET level = @lvl, exp = @exp, updated_at = CURRENT_TIMESTAMP
-WHERE character_id = @cid;";
-                    cmd.Parameters.AddWithValue("@lvl", (int)level);
-                    cmd.Parameters.AddWithValue("@exp", (long)exp);
-                    cmd.Parameters.AddWithValue("@cid", characterId);
-                    cmd.ExecuteNonQuery();
-                }
-
-                byte job;
-                byte growType;
-                using (var cmd = conn.CreateCommand())
-                {
-                    cmd.Transaction = tx;
-                    cmd.CommandText = "SELECT job, grow_type FROM characters WHERE character_id = @cid;";
-                    cmd.Parameters.AddWithValue("@cid", characterId);
-                    using (var reader = cmd.ExecuteReader())
-                    {
-                        if (!reader.Read())
-                            return false;   // 角色不存在: 随事务回滚, 不留半截写入
-
-                        job = (byte)reader.GetInt32(0);
-                        growType = (byte)reader.GetInt32(1);
-                    }
-                }
-
-                CharacterStatComputer.DecodeGrowType(growType, out int firstGrow, out int secondGrow);
-                var combatStats = CharacterStatComputer.BuildAdditionalInfo(job, level, firstGrow, secondGrow);
-                var updated = SqliteSubtype1Repository.UpdateCombatStatsOnConnection(conn, characterId, combatStats, tx) > 0;
+                var updated = PersistLevelAndExp(conn, tx, characterId, level, exp);
                 tx.Commit();
                 return updated;
             }
+        }
+
+        // (conn, tx) 变体: 并入调用方的事务, 由调用方提交/回滚。
+        // 任务完成结算走这里, 使"任务奖励 + 经验/等级/战斗属性"整体原子。
+        public static bool PersistLevelAndExp(
+            SqliteConnection conn,
+            SqliteTransaction tx,
+            int characterId,
+            byte level,
+            uint exp)
+        {
+            using (var cmd = conn.CreateCommand())
+            {
+                cmd.Transaction = tx;
+                cmd.CommandText = @"
+UPDATE characters
+SET level = @lvl, exp = @exp, updated_at = CURRENT_TIMESTAMP
+WHERE character_id = @cid;";
+                cmd.Parameters.AddWithValue("@lvl", (int)level);
+                cmd.Parameters.AddWithValue("@exp", (long)exp);
+                cmd.Parameters.AddWithValue("@cid", characterId);
+                cmd.ExecuteNonQuery();
+            }
+
+            byte job;
+            byte growType;
+            using (var cmd = conn.CreateCommand())
+            {
+                cmd.Transaction = tx;
+                cmd.CommandText = "SELECT job, grow_type FROM characters WHERE character_id = @cid;";
+                cmd.Parameters.AddWithValue("@cid", characterId);
+                using (var reader = cmd.ExecuteReader())
+                {
+                    if (!reader.Read())
+                        return false;   // 角色不存在: 随事务回滚, 不留半截写入
+
+                    job = (byte)reader.GetInt32(0);
+                    growType = (byte)reader.GetInt32(1);
+                }
+            }
+
+            CharacterStatComputer.DecodeGrowType(growType, out int firstGrow, out int secondGrow);
+            var combatStats = CharacterStatComputer.BuildAdditionalInfo(job, level, firstGrow, secondGrow);
+            return SqliteSubtype1Repository.UpdateCombatStatsOnConnection(conn, characterId, combatStats, tx) > 0;
         }
     }
 }

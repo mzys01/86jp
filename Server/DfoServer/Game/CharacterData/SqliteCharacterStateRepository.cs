@@ -156,21 +156,13 @@ namespace DfoServer.Game.CharacterData
                 }
 
                 snapshot.CharacInvisibleFalgs.Clear();
-                using (var cmd = new SqliteCommand(
-                    "SELECT slot_index, flag_value FROM character_invisible_falgs WHERE character_id = @cid ORDER BY slot_index", conn))
+                foreach (var entry in Game.Quests.QuestRepository.LoadAllFlagEntries(conn, null, characterId))
                 {
-                    cmd.Parameters.AddWithValue("@cid", characterId);
-                    using (var reader = cmd.ExecuteReader())
+                    snapshot.CharacInvisibleFalgs.Add(new CharacInvisibleFalgEntrySnapshot
                     {
-                        while (reader.Read())
-                        {
-                            snapshot.CharacInvisibleFalgs.Add(new CharacInvisibleFalgEntrySnapshot
-                            {
-                                SlotIndex = (ushort)reader.GetInt32(0),
-                                FlagValue = (byte)reader.GetInt32(1),
-                            });
-                        }
-                    }
+                        SlotIndex = (ushort)entry.Key,
+                        FlagValue = (byte)entry.Value,
+                    });
                 }
 
                 snapshot.RacingDungeonGroups.Clear();
@@ -420,22 +412,9 @@ VALUES (@cid, (SELECT COALESCE(MAX(sort_order),0)+1 FROM character_dungeon_permi
                         }
                     }
 
-                    using (var cmd = new SqliteCommand("DELETE FROM character_invisible_falgs WHERE character_id = @cid", conn, tx))
-                    {
-                        cmd.Parameters.AddWithValue("@cid", characterId);
-                        cmd.ExecuteNonQuery();
-                    }
-                    foreach (var entry in snapshot.CharacInvisibleFalgs)
-                    {
-                        using (var cmd = new SqliteCommand(
-                            "INSERT INTO character_invisible_falgs (character_id, slot_index, flag_value) VALUES (@cid, @si, @fv)", conn, tx))
-                        {
-                            cmd.Parameters.AddWithValue("@cid", characterId);
-                            cmd.Parameters.AddWithValue("@si", (int)entry.SlotIndex);
-                            cmd.Parameters.AddWithValue("@fv", (int)entry.FlagValue);
-                            cmd.ExecuteNonQuery();
-                        }
-                    }
+                    Game.Quests.QuestRepository.ReplaceAllClearedFlags(conn, tx, characterId,
+                        snapshot.CharacInvisibleFalgs.ConvertAll(
+                            entry => new KeyValuePair<int, int>(entry.SlotIndex, entry.FlagValue)));
                     using (var cmd = new SqliteCommand("DELETE FROM character_racing_dungeon_groups WHERE character_id = @cid", conn, tx))
                     {
                         cmd.Parameters.AddWithValue("@cid", characterId);

@@ -48,7 +48,7 @@ namespace DfoServer.Network.Builders
         }
 
         public static byte[] BuildRawEquipEntry(short slotIndex, uint itemId,
-            uint qualitySeed = 999999998, ushort durability = 32)
+            uint qualitySeed = Game.Inventory.ItemQuality.TopQualitySeed, ushort durability = 32)
         {
             var buf = new byte[84];
             BitConverter.GetBytes(slotIndex).CopyTo(buf, 0);    // [0:2]  slot

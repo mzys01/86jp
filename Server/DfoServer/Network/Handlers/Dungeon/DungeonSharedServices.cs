@@ -458,29 +458,13 @@ namespace DfoServer.Network.Handlers.Dungeon
                 var rec = CharacterRepository.GetById(session.Player.CharacterId);
                 if (rec == null) return;
 
-                var initSnap = new SelectCharacterInitializationSnapshot();
-                CharacterStateRepository.LoadFlags(session.Player.CharacterId, initSnap);
+                var clearedFlags = new Game.Quests.QuestRepository(
+                    SqliteDatabaseBootstrap.BuildConnectionString(ServerPaths.DatabasePath))
+                    .LoadClearedFlags(session.Player.CharacterId);
 
-                var clearedSet = new HashSet<int>();
-                var clearedFlags = new Dictionary<int, int>();
-                foreach (var entry in initSnap.CharacInvisibleFalgs)
-                {
-                    if (entry.FlagValue != 0)
-                    {
-                        clearedSet.Add(entry.SlotIndex);
-                        clearedFlags[entry.SlotIndex] = entry.FlagValue;
-                    }
-                }
-
-                var questIds = QuestData.ComputeAcceptableQuests(
-                    session.Player.Level, rec.Job, rec.GrowType, clearedSet, clearedFlags);
-
-                var w = new GamePacketWriter();
-                w.WriteByte(session.Player.Level);
-                w.WriteUInt16((ushort)questIds.Count);
-                foreach (var qid in questIds)
-                    w.WriteUInt16(qid);
-                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0015, w.ToArray()));
+                var body = Builders.QuestListBodyBuilder.BuildBody(
+                    session.Player.Level, rec.Job, rec.GrowType, clearedFlags);
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0015, body));
             }
             catch (Exception ex)
             {

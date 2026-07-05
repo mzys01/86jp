@@ -28,6 +28,7 @@ namespace DfoServer
             ("--selftest-quest-clear", SelfTests.QuestClearSelfTest.Run),
             ("--selftest-quest-trigger-counts", SelfTests.QuestTriggerCountSelfTest.Run),
             ("--selftest-quest-item-flow", SelfTests.QuestItemFlowSelfTest.Run),
+            ("--selftest-quest-ack-format", SelfTests.QuestAckFormatSelfTest.Run),
             ("--selftest-question-quest-branch", SelfTests.QuestionQuestBranchSelfTest.Run),
             ("--selftest-striker-skill", SelfTests.StrikerSkillSelfTest.Run),
             ("--selftest-pet-equipment", SelfTests.PetEquipmentSelfTest.Run),

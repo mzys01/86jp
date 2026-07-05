@@ -34,7 +34,7 @@ namespace DfoServer.Game.Inventory
 
                 var fields = new MakeEquipListCodec.DisplayFields
                 {
-                    InstanceValue = 999999998u,
+                    InstanceValue = ItemQuality.TopQualitySeed,
                     Durability = meta.Durability,
                 };
                 var raw = MakeEquipListCodec.BuildEntryFromDisplayFields(slot, itemId, fields);

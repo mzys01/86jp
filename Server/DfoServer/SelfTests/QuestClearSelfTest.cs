@@ -130,24 +130,25 @@ namespace DfoServer.SelfTests
             return body;
         }
 
-        private static bool IsSuccessAck(byte[] ack)
+        private static bool IsSuccessAck(QuestAcceptResult result)
         {
-            return ack != null && ack.Length > 0 && ack[0] == 0x01;
+            return result != null && result.Success;
         }
 
-        private static bool IsFailAck(byte[] ack, byte errorCode)
+        private static bool IsSuccessAck(QuestFinishResult result)
         {
-            return ack != null && ack.Length >= 2 && ack[0] == 0x00 && ack[1] == errorCode;
+            return result != null && result.Success;
         }
 
-        private static bool TryReadAcceptTrigger(byte[] ack, out uint trigger)
+        private static bool IsFailAck(QuestFinishResult result, byte errorCode)
         {
-            trigger = 0;
-            if (ack == null || ack.Length < 8 || ack[0] != 0x01)
-                return false;
+            return result != null && !result.Success && result.ErrorCode == errorCode;
+        }
 
-            trigger = BitConverter.ToUInt32(ack, 3);
-            return true;
+        private static bool TryReadAcceptTrigger(QuestAcceptResult result, out uint trigger)
+        {
+            trigger = result != null ? result.InitTrigger : 0;
+            return result != null && result.Success;
         }
 
         private static uint LoadTrigger(string connStr, ushort questId)

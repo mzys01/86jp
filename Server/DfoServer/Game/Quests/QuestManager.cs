@@ -40,8 +40,8 @@ namespace DfoServer.Game.Quests
             FileLogger.Log($"[GameProtocol] ACCEPT_QUEST payload: {(qBody != null ? BitConverter.ToString(qBody) : "null")} ({qBody?.Length ?? 0}B)");
             int cid = _sender.CharacterId;
             if (cid <= 0) return;
-            var ack = QuestService.HandleAcceptQuest(_connStr, cid, qBody, _assetService, _sender.AccountId);
-            await _sender.SendCmdAckAsync(wireType, ack);
+            var result = QuestService.HandleAcceptQuest(_connStr, cid, qBody, _assetService, _sender.AccountId);
+            await _sender.SendCmdAckAsync(wireType, QuestAckBuilder.BuildAccept(result));
         }
 
         public async Task HandleGiveupQuestAsync(ushort wireType, byte[] body)
@@ -49,8 +49,8 @@ namespace DfoServer.Game.Quests
             var qBody = StripEcho(body);
             int cid = _sender.CharacterId;
             if (cid <= 0) return;
-            var ack = QuestService.HandleGiveupQuest(_connStr, cid, qBody);
-            await _sender.SendCmdAckAsync(wireType, ack);
+            var result = QuestService.HandleGiveupQuest(_connStr, cid, qBody);
+            await _sender.SendCmdAckAsync(wireType, QuestAckBuilder.BuildGiveup(result));
         }
 
         public async Task HandleSetTriggerAsync(ushort wireType, byte[] body)
@@ -59,15 +59,15 @@ namespace DfoServer.Game.Quests
             int cid = _sender.CharacterId;
             if (cid <= 0) return;
 
-            byte[] deferredAck;
-            if (TryBuildDeferredClearMapSetTriggerAck(cid, qBody, out deferredAck))
+            QuestSetTriggerResult deferred;
+            if (TryBuildDeferredClearMapSetTrigger(cid, qBody, out deferred))
             {
-                await _sender.SendCmdAckAsync(wireType, deferredAck);
+                await _sender.SendCmdAckAsync(wireType, QuestAckBuilder.BuildSetTrigger(deferred));
                 return;
             }
 
-            var ack = QuestService.HandleSetTrigger(_connStr, cid, qBody);
-            await _sender.SendCmdAckAsync(wireType, ack);
+            var result = QuestService.HandleSetTrigger(_connStr, cid, qBody);
+            await _sender.SendCmdAckAsync(wireType, QuestAckBuilder.BuildSetTrigger(result));
         }
 
         public async Task HandleFinishQuestAsync(ushort wireType, byte[] body)
@@ -75,113 +75,85 @@ namespace DfoServer.Game.Quests
             var qBody = StripEcho(body);
             int cid = _sender.CharacterId;
             if (cid <= 0) return;
-            var ack = QuestService.HandleFinishQuest(_connStr, cid, qBody, _assetService);
-            await _sender.SendCmdAckAsync(wireType, ack);
+            var result = QuestService.HandleFinishQuest(_connStr, cid, qBody, _assetService);
+            await _sender.SendCmdAckAsync(wireType, QuestAckBuilder.BuildFinish(result));
 
-            if (ack != null && ack.Length > 1 && ack[0] == 0x01)
+            if (!result.Success)
+                return;
+
+            var player = _sender.Player;
+            var prevLevel = player.Level;
+
+            // 经验/等级已在完成事务内落库(见 QuestService), 这里只同步会话内存。
+            if (result.Exp > 0)
             {
-                var player = _sender.Player;
-                var prevLevel = player.Level;
-
-                if (ack.Length >= 8)
-                {
-                    uint questExp = BitConverter.ToUInt32(ack, 4);
-                    if (questExp > 0)
-                    {
-                        player.Exp += questExp;
-
-                        while (player.Level < 86 && player.Exp >= (uint)ExpTableProvider.GetLevelThreshold(player.Level))
-                            player.Level++;
-
-                        try
-                        {
-                            CharacterProgressService.PersistLevelAndExp(
-                                _connStr,
-                                cid,
-                                player.Level,
-                                player.Exp);
-                        }
-                        catch (Exception ex)
-                        {
-                            FileLogger.Log($"[QuestManager] PersistLevelAndExp ERROR: {ex.Message}");
-                        }
-                    }
-                }
-
-                ushort remainSp = 0, remainTp = 0;
-                try
-                {
-                    CharacterRecord rec;
-                    using (var conn = new Microsoft.Data.Sqlite.SqliteConnection(_connStr))
-                    {
-                        conn.Open();
-                        rec = SqliteCharacterRepository.LoadById(conn, cid);
-                    }
-                    var skillRepo = SqliteCharacterProgressRepository.FromConnectionString(_connStr);
-                    if (rec != null)
-                    {
-                        var synced = SkillStateService.LoadAndSync(
-                            skillRepo, cid, rec.Job, player.Level, rec.BonusSp, rec.BonusTp, persist: player.Level > prevLevel);
-                        var skillTreeIndex = player.Subtype0Tail?.SkillTreeIndex
-                            ?? SqliteSubtype1Repository.FromConnectionString(_connStr).LoadSkillTreeIndex(cid)
-                            ?? 0;
-                        remainSp = SkillStateService.GetPageRemainingSp(synced.Skills, synced.Points, skillTreeIndex == 1 ? 1 : 0);
-                        remainTp = (ushort)synced.Points.RemainingTp;
-                    }
-                }
-                catch (Exception ex) { FileLogger.Log($"[QuestManager] SP calc ERROR: {ex.Message}"); }
-
-                var leveledUp = player.Level > prevLevel;
-                var inDungeon = player.CurrentRun != null;
-                // 城镇内升级: 先推角色状态(subtype0)+属性(subtype1)再发经验包, 面板即时刷新。
-                // 副本内升级绝不能发角色状态包(subtype0) -- 它会打乱客户端的副本内角色状态,
-                // 实测导致清房后无法进下一个门; 副本内沿用旧时序(经验包之后只补属性)。
-                if (leveledUp && !inDungeon)
-                {
-                    await SendUserInfoSubtype0Broadcast(cid, "LevelUp");
-                    await SendUserInfoBroadcast(cid);
-                }
-
-                await _sender.SendNotiAsync(0x0025,
-                    ExpNotificationBuilder.Build(player.Level, player.Exp, remainSp, remainTp));
-
-                if (leveledUp)
-                {
-                    FileLogger.Log($"[QuestManager] LEVEL UP from quest: cid={cid} {prevLevel}->{player.Level} exp={player.Exp} inDungeon={inDungeon}");
-                    if (inDungeon)
-                        await SendUserInfoBroadcast(cid);
-                }
-
-                if (ack.Length >= 13)
-                {
-                    int consumedCount = ack[12];
-                    int chainTypeOffset = 13 + consumedCount * 7;
-                    if (ack.Length >= chainTypeOffset + 1)
-                    {
-                        int chainType = ack[chainTypeOffset];
-                        if (chainType == 1 || chainType == 2)
-                        {
-                            await SendJobChangeNotification(cid);
-                            await SendUserInfoBroadcast(cid);
-                        }
-                        else if (chainType == 20 && ack.Length >= chainTypeOffset + 2)
-                        {
-                            int expertJobType = ack[chainTypeOffset + 1];
-                            await SendExpertJobChangeNotification(cid, expertJobType);
-                            await SendUserInfoBroadcast(cid);
-                        }
-                        else if (chainType == GameWorld.QuestData.ChainTypeSlotExpansion)
-                        {
-                            // The ACK completes the quest, but the client opens the visual slot from refreshed subtype1 data.
-                            await SendUserInfoBroadcast(cid);
-                        }
-                    }
-                }
-
-                var noti = BuildAcceptedQuestNoti(cid);
-                await _sender.SendNotiAsync(0x023F, noti);
-                await SendAcceptableQuestListAsync();
+                player.Exp = result.NewExp;
+                player.Level = result.NewLevel;
             }
+
+            ushort remainSp = 0, remainTp = 0;
+            try
+            {
+                CharacterRecord rec;
+                using (var conn = new Microsoft.Data.Sqlite.SqliteConnection(_connStr))
+                {
+                    conn.Open();
+                    rec = SqliteCharacterRepository.LoadById(conn, cid);
+                }
+                var skillRepo = SqliteCharacterProgressRepository.FromConnectionString(_connStr);
+                if (rec != null)
+                {
+                    var synced = SkillStateService.LoadAndSync(
+                        skillRepo, cid, rec.Job, player.Level, rec.BonusSp, rec.BonusTp, persist: player.Level > prevLevel);
+                    var skillTreeIndex = player.Subtype0Tail?.SkillTreeIndex
+                        ?? SqliteSubtype1Repository.FromConnectionString(_connStr).LoadSkillTreeIndex(cid)
+                        ?? 0;
+                    remainSp = SkillStateService.GetPageRemainingSp(synced.Skills, synced.Points, skillTreeIndex == 1 ? 1 : 0);
+                    remainTp = (ushort)synced.Points.RemainingTp;
+                }
+            }
+            catch (Exception ex) { FileLogger.Log($"[QuestManager] SP calc ERROR: {ex.Message}"); }
+
+            var leveledUp = player.Level > prevLevel;
+            var inDungeon = player.CurrentRun != null;
+            // 城镇内升级: 先推角色状态(subtype0)+属性(subtype1)再发经验包, 面板即时刷新。
+            // 副本内升级绝不能发角色状态包(subtype0) -- 它会打乱客户端的副本内角色状态,
+            // 实测导致清房后无法进下一个门; 副本内沿用旧时序(经验包之后只补属性)。
+            if (leveledUp && !inDungeon)
+            {
+                await SendUserInfoSubtype0Broadcast(cid, "LevelUp");
+                await SendUserInfoBroadcast(cid);
+            }
+
+            await _sender.SendNotiAsync(0x0025,
+                ExpNotificationBuilder.Build(player.Level, player.Exp, remainSp, remainTp));
+
+            if (leveledUp)
+            {
+                FileLogger.Log($"[QuestManager] LEVEL UP from quest: cid={cid} {prevLevel}->{player.Level} exp={player.Exp} inDungeon={inDungeon}");
+                if (inDungeon)
+                    await SendUserInfoBroadcast(cid);
+            }
+
+            if (result.ChainType == 1 || result.ChainType == 2)
+            {
+                await SendJobChangeNotification(cid);
+                await SendUserInfoBroadcast(cid);
+            }
+            else if (result.ChainType == 20)
+            {
+                await SendExpertJobChangeNotification(cid, result.GrowNumber);
+                await SendUserInfoBroadcast(cid);
+            }
+            else if (result.ChainType == GameWorld.QuestData.ChainTypeSlotExpansion)
+            {
+                // The ACK completes the quest, but the client opens the visual slot from refreshed subtype1 data.
+                await SendUserInfoBroadcast(cid);
+            }
+
+            var noti = BuildAcceptedQuestNoti(cid);
+            await _sender.SendNotiAsync(0x023F, noti);
+            await SendAcceptableQuestListAsync();
         }
 
         public async Task SendActiveQuestListAsync()
@@ -225,9 +197,9 @@ namespace DfoServer.Game.Quests
             await _sender.SendNotiAsync(0x023F, noti);
         }
 
-        private bool TryBuildDeferredClearMapSetTriggerAck(int characterId, byte[] qBody, out byte[] ack)
+        private bool TryBuildDeferredClearMapSetTrigger(int characterId, byte[] qBody, out QuestSetTriggerResult result)
         {
-            ack = null;
+            result = null;
             if (qBody == null || qBody.Length < 3)
                 return false;
 
@@ -252,7 +224,7 @@ namespace DfoServer.Game.Quests
             if (quest == null || quest.TriggerValue == 0)
                 return false;
 
-            ack = BuildSetTriggerAck(questId, quest.TriggerValue);
+            result = new QuestSetTriggerResult { QuestId = questId, TriggerValue = quest.TriggerValue };
             FileLogger.Log($"[QuestManager] SET_TRIGGER deferred clear-map start target: cid={characterId} quest={questId} trigger={quest.TriggerValue} dungeon={run.DungeonId} maze={run.MazeIndex} map={run.MazeStartMapId}");
             return true;
         }
@@ -308,30 +280,8 @@ namespace DfoServer.Game.Quests
             int job = character != null ? character.Job : 0;
             int growType = character != null ? character.GrowType : -1;
 
-            var clearedSet = new System.Collections.Generic.HashSet<int>();
-            var clearedFlags = new System.Collections.Generic.Dictionary<int, int>();
-            using (var conn = new Microsoft.Data.Sqlite.SqliteConnection(_connStr))
-            {
-                conn.Open();
-                using (var cmd = new Microsoft.Data.Sqlite.SqliteCommand(
-                    "SELECT slot_index, flag_value FROM character_invisible_falgs WHERE character_id=@cid", conn))
-                {
-                    cmd.Parameters.AddWithValue("@cid", cid);
-                    using (var r = cmd.ExecuteReader())
-                        while (r.Read())
-                        {
-                            int si = r.GetInt32(0), fv = r.GetInt32(1);
-                            if (fv != 0) { clearedSet.Add(si); clearedFlags[si] = fv; }
-                        }
-                }
-            }
-            var questIds = GameWorld.QuestData.ComputeAcceptableQuests(level, job, growType, clearedSet, clearedFlags);
-            var w = new Network.GamePacketWriter();
-            w.WriteByte((byte)level);
-            w.WriteUInt16((ushort)questIds.Count);
-            foreach (var qid in questIds)
-                w.WriteUInt16(qid);
-            await _sender.SendNotiAsync(0x0015, w.ToArray());
+            var clearedFlags = new QuestRepository(_connStr).LoadClearedFlags(cid);
+            await _sender.SendNotiAsync(0x0015, QuestListBodyBuilder.BuildBody(level, job, growType, clearedFlags));
         }
 
         private async Task SendUserInfoBroadcast(int characterId)
@@ -461,15 +411,6 @@ namespace DfoServer.Game.Quests
                 w.WriteUInt16(q.QuestId);
                 w.WriteUInt32(q.TriggerValue);
             }
-            return w.ToArray();
-        }
-
-        private static byte[] BuildSetTriggerAck(ushort questId, uint triggerValue)
-        {
-            var w = new Network.GamePacketWriter();
-            w.WriteByte(0x01);
-            w.WriteUInt16(questId);
-            w.WriteUInt32(triggerValue);
             return w.ToArray();
         }
     }

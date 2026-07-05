@@ -226,55 +226,52 @@ namespace DfoServer.SelfTests
             return body;
         }
 
-        private static bool IsSuccessAck(byte[] ack)
+        private static bool IsSuccessAck(QuestAcceptResult result)
         {
-            return ack != null && ack.Length > 0 && ack[0] == 0x01;
+            return result != null && result.Success;
         }
 
-        private static bool TryReadAcceptTrigger(byte[] ack, out uint trigger)
+        private static bool IsSuccessAck(QuestFinishResult result)
         {
-            trigger = 0;
-            if (ack == null || ack.Length < 8 || ack[0] != 0x01)
-                return false;
-            trigger = BitConverter.ToUInt32(ack, 3);
-            return true;
+            return result != null && result.Success;
         }
 
-        private static bool TryReadAcceptEventItem(byte[] ack, out ushort slot, out int itemId, out int count)
+        private static bool IsSuccessAck(QuestSetTriggerResult result)
+        {
+            return result != null && result.Success;
+        }
+
+        private static bool TryReadAcceptTrigger(QuestAcceptResult result, out uint trigger)
+        {
+            trigger = result != null ? result.InitTrigger : 0;
+            return result != null && result.Success;
+        }
+
+        private static bool TryReadAcceptEventItem(QuestAcceptResult result, out ushort slot, out int itemId, out int count)
         {
             slot = 0;
             itemId = 0;
             count = 0;
-            if (ack == null || ack.Length < 18 || ack[0] != 0x01 || ack[7] < 1)
+            if (result == null || !result.Success || result.EventItems.Count < 1)
                 return false;
 
-            slot = BitConverter.ToUInt16(ack, 8);
-            itemId = (int)BitConverter.ToUInt32(ack, 10);
-            count = (int)BitConverter.ToUInt32(ack, 14);
+            slot = result.EventItems[0].SlotIndex;
+            itemId = result.EventItems[0].ItemId;
+            count = result.EventItems[0].Count;
             return true;
         }
 
-        private static bool TryReadFinishInsertedItem(byte[] ack, out ushort slot, out int itemId, out int count)
+        private static bool TryReadFinishInsertedItem(QuestFinishResult result, out ushort slot, out int itemId, out int count)
         {
             slot = 0;
             itemId = 0;
             count = 0;
-            if (ack == null || ack.Length < 25 || ack[0] != 0x01)
+            if (result == null || !result.Success || result.ChainType != 0 || result.InsertedEntries.Count < 1)
                 return false;
 
-            int consumedCount = ack[12];
-            int chainTypeOffset = 13 + consumedCount * 7;
-            if (ack.Length < chainTypeOffset + 12 || ack[chainTypeOffset] != 0)
-                return false;
-
-            int insertedCount = ack[chainTypeOffset + 1];
-            if (insertedCount <= 0)
-                return false;
-
-            int itemOffset = chainTypeOffset + 2;
-            slot = BitConverter.ToUInt16(ack, itemOffset);
-            itemId = (int)BitConverter.ToUInt32(ack, itemOffset + 2);
-            count = (int)BitConverter.ToUInt32(ack, itemOffset + 6);
+            slot = result.InsertedEntries[0].SlotIndex;
+            itemId = result.InsertedEntries[0].ItemId;
+            count = (int)result.InsertedEntries[0].CountOrSeed;
             return true;
         }
 

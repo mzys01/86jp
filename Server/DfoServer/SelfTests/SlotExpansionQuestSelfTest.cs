@@ -73,26 +73,16 @@ namespace DfoServer.SelfTests
             return body;
         }
 
-        private static bool IsSuccessAck(byte[] ack)
+        private static bool IsSuccessAck(QuestFinishResult result)
         {
-            return ack != null && ack.Length > 0 && ack[0] == 0x01;
+            return result != null && result.Success;
         }
 
-        private static bool TryReadChain(byte[] ack, out int chainType, out int rewardValue)
+        private static bool TryReadChain(QuestFinishResult result, out int chainType, out int rewardValue)
         {
-            chainType = -1;
-            rewardValue = -1;
-            if (ack == null || ack.Length < 14)
-                return false;
-
-            var consumedCount = ack[12];
-            var chainTypeOffset = 13 + consumedCount * 7;
-            if (ack.Length < chainTypeOffset + 2)
-                return false;
-
-            chainType = ack[chainTypeOffset];
-            rewardValue = ack[chainTypeOffset + 1];
-            return true;
+            chainType = result != null ? result.ChainType : -1;
+            rewardValue = result != null ? result.GrowNumber : -1;
+            return result != null && result.Success;
         }
 
         private static void SeedAccount(string dbPath)

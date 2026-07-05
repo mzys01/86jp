@@ -96,19 +96,15 @@ namespace DfoServer.SelfTests
             return body;
         }
 
-        private static bool IsSuccessAck(byte[] ack)
+        private static bool IsSuccessAck(QuestAcceptResult result)
         {
-            return ack != null && ack.Length > 0 && ack[0] == 0x01;
+            return result != null && result.Success;
         }
 
-        private static bool TryReadAcceptTrigger(byte[] ack, out uint trigger)
+        private static bool TryReadAcceptTrigger(QuestAcceptResult result, out uint trigger)
         {
-            trigger = 0;
-            if (ack == null || ack.Length < 8 || ack[0] != 0x01)
-                return false;
-
-            trigger = BitConverter.ToUInt32(ack, 3);
-            return true;
+            trigger = result != null ? result.InitTrigger : 0;
+            return result != null && result.Success;
         }
 
         private static void SeedAccount(string dbPath)

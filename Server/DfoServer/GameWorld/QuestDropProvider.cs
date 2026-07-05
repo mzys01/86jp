@@ -54,7 +54,10 @@ namespace DfoServer.GameWorld
                         });
                     }
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    FileLogger.Log($"[QuestDropProvider] ERROR: monster drop match failed, quest {questId} skipped: {ex.Message}");
+                }
             }
 
             return results.Count > 0 ? results : null;
@@ -94,7 +97,10 @@ namespace DfoServer.GameWorld
                         });
                     }
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    FileLogger.Log($"[QuestDropProvider] ERROR: enemy drop match failed, quest {questId} skipped: {ex.Message}");
+                }
             }
 
             return results.Count > 0 ? results : null;

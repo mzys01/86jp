@@ -760,7 +760,7 @@ WHERE character_id = @characterId AND list_type = @listType;";
 
         internal static int GenerateInstanceValue(int itemTemplateId, int slotIndex)
         {
-            return 999999998;
+            return (int)ItemQuality.TopQualitySeed;
         }
 
         // ── Package / Booster shared ───────────────────────────
