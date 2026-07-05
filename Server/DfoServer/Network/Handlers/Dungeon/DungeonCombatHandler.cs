@@ -463,12 +463,14 @@ namespace DfoServer.Network.Handlers.Dungeon
 
             if (matchedDrop.IsGold)
             {
-                var goldAmount = (int)matchedDrop.StackCount;
-                _svc.PersistGold(session.Player.CharacterId, accountId, goldAmount);
+                var baseGold = (int)matchedDrop.StackCount;
+                var totalBonusPct = _svc.GetEquippedGoldBonus(session.Player.CharacterId);
+                var extraGold = baseGold * totalBonusPct / 100;
+                _svc.PersistGold(session.Player.CharacterId, accountId, baseGold + extraGold);
                 session.Player.CurDungeonDrops.Remove(req.SrcSlot);
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0027,
-                    DropItemBuilder.BuildPickupGold(req.SrcSlot, session.Player.UserId, goldAmount)));
-                FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] GET_ITEM: gold pickup srcSlot={req.SrcSlot} amount={goldAmount}");
+                    DropItemBuilder.BuildPickupGold(req.SrcSlot, session.Player.UserId, baseGold + extraGold, extraGold)));
+                FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] GET_ITEM: gold pickup srcSlot={req.SrcSlot} baseGold={baseGold} extraGold={extraGold}");
             }
             else
             {
