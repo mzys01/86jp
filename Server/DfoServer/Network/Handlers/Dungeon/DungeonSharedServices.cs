@@ -187,21 +187,7 @@ namespace DfoServer.Network.Handlers.Dungeon
         {
             try
             {
-                var repo = new SqliteCharacterRepository(
-                    ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
-                repo.UpdateLevelAndExp(characterId, level, exp);
-
-                // After level-up, recompute combat stats for the new level and persist subtype1.
-                // growType selects the growth table (15-49 advancement / 50+ awakening); it must come from the character record.
-                var rec = repo.GetById(characterId);
-                if (rec != null)
-                {
-                    CharacterStatComputer.DecodeGrowType(rec.GrowType, out int first, out int second);
-                    var blob = CharacterStatComputer.BuildAdditionalInfo(rec.Job, level, first, second);
-                    new SqliteSubtype1Repository(
-                        ServerPaths.DatabasePath, ServerPaths.SchemaFilePath)
-                        .UpdateCombatStats(characterId, blob);
-                }
+                CharacterProgressService.PersistLevelAndExp(characterId, level, exp);
             }
             catch (Exception ex)
             {
@@ -640,6 +626,29 @@ namespace DfoServer.Network.Handlers.Dungeon
             catch (Exception ex)
             {
                 FileLogger.Log($"[DungeonHandler] SendUserInfoBroadcast ERROR: {ex.Message}");
+            }
+        }
+
+        internal async Task SendUserInfoSubtype0Broadcast(EnhancedClientSession session)
+        {
+            try
+            {
+                int cid = session.Player.CharacterId;
+                var charRepo = new SqliteCharacterRepository(
+                    ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
+                var record = charRepo.GetById(cid);
+                if (record == null)
+                    return;
+
+                record.Subtype0Tail = new SqliteSubtype0FieldsRepository(
+                    ServerPaths.DatabasePath, ServerPaths.SchemaFilePath).Load(cid);
+
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
+                    0x00, 0x0002, UserInfoSubtype0Builder.BuildNotificationBody(record)));
+            }
+            catch (Exception ex)
+            {
+                FileLogger.Log($"[DungeonHandler] SendUserInfoSubtype0Broadcast ERROR: {ex.Message}");
             }
         }
 

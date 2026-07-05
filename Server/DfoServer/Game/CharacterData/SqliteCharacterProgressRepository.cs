@@ -16,7 +16,15 @@ namespace DfoServer.Game.CharacterData
             _connectionString = SqliteDatabaseBootstrap.Initialize(databasePath, schemaFilePath);
         }
 
-        
+        private SqliteCharacterProgressRepository(string connectionString)
+        {
+            _connectionString = connectionString ?? throw new ArgumentNullException(nameof(connectionString));
+        }
+
+        public static SqliteCharacterProgressRepository FromConnectionString(string connectionString)
+        {
+            return new SqliteCharacterProgressRepository(connectionString);
+        }
 
         public SkillInfoSnapshot LoadSkills(int characterId)
         {

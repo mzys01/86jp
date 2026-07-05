@@ -31,6 +31,14 @@ namespace DfoServer.Game.Characters
         public CharacterRecord GetById(int characterId)
         {
             using (var conn = Open())
+                return LoadById(conn, characterId);
+        }
+
+        public static CharacterRecord LoadById(SqliteConnection conn, int characterId)
+        {
+            if (conn == null)
+                throw new ArgumentNullException(nameof(conn));
+
             using (var cmd = conn.CreateCommand())
             {
                 cmd.CommandText = SelectColumns + " WHERE character_id = @id;";
