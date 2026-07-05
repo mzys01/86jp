@@ -132,7 +132,7 @@ namespace DfoServer.Game.Quests
                 catch (Exception ex) { FileLogger.Log($"[QuestManager] SP calc ERROR: {ex.Message}"); }
 
                 var leveledUp = player.Level > prevLevel;
-                var inDungeon = player.CurDungeon > 0;
+                var inDungeon = player.CurrentRun != null;
                 // 城镇内升级: 先推角色状态(subtype0)+属性(subtype1)再发经验包, 面板即时刷新。
                 // 副本内升级绝不能发角色状态包(subtype0) -- 它会打乱客户端的副本内角色状态,
                 // 实测导致清房后无法进下一个门; 副本内沿用旧时序(经验包之后只补属性)。
@@ -231,8 +231,8 @@ namespace DfoServer.Game.Quests
             if (qBody == null || qBody.Length < 3)
                 return false;
 
-            var player = _sender.Player;
-            if (player == null || player.CurDungeon <= 0)
+            var run = _sender.Player?.CurrentRun;
+            if (run == null || run.DungeonId <= 0)
                 return false;
 
             ushort questId = BitConverter.ToUInt16(qBody, 0);
@@ -242,9 +242,9 @@ namespace DfoServer.Game.Quests
                     questId,
                     triggerType,
                     isIncrement,
-                    player.CurDungeonCleared,
-                    player.CurMazeQuestConnected,
-                    player.CurMazeStartMapId))
+                    run.Phase >= Dungeon.DungeonRunPhase.Cleared,
+                    run.MazeQuestConnected,
+                    run.MazeStartMapId))
                 return false;
 
             var active = QuestService.LoadActiveQuests(_connStr, characterId);
@@ -253,7 +253,7 @@ namespace DfoServer.Game.Quests
                 return false;
 
             ack = BuildSetTriggerAck(questId, quest.TriggerValue);
-            FileLogger.Log($"[QuestManager] SET_TRIGGER deferred clear-map start target: cid={characterId} quest={questId} trigger={quest.TriggerValue} dungeon={player.CurDungeon} maze={player.CurMazeIndex} map={player.CurMazeStartMapId}");
+            FileLogger.Log($"[QuestManager] SET_TRIGGER deferred clear-map start target: cid={characterId} quest={questId} trigger={quest.TriggerValue} dungeon={run.DungeonId} maze={run.MazeIndex} map={run.MazeStartMapId}");
             return true;
         }
 

@@ -16,14 +16,16 @@ namespace DfoServer.SelfTests
 
             using var client = new TcpClient();
             var session = new EnhancedClientSession(client, new GamePacketHeader());
+            var run = new Game.Dungeon.DungeonRun(1000, 0);
+            session.Player.CurrentRun = run;
 
-            session.Player.CurRoomStartSequence = 10;
-            session.Player.CurRoomMonsters = new List<DungeonData.MonsterSumInfo>
+            run.RoomStartSequence = 10;
+            run.RoomMonsters = new List<DungeonData.MonsterSumInfo>
             {
                 new DungeonData.MonsterSumInfo { Code = 200, Type = 0, Level = 1, IsBlocking = true },
                 new DungeonData.MonsterSumInfo { Code = 56408, Type = 8, Level = 25, IsBlocking = true },
             };
-            session.Player.CurRoomKilledSeqIds = new HashSet<ushort> { 10 };
+            run.RoomKilledSeqIds = new HashSet<ushort> { 10 };
 
             var progress = DungeonSharedServices.GetCurrentRoomProgress(session);
             Check("enemy apc remains blocking after normal monster kill",
@@ -33,7 +35,7 @@ namespace DfoServer.SelfTests
                 && !progress.RoomPassable,
                 ref failures);
 
-            session.Player.CurRoomKilledSeqIds.Add(11);
+            run.RoomKilledSeqIds.Add(11);
             progress = DungeonSharedServices.GetCurrentRoomProgress(session);
             Check("apc dialog may clear after blocking apc is defeated",
                 DungeonSharedServices.ShouldClearAfterApcDialog(progress)
@@ -41,25 +43,25 @@ namespace DfoServer.SelfTests
                 && progress.RoomPassable,
                 ref failures);
 
-            session.Player.CurRoomStartSequence = 20;
-            session.Player.CurRoomMonsters = new List<DungeonData.MonsterSumInfo>
+            run.RoomStartSequence = 20;
+            run.RoomMonsters = new List<DungeonData.MonsterSumInfo>
             {
                 new DungeonData.MonsterSumInfo { Code = 300, Type = 5, Level = 1, IsBlocking = false },
             };
-            session.Player.CurRoomKilledSeqIds = new HashSet<ushort>();
+            run.RoomKilledSeqIds = new HashSet<ushort>();
             progress = DungeonSharedServices.GetCurrentRoomProgress(session);
             Check("non-blocking apc dialog room can clear",
                 DungeonSharedServices.ShouldClearAfterApcDialog(progress)
                 && progress.BlockingRemainingCount == 0,
                 ref failures);
 
-            session.Player.CurRoomStartSequence = 30;
-            session.Player.CurRoomMonsters = new List<DungeonData.MonsterSumInfo>
+            run.RoomStartSequence = 30;
+            run.RoomMonsters = new List<DungeonData.MonsterSumInfo>
             {
                 new DungeonData.MonsterSumInfo { Code = 301, Type = 0, Level = 1, IsBlocking = true },
                 new DungeonData.MonsterSumInfo { Code = 302, Type = 5, Level = 1, IsBlocking = false },
             };
-            session.Player.CurRoomKilledSeqIds = new HashSet<ushort>();
+            run.RoomKilledSeqIds = new HashSet<ushort>();
             progress = DungeonSharedServices.GetCurrentRoomProgress(session);
             Check("apc dialog does not clear while normal monster remains",
                 !DungeonSharedServices.ShouldClearAfterApcDialog(progress)

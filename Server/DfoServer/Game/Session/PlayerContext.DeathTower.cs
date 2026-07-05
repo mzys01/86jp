@@ -2,9 +2,9 @@ namespace DfoServer.Game.Session
 {
     public partial class PlayerContext
     {
-        // 塔状态(进塔时创建, 返城/断线时清除; null=不在塔中)
-        public DeathTower.DeathTowerSession DeathTowerState { get; set; }
+        // 塔状态便捷只读入口: 真相在 CurrentRun.Tower(塔是一局副本的变体)。
+        public DeathTower.DeathTowerSession DeathTowerState => CurrentRun?.Tower;
 
-        public bool IsInDeathTower => DeathTowerState != null;
+        public bool IsInDeathTower => CurrentRun?.Tower != null;
     }
 }

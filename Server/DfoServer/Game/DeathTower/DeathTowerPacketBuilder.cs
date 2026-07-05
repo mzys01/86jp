@@ -19,13 +19,13 @@ namespace DfoServer.Game.DeathTower
         }
 
         // NOTI 143 START_DEATH_TOWER_MAP (变长, 汇编定案: 9B头 + 14B×怪物 + 1B + 18B×物品)
-        public static byte[] BuildStageMap(DeathTowerSession tower, List<StageMonster> monsters, Random seedRng)
+        public static byte[] BuildStageMap(DeathTowerSession tower, List<StageMonster> monsters)
         {
             var w = new GamePacketWriter();
 
             // Header 9B — currentStage 是 1-based(客户端显示层数)
             w.WriteUInt16((ushort)(tower.CurrentStage + 1));
-            w.WriteUInt32((uint)seedRng.Next());           // randomSeed
+            w.WriteUInt32((uint)Infrastructure.ServerRandom.Next());   // randomSeed
             w.WriteUInt16((ushort)tower.GetCurrentMapId());
             w.WriteByte((byte)monsters.Count);
 

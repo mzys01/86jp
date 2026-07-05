@@ -20,6 +20,7 @@ namespace DfoServer.Network
         private readonly InventoryHandler _inventoryHandler;
         private readonly TownHandler _townHandler;
         private readonly DungeonHandler _dungeonHandler;
+        private readonly StaminaHandler _staminaHandler;
         private readonly SkillHandler _skillHandler;
         private readonly SettingsHandler _settingsHandler;
         private readonly CeraShopHandler _ceraShopHandler;
@@ -68,7 +69,8 @@ namespace DfoServer.Network
             _townHandler = new TownHandler(characterRepository, inventoryStore);
             var dailyResetService = new Game.DailyReset.DailyResetService(databasePath, schemaFilePath);
             var reviveCoinService = new Game.ReviveCoin.ReviveCoinService(inventoryStore, _assetService, dailyResetService);
-            _dungeonHandler = new DungeonHandler(_assetService, reviveCoinService);
+            _dungeonHandler = new DungeonHandler(_assetService, reviveCoinService, characterRepository);
+            _staminaHandler = new StaminaHandler(_assetService);
             _skillHandler = new SkillHandler(characterRepository);
             _settingsHandler = new SettingsHandler();
             _ceraShopHandler = new CeraShopHandler(inventoryStore, sqliteSelectCharacterDataSource);
@@ -111,6 +113,7 @@ namespace DfoServer.Network
         public override Task OnClientDisconnected(EnhancedClientSession session)
         {
             FileLogger.Log($"[{ProtocolName}] Admin client disconnected: {session.SessionId}");
+            Handlers.Dungeon.DungeonRunLifecycle.EndRunOnTeardown(session, "disconnect");
             _townHandler.PersistPosition(session, forceImmediate: true, source: "disconnect");
             return Task.CompletedTask;
         }
@@ -174,7 +177,7 @@ namespace DfoServer.Network
             d[0x0006] = _characterSelectHandler.Handle_ENUM_CMDPACKET_DELETE_CHARACTER;
             d[0x0007] = _characterSelectHandler.Handle_ENUM_CMDPACKET_RETURN_SELECT_CHARACTER;
             d[0x0008] = _characterSelectHandler.Handle_ENUM_CMDPACKET_GET_USERINFO;
-            d[0x0009] = _dungeonHandler.Handle_ENUM_CMDPACKET_RECOVER_STAMINA;
+            d[0x0009] = _staminaHandler.Handle_ENUM_CMDPACKET_RECOVER_STAMINA;
             d[0x02B5] = _characterSelectHandler.Handle_ENUM_CMDPACKET_CHECK_DOUBLE_CHARACTER_NAME;
         }
 
@@ -260,7 +263,7 @@ namespace DfoServer.Network
             d[0x008F] = _dungeonHandler.Handle_ENUM_CMDPACKET_CHANGE_TUTORIAL_FLAG; //143
             d[0x00BF] = _dungeonHandler.Handle_ENUM_CMDPACKET_DUNGEON_EVENT_STORY_PAUSE; //191
             d[0x01E4] = _dungeonHandler.Handle_ENUM_CMDPACKET_TUTORIAL_LEVEL_UP;   //484
-            d[0x0312] = _dungeonHandler.Handle_PREMIUM_SERVICE;                    //786
+            d[0x0312] = PremiumQueryHandler.Handle_PREMIUM_SERVICE;                //786
             d[0x03B6] = _dungeonHandler.Handle_ENUM_CMDPACKET_GORGEOUS_CHALLENGE_TOGGLE;
             d[0x009F] = _dungeonHandler.Handle_ENUM_CMDPACKET_DEATH_TOWER_STAGE_CMD; // 159
         }

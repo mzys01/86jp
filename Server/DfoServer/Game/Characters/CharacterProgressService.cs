@@ -24,17 +24,8 @@ namespace DfoServer.Game.Characters
             string databasePath,
             string schemaFilePath)
         {
-            var characterRepository = new SqliteCharacterRepository(databasePath, schemaFilePath);
-            characterRepository.UpdateLevelAndExp(characterId, level, exp);
-
-            var record = characterRepository.GetById(characterId);
-            if (record == null)
-                return false;
-
-            CharacterStatComputer.DecodeGrowType(record.GrowType, out int firstGrow, out int secondGrow);
-            var combatStats = CharacterStatComputer.BuildAdditionalInfo(record.Job, level, firstGrow, secondGrow);
-            return new SqliteSubtype1Repository(databasePath, schemaFilePath)
-                .UpdateCombatStats(characterId, combatStats) > 0;
+            var connectionString = SqliteDatabaseBootstrap.Initialize(databasePath, schemaFilePath);
+            return PersistLevelAndExp(connectionString, characterId, level, exp);
         }
 
         public static bool PersistLevelAndExp(
@@ -53,43 +44,52 @@ namespace DfoServer.Game.Characters
             }
         }
 
+        // 等级/经验写与战斗属性写必须同生共死: 崩在中间会留下"等级已升属性没跟上"的
+        // 不一致状态(历史上启动时的全量重算就是为修这类存量而生)。显式事务包住两步。
         private static bool PersistLevelAndExp(
             SqliteConnection conn,
             int characterId,
             byte level,
             uint exp)
         {
-            using (var cmd = conn.CreateCommand())
+            using (var tx = conn.BeginTransaction())
             {
-                cmd.CommandText = @"
+                using (var cmd = conn.CreateCommand())
+                {
+                    cmd.Transaction = tx;
+                    cmd.CommandText = @"
 UPDATE characters
 SET level = @lvl, exp = @exp, updated_at = CURRENT_TIMESTAMP
 WHERE character_id = @cid;";
-                cmd.Parameters.AddWithValue("@lvl", (int)level);
-                cmd.Parameters.AddWithValue("@exp", (long)exp);
-                cmd.Parameters.AddWithValue("@cid", characterId);
-                cmd.ExecuteNonQuery();
-            }
-
-            byte job;
-            byte growType;
-            using (var cmd = conn.CreateCommand())
-            {
-                cmd.CommandText = "SELECT job, grow_type FROM characters WHERE character_id = @cid;";
-                cmd.Parameters.AddWithValue("@cid", characterId);
-                using (var reader = cmd.ExecuteReader())
-                {
-                    if (!reader.Read())
-                        return false;
-
-                    job = (byte)reader.GetInt32(0);
-                    growType = (byte)reader.GetInt32(1);
+                    cmd.Parameters.AddWithValue("@lvl", (int)level);
+                    cmd.Parameters.AddWithValue("@exp", (long)exp);
+                    cmd.Parameters.AddWithValue("@cid", characterId);
+                    cmd.ExecuteNonQuery();
                 }
-            }
 
-            CharacterStatComputer.DecodeGrowType(growType, out int firstGrow, out int secondGrow);
-            var combatStats = CharacterStatComputer.BuildAdditionalInfo(job, level, firstGrow, secondGrow);
-            return SqliteSubtype1Repository.UpdateCombatStatsOnConnection(conn, characterId, combatStats) > 0;
+                byte job;
+                byte growType;
+                using (var cmd = conn.CreateCommand())
+                {
+                    cmd.Transaction = tx;
+                    cmd.CommandText = "SELECT job, grow_type FROM characters WHERE character_id = @cid;";
+                    cmd.Parameters.AddWithValue("@cid", characterId);
+                    using (var reader = cmd.ExecuteReader())
+                    {
+                        if (!reader.Read())
+                            return false;   // 角色不存在: 随事务回滚, 不留半截写入
+
+                        job = (byte)reader.GetInt32(0);
+                        growType = (byte)reader.GetInt32(1);
+                    }
+                }
+
+                CharacterStatComputer.DecodeGrowType(growType, out int firstGrow, out int secondGrow);
+                var combatStats = CharacterStatComputer.BuildAdditionalInfo(job, level, firstGrow, secondGrow);
+                var updated = SqliteSubtype1Repository.UpdateCombatStatsOnConnection(conn, characterId, combatStats, tx) > 0;
+                tx.Commit();
+                return updated;
+            }
         }
     }
 }

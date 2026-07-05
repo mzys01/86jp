@@ -16,10 +16,30 @@ namespace DfoServer.GameWorld
             return LstFile.Parse(content);
         }
 
+        private static readonly object _dungeonLstLock = new object();
+        private static LstFile _dungeonLstCache;
+
+        // dungeon.lst 与各 .dgn 解析结果按需缓存(PVF 只读, 解析结果视为不可变共享)。
+        // 击杀热路径每杀一只怪要读 3-4 个副本标量, 此前每次都重新解码+解析整个 .dgn 文本。
         public static LstFile LoadDungeonLstFile()
         {
-            return LoadLstFile(Path.Combine("dungeon", "dungeon.lst"));
+            var cached = _dungeonLstCache;
+            if (cached != null) return cached;
+            lock (_dungeonLstLock)
+            {
+                if (_dungeonLstCache == null)
+                    _dungeonLstCache = LoadLstFile(Path.Combine("dungeon", "dungeon.lst"));
+                return _dungeonLstCache;
+            }
         }
+
+        private static readonly System.Collections.Concurrent.ConcurrentDictionary<int, (DungeonFile File, string FilePath)>
+            _dungeonFileCache = new System.Collections.Concurrent.ConcurrentDictionary<int, (DungeonFile, string)>();
+
+        // 缓存版 .dgn 读取。返回的解析对象是共享实例, 调用方只读不改
+        // (与房间拓扑的迷宫缓存共享同一约定)。
+        public static DungeonFile GetDungeonFile(int dungeonId)
+            => LoadDungeonFileWithPath(dungeonId).File;
 
         private static string ResolveFilePath(LstFile lstFile, int id, string description)
         {
@@ -118,13 +138,7 @@ namespace DfoServer.GameWorld
 
         public static byte GetDungeonBasicLv(int dungeonId)
         {
-            var dgnlst = LoadLstFile(Path.Combine("dungeon", "dungeon.lst"));
-            if (dgnlst == null)
-                throw new Exception("未能成功解析地下城LST文件 dungeon/dungeon.lst");
-
-            var dgnFilePath = ResolveFilePath(dgnlst, dungeonId, "地下城");
-
-            var dngFile = DungeonFile.Parse(PvfArchiveAccessor.ReadText(Path.Combine("dungeon", dgnFilePath)));
+            var dngFile = GetDungeonFile(dungeonId);
             if (dngFile.Mazes == null || dngFile.Mazes.Count == 0)
                 throw new Exception("未解析到迷宫信息");
 
@@ -151,9 +165,7 @@ namespace DfoServer.GameWorld
         {
             try
             {
-                var dgnlst = LoadLstFile(Path.Combine("dungeon", "dungeon.lst"));
-                var dgnFilePath = ResolveFilePath(dgnlst, dungeonId, "地下城");
-                var dngFile = DungeonFile.Parse(PvfArchiveAccessor.ReadText(Path.Combine("dungeon", dgnFilePath)));
+                var dngFile = GetDungeonFile(dungeonId);
                 if (dngFile.DifficultyLevel != null && dngFile.DifficultyLevel.Length > 0)
                 {
                     int count = 0;
@@ -170,14 +182,12 @@ namespace DfoServer.GameWorld
             catch { return 0; }
         }
 
-        public static int GetChampionCount(int dungeonId, int difficulty, int mazeIndex, Random rng, out int[] namedMonsterCodes)
+        public static int GetChampionCount(int dungeonId, int difficulty, int mazeIndex, out int[] namedMonsterCodes)
         {
             namedMonsterCodes = null;
             try
             {
-                var dgnlst = LoadLstFile(Path.Combine("dungeon", "dungeon.lst"));
-                var dgnFilePath = ResolveFilePath(dgnlst, dungeonId, "地下城");
-                var dngFile = DungeonFile.Parse(PvfArchiveAccessor.ReadText(Path.Combine("dungeon", dgnFilePath)));
+                var dngFile = GetDungeonFile(dungeonId);
                 namedMonsterCodes = dngFile.NamedMonster;
 
                 if (dngFile.Champion == null || dngFile.Champion.Length == 0)
@@ -205,12 +215,12 @@ namespace DfoServer.GameWorld
                 }
 
                 int area = mazeW * mazeH;
-                return 100 * adjusted / area > rng.Next(100) ? 1 : 0;
+                return 100 * adjusted / area > Infrastructure.ServerRandom.Next(100) ? 1 : 0;
             }
             catch { return 0; }
         }
 
-        public static void PromoteChampions(List<MonsterSumInfo> monsters, int count, Random rng, int[] namedMonsterCodes = null)
+        public static void PromoteChampions(List<MonsterSumInfo> monsters, int count, int[] namedMonsterCodes = null)
         {
             if (count <= 0) return;
 
@@ -230,7 +240,7 @@ namespace DfoServer.GameWorld
 
             for (int i = 0; i < count && normalIndices.Count > 0; i++)
             {
-                int pick = rng.Next(normalIndices.Count);
+                int pick = Infrastructure.ServerRandom.Next(normalIndices.Count);
                 int idx = normalIndices[pick];
                 normalIndices.RemoveAt(pick);
 
@@ -244,10 +254,7 @@ namespace DfoServer.GameWorld
         {
             try
             {
-                var dgnlst = LoadLstFile(Path.Combine("dungeon", "dungeon.lst"));
-                if (dgnlst == null) return 1.0f;
-                var dgnFilePath = ResolveFilePath(dgnlst, dungeonId, "地下城");
-                var dngFile = DungeonFile.Parse(PvfArchiveAccessor.ReadText(Path.Combine("dungeon", dgnFilePath)));
+                var dngFile = GetDungeonFile(dungeonId);
                 return dngFile.ExperienceIncreasingPoint >= 0 ? dngFile.ExperienceIncreasingPoint : 1.0f;
             }
             catch
@@ -286,7 +293,7 @@ namespace DfoServer.GameWorld
             return defaultMaze;
         }
 
-        private static readonly Random _mazeRng = new Random();
+        
         private static readonly Regex MapCoordinateFileNameRegex =
             new Regex(@"\((?<x>-?\d+)[,.](?<y>-?\d+)\)", RegexOptions.Compiled);
         private static readonly Lazy<Dictionary<int, bool>> _monsterHellFlags =
@@ -330,7 +337,7 @@ namespace DfoServer.GameWorld
             if (bossMap == null || bossMap.Length < 2) return null;
             int pairCount = bossMap.Length / 2;
             if (pairCount <= 1) return new[] { bossMap[0], bossMap[1] };
-            int pick = _mazeRng.Next(pairCount);
+            int pick = Infrastructure.ServerRandom.Next(pairCount);
             return new[] { bossMap[pick * 2], bossMap[pick * 2 + 1] };
         }
 
@@ -370,7 +377,7 @@ namespace DfoServer.GameWorld
             if (candidates.Count == 0)
                 return (dngFile.Mazes[0], 0);
 
-            var pick = candidates[_mazeRng.Next(candidates.Count)];
+            var pick = candidates[Infrastructure.ServerRandom.Next(candidates.Count)];
             return (pick.maze, pick.index);
         }
 
@@ -449,9 +456,7 @@ namespace DfoServer.GameWorld
 
         public static int[] GetLayeredMapIds(int dungeonId, int x, int y, int mazeIndex)
         {
-            var dgnlst = LoadLstFile(Path.Combine("dungeon", "dungeon.lst"));
-            var dgnFilePath = ResolveFilePath(dgnlst, dungeonId, "地下城");
-            var dngFile = DungeonFile.Parse(PvfArchiveAccessor.ReadText(Path.Combine("dungeon", dgnFilePath)));
+            var dngFile = GetDungeonFile(dungeonId);
             if (dngFile.Mazes == null || dngFile.Mazes.Count == 0)
                 return null;
             var maze = (mazeIndex >= 0 && mazeIndex < dngFile.Mazes.Count) ? dngFile.Mazes[mazeIndex] : dngFile.Mazes[0];
@@ -749,10 +754,13 @@ namespace DfoServer.GameWorld
 
         private static (DungeonFile File, string FilePath) LoadDungeonFileWithPath(int dungeonId)
         {
-            var dgnlst = LoadLstFile(Path.Combine("dungeon", "dungeon.lst"));
-            var dgnFilePath = ResolveFilePath(dgnlst, dungeonId, "dungeon");
-            var dungeonFile = DungeonFile.Parse(PvfArchiveAccessor.ReadText(Path.Combine("dungeon", dgnFilePath)));
-            return (dungeonFile, dgnFilePath);
+            return _dungeonFileCache.GetOrAdd(dungeonId, id =>
+            {
+                var dgnlst = LoadDungeonLstFile();
+                var dgnFilePath = ResolveFilePath(dgnlst, id, "dungeon");
+                var dungeonFile = DungeonFile.Parse(PvfArchiveAccessor.ReadText(Path.Combine("dungeon", dgnFilePath)));
+                return (dungeonFile, dgnFilePath);
+            });
         }
 
         private static MapFile LoadMapFile(int mapId)
@@ -841,7 +849,7 @@ namespace DfoServer.GameWorld
             if (total <= 0)
                 return entries[0];
 
-            var roll = _mazeRng.Next(total);
+            var roll = Infrastructure.ServerRandom.Next(total);
             foreach (var entry in entries)
             {
                 if (entry.Rate <= 0)
@@ -1213,14 +1221,14 @@ namespace DfoServer.GameWorld
                 if (bossActorMapIds != null && bossActorMapIds.Count > 0)
                 {
                     return bossActorMapIds.Count > 1
-                        ? bossActorMapIds[_mazeRng.Next(bossActorMapIds.Count)]
+                        ? bossActorMapIds[Infrastructure.ServerRandom.Next(bossActorMapIds.Count)]
                         : bossActorMapIds[0];
                 }
 
                 if (originalCandidates == null || originalCandidates.Length == 0)
                     return -1;
                 return originalCandidates.Length > 1
-                    ? originalCandidates[_mazeRng.Next(originalCandidates.Length)]
+                    ? originalCandidates[Infrastructure.ServerRandom.Next(originalCandidates.Length)]
                     : originalCandidates[0];
             }
             int FindMapIdByMapSpecification(bool allowMapTypeForBossRoom)
@@ -1267,7 +1275,7 @@ namespace DfoServer.GameWorld
                     if (string.Equals(item.Type, "boss", StringComparison.OrdinalIgnoreCase))
                         continue;
                     if (item.MapCandidates != null && item.MapCandidates.Length > 1)
-                        return item.MapCandidates[_mazeRng.Next(item.MapCandidates.Length)];
+                        return item.MapCandidates[Infrastructure.ServerRandom.Next(item.MapCandidates.Length)];
                     return item.Index;
                 }
 
@@ -1327,7 +1335,7 @@ namespace DfoServer.GameWorld
                     if (item.X == x && item.Y == y && item.Type == "map")
                     {
                         mapId = (item.MapCandidates != null && item.MapCandidates.Length > 1)
-                            ? item.MapCandidates[_mazeRng.Next(item.MapCandidates.Length)]
+                            ? item.MapCandidates[Infrastructure.ServerRandom.Next(item.MapCandidates.Length)]
                             : item.Index;
                         break;
                     }
@@ -1598,7 +1606,7 @@ namespace DfoServer.GameWorld
                     reason = "first map spec";
                     if (item.MapCandidates != null && item.MapCandidates.Length > 0)
                     {
-                        var pick = _mazeRng.Next(item.MapCandidates.Length);
+                        var pick = Infrastructure.ServerRandom.Next(item.MapCandidates.Length);
                         return item.MapCandidates[pick];
                     }
                     return item.Index;

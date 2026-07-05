@@ -310,8 +310,9 @@ ON CONFLICT(character_id) DO UPDATE SET skill_tree_index=@idx;", conn))
                 return UpdateCombatStatsOnConnection(conn, characterId, statBlob);
         }
 
-        /// <summary>同连接版本, 供 RecomputeAllCombatStats 在单连接内顺序执行避免锁冲突。</summary>
-        internal static int UpdateCombatStatsOnConnection(SqliteConnection conn, int characterId, byte[] statBlob)
+        /// <summary>同连接版本, 供 RecomputeAllCombatStats 在单连接内顺序执行避免锁冲突;
+        /// 传入 tx 可并入外部事务(等级与属性写同生共死)。</summary>
+        internal static int UpdateCombatStatsOnConnection(SqliteConnection conn, int characterId, byte[] statBlob, SqliteTransaction tx = null)
         {
             var f = CombatStatFields.Parse(statBlob);
             using (var cmd = new SqliteCommand(@"
@@ -328,6 +329,7 @@ UPDATE character_subtype1_fields SET
     stat_jump_power=@jp, stat_weight=@wt, stat_level=@sl
 WHERE character_id=@cid;", conn))
             {
+                cmd.Transaction = tx;
                 f.AddTo(cmd);
                 cmd.Parameters.AddWithValue("@cid", characterId);
                 // stat_level 固定 100, 与种子创建(SqliteSelectCharacterDataSource 建号 INSERT)保持一致;

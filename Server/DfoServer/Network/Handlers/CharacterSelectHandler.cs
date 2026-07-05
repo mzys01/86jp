@@ -32,6 +32,10 @@ namespace DfoServer.Network.Handlers
         {
             try
             {
+                // 换角色前丢弃上一个角色的副本局: PlayerContext 实例跨角色复用, 不丢会把
+                // 上个角色的副本状态带给下个角色。
+                Dungeon.DungeonRunLifecycle.EndRunOnTeardown(session, "select_character");
+
                 int slot = 0;
                 if (body != null && body.Length >= 2)
                 {

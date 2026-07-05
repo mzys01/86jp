@@ -44,12 +44,8 @@ namespace DfoServer.Network.Handlers.Dungeon
                 }
                 else
                 {
-                    var charRepo = new SqliteCharacterRepository(
-                        ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
-                    var record = charRepo.GetById(cid);
-                    var subtype1Repo = new SqliteSubtype1Repository(
-                        ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
-                    var addition = subtype1Repo.HasData(cid) ? subtype1Repo.Load(cid) : null;
+                    var record = _svc.CharacterRepository.GetById(cid);
+                    var addition = _svc.Subtype1Repository.HasData(cid) ? _svc.Subtype1Repository.Load(cid) : null;
                     if (record != null && addition != null)
                     {
                         var skillSnap = _svc.LoadSyncedSkillState(cid, record.Level).Skills;
@@ -85,45 +81,14 @@ namespace DfoServer.Network.Handlers.Dungeon
             if (await _svc.DeathTower.TryHandleSelectDungeon(session, req.DungeonId))
                 return;
 
-            session.Player.CurDungeon = (short)req.DungeonId;
-            session.Player.CurDungeonDifficulty = req.Difficulty;
-            session.Player.CurDungeonFlag1 = req.Flag1;
-            session.Player.CurDungeonFlag2 = req.Flag2;
-            session.Player.CurMazeQuestConnected = false;
-            session.Player.CurMazeStartMapId = 0;
-            session.Player.CurMazeStartX = -1;
-            session.Player.CurMazeStartY = -1;
-            session.Player.CurDungeonHellMode = req.HellPartyRequestFlag != 0 && DungeonData.IsHellDungeon(req.DungeonId);
-            session.Player.CurDungeonHellPartyMode = 0;
-            session.Player.CurDungeonVeryDifficultHell = false;
-            session.Player.CurDungeonHellGorgeousChallenge = false;
-            session.Player.CurDungeonHellMapId = -1;
-            session.Player.CurDungeonHellMapX = 0xFF;
-            session.Player.CurDungeonHellMapY = 0xFF;
-            session.Player.CurDungeonHellRoomInfo = null;
-            session.Player.CurMonsterCnt = 0;
-            session.Player.CurLayeredMapIndex = -1;
-            session.Player.CurMoveMapU15 = 0;
-            session.Player.CurMoveMapU19 = 0;
-            session.Player.CurDungeonTotalExp = 0;
-            session.Player.CurDungeonBossTotalExp = 0;
-            session.Player.CurDungeonChampionTotalExp = 0;
-            session.Player.CurDungeonSuperChampionTotalExp = 0;
-            session.Player.CurDungeonNamedMonsterTotalExp = 0;
-            session.Player.CurDungeonMonsterGrowthContractBonusExp = 0;
-            session.Player.CurDungeonTotalGold = 0;
-            session.Player.CurSceneSlotCounter = 0;
-            session.Player.CurDungeonDrops.Clear();
-            session.Player.CurRoomKilledSeqIds.Clear();
-            session.Player.DungeonRoomStates.Clear();
-            session.Player.CurDungeonRidableObjects.Clear();
-            session.Player.CurBossKilled = false;
-            session.Player.CurBossCode = 0;
+            DungeonRunLifecycle.BeginRun(session, req.DungeonId, req.Difficulty);
+            var run = session.Player.CurrentRun;
+            run.HellMode = req.HellPartyRequestFlag != 0 && DungeonData.IsHellDungeon(req.DungeonId);
 
-            WarmUpDropConfigs(session.Player.CurDungeonHellMode);
+            WarmUpDropConfigs(run.HellMode);
 
             if (req.HellPartyRequestFlag != 0)
-                FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] SELECT_DUNGEON: manual hell requested dungeon={req.DungeonId} enabled={session.Player.CurDungeonHellMode}");
+                FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] SELECT_DUNGEON: manual hell requested dungeon={req.DungeonId} enabled={run.HellMode}");
 
             HashSet<int> activeQuestIds = null;
             HashSet<int> relatedQuestIds = null;
@@ -149,27 +114,27 @@ namespace DfoServer.Network.Handlers.Dungeon
                         relatedQuestIds = null;
                 }
             }
-            catch { }
+            catch (Exception ex) { FileLogger.Log($"[DungeonHandler] SELECT_DUNGEON ERROR: active quest load failed, maze selection ignores quests: {ex.Message}"); }
             var selection = DungeonData.SelectDungeonMaze(req.DungeonId, activeQuestIds, relatedQuestIds);
-            session.Player.CurMazeIndex = selection.Index;
-            session.Player.CurMazeQuestConnected = selection.Maze.QuestConnection != null
+            run.MazeIndex = selection.Index;
+            run.MazeQuestConnected = selection.Maze.QuestConnection != null
                 && selection.Maze.QuestConnection.Length >= 2;
-            session.Player.CurMazeStartX = selection.Maze.StartMap != null && selection.Maze.StartMap.Length >= 2
+            run.MazeStartX = selection.Maze.StartMap != null && selection.Maze.StartMap.Length >= 2
                 ? selection.Maze.StartMap[0]
                 : -1;
-            session.Player.CurMazeStartY = selection.Maze.StartMap != null && selection.Maze.StartMap.Length >= 2
+            run.MazeStartY = selection.Maze.StartMap != null && selection.Maze.StartMap.Length >= 2
                 ? selection.Maze.StartMap[1]
                 : -1;
-            session.Player.CurMazeStartMapId = ResolveMazeStartMapId(selection.Maze);
+            run.MazeStartMapId = ResolveMazeStartMapId(selection.Maze);
             var bossPos = DungeonData.RandomizeBossPosition(selection.Maze.BossMap);
-            session.Player.CurBossMapPos = bossPos;
-            session.Player.CurDungeonRidableObjects = DungeonMapHandler.InitRidableObjects(selection.Maze);
-            session.Player.CurClearCondition = new ClearConditionState(selection.Maze.ClearConditions);
-            if (session.Player.CurDungeonHellMode)
+            run.BossMapPos = bossPos;
+            run.RidableObjects = DungeonMapHandler.InitRidableObjects(selection.Maze);
+            run.ClearCondition = new ClearConditionState(selection.Maze.ClearConditions);
+            if (run.HellMode)
                 await PrepareManualHellPartyAsync(session, req, selection.Maze, selection.Index);
 
-            if (session.Player.CurClearCondition.HasConditions)
-                FileLogger.Log($"[DungeonHandler] ClearCondition init: {selection.Maze.ClearConditions.Count} conditions, totalRequired={session.Player.CurClearCondition.TotalRequired}");
+            if (run.ClearCondition.HasConditions)
+                FileLogger.Log($"[DungeonHandler] ClearCondition init: {selection.Maze.ClearConditions.Count} conditions, totalRequired={run.ClearCondition.TotalRequired}");
             else
                 FileLogger.Log($"[DungeonHandler] WARNING: dungeon={req.DungeonId} maze={selection.Index} has no [clear condition]");
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x001C, DungeonNotificationBuilder.BuildDungeonInfo(
@@ -178,11 +143,11 @@ namespace DfoServer.Network.Handlers.Dungeon
                 modeFlag: (byte)selection.Index,
                 bossX: bossPos != null ? (byte)bossPos[0] : (byte)0,
                 bossY: bossPos != null ? (byte)bossPos[1] : (byte)0,
-                hellPartyRoomX: session.Player.CurDungeonHellMode ? session.Player.CurDungeonHellMapX : (byte)0xFF,
-                hellPartyRoomY: session.Player.CurDungeonHellMode ? session.Player.CurDungeonHellMapY : (byte)0xFF,
+                hellPartyRoomX: run.HellMode ? run.HellMapX : (byte)0xFF,
+                hellPartyRoomY: run.HellMode ? run.HellMapY : (byte)0xFF,
                 dungeonMode: 0,
-                hellPartyEnabled: session.Player.CurDungeonHellMode ? (ushort)1 : (ushort)0,
-                value2: session.Player.CurDungeonHellMode ? (byte)0x0B : (byte)0)));
+                hellPartyEnabled: run.HellMode ? (ushort)1 : (ushort)0,
+                value2: run.HellMode ? (byte)0x0B : (byte)0)));
 
             await _mapHandler.SendStartMapAsync(session, 0xFF, 0xFF, overrideMapId: -1);
 
@@ -213,7 +178,7 @@ namespace DfoServer.Network.Handlers.Dungeon
             if (requestFlag == 1 || requestFlag == 2)
                 return requestFlag;
 
-            return HellPartyData.PickManualHellPartyMode(DungeonSharedServices.SeedGen);
+            return HellPartyData.PickManualHellPartyMode();
         }
 
         private static bool ParseGorgeousChallengeEnabled(byte[] body)
@@ -251,6 +216,7 @@ namespace DfoServer.Network.Handlers.Dungeon
             PvfLib.MazeInfo maze,
             int mazeIndex)
         {
+            var run = session.Player.CurrentRun;
             var area = WorldMap.GetAreaByDungeonId(req.DungeonId);
             var dungeonMinLevel = DungeonData.GetDungeonMinimumRequiredLevel(req.DungeonId);
             var hellPartyMode = ResolveHellPartyMode(req.HellPartyDifficultyFlag);
@@ -273,7 +239,7 @@ namespace DfoServer.Network.Handlers.Dungeon
                 }
                 else
                 {
-                    hellPartyMode = HellPartyData.PickManualHellPartyMode(DungeonSharedServices.SeedGen);
+                    hellPartyMode = HellPartyData.PickManualHellPartyMode();
                     if (!veryHardRoom.Found)
                         FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] SELECT_DUNGEON: gorgeous challenge ignored, very hard hell room missing dungeon={req.DungeonId}");
                     else
@@ -304,7 +270,7 @@ namespace DfoServer.Network.Handlers.Dungeon
                 if (_svc.TrySpendGold(session.Player.CharacterId, session.Account?.AccountId ?? 1, GorgeousChallengeGoldCost, out gorgeousGoldBefore, out gorgeousGoldAfter))
                 {
                     gorgeousApplied = true;
-                    session.Player.CurDungeonHellGorgeousChallenge = true;
+                    run.HellGorgeousChallenge = true;
                 }
                 else
                 {
@@ -312,14 +278,14 @@ namespace DfoServer.Network.Handlers.Dungeon
                 }
             }
 
-            session.Player.CurDungeonHellPartyMode = hellPartyMode;
-            session.Player.CurDungeonVeryDifficultHell = session.Player.CurDungeonHellPartyMode == 1;
-            session.Player.CurDungeonHellMapId = hellRoom.MapId;
-            session.Player.CurDungeonHellMapX = (byte)hellRoom.X;
-            session.Player.CurDungeonHellMapY = (byte)hellRoom.Y;
-            session.Player.CurDungeonHellRoomInfo = hellRoom;
+            run.HellPartyMode = hellPartyMode;
+            run.VeryDifficultHell = run.HellPartyMode == 1;
+            run.HellMapId = hellRoom.MapId;
+            run.HellMapX = (byte)hellRoom.X;
+            run.HellMapY = (byte)hellRoom.Y;
+            run.HellRoomInfo = hellRoom;
 
-            FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] SELECT_DUNGEON: hell room=({hellRoom.X},{hellRoom.Y}) map={hellRoom.MapId} normalMap={hellRoom.NormalMapId} waves={hellRoom.Waves.Count} requestFlag={req.HellPartyRequestFlag} difficultyFlag={req.HellPartyDifficultyFlag} mode={session.Player.CurDungeonHellPartyMode} veryDifficult={session.Player.CurDungeonVeryDifficultHell} area={area?.AreaId ?? -1} minLevel={dungeonMinLevel} ticket={(ticketResult.IsFreePass ? "freepass" : "normal")} updates={ticketResult.Updates.Count}");
+            FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] SELECT_DUNGEON: hell room=({hellRoom.X},{hellRoom.Y}) map={hellRoom.MapId} normalMap={hellRoom.NormalMapId} waves={hellRoom.Waves.Count} requestFlag={req.HellPartyRequestFlag} difficultyFlag={req.HellPartyDifficultyFlag} mode={run.HellPartyMode} veryDifficult={run.VeryDifficultHell} area={area?.AreaId ?? -1} minLevel={dungeonMinLevel} ticket={(ticketResult.IsFreePass ? "freepass" : "normal")} updates={ticketResult.Updates.Count}");
 
             await SendHellPartyTicketUpdates(session, ticketResult);
             if (gorgeousApplied && gorgeousGoldAfter >= 0)
@@ -344,14 +310,16 @@ namespace DfoServer.Network.Handlers.Dungeon
 
         private static void DisableCurrentHellParty(EnhancedClientSession session)
         {
-            session.Player.CurDungeonHellMode = false;
-            session.Player.CurDungeonHellPartyMode = 0;
-            session.Player.CurDungeonVeryDifficultHell = false;
-            session.Player.CurDungeonHellGorgeousChallenge = false;
-            session.Player.CurDungeonHellMapId = -1;
-            session.Player.CurDungeonHellMapX = 0xFF;
-            session.Player.CurDungeonHellMapY = 0xFF;
-            session.Player.CurDungeonHellRoomInfo = null;
+            var run = session.Player.CurrentRun;
+            if (run == null) return;
+            run.HellMode = false;
+            run.HellPartyMode = 0;
+            run.VeryDifficultHell = false;
+            run.HellGorgeousChallenge = false;
+            run.HellMapId = -1;
+            run.HellMapX = 0xFF;
+            run.HellMapY = 0xFF;
+            run.HellRoomInfo = null;
         }
 
         private static void WarmUpDropConfigs(bool includeHellParty)

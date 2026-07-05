@@ -7,158 +7,83 @@ namespace DfoServer
 {
     internal class Program
     {
+        // 自测注册表: 新增自测在这里加一行, 单跑参数与 --selftest-all 都会覆盖到。
+        private static readonly (string Arg, Func<int> Run)[] SelfTestRegistry =
+        {
+            ("--selftest-buyskill", Game.Skills.BuySkillSelfTest.Run),
+            ("--selftest-avatar-package", SelfTests.AvatarPackageSelfTest.Run),
+            ("--selftest-cerashop", SelfTests.CeraShopSelfTest.Run),
+            ("--selftest-selectable-package", SelfTests.SelectablePackageSelfTest.Run),
+            ("--selftest-pet-consumable", SelfTests.PetConsumableSelfTest.Run),
+            ("--selftest-inventory-sale", SelfTests.InventorySaleSelfTest.Run),
+            ("--selftest-personal-cargo", SelfTests.PersonalCargoSelfTest.Run),
+            ("--selftest-dungeon-map-fallback", SelfTests.DungeonMapFallbackSelfTest.Run),
+            ("--selftest-dungeon-room-progress", SelfTests.DungeonRoomProgressSelfTest.Run),
+            ("--selftest-dungeon-run", SelfTests.DungeonRunLifecycleSelfTest.Run),
+            ("--selftest-character-option", SelfTests.CharacterOptionSelfTest.Run),
+            ("--selftest-crystal-contract", SelfTests.CrystalContractSelfTest.Run),
+            ("--selftest-slot-expansion-quest", SelfTests.SlotExpansionQuestSelfTest.Run),
+            ("--selftest-character-slot-policy", SelfTests.CharacterSlotPolicySelfTest.Run),
+            ("--selftest-clear-map-quest", SelfTests.ClearMapQuestSelfTest.Run),
+            ("--selftest-quest-clear", SelfTests.QuestClearSelfTest.Run),
+            ("--selftest-quest-trigger-counts", SelfTests.QuestTriggerCountSelfTest.Run),
+            ("--selftest-quest-item-flow", SelfTests.QuestItemFlowSelfTest.Run),
+            ("--selftest-question-quest-branch", SelfTests.QuestionQuestBranchSelfTest.Run),
+            ("--selftest-striker-skill", SelfTests.StrikerSkillSelfTest.Run),
+            ("--selftest-pet-equipment", SelfTests.PetEquipmentSelfTest.Run),
+            ("--selftest-pet-hatch", SelfTests.PetHatchSelfTest.Run),
+            ("--selftest-currency", SelfTests.CurrencySelfTest.Run),
+            ("--selftest-daily-reset", SelfTests.DailyResetSelfTest.Run),
+            ("--selftest-revive-coin", SelfTests.ReviveCoinSelfTest.Run),
+            ("--selftest-clock", SelfTests.ClockSelfTest.Run),
+        };
+
+        // 顺序跑全部自测, 输出汇总表; 任一失败(或抛异常)退出码为 1。
+        private static int RunAllSelfTests()
+        {
+            var failed = new List<string>();
+            foreach (var entry in SelfTestRegistry)
+            {
+                var name = entry.Arg.Substring("--selftest-".Length);
+                Console.WriteLine($"===== [{name}] =====");
+                int code;
+                try
+                {
+                    code = entry.Run();
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[{name}] EXCEPTION: {ex.Message}");
+                    code = 1;
+                }
+                if (code != 0)
+                    failed.Add(name);
+            }
+
+            Console.WriteLine("===== SELFTEST SUMMARY =====");
+            Console.WriteLine($"total={SelfTestRegistry.Length} pass={SelfTestRegistry.Length - failed.Count} fail={failed.Count}");
+            foreach (var name in failed)
+                Console.WriteLine($"FAIL: {name}");
+            return failed.Count == 0 ? 0 : 1;
+        }
+
         static void Main(string[] args)
         {
             args ??= Array.Empty<string>();
 
-            if (Array.IndexOf(args, "--selftest-buyskill") >= 0)
+            if (Array.IndexOf(args, "--selftest-all") >= 0)
             {
-                Environment.Exit(Game.Skills.BuySkillSelfTest.Run());
+                Environment.Exit(RunAllSelfTests());
                 return;
             }
 
-            if (Array.IndexOf(args, "--selftest-avatar-package") >= 0)
+            foreach (var entry in SelfTestRegistry)
             {
-                Environment.Exit(SelfTests.AvatarPackageSelfTest.Run());
-                return;
-            }
-
-            if (Array.IndexOf(args, "--selftest-cerashop") >= 0)
-            {
-                Environment.Exit(SelfTests.CeraShopSelfTest.Run());
-                return;
-            }
-
-            if (Array.IndexOf(args, "--selftest-selectable-package") >= 0)
-            {
-                Environment.Exit(SelfTests.SelectablePackageSelfTest.Run());
-                return;
-            }
-
-            if (Array.IndexOf(args, "--selftest-pet-consumable") >= 0)
-            {
-                Environment.Exit(SelfTests.PetConsumableSelfTest.Run());
-                return;
-            }
-
-            if (Array.IndexOf(args, "--selftest-inventory-sale") >= 0)
-            {
-                Environment.Exit(SelfTests.InventorySaleSelfTest.Run());
-                return;
-            }
-
-            if (Array.IndexOf(args, "--selftest-personal-cargo") >= 0)
-            {
-                Environment.Exit(SelfTests.PersonalCargoSelfTest.Run());
-                return;
-            }
-
-            if (Array.IndexOf(args, "--selftest-dungeon-map-fallback") >= 0)
-            {
-                Environment.Exit(SelfTests.DungeonMapFallbackSelfTest.Run());
-                return;
-            }
-
-            if (Array.IndexOf(args, "--selftest-dungeon-room-progress") >= 0)
-            {
-                Environment.Exit(SelfTests.DungeonRoomProgressSelfTest.Run());
-                return;
-            }
-
-            if (Array.IndexOf(args, "--selftest-character-option") >= 0)
-            {
-                Environment.Exit(SelfTests.CharacterOptionSelfTest.Run());
-                return;
-            }
-
-            if (Array.IndexOf(args, "--selftest-crystal-contract") >= 0)
-            {
-                Environment.Exit(SelfTests.CrystalContractSelfTest.Run());
-                return;
-            }
-
-            if (Array.IndexOf(args, "--selftest-slot-expansion-quest") >= 0)
-            {
-                Environment.Exit(SelfTests.SlotExpansionQuestSelfTest.Run());
-                return;
-            }
-
-            if (Array.IndexOf(args, "--selftest-character-slot-policy") >= 0)
-            {
-                Environment.Exit(SelfTests.CharacterSlotPolicySelfTest.Run());
-                return;
-            }
-
-            if (Array.IndexOf(args, "--selftest-clear-map-quest") >= 0)
-            {
-                Environment.Exit(SelfTests.ClearMapQuestSelfTest.Run());
-                return;
-            }
-
-            if (Array.IndexOf(args, "--selftest-quest-clear") >= 0)
-            {
-                Environment.Exit(SelfTests.QuestClearSelfTest.Run());
-                return;
-            }
-
-            if (Array.IndexOf(args, "--selftest-quest-trigger-counts") >= 0)
-            {
-                Environment.Exit(SelfTests.QuestTriggerCountSelfTest.Run());
-                return;
-            }
-
-            if (Array.IndexOf(args, "--selftest-quest-item-flow") >= 0)
-            {
-                Environment.Exit(SelfTests.QuestItemFlowSelfTest.Run());
-                return;
-            }
-
-            if (Array.IndexOf(args, "--selftest-question-quest-branch") >= 0)
-            {
-                Environment.Exit(SelfTests.QuestionQuestBranchSelfTest.Run());
-                return;
-            }
-
-            if (Array.IndexOf(args, "--selftest-striker-skill") >= 0)
-            {
-                Environment.Exit(SelfTests.StrikerSkillSelfTest.Run());
-                return;
-            }
-
-            if (Array.IndexOf(args, "--selftest-pet-equipment") >= 0)
-            {
-                Environment.Exit(SelfTests.PetEquipmentSelfTest.Run());
-                return;
-            }
-
-            if (Array.IndexOf(args, "--selftest-pet-hatch") >= 0)
-            {
-                Environment.Exit(SelfTests.PetHatchSelfTest.Run());
-                return;
-            }
-
-            if (Array.IndexOf(args, "--selftest-currency") >= 0)
-            {
-                Environment.Exit(SelfTests.CurrencySelfTest.Run());
-                return;
-            }
-
-            if (Array.IndexOf(args, "--selftest-daily-reset") >= 0)
-            {
-                Environment.Exit(SelfTests.DailyResetSelfTest.Run());
-                return;
-            }
-
-            if (Array.IndexOf(args, "--selftest-revive-coin") >= 0)
-            {
-                Environment.Exit(SelfTests.ReviveCoinSelfTest.Run());
-                return;
-            }
-
-            if (Array.IndexOf(args, "--selftest-clock") >= 0)
-            {
-                Environment.Exit(SelfTests.ClockSelfTest.Run());
-                return;
+                if (Array.IndexOf(args, entry.Arg) >= 0)
+                {
+                    Environment.Exit(entry.Run());
+                    return;
+                }
             }
 
             GameNetworkConfig.Configure(args);

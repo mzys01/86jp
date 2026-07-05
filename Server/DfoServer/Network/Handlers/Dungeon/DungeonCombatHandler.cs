@@ -29,9 +29,12 @@ namespace DfoServer.Network.Handlers.Dungeon
 
         internal async Task HandleDieMonster(EnhancedClientSession session, GamePacketHeader header, byte[] body)
         {
+            var run = session.Player.CurrentRun;
+            if (run == null) return;
+
             var req = DieMonsterRequest.Parse(body);
 
-            if (session.Player.CurDungeonCleared)
+            if (run.Phase >= DungeonRunPhase.Cleared)
             {
                 FileLogger.Log($"[DungeonHandler] DIE_MONSTER: post-clear seqId={req.LocalIndex}, ignored for exp");
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0026,
@@ -42,13 +45,13 @@ namespace DfoServer.Network.Handlers.Dungeon
             if (req.IsPassiveObject)
             {
                 FileLogger.Log($"[DungeonHandler] DIE_MONSTER: passive object code={req.LocalIndex}");
-                if (session.Player.CurClearCondition != null && session.Player.CurClearCondition.Check(0, req.LocalIndex))
+                if (run.ClearCondition != null && run.ClearCondition.Check(0, req.LocalIndex))
                     await _settlement.TryClearDungeon(session, $"destroy object {req.LocalIndex}");
-                await _svc.CheckQuestPassiveObjectDrop(session, req.LocalIndex);
+                await _svc.QuestDrops.CheckPassiveObjectDrop(session, req.LocalIndex);
                 return;
             }
 
-            if (!session.Player.CurRoomKilledSeqIds.Add(req.LocalIndex))
+            if (!run.RoomKilledSeqIds.Add(req.LocalIndex))
             {
                 FileLogger.Log($"[DungeonHandler] DIE_MONSTER: duplicate seqId={req.LocalIndex}, ignored");
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0026,
@@ -56,14 +59,14 @@ namespace DfoServer.Network.Handlers.Dungeon
                 return;
             }
 
-            var roomLocalIndex = req.LocalIndex - session.Player.CurRoomStartSequence;
-            var monsters = session.Player.CurRoomMonsters;
+            var roomLocalIndex = req.LocalIndex - run.RoomStartSequence;
+            var monsters = run.RoomMonsters;
 
             if (roomLocalIndex < 0 || roomLocalIndex >= monsters.Count)
             {
                 if (TryGetCurrentRoomState(session, out var outOfRangeRoomState) && outOfRangeRoomState.IsHellPartyRoom)
                 {
-                    FileLogger.Log($"[DungeonHandler] HELLPARTY DIE_MONSTER: seqId={req.LocalIndex} local={roomLocalIndex} source=out-of-start-map ignoredForClear tracked={outOfRangeRoomState.MonsterCount} killed={session.Player.CurRoomKilledSeqIds.Count}");
+                    FileLogger.Log($"[DungeonHandler] HELLPARTY DIE_MONSTER: seqId={req.LocalIndex} local={roomLocalIndex} source=out-of-start-map ignoredForClear tracked={outOfRangeRoomState.MonsterCount} killed={run.RoomKilledSeqIds.Count}");
                 }
             }
 
@@ -81,30 +84,30 @@ namespace DfoServer.Network.Handlers.Dungeon
                 if (dieRoomState != null && dieRoomState.IsHellPartyRoom)
                 {
                     var source = monster.Flag0 == 0 ? "normal" : "hell-hidden";
-                    FileLogger.Log($"[DungeonHandler] HELLPARTY DIE_MONSTER: seqId={req.LocalIndex} local={roomLocalIndex} source={source} code={monster.Code} type={monster.Type} level={monster.Level} order={monster.TemplateOrder} flag0={monster.Flag0} flag1={monster.Flag1} group={monster.HellPartyGroupId} hellMonster={monster.IsHellMonsterScript} tracked={dieRoomState.MonsterCount} killed={session.Player.CurRoomKilledSeqIds.Count}");
+                    FileLogger.Log($"[DungeonHandler] HELLPARTY DIE_MONSTER: seqId={req.LocalIndex} local={roomLocalIndex} source={source} code={monster.Code} type={monster.Type} level={monster.Level} order={monster.TemplateOrder} flag0={monster.Flag0} flag1={monster.Flag1} group={monster.HellPartyGroupId} hellMonster={monster.IsHellMonsterScript} tracked={dieRoomState.MonsterCount} killed={run.RoomKilledSeqIds.Count}");
                 }
 
-                var weight = DungeonData.GetExperienceWeight(session.Player.CurDungeon);
+                var weight = DungeonData.GetExperienceWeight(run.DungeonId);
                 var rewardMonsterType = GetRewardMonsterType(monster.Type);
                 var isBossMonster = IsBossActorType(monster.Type);
                 var isChampionMonster = monster.Type == 1;
-                var isNamedMonster = !isBossMonster && DungeonData.IsNamedMonster(session.Player.CurDungeon, monster.Code);
+                var isNamedMonster = !isBossMonster && DungeonData.IsNamedMonster(run.DungeonId, monster.Code);
                 var isSuperChampionMonster = monster.Type == 2 && !isNamedMonster;
                 var baseExp = (uint)MonsterRewardTable.CalcBaseExp(monsterLevel, weight);
                 var gainedExp = (uint)MonsterRewardTable.CalcExp(
                     monsterLevel,
                     weight,
-                    session.Player.CurDungeonDifficulty,
+                    run.Difficulty,
                     rewardMonsterType,
                     isNamedMonster);
                 var growthContractBonusExp = CalculateGrowthContractMonsterBonus(session, gainedExp);
                 var totalGainedExp = AddSaturating(gainedExp, growthContractBonusExp);
 
-                var slotCounter = session.Player.CurSceneSlotCounter;
+                var slotCounter = run.SceneSlotCounter;
                 int dungeonBasisLevel = monsterLevel;
-                try { dungeonBasisLevel = DungeonData.GetDungeonBasicLv(session.Player.CurDungeon); } catch { }
+                try { dungeonBasisLevel = DungeonData.GetDungeonBasicLv(run.DungeonId); } catch (Exception ex) { FileLogger.Log($"[DungeonHandler] DIE_MONSTER ERROR: basic level fallback dungeon={run.DungeonId} default={dungeonBasisLevel}: {ex.Message}"); }
                 int dungeonMinimumLevel = dungeonBasisLevel;
-                try { dungeonMinimumLevel = DungeonData.GetDungeonMinimumRequiredLevel(session.Player.CurDungeon); } catch { }
+                try { dungeonMinimumLevel = DungeonData.GetDungeonMinimumRequiredLevel(run.DungeonId); } catch (Exception ex) { FileLogger.Log($"[DungeonHandler] DIE_MONSTER ERROR: minimum level fallback dungeon={run.DungeonId} default={dungeonMinimumLevel}: {ex.Message}"); }
                 int goldGained;
                 List<DropInfo> generatedDrops;
                 if (monster.IsHellPartyActor && dieRoomState != null && dieRoomState.IsHellPartyRoom)
@@ -123,7 +126,7 @@ namespace DfoServer.Network.Handlers.Dungeon
                     var dropPool = MonsterDropTable.GetDropPool(monster.Code);
 
                     // Area material is added by the server to the normal monster item pool; hidden hell actors do not use this path.
-                    int areaMaterialId = AreaMaterialDropProvider.GetAreaMaterialItem(session.Player.CurDungeon);
+                    int areaMaterialId = AreaMaterialDropProvider.GetAreaMaterialItem(run.DungeonId);
                     if (areaMaterialId > 0)
                     {
                         var extended = new List<MonsterDropTable.DropPoolEntry>();
@@ -132,37 +135,37 @@ namespace DfoServer.Network.Handlers.Dungeon
                         dropPool = extended;
                     }
 
-                    var generator = new DropGenerator(session.Player.CurRoomLcg);
-                    var dropRateLevel = session.Player.CurDungeonHellMode ? dungeonBasisLevel : (int)monsterLevel;
-                    var result = generator.GenerateMonsterDrops(dropRateLevel, rewardMonsterType, monster.Code, session.Player.CurDungeonDifficulty, dungeonBasisLevel, ref slotCounter, dropPool);
+                    var generator = new DropGenerator(run.RoomLcg);
+                    var dropRateLevel = run.HellMode ? dungeonBasisLevel : (int)monsterLevel;
+                    var result = generator.GenerateMonsterDrops(dropRateLevel, rewardMonsterType, monster.Code, run.Difficulty, dungeonBasisLevel, ref slotCounter, dropPool);
                     goldGained = result.goldAmount;
                     generatedDrops = result.drops;
                 }
 
-                session.Player.CurSceneSlotCounter = slotCounter;
+                run.SceneSlotCounter = slotCounter;
 
                 session.Player.Exp = AddSaturating(session.Player.Exp, totalGainedExp);
-                session.Player.CurDungeonTotalExp += gainedExp;
-                session.Player.CurDungeonMonsterGrowthContractBonusExp =
-                    AddSaturating(session.Player.CurDungeonMonsterGrowthContractBonusExp, growthContractBonusExp);
+                run.TotalExp += gainedExp;
+                run.MonsterGrowthContractBonusExp =
+                    AddSaturating(run.MonsterGrowthContractBonusExp, growthContractBonusExp);
                 if (isBossMonster)
-                    session.Player.CurDungeonBossTotalExp += gainedExp;
+                    run.BossTotalExp += gainedExp;
                 if (isChampionMonster)
-                    session.Player.CurDungeonChampionTotalExp += gainedExp;
+                    run.ChampionTotalExp += gainedExp;
                 if (isSuperChampionMonster)
-                    session.Player.CurDungeonSuperChampionTotalExp += gainedExp;
+                    run.SuperChampionTotalExp += gainedExp;
                 if (isNamedMonster)
-                    session.Player.CurDungeonNamedMonsterTotalExp += gainedExp;
-                session.Player.CurDungeonTotalGold += goldGained;
+                    run.NamedMonsterTotalExp += gainedExp;
+                run.TotalGold += goldGained;
 
-                FileLogger.Log($"[DungeonHandler] DIE_MONSTER_EXP: seqId={req.LocalIndex} local={roomLocalIndex} code={monster.Code} type={monster.Type} level={monsterLevel} weight={weight:0.###} baseExp={baseExp} totalExp={gainedExp} growthContract={growthContractBonusExp} awardedExp={totalGainedExp} boss={isBossMonster} champion={isChampionMonster} superChampion={isSuperChampionMonster} named={isNamedMonster} dungeonTotalExp={session.Player.CurDungeonTotalExp} bossTotalExp={session.Player.CurDungeonBossTotalExp} championTotalExp={session.Player.CurDungeonChampionTotalExp} superChampionTotalExp={session.Player.CurDungeonSuperChampionTotalExp} namedTotalExp={session.Player.CurDungeonNamedMonsterTotalExp} monsterGrowthContractTotal={session.Player.CurDungeonMonsterGrowthContractBonusExp}");
+                FileLogger.Log($"[DungeonHandler] DIE_MONSTER_EXP: seqId={req.LocalIndex} local={roomLocalIndex} code={monster.Code} type={monster.Type} level={monsterLevel} weight={weight:0.###} baseExp={baseExp} totalExp={gainedExp} growthContract={growthContractBonusExp} awardedExp={totalGainedExp} boss={isBossMonster} champion={isChampionMonster} superChampion={isSuperChampionMonster} named={isNamedMonster} dungeonTotalExp={run.TotalExp} bossTotalExp={run.BossTotalExp} championTotalExp={run.ChampionTotalExp} superChampionTotalExp={run.SuperChampionTotalExp} namedTotalExp={run.NamedMonsterTotalExp} monsterGrowthContractTotal={run.MonsterGrowthContractBonusExp}");
 
                 if (generatedDrops.Count > 0)
                 {
                     foreach (var drop in generatedDrops)
-                        session.Player.CurDungeonDrops[drop.SceneSlot] = drop;
+                        run.Drops[drop.SceneSlot] = drop;
                     drops = generatedDrops;
-                    FileLogger.Log($"[DungeonHandler] DROP: {generatedDrops.Count} items, seqId={req.LocalIndex} seed={session.Player.CurRoomLcg.Seed:X8}");
+                    FileLogger.Log($"[DungeonHandler] DROP: {generatedDrops.Count} items, seqId={req.LocalIndex} seed={run.RoomLcg.Seed:X8}");
                 }
 
                 var prevLevel = session.Player.Level;
@@ -186,7 +189,7 @@ namespace DfoServer.Network.Handlers.Dungeon
                         remainTp = (ushort)synced.Points.RemainingTp;
                     }
                 }
-                catch { }
+                catch (Exception ex) { FileLogger.Log($"[DungeonHandler] DIE_MONSTER ERROR: skill state sync failed, SP/TP sent as 0: {ex.Message}"); }
 
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0025,
                     ExpNotificationBuilder.Build(session.Player.Level, session.Player.Exp, remainSp, remainTp,
@@ -208,7 +211,7 @@ namespace DfoServer.Network.Handlers.Dungeon
                 DungeonNotificationBuilder.BuildMonsterDie(req.LocalIndex, drops, session.Player.UserId)));
 
             // Quest item drop (IDA: CUser::CheckQuestMonster, after DIE_MONSTER NOTI)
-            await _svc.CheckQuestMonsterDrop(session, killedMonsterCode);
+            await _svc.QuestDrops.CheckMonsterDrop(session, killedMonsterCode);
 
             // check_grid_clear (IDA 0x830A0E8): spawnType==100 && spawnFlag==0 blocks passage
             int blockingCount = 0;
@@ -219,8 +222,8 @@ namespace DfoServer.Network.Handlers.Dungeon
                     continue;
 
                 blockingCount++;
-                var seqId = (ushort)(session.Player.CurRoomStartSequence + i);
-                if (session.Player.CurRoomKilledSeqIds.Contains(seqId))
+                var seqId = (ushort)(run.RoomStartSequence + i);
+                if (run.RoomKilledSeqIds.Contains(seqId))
                     killedBlockingCount++;
             }
             bool roomCleared = killedBlockingCount >= blockingCount && blockingCount > 0;
@@ -234,29 +237,24 @@ namespace DfoServer.Network.Handlers.Dungeon
             // check_grid_clear -> ClearCondition(1, mapIndex) OR check_end_point -> ClearDungeon
             if (roomCleared)
             {
+                TryGetCurrentRoomState(session, out var clearedRoomState);
+
                 bool endPoint = false;
-                if (session.Player.CurBossMapPos != null && session.Player.CurBossMapPos.Length >= 2)
+                if (clearedRoomState != null
+                    && run.BossMapPos != null && run.BossMapPos.Length >= 2)
                 {
-                    var roomState = session.Player.DungeonRoomStates.Values
-                        .FirstOrDefault(rs => rs.KilledSeqIds == session.Player.CurRoomKilledSeqIds);
-                    if (roomState != null)
-                        endPoint = roomState.Maze.X == session.Player.CurBossMapPos[0]
-                                && roomState.Maze.Y == session.Player.CurBossMapPos[1];
+                    endPoint = clearedRoomState.Maze.X == run.BossMapPos[0]
+                            && clearedRoomState.Maze.Y == run.BossMapPos[1];
                 }
 
-                int currentMapId = 0;
-                {
-                    var rs = session.Player.DungeonRoomStates.Values
-                        .FirstOrDefault(r => r.KilledSeqIds == session.Player.CurRoomKilledSeqIds);
-                    if (rs != null) currentMapId = rs.Maze.Index;
-                }
-                bool ccType1 = session.Player.CurClearCondition != null
-                    && session.Player.CurClearCondition.Check(1, currentMapId);
+                int currentMapId = clearedRoomState != null ? clearedRoomState.Maze.Index : 0;
+                bool ccType1 = run.ClearCondition != null
+                    && run.ClearCondition.Check(1, currentMapId);
 
                 if (ccType1 || endPoint)
                     await _settlement.TryClearDungeon(session, $"prepare_dungeon_clear ccType1={ccType1} endPoint={endPoint}", killedMonsterCode);
 
-                FileLogger.Log($"[DungeonHandler] ROOM CLEARED: dungeon={session.Player.CurDungeon} room=({session.Player.CurRoomKey.X},{session.Player.CurRoomKey.Y}) map={currentMapId} killedBlocking={killedBlockingCount}/{blockingCount} killedTotal={session.Player.CurRoomKilledSeqIds.Count}");
+                FileLogger.Log($"[DungeonHandler] ROOM CLEARED: dungeon={run.DungeonId} room=({run.RoomKey.X},{run.RoomKey.Y}) map={currentMapId} killedBlocking={killedBlockingCount}/{blockingCount} killedTotal={run.RoomKilledSeqIds.Count}");
                 if (currentMapId > 0 && session.GameSession?.QuestManager != null)
                 {
                     if (ShouldDeferQuestConnectedStartMapSync(session, currentMapId)
@@ -264,7 +262,7 @@ namespace DfoServer.Network.Handlers.Dungeon
                             session.Player.CharacterId,
                             currentMapId))
                     {
-                        FileLogger.Log($"[DungeonHandler] CLEAR_MAP deferred for quest-connected start room: dungeon={session.Player.CurDungeon} maze={session.Player.CurMazeIndex} map={currentMapId}");
+                        FileLogger.Log($"[DungeonHandler] CLEAR_MAP deferred for quest-connected start room: dungeon={run.DungeonId} maze={run.MazeIndex} map={currentMapId}");
                     }
                     else
                     {
@@ -284,10 +282,10 @@ namespace DfoServer.Network.Handlers.Dungeon
 
             // Path A: ClearCondition(type, monsterCode) (df_game_r kill_monster tail)
             // monsterType -> conditionType: boss(3) / AI boss(8)->4, APC(5-7)->3, normal->2
-            if (session.Player.CurClearCondition != null)
+            if (run.ClearCondition != null)
             {
                 int ccType = IsBossActorType(killedMonsterType) ? 4 : (killedMonsterType >= 5 ? 3 : 2);
-                if (session.Player.CurClearCondition.Check(ccType, killedMonsterCode))
+                if (run.ClearCondition.Check(ccType, killedMonsterCode))
                     await _settlement.TryClearDungeon(session, $"ClearCondition type={ccType} target={killedMonsterCode}", killedMonsterCode);
             }
         }
@@ -304,18 +302,25 @@ namespace DfoServer.Network.Handlers.Dungeon
 
         private static bool TryGetCurrentRoomState(EnhancedClientSession session, out RoomState roomState)
         {
-            return session.Player.DungeonRoomStates.TryGetValue(session.Player.CurRoomKey, out roomState);
+            var run = session.Player.CurrentRun;
+            if (run == null)
+            {
+                roomState = null;
+                return false;
+            }
+
+            return run.RoomStates.TryGetValue(run.RoomKey, out roomState);
         }
 
         private static bool ShouldDeferQuestConnectedStartMapSync(EnhancedClientSession session, int currentMapId)
         {
-            var player = session?.Player;
-            if (player == null || !player.CurMazeQuestConnected)
+            var run = session?.Player?.CurrentRun;
+            if (run == null || !run.MazeQuestConnected)
                 return false;
-            if (player.CurMazeStartMapId <= 0 || player.CurMazeStartMapId != currentMapId)
+            if (run.MazeStartMapId <= 0 || run.MazeStartMapId != currentMapId)
                 return false;
-            return player.CurRoomKey.X == player.CurMazeStartX
-                && player.CurRoomKey.Y == player.CurMazeStartY;
+            return run.RoomKey.X == run.MazeStartX
+                && run.RoomKey.Y == run.MazeStartY;
         }
 
         private static List<DropInfo> GenerateHellPartyActorDrops(
@@ -326,11 +331,12 @@ namespace DfoServer.Network.Handlers.Dungeon
             int dungeonBasisLevel,
             ref ushort slotCounter)
         {
+            var run = session.Player.CurrentRun;
             var drops = IndependentDropSystem.GenerateDrops(
                 monster.Code,
-                session.Player.CurDungeonDifficulty,
+                run.Difficulty,
                 dungeonBasisLevel,
-                session.Player.CurRoomLcg,
+                run.RoomLcg,
                 ref slotCounter);
 
             var remainingBefore = 0;
@@ -356,10 +362,10 @@ namespace DfoServer.Network.Handlers.Dungeon
             if (isLastGroupMonster && !monster.IsHellMonsterScript)
             {
                 var rewardDrops = HellMonsterDropConfig.GenerateSpecificEquipmentDrops(
-                    session.Player.CurRoomLcg,
+                    run.RoomLcg,
                     dungeonMinimumLevel,
                     dungeonBasisLevel,
-                    session.Player.CurDungeonDifficulty,
+                    run.Difficulty,
                     monster.HellPartyDifficulty,
                     monster.HellRewardRollCount,
                     ref slotCounter);
@@ -447,11 +453,14 @@ namespace DfoServer.Network.Handlers.Dungeon
 
         internal async Task HandleGetItem(EnhancedClientSession session, GamePacketHeader header, byte[] body)
         {
+            var run = session.Player.CurrentRun;
+            if (run == null) return;
+
             var req = GetItemRequest.Parse(body);
             FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] GET_ITEM: cid={session.Player.CharacterId} srcSlot={req.SrcSlot}");
 
             DropInfo matchedDrop;
-            if (!session.Player.CurDungeonDrops.TryGetValue(req.SrcSlot, out matchedDrop))
+            if (!run.Drops.TryGetValue(req.SrcSlot, out matchedDrop))
             {
                 FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] GET_ITEM: no pending drop for srcSlot={req.SrcSlot}, ignored");
                 return;
@@ -465,7 +474,7 @@ namespace DfoServer.Network.Handlers.Dungeon
                 var totalBonusPct = _svc.GetEquippedGoldBonus(session.Player.CharacterId);
                 var extraGold = baseGold * totalBonusPct / 100;
                 _svc.PersistGold(session.Player.CharacterId, accountId, baseGold + extraGold);
-                session.Player.CurDungeonDrops.Remove(req.SrcSlot);
+                run.Drops.Remove(req.SrcSlot);
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0027,
                     DropItemBuilder.BuildPickupGold(req.SrcSlot, session.Player.UserId, baseGold + extraGold, extraGold)));
                 FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] GET_ITEM: gold pickup srcSlot={req.SrcSlot} baseGold={baseGold} extraGold={extraGold}");
@@ -478,7 +487,7 @@ namespace DfoServer.Network.Handlers.Dungeon
                     FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] GET_ITEM: FAILED to insert item templateId={matchedDrop.TemplateId} -- inventory full or special, drop preserved for retry");
                     return;
                 }
-                session.Player.CurDungeonDrops.Remove(req.SrcSlot);
+                run.Drops.Remove(req.SrcSlot);
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0027,
                     DropItemBuilder.BuildPickupItem(req.SrcSlot, session.Player.UserId, (ushort)invSlot, 7)));
                 if (session.GameSession?.QuestManager != null && matchedDrop.TemplateId > 0)

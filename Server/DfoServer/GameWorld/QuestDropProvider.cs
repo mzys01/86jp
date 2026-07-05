@@ -15,7 +15,7 @@ namespace DfoServer.GameWorld
     {
         public const int EnemyTypePassiveObject = 3;
 
-        private static readonly Random _rng = new Random();
+        
 
         /// <summary>
         /// 检查杀怪是否触发任务物品掉落。
@@ -125,7 +125,7 @@ namespace DfoServer.GameWorld
             int maxAttempts = Math.Max(1, candidate.Count);
             for (int k = 0; k < maxAttempts; k++)
             {
-                if (_rng.Next(100) < candidate.DropRate)
+                if (Infrastructure.ServerRandom.Next(100) < candidate.DropRate)
                     actual++;
             }
 

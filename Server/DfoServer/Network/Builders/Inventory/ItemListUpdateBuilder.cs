@@ -36,6 +36,31 @@ namespace DfoServer.Network.Builders
         public static byte[] BuildGoldUpdate(int gold)
             => BuildCommonSlotUpdate(InventoryListType.Main, 0, 0, gold);
 
+        // NOTI 14 UPDATE_ITEM_LIST - 84B raw item entry (Reverse/SUBSYSTEMS/inventory_system.md)
+        // 客户端按 PacketPopBuffer(84) 整块 memcpy, 不逐字段读取。全仓 84B 条目构造只此一处。
+        public static byte[] BuildRawItemEntry(short slotIndex, uint itemId, uint instanceValue)
+        {
+            var buf = new byte[84];
+            BitConverter.GetBytes(slotIndex).CopyTo(buf, 0);
+            BitConverter.GetBytes(itemId).CopyTo(buf, 2);
+            BitConverter.GetBytes(instanceValue).CopyTo(buf, 6);
+            return buf;
+        }
+
+        public static byte[] BuildRawEquipEntry(short slotIndex, uint itemId,
+            uint qualitySeed = 999999998, ushort durability = 32)
+        {
+            var buf = new byte[84];
+            BitConverter.GetBytes(slotIndex).CopyTo(buf, 0);    // [0:2]  slot
+            BitConverter.GetBytes(itemId).CopyTo(buf, 2);        // [2:6]  itemId
+            BitConverter.GetBytes(qualitySeed).CopyTo(buf, 6);   // [6:10] quality seed
+            // buf[10] = 0 enhance level
+            BitConverter.GetBytes(durability).CopyTo(buf, 11);   // [11:13] durability
+            // buf[13] = 0 isSealed
+            BitConverter.GetBytes(0xFFFFFFFF).CopyTo(buf, 22);   // [22:26] equipment marker
+            return buf;
+        }
+
         public static byte[] BuildPetUpdates(IReadOnlyList<PetInventoryItem> items)
         {
             var writer = new GamePacketWriter();

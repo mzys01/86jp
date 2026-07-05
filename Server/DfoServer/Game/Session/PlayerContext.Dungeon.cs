@@ -1,58 +1,15 @@
-using System;
-using System.Collections.Generic;
-
 namespace DfoServer.Game.Session
 {
     public partial class PlayerContext
     {
-        public short CurDungeon { get; set; }
-        public byte CurDungeonDifficulty { get; set; }
-        public int CurMazeIndex { get; set; } = -1;
-        public int CurLayeredMapIndex { get; set; } = -1;
-        public byte CurDungeonFlag1 { get; set; }
-        public byte CurDungeonFlag2 { get; set; }
-        public bool CurMazeQuestConnected { get; set; }
-        public int CurMazeStartMapId { get; set; }
-        public int CurMazeStartX { get; set; } = -1;
-        public int CurMazeStartY { get; set; } = -1;
+        // 副本状态真相: 一局一个 DungeonRun 对象, null = 不在副本中。
+        // 进本由 DungeonRunLifecycle.BeginRun/BeginTowerRun 置换新实例,
+        // 返城/断线/换角色置 null -- 单局字段随对象消失, 不存在漏重置。
+        public Game.Dungeon.DungeonRun CurrentRun { get; internal set; }
+
+        // ---- 跨局存活字段(刻意不随 run 重建) ----
+
+        // 深渊华丽挑战 UI 开关: 在选图界面(进本之前)切换。
         public bool HellPartyGorgeousChallengeEnabled { get; set; }
-        public bool CurDungeonHellMode { get; set; }
-        public byte CurDungeonHellPartyMode { get; set; }
-        public bool CurDungeonVeryDifficultHell { get; set; }
-        public bool CurDungeonHellGorgeousChallenge { get; set; }
-        public int CurDungeonHellMapId { get; set; } = -1;
-        public byte CurDungeonHellMapX { get; set; } = 0xFF;
-        public byte CurDungeonHellMapY { get; set; } = 0xFF;
-        public GameWorld.Dungeon.HellPartyRoomInfo CurDungeonHellRoomInfo { get; set; }
-        public byte CurMap { get; set; }
-        public uint CurMoveMapU15 { get; set; }
-        public uint CurMoveMapU19 { get; set; }
-        public ushort CurMonsterCnt { get; set; }
-        public ushort CurRoomStartSequence { get; set; }
-        public IReadOnlyList<GameWorld.Dungeon.MonsterSumInfo> CurRoomMonsters { get; set; }
-            = Array.Empty<GameWorld.Dungeon.MonsterSumInfo>();
-        public HashSet<ushort> CurRoomKilledSeqIds { get; set; } = new HashSet<ushort>();
-        public bool CurBossKilled { get; set; }
-        public bool CurDungeonCleared { get; set; }
-        public Game.Dungeon.ClearConditionState CurClearCondition { get; set; }
-        public int CurBossCode { get; set; }
-        public int[] CurBossMapPos { get; set; }
-        public uint CurDungeonTotalExp { get; set; }
-        public uint CurDungeonBossTotalExp { get; set; }
-        public uint CurDungeonChampionTotalExp { get; set; }
-        public uint CurDungeonSuperChampionTotalExp { get; set; }
-        public uint CurDungeonNamedMonsterTotalExp { get; set; }
-        public uint CurDungeonMonsterGrowthContractBonusExp { get; set; }
-        public int CurDungeonTotalGold { get; set; }
-        public ushort CurSceneSlotCounter { get; set; }
-        public Dictionary<ushort, Dungeon.DropInfo> CurDungeonDrops { get; set; }
-            = new Dictionary<ushort, Dungeon.DropInfo>();
-        public uint CurDungeonSeed { get; set; }
-        public Dungeon.DnfLcg CurRoomLcg { get; set; }
-        public Dungeon.RoomKey CurRoomKey { get; set; }
-        public Dictionary<Dungeon.RoomKey, Dungeon.RoomState> DungeonRoomStates { get; set; }
-            = new Dictionary<Dungeon.RoomKey, Dungeon.RoomState>();
-        public List<Dungeon.RidableObjectSpawnEntry> CurDungeonRidableObjects { get; set; }
-            = new List<Dungeon.RidableObjectSpawnEntry>();
     }
 }

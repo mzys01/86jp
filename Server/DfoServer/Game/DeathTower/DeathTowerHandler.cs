@@ -7,8 +7,6 @@ namespace DfoServer.Game.DeathTower
 {
     public sealed class DeathTowerHandler
     {
-        private static readonly Random _seedRng = new Random();
-
         public async Task<bool> TryHandleSelectDungeon(EnhancedClientSession session, int dungeonId)
         {
             var config = DeathTowerData.GetConfig(dungeonId);
@@ -16,8 +14,7 @@ namespace DfoServer.Game.DeathTower
                 return false;
 
             var tower = new DeathTowerSession(config);
-            session.Player.DeathTowerState = tower;
-            session.Player.CurDungeon = (short)dungeonId;
+            Network.Handlers.Dungeon.DungeonRunLifecycle.BeginTowerRun(session, dungeonId, tower);
 
             FileLogger.Log($"[DeathTower] ENTER: cid={session.Player.CharacterId} dungeon={dungeonId} stages={config.TotalStages} basisLv={config.BasisLevel}");
 
@@ -96,13 +93,14 @@ namespace DfoServer.Game.DeathTower
             return Task.CompletedTask;
         }
 
-        // 返城时清除塔状态(由 BACK_2_VILLAGE/EPLP 路径调用)
+        // 返城时清除塔状态(由生命周期统一清理路径调用; run 置换后本方法只负责日志与提前摘除)
         public static void ClearTowerState(EnhancedClientSession session)
         {
-            if (session?.Player?.DeathTowerState != null)
+            var run = session?.Player?.CurrentRun;
+            if (run?.Tower != null)
             {
-                FileLogger.Log($"[DeathTower] CLEAR: cid={session.Player.CharacterId} wasStage={session.Player.DeathTowerState.CurrentStage}");
-                session.Player.DeathTowerState = null;
+                FileLogger.Log($"[DeathTower] CLEAR: cid={session.Player.CharacterId} wasStage={run.Tower.CurrentStage}");
+                run.Tower = null;
             }
         }
 
@@ -139,7 +137,7 @@ namespace DfoServer.Game.DeathTower
             if (monsters.Count == 0)
                 FileLogger.Log($"[DeathTower] WARNING: stage={tower.CurrentStage} map={mapId} loaded 0 monsters (map may have only [apc random point] or PVF read failed)");
 
-            var body = DeathTowerPacketBuilder.BuildStageMap(tower, monsters, _seedRng);
+            var body = DeathTowerPacketBuilder.BuildStageMap(tower, monsters);
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x008F, body));
             FileLogger.Log($"[DeathTower] SENT 0x008F STAGE_MAP: stage={tower.CurrentStage} map={mapId} monsters={monsters.Count} bodyLen={body.Length}");
         }

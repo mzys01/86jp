@@ -41,7 +41,7 @@ namespace DfoServer.Network.Handlers.Dungeon
 
             // After APC dialog ends: only non-blocking APC rooms may clear from dialog flow.
             // Enemy APC/BOSS actors still block the room until their DIE_MONSTER is received.
-            if (pauseFlag == 1 && session.Player.CurDungeon > 0)
+            if (pauseFlag == 1 && (session.Player.CurrentRun?.DungeonId ?? 0) > 0)
             {
                 var progress = DungeonSharedServices.GetCurrentRoomProgress(session);
                 if (DungeonSharedServices.ShouldClearAfterApcDialog(progress))
@@ -66,7 +66,7 @@ namespace DfoServer.Network.Handlers.Dungeon
             uint flagIndex = BitConverter.ToUInt32(body, 0);
             byte rewardFlag = body[4];
 
-            FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] CHANGE_TUTORIAL_FLAG: flagIndex={flagIndex} rewardFlag={rewardFlag} dungeon={session.Player.CurDungeon} cid={session.Player.CharacterId}");
+            FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] CHANGE_TUTORIAL_FLAG: flagIndex={flagIndex} rewardFlag={rewardFlag} dungeon={(session.Player.CurrentRun?.DungeonId ?? 0)} cid={session.Player.CharacterId}");
 
             // RewardTutorial: PVF serverparameter.etc [escalade tutorial reward]
             var inserted = new List<(short slot, int itemId, int count)>();
@@ -110,16 +110,14 @@ namespace DfoServer.Network.Handlers.Dungeon
                 var cid = session.Player.CharacterId;
                 FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] CHANGE_TUTORIAL_FLAG: tutorial complete (flag=31), marking skip. cid={cid}");
 
-                var stateRepo = new SqliteCharacterStateRepository(
-                    ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
                 var snap = new SelectCharacterInitializationSnapshot();
-                stateRepo.LoadFlags(cid, snap);
+                _svc.CharacterStateRepository.LoadFlags(cid, snap);
                 snap.AckTutorialSkipable = 1;
-                stateRepo.SaveFlags(cid, snap);
+                _svc.CharacterStateRepository.SaveFlags(cid, snap);
 
-                if (session.Player.CurDungeon > 0)
+                if ((session.Player.CurrentRun?.DungeonId ?? 0) > 0)
                 {
-                    FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] CHANGE_TUTORIAL_FLAG: returning to town from dungeon={session.Player.CurDungeon}");
+                    FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] CHANGE_TUTORIAL_FLAG: returning to town from dungeon={(session.Player.CurrentRun?.DungeonId ?? 0)}");
                     await ReturnToVillage(session);
                 }
             }
@@ -130,9 +128,9 @@ namespace DfoServer.Network.Handlers.Dungeon
         // CalLevelUpItemState(1, targetLevel) bulk exp to target level, SendCmdOkPacket(484)
         internal async Task HandleTutorialLevelUp(EnhancedClientSession session, GamePacketHeader header, byte[] body)
         {
-            FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] TUTORIAL_LEVEL_UP: cid={session.Player.CharacterId} level={session.Player.Level} dungeon={session.Player.CurDungeon}");
+            FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] TUTORIAL_LEVEL_UP: cid={session.Player.CharacterId} level={session.Player.Level} dungeon={(session.Player.CurrentRun?.DungeonId ?? 0)}");
 
-            if (session.Player.Level != 1 || session.Player.CurDungeon <= 0)
+            if (session.Player.Level != 1 || (session.Player.CurrentRun?.DungeonId ?? 0) <= 0)
             {
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x01E4, new byte[] { 0x13 }));
                 return;
@@ -162,7 +160,7 @@ namespace DfoServer.Network.Handlers.Dungeon
                     remainTp = (ushort)synced.Points.RemainingTp;
                 }
             }
-            catch { }
+            catch (Exception ex) { FileLogger.Log($"[DungeonHandler] TUTORIAL_LEVEL_UP ERROR: skill state sync failed, SP/TP sent as 0: {ex.Message}"); }
 
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0025,
                 ExpNotificationBuilder.Build(session.Player.Level, session.Player.Exp, remainSp, remainTp)));
@@ -183,7 +181,7 @@ namespace DfoServer.Network.Handlers.Dungeon
 
         private async Task ReturnToVillage(EnhancedClientSession session)
         {
-            DungeonSharedServices.ResetDungeonState(session);
+            await DungeonRunLifecycle.EndRunToTownAsync(session);
             session.Player.UserState = 0x00;
 
             var snapshot = TownAreaNotificationBuilder.CreateCurrentSnapshot(session.Player);
