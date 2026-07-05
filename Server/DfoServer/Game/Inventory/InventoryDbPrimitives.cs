@@ -1167,6 +1167,10 @@ WHERE character_id = @characterId AND list_type = @listType;";
                     int stackCount = reader.GetInt32(2);
                     reader.Close();
 
+                    // Material costs must be all-or-nothing; a short stack cannot be
+                    // partially deleted and reported as a successful fixed-count spend.
+                    if (stackCount < count) return null;
+
                     var db = new InventoryDbPrimitives();
                     if (stackCount <= count)
                     {

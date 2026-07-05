@@ -324,27 +324,75 @@ namespace DfoServer.Network.Handlers
         public async Task Handle_CREATE_ACCOUNT_CARGO(EnhancedClientSession session, GamePacketHeader header, byte[] body)
         {
             var (cid, aid) = ResolveOwner(session);
-            if (!_inventoryStore.TryCreateAccountCargo(aid))
+            if (!_inventoryStore.TryCreateAccountCargo(cid, aid, out var costResult, out var errorCode))
             {
-                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0131, new byte[] { 0x00, 0x14 }));
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0131, new byte[] { 0x00, errorCode }));
                 return;
             }
 
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0131, new byte[] { 0x01 }));
-            FileLogger.Log($"[{ProtocolName}] CREATE_ACCOUNT_CARGO: aid={aid} cargo created");
+            await SendAccountCargoCostRefresh(session, costResult);
+            await _refresh.SendItemListRefresh(session, InventoryListType.AccountCargo);
+            FileLogger.Log($"[{ProtocolName}] CREATE_ACCOUNT_CARGO: aid={aid} cargo created costGold={costResult?.GoldSpent == true} costItem=0x{costResult?.CostItemTemplateId ?? 0:X8}");
         }
 
         public async Task Handle_UPGRADE_ACCOUNT_CARGO(EnhancedClientSession session, GamePacketHeader header, byte[] body)
         {
             var (cid, aid) = ResolveOwner(session);
-            if (!_inventoryStore.TryUpgradeAccountCargo(aid, out var errorCode))
+            if (!_inventoryStore.TryUpgradeAccountCargo(cid, aid, out var costResult, out var errorCode))
             {
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0132, new byte[] { 0x00, errorCode }));
                 return;
             }
 
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0132, new byte[] { 0x01 }));
-            FileLogger.Log($"[{ProtocolName}] UPGRADE_ACCOUNT_CARGO: aid={aid} selectionKey upgraded");
+            await SendAccountCargoCostRefresh(session, costResult);
+            await _refresh.SendItemListRefresh(session, InventoryListType.AccountCargo);
+            FileLogger.Log($"[{ProtocolName}] UPGRADE_ACCOUNT_CARGO: aid={aid} selectionKey upgraded costGold={costResult?.GoldSpent == true} costItem=0x{costResult?.CostItemTemplateId ?? 0:X8} costItemNew={costResult?.CostItemNewStackCount ?? 0} coin={costResult?.UpdatedCoin ?? 0}");
+        }
+
+        private async Task SendAccountCargoCostRefresh(EnhancedClientSession session, InventoryMutationResult costResult)
+        {
+            if (costResult == null)
+                return;
+
+            if (costResult.GoldSpent)
+            {
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000E,
+                    ItemListUpdateBuilder.BuildGoldUpdate(costResult.UpdatedGold)));
+                return;
+            }
+
+            if (costResult.CostItemTemplateId > 0)
+            {
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000E,
+                    ItemListUpdateBuilder.BuildCommonSlotUpdate(
+                        costResult.CostItemSlotIndex,
+                        costResult.CostItemTemplateId,
+                        costResult.CostItemNewStackCount)));
+                return;
+            }
+
+            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0035,
+                CeraUpdateBuilder.Build(
+                    costResult.UpdatedCoin,
+                    costResult.UpdatedTokenCera,
+                    costResult.UpdatedHappyTokenCera)));
+        }
+
+        public async Task Handle_UPGRADE_CARGO(EnhancedClientSession session, GamePacketHeader header, byte[] body)
+        {
+            var (cid, aid) = ResolveOwner(session);
+            if (!_inventoryStore.TryUpgradePersonalCargo(cid, aid, out var newListParam16, out var errorCode))
+            {
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, header.type, new byte[] { 0x00, errorCode }));
+                FileLogger.Log($"[{ProtocolName}] UPGRADE_CARGO: failed cid={cid} aid={aid} error=0x{errorCode:X2} rawBody({body?.Length ?? 0}B)={(body != null ? BitConverter.ToString(body) : "null")}");
+                return;
+            }
+
+            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, header.type, new byte[] { 0x01 }));
+            await _refresh.SendItemListRefresh(session, InventoryListType.PersonalCargo);
+            FileLogger.Log($"[{ProtocolName}] UPGRADE_CARGO: cid={cid} aid={aid} personalCargoListParam16={newListParam16} rawBody({body?.Length ?? 0}B)={(body != null ? BitConverter.ToString(body) : "null")}");
         }
     }
 }
