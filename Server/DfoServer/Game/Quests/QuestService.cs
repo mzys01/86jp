@@ -677,8 +677,7 @@ namespace DfoServer.Game.Quests
                 if (expReward > 0)
                 {
                     newExp += expReward;
-                    while (newLevel < 86 && newExp >= (uint)Dungeon.ExpTableProvider.GetLevelThreshold(newLevel))
-                        newLevel++;
+                    newLevel = Dungeon.ExpTableProvider.ApplyLevelUps(newLevel, newExp);
                     Characters.CharacterProgressService.PersistLevelAndExp(
                         scope.Connection, scope.Transaction, characterId, newLevel, newExp);
                 }

@@ -451,6 +451,32 @@ namespace DfoServer.Network.Handlers.Dungeon
                 persist: persist);
         }
 
+        // 经验入口共用: 升级/结算后的 SP/TP 剩余点计算, 失败按 0 发并留日志。
+        internal (ushort RemainSp, ushort RemainTp) GetRemainingSpTp(EnhancedClientSession session, bool persist, string logTag)
+        {
+            try
+            {
+                var synced = LoadSyncedSkillState(session.Player.CharacterId, session.Player.Level, persist: persist);
+                if (synced.Points != null)
+                {
+                    var pageIndex = session.Player.Subtype0Tail?.SkillTreeIndex == 1 ? 1 : 0;
+                    return (SkillStateService.GetPageRemainingSp(synced.Skills, synced.Points, pageIndex),
+                            (ushort)synced.Points.RemainingTp);
+                }
+            }
+            catch (Exception ex) { FileLogger.Log($"[DungeonHandler] {logTag} ERROR: skill state sync failed, SP/TP sent as 0: {ex.Message}"); }
+            return (0, 0);
+        }
+
+        // 副本内升级的后续通知: 刷新可接任务列表 + 补属性(subtype1)。
+        // 绝不发角色状态包(subtype0) -- 它会打乱客户端的副本内角色状态,
+        // 实测导致清房后无法进下一个门。
+        internal async Task SendInDungeonLevelUpFollowups(EnhancedClientSession session)
+        {
+            await SendQuestListRefresh(session);
+            await SendUserInfoBroadcast(session);
+        }
+
         internal async Task SendQuestListRefresh(EnhancedClientSession session)
         {
             try

@@ -149,26 +149,12 @@ namespace DfoServer.Network.Handlers.Dungeon
             _svc.PersistLevelAndExp(session.Player.CharacterId, session.Player.Level, session.Player.Exp);
             FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] TUTORIAL_LEVEL_UP: {1}->{target} exp={targetExp}");
 
-            ushort remainSp = 0, remainTp = 0;
-            try
-            {
-                var synced = _svc.LoadSyncedSkillState(session.Player.CharacterId, session.Player.Level, persist: true);
-                if (synced.Points != null)
-                {
-                    var pageIndex = session.Player.Subtype0Tail?.SkillTreeIndex == 1 ? 1 : 0;
-                    remainSp = SkillStateService.GetPageRemainingSp(synced.Skills, synced.Points, pageIndex);
-                    remainTp = (ushort)synced.Points.RemainingTp;
-                }
-            }
-            catch (Exception ex) { FileLogger.Log($"[DungeonHandler] TUTORIAL_LEVEL_UP ERROR: skill state sync failed, SP/TP sent as 0: {ex.Message}"); }
+            var (remainSp, remainTp) = _svc.GetRemainingSpTp(session, persist: true, logTag: "TUTORIAL_LEVEL_UP");
 
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0025,
                 ExpNotificationBuilder.Build(session.Player.Level, session.Player.Exp, remainSp, remainTp)));
 
-            await _svc.SendQuestListRefresh(session);
-            // 教程升级发生在副本场景内: 只在经验包之后补属性(subtype1),
-            // 不发角色状态包(subtype0), 理由同击杀路径。
-            await _svc.SendUserInfoBroadcast(session);
+            await _svc.SendInDungeonLevelUpFollowups(session);
 
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x01E4, new byte[] { 0x01 }));
         }

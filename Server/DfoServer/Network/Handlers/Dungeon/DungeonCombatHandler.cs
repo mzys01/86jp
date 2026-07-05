@@ -169,8 +169,7 @@ namespace DfoServer.Network.Handlers.Dungeon
                 }
 
                 var prevLevel = session.Player.Level;
-                while (session.Player.Level < 86 && session.Player.Exp >= (uint)ExpTableProvider.GetLevelThreshold(session.Player.Level))
-                    session.Player.Level++;
+                session.Player.Level = ExpTableProvider.ApplyLevelUps(session.Player.Level, session.Player.Exp);
 
                 var leveledUp = session.Player.Level > prevLevel;
                 if (leveledUp)
@@ -178,18 +177,7 @@ namespace DfoServer.Network.Handlers.Dungeon
                     _svc.PersistLevelAndExp(session.Player.CharacterId, session.Player.Level, session.Player.Exp);
                 }
 
-                ushort remainSp = 0, remainTp = 0;
-                try
-                {
-                    var synced = _svc.LoadSyncedSkillState(session.Player.CharacterId, session.Player.Level, persist: leveledUp);
-                    if (synced.Points != null)
-                    {
-                        var pageIndex = session.Player.Subtype0Tail?.SkillTreeIndex == 1 ? 1 : 0;
-                        remainSp = SkillStateService.GetPageRemainingSp(synced.Skills, synced.Points, pageIndex);
-                        remainTp = (ushort)synced.Points.RemainingTp;
-                    }
-                }
-                catch (Exception ex) { FileLogger.Log($"[DungeonHandler] DIE_MONSTER ERROR: skill state sync failed, SP/TP sent as 0: {ex.Message}"); }
+                var (remainSp, remainTp) = _svc.GetRemainingSpTp(session, persist: leveledUp, logTag: "DIE_MONSTER");
 
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0025,
                     ExpNotificationBuilder.Build(session.Player.Level, session.Player.Exp, remainSp, remainTp,
@@ -198,11 +186,7 @@ namespace DfoServer.Network.Handlers.Dungeon
                 if (leveledUp)
                 {
                     FileLogger.Log($"[DungeonHandler] LEVEL UP: cid={session.Player.CharacterId} {prevLevel}->{session.Player.Level} exp={session.Player.Exp}");
-                    await _svc.SendQuestListRefresh(session);
-                    // 副本内升级只在经验包之后补发属性(subtype1)。
-                    // 不发角色状态包(subtype0): 它会打乱客户端的副本内角色状态,
-                    // 实测导致清房后无法进下一个门。
-                    await _svc.SendUserInfoBroadcast(session);
+                    await _svc.SendInDungeonLevelUpFollowups(session);
                 }
 
             }

@@ -48,8 +48,7 @@ namespace DfoServer.Network.Handlers.Dungeon
             if (clearExp.Total > 0)
             {
                 session.Player.Exp = AddSaturating(session.Player.Exp, clearExp.Total);
-                while (session.Player.Level < 86 && session.Player.Exp >= (uint)ExpTableProvider.GetLevelThreshold(session.Player.Level))
-                    session.Player.Level++;
+                session.Player.Level = ExpTableProvider.ApplyLevelUps(session.Player.Level, session.Player.Exp);
             }
             var leveledUp = session.Player.Level > prevLevel;
             _svc.PersistLevelAndExp(session.Player.CharacterId, session.Player.Level, session.Player.Exp);
@@ -84,18 +83,7 @@ namespace DfoServer.Network.Handlers.Dungeon
                 DungeonNotificationBuilder.BuildPlayResult(
                     session.Player.UserId, monsterTotalExp, allKill: true,
                     rankGrade: clearRank.RankGrade, clientRankPoint: clearRank.ClientRankPoint)));
-            ushort remainSp = 0, remainTp = 0;
-            try
-            {
-                var synced = _svc.LoadSyncedSkillState(session.Player.CharacterId, session.Player.Level, persist: leveledUp);
-                if (synced.Points != null)
-                {
-                    var pageIndex = session.Player.Subtype0Tail?.SkillTreeIndex == 1 ? 1 : 0;
-                    remainSp = SkillStateService.GetPageRemainingSp(synced.Skills, synced.Points, pageIndex);
-                    remainTp = (ushort)synced.Points.RemainingTp;
-                }
-            }
-            catch (Exception ex) { FileLogger.Log($"[DungeonHandler] SET_PLAY_RESULT ERROR: skill state sync failed, SP/TP sent as 0: {ex.Message}"); }
+            var (remainSp, remainTp) = _svc.GetRemainingSpTp(session, persist: leveledUp, logTag: "SET_PLAY_RESULT");
 
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0025,
                 DungeonNotificationBuilder.BuildExp(session.Player.Level, session.Player.Exp, remainSp, remainTp)));
@@ -116,9 +104,7 @@ namespace DfoServer.Network.Handlers.Dungeon
             if (leveledUp)
             {
                 FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] LEVEL UP from dungeon clear: cid={session.Player.CharacterId} {prevLevel}->{session.Player.Level} exp={session.Player.Exp}");
-                await _svc.SendQuestListRefresh(session);
-                // 结算仍在副本场景内: 只补属性(subtype1), 不发角色状态包(subtype0), 理由同击杀路径。
-                await _svc.SendUserInfoBroadcast(session);
+                await _svc.SendInDungeonLevelUpFollowups(session);
             }
 
             // Card layout is deferred: 2 s timer -> layout, then 4 s -> auto-flip free card.
