@@ -275,6 +275,38 @@ ORDER BY slot_index;";
                     return true;
                 }
 
+                    // 金币槽(主背包 slot=0, item_template_id=0): 客户端用 DELETE_ITEM 同步"消耗金币"
+                    // (例如消耗金币的技能), 走通用 TryDeleteItemCore 会把整行物理删除导致余额归零。
+                    // 这里像 cube fragment 一样按数量增减, 而非删行。
+                    // 只对主背包(Main)生效; avatar/equipment/pet 的 slot=0 不是金币, 不能误判。
+                    if (slotIndex == 0 && listType == InventoryListType.Main)
+                    {
+                        if (deleteCount <= 0)
+                            return false;
+
+                        if (!CurrencyService.TrySpendGold(connection, transaction, characterId, deleteCount))
+                            return false;
+
+                        var goldWallet = _db.LoadWallet(connection, transaction, characterId);
+                        transaction.Commit();
+
+                        result = new InventoryMutationResult
+                        {
+                            ListType = listType,
+                            SlotIndex = slotIndex,
+                            ItemTemplateId = 0,
+                            RemainingStackCount = goldWallet.Gold,
+                            InstanceValue = goldWallet.Gold,
+                            Durability = 0,
+                            UpdatedGold = goldWallet.Gold,
+                            UpdatedSp = goldWallet.Sp,
+                            UpdatedCoin = goldWallet.Cera,
+                            RequestedCount = deleteCount,
+                            AppliedCount = deleteCount,
+                        };
+                        return true;
+                    }
+
 
                 var ok = TryDeleteItemCore(connection, transaction, characterId, listType, dbListType, slotIndex, deleteCount, out result);
                 if (ok)
