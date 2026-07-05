@@ -1,4 +1,5 @@
 using DfoServer.Game.Currency;
+using DfoServer.Game.DailyReset;
 using DfoServer.Game.Inventory;
 using DfoServer.Game.SelectCharacter;
 using DfoServer.Network;
@@ -12,6 +13,15 @@ namespace DfoServer.Game.Premium
 {
     public static class PremiumService
     {
+        // 魔王契约的袖珍罐双倍奖励功能位；客户端每天最多显示并消费 8 次。
+        public const int LotteryDoubleRewardServiceIndex = 1;
+        public const int LotteryDoubleRewardDailyLimit = 8;
+        public const string LotteryDoubleRewardCounterKey = "lottery_double_reward_used";
+
+        private const int PremiumServiceEntryExpireBase = 6;
+        private const int PremiumServiceEntryUsedCountBase = 10;
+        private const int PremiumServiceEntryStride = 9;
+
         public static bool IsContractItem(int itemTemplateId)
         {
             return PremiumCatalog.Load().TryGetValue(itemTemplateId, out var pt, out var dd)
@@ -187,9 +197,14 @@ namespace DfoServer.Game.Premium
             return (true, result);
         }
 
-        public static byte[] BuildPremiumServiceData(string connStr, int accountId)
+        public static byte[] BuildPremiumServiceData(
+            string connStr,
+            int accountId,
+            int characterId = 0,
+            DailyResetService dailyResetService = null)
         {
             var data = new byte[74];
+            var lotteryDoubleRewardUsedCount = GetLotteryDoubleRewardUsedCount(dailyResetService, characterId);
             using (var conn = new SqliteConnection(connStr))
             {
                 conn.Open();
@@ -206,8 +221,16 @@ namespace DfoServer.Game.Premium
                             var slot = DevilContractCatalog.PremiumTypeToSlot(reader.GetInt32(0));
                             if (slot < 0 || slot >= 8) continue;
                             var expire = reader.GetInt64(1);
-                            var off = 6 + slot * 9;
-                            Buffer.BlockCopy(BitConverter.GetBytes((int)Math.Min(expire, int.MaxValue)), 0, data, off, 4);
+                            var expireOffset = PremiumServiceEntryExpireBase + slot * PremiumServiceEntryStride;
+                            Buffer.BlockCopy(BitConverter.GetBytes((int)Math.Min(expire, int.MaxValue)), 0, data, expireOffset, 4);
+
+                            if (slot == LotteryDoubleRewardServiceIndex)
+                            {
+                                WriteInt32(
+                                    data,
+                                    PremiumServiceEntryUsedCountBase + slot * PremiumServiceEntryStride,
+                                    lotteryDoubleRewardUsedCount);
+                            }
                         }
                     }
                 }
@@ -239,6 +262,50 @@ namespace DfoServer.Game.Premium
                     return cmd.ExecuteScalar() != null;
                 }
             }
+        }
+
+        public static int GetLotteryDoubleRewardUsedCount(DailyResetService dailyResetService, int characterId)
+        {
+            if (dailyResetService == null || characterId <= 0)
+                return 0;
+
+            return ClampLotteryDoubleRewardUseCount(
+                dailyResetService.GetCounter(characterId, LotteryDoubleRewardCounterKey));
+        }
+
+        public static int GetLotteryDoubleRewardUsedCount(
+            DailyResetService dailyResetService,
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            int characterId)
+        {
+            if (dailyResetService == null || connection == null || transaction == null || characterId <= 0)
+                return 0;
+
+            return ClampLotteryDoubleRewardUseCount(
+                dailyResetService.GetCounter(connection, transaction, characterId, LotteryDoubleRewardCounterKey));
+        }
+
+        public static bool TryConsumeLotteryDoubleRewardUse(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            DailyResetService dailyResetService,
+            int characterId,
+            int accountId)
+        {
+            if (connection == null || transaction == null || dailyResetService == null || characterId <= 0 || accountId <= 0)
+                return false;
+
+            var premiumType = DevilContractCatalog.SlotToPremiumType(LotteryDoubleRewardServiceIndex);
+            if (!HasActivePremium(connection, transaction, accountId, premiumType))
+                return false;
+
+            return dailyResetService.TryIncrementCounter(
+                connection,
+                transaction,
+                characterId,
+                LotteryDoubleRewardCounterKey,
+                LotteryDoubleRewardDailyLimit);
         }
 
 
@@ -312,6 +379,34 @@ DO UPDATE SET end_time = @expire, updated_at = CURRENT_TIMESTAMP;";
                 cmd.ExecuteNonQuery();
             }
             return newExpire;
+        }
+
+        internal static bool HasActivePremium(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            int accountId,
+            int premiumType)
+        {
+            using (var cmd = connection.CreateCommand())
+            {
+                cmd.Transaction = transaction;
+                cmd.CommandText = "SELECT 1 FROM account_premiums WHERE account_id=@aid AND premium_type=@type AND end_time>@now LIMIT 1;";
+                cmd.Parameters.AddWithValue("@aid", accountId);
+                cmd.Parameters.AddWithValue("@type", premiumType);
+                cmd.Parameters.AddWithValue("@now", DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+                return cmd.ExecuteScalar() != null;
+            }
+        }
+
+        private static int ClampLotteryDoubleRewardUseCount(long usedCount)
+            => (int)Math.Max(0, Math.Min(LotteryDoubleRewardDailyLimit, usedCount));
+
+        private static void WriteInt32(byte[] data, int offset, int value)
+        {
+            if (data == null || offset < 0 || offset + 4 > data.Length)
+                return;
+
+            Buffer.BlockCopy(BitConverter.GetBytes(value), 0, data, offset, 4);
         }
     }
 }

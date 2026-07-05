@@ -6,7 +6,7 @@ namespace DfoServer.Network.Builders
 {
     public static class BuyItemAckBuilder
     {
-        public static byte[] Build(InventoryMutationResult result, List<CostItemUpdate> costItems = null)
+        public static byte[] Build(InventoryMutationResult result, List<CostItemUpdate> costItems = null, bool includePurchasedItemSummary = true)
         {
             var writer = new GamePacketWriter();
             writer.WriteByte(0x01);
@@ -18,10 +18,10 @@ namespace DfoServer.Network.Builders
             writer.WriteInt32(result.UpdatedSp);         
             writer.WriteInt32(0);                        
             writer.WriteInt32(result.UpdatedCoin);       
-            writer.WriteInt16(result.SlotIndex);         
-            writer.WriteInt32(result.ItemTemplateId);    
-            writer.WriteInt32(result.InstanceValue);     
-            writer.WriteUInt16(result.Durability);       
+            writer.WriteInt16(result.SlotIndex);
+            writer.WriteInt32(includePurchasedItemSummary ? result.ItemTemplateId : 0);
+            writer.WriteInt32(includePurchasedItemSummary ? result.InstanceValue : 0);
+            writer.WriteUInt16(includePurchasedItemSummary ? result.Durability : (ushort)0);
             writer.WriteByte(0);                         
             writer.WriteUInt16(0);                       
             writer.WriteInt32(0);                        

@@ -38,13 +38,19 @@ namespace DfoServer.Game.SelectCharacter
             ICharacterRepository characterRepository,
             IAssetService assetService = null,
             IInventoryStore inventoryStore = null,
-            IRentalTimeProvider rentalTimeProvider = null)
+            IRentalTimeProvider rentalTimeProvider = null,
+            DailyReset.DailyResetService dailyResetService = null)
         {
             _databasePath = databasePath;
             _schemaFilePath = schemaFilePath;
             _connectionString = Infrastructure.SqliteDatabaseBootstrap.Initialize(databasePath, schemaFilePath);
             _rentalTimeProvider = rentalTimeProvider ?? SystemRentalTimeProvider.Instance;
-            _inventoryStore = inventoryStore ?? new SqliteInventoryStore(databasePath, schemaFilePath, _rentalTimeProvider);
+            _dailyResetService = dailyResetService ?? new DailyReset.DailyResetService(databasePath, schemaFilePath);
+            _inventoryStore = inventoryStore ?? new SqliteInventoryStore(
+                databasePath,
+                schemaFilePath,
+                _rentalTimeProvider,
+                _dailyResetService);
             _assetService = assetService;
             _initDataRepository = new SqliteCharacterProgressRepository(databasePath, schemaFilePath);
             _darkKnightComboSkillRepository = new SqliteDarkKnightComboSkillRepository(databasePath, schemaFilePath);
@@ -53,7 +59,6 @@ namespace DfoServer.Game.SelectCharacter
             _characterRepository = characterRepository;
             _accountSettingsRepository = new AccountSettingsRepository(databasePath, schemaFilePath);
             _titleBookRepository = new CharacterTitleBookRepository(_connectionString);
-            _dailyResetService = new DailyReset.DailyResetService(databasePath, schemaFilePath);
             _titleBookMutationService = new TitleBookMutationService(_connectionString);
             _honorLevel = new HonorLevelSyncService(_characterRepository);
         }
@@ -63,6 +68,23 @@ namespace DfoServer.Game.SelectCharacter
             int dbSeedId = _userInfoBlobRepository.LoadSeedCharacterId();
             return dbSeedId > 0 ? dbSeedId : 1000;
         }
+
+        public CharacterItemListSnapshot LoadItemListSnapshot(int characterId, int accountId)
+        {
+            if (_assetService != null)
+            {
+                using (var scope = _assetService.OpenScope(characterId, accountId))
+                    return _assetService.LoadSnapshot(scope);
+            }
+
+            return _inventoryStore.LoadCharacterItemListSnapshot(characterId, accountId);
+        }
+
+        public bool TryUseBoosterItem(int characterId, int accountId, BoosterUseRequest request, out BoosterUseResult result)
+            => _inventoryStore.TryUseBoosterItem(characterId, accountId, request, out result);
+
+        public bool CanUseBoosterItem(int characterId, int accountId, BoosterUseRequest request)
+            => _inventoryStore.CanUseBoosterItem(characterId, accountId, request);
 
         public CreatureItemListSnapshot LoadCreatureItemListSnapshot(int characterId)
         {
@@ -214,7 +236,7 @@ namespace DfoServer.Game.SelectCharacter
 
             initSnapshot.PremiumServiceType = 1;
             initSnapshot.PremiumServiceData = Premium.PremiumService.BuildPremiumServiceData(
-                _connectionString, accountId);
+                _connectionString, accountId, characterId, _dailyResetService);
             LoadAccountPremiums(accountId, initSnapshot);
 
             

@@ -344,42 +344,6 @@ namespace DfoServer.Network.Handlers
                 : CommonPacketBodyBuilder.BuildCmdError(0x04);
         }
 
-        public async Task Handle_USE_LOTTERY_ITEM(EnhancedClientSession session, GamePacketHeader header, byte[] body)
-        {
-            var elapsed = Stopwatch.StartNew();
-            FileLogger.Log($"[{ProtocolName}] USE_LOTTERY_ITEM raw({body?.Length ?? 0}B): {(body != null ? BitConverter.ToString(body) : "null")}");
-
-            if (body == null || body.Length < 4)
-            {
-                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, header.type, new byte[] { 0x00 }));
-                return;
-            }
-
-            var rawListType = BitConverter.ToInt16(body, 0);
-            var slotIndex = BitConverter.ToInt16(body, 2);
-            if (rawListType != (short)InventoryListType.Main)
-            {
-                FileLogger.Log($"[{ProtocolName}] USE_LOTTERY_ITEM: unsupported listType={rawListType} slot={slotIndex}");
-                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, header.type, new byte[] { 0x00 }));
-                return;
-            }
-
-            var (cid, aid) = ResolveOwner(session);
-            if (!_inventoryStore.TryUseBoosterItem(cid, aid, new BoosterUseRequest
-            {
-                SlotIndex = slotIndex,
-                SelectedItemTemplateIds = Array.Empty<int>(),
-            }, out var result))
-            {
-                FileLogger.Log($"[{ProtocolName}] USE_LOTTERY_ITEM: failed cid={cid} aid={aid} slot={slotIndex} elapsed={elapsed.ElapsedMilliseconds}ms");
-                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, header.type, new byte[] { 0x00 }));
-                return;
-            }
-
-            await SendBoosterUseResult(session, header.type, result);
-            FileLogger.Log($"[{ProtocolName}] USE_LOTTERY_ITEM: source=0x{result.SourceItemTemplateId:X8} slot={result.SourceSlotIndex} remaining={result.SourceRemainingStackCount}, rewards={string.Join(",", result.Rewards.Select(r => $"{r.ListType}:0x{r.ItemTemplateId:X8}x{r.GrantedCount}@{r.SlotIndex}"))}, elapsed={elapsed.ElapsedMilliseconds}ms");
-        }
-
         public async Task Handle_OPEN_MAGIC_BOX(EnhancedClientSession session, GamePacketHeader header, byte[] body)
         {
             var elapsed = Stopwatch.StartNew();
@@ -644,7 +608,7 @@ namespace DfoServer.Network.Handlers
 
         internal static bool ShouldSendSourceAckForBoosterResponse(ushort responseType)
         {
-            return responseType != 0x00D0 && responseType != 0x03F3;
+            return responseType != 0x001B && responseType != 0x00D0 && responseType != 0x03F3;
         }
 
         internal static bool ShouldUseNativeMagicBoxBatchAck(BoosterUseResult result)

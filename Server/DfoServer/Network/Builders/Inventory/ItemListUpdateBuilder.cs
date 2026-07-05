@@ -7,8 +7,35 @@ namespace DfoServer.Network.Builders
 {
     public static class ItemListUpdateBuilder
     {
+        public static CommonInventoryItem CreateClearedCommonSlot(short slotIndex)
+        {
+            return new CommonInventoryItem
+            {
+                SlotIndex = slotIndex,
+                ItemTemplateId = -1,
+                CountOrInstanceValue = 0,
+            };
+        }
+
         public static byte[] BuildCommonUpdates(IReadOnlyList<CommonInventoryItem> items)
             => BuildCommonUpdates(InventoryListType.Main, items);
+
+        public static byte[] BuildCompactCommonUpdates(IReadOnlyList<InventoryMutationResult> items)
+        {
+            var updates = new List<CommonInventoryItem>();
+            if (items != null)
+            {
+                foreach (var item in items)
+                {
+                    if (item == null)
+                        continue;
+
+                    updates.Add(CreateCommonSlotUpdate(item.SlotIndex, item.ItemTemplateId, item.RemainingStackCount));
+                }
+            }
+
+            return BuildCommonUpdates(updates);
+        }
 
         public static byte[] BuildCommonUpdates(InventoryListType itemSpace, IReadOnlyList<CommonInventoryItem> items)
         {

@@ -32,6 +32,8 @@ namespace DfoServer.Game.Inventory
 
         bool TryUseBoosterItem(int characterId, int accountId, BoosterUseRequest request, out BoosterUseResult result);
 
+        bool CanUseBoosterItem(int characterId, int accountId, BoosterUseRequest request);
+
         bool TryOpenPackage0207(int characterId, int accountId, short slotIndex, IReadOnlyList<int> selectedItemTemplateIds, out BoosterUseResult result);
 
         bool TryHatchCreatureEgg(int characterId, InventoryListType listType, short slotIndex, int expectedItemTemplateId, out CreatureHatchResult result);

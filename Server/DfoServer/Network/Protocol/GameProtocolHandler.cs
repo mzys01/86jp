@@ -56,9 +56,14 @@ namespace DfoServer.Network
             var accountRepository = new SqliteAccountRepository(databasePath, schemaFilePath);
             // 租赁全链路共用同一时间源，保持绝对 Unix 到期时间模型。
             var rentalTimeProvider = SystemRentalTimeProvider.Instance;
+            var dailyResetService = new Game.DailyReset.DailyResetService(databasePath, schemaFilePath);
 
             // 全程序共享一个 SqliteInventoryStore(无状态, 只持连接串): 旧版门面与 AssetService 各自 new 一个
-            var inventoryStore = new Game.Inventory.SqliteInventoryStore(databasePath, schemaFilePath, rentalTimeProvider);
+            var inventoryStore = new Game.Inventory.SqliteInventoryStore(
+                databasePath,
+                schemaFilePath,
+                rentalTimeProvider,
+                dailyResetService);
             var experienceItemCooldowns = new ExperienceItemCooldownTracker();
             var experienceItemUseService = new ExperienceItemUseService(
                 inventoryStore,
@@ -72,7 +77,8 @@ namespace DfoServer.Network
                 characterRepository,
                 _assetService,
                 inventoryStore,
-                rentalTimeProvider);
+                rentalTimeProvider,
+                dailyResetService);
 
             var userInfoBlobRepository = new Game.CharacterData.SqliteUserInfoBlobRepository(databasePath, schemaFilePath);
             var getUserInfoTemplate = userInfoBlobRepository.LoadGetUserInfoTemplate();
@@ -94,12 +100,12 @@ namespace DfoServer.Network
                 characterRepository,
                 _inventoryRefreshSender,
                 experienceItemNotifications,
+                dailyResetService,
                 broadcastGamePacket);
             _petCreatureHandler = new PetCreatureHandler(inventoryStore, sqliteSelectCharacterDataSource, _inventoryRefreshSender);
             // 组队与城镇/副本共享同一个 PartyManager 实例: 跟随退出/副本 fan-out 都要看到同一份队伍状态。
             _partyManager = new Game.Party.PartyManager();
             _townHandler = new TownHandler(characterRepository, inventoryStore, sqliteSelectCharacterDataSource, _partyManager, sessionDirectory);
-            var dailyResetService = new Game.DailyReset.DailyResetService(databasePath, schemaFilePath);
             var reviveCoinService = new Game.ReviveCoin.ReviveCoinService(inventoryStore, _assetService, dailyResetService);
             _dungeonHandler = new DungeonHandler(
                 _assetService,
@@ -279,6 +285,7 @@ namespace DfoServer.Network
             d[0x00CC] = _inventoryHandler.Handle_ENUM_CMDPACKET_PURIFY_ITEM;
             d[0x00CD] = _inventoryHandler.Handle_ENUM_CMDPACKET_INVEST_ITEM_AMPLIFY_OPTION;
             d[0x00D0] = _inventoryHandler.Handle_OPEN_MAGIC_BOX_SINGLE;
+            d[0x00D9] = _inventoryHandler.Handle_OVERFLOW_INFO;
             d[0x0050] = _inventoryHandler.Handle_ENUM_CMDPACKET_UPGRADE_ITEM;      //80
             d[0x00A0] = _inventoryHandler.Handle_OPEN_SELECTABLE_PACKAGE;
             d[0x0110] = _inventoryHandler.Handle_ENUM_CMDPACKET_ENCHANT_BY_BEAD;   //272
