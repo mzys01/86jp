@@ -188,6 +188,13 @@ namespace DfoServer.GameWorld
             return grade == "[daily]" || grade == "[normaly repeat]" || grade == "[special daily]";
         }
 
+        public static bool IsTitleRewardQuest(int questId)
+        {
+            var qst = GetQuestFile(questId);
+            if (qst == null) return false;
+            return NormalizeQuestTag(qst.RewardType) == "title";
+        }
+
         public static bool CanGiveup(int questId)
         {
             var qst = GetQuestFile(questId);

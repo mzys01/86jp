@@ -249,7 +249,7 @@ namespace DfoServer.Network.Handlers
 
         private async Task SendTitleBookCategoryRefresh(EnhancedClientSession session, int characterId, int category)
         {
-            var snapshot = _sqliteSelectCharacterDataSource.LoadTitleBookSnapshotWithEquippedProjection(characterId, category);
+            var snapshot = _sqliteSelectCharacterDataSource.LoadTitleBookSnapshot(characterId, category);
             if (snapshot == null)
                 return;
 
