@@ -119,6 +119,8 @@ namespace DfoServer.Network.Handlers
 
             var ownerCharId = session.Player.CharacterId > 0 ? session.Player.CharacterId : _selectCharacterDataSource.GetSeedCharacterId();
             var ownerAcctId = session.Account?.AccountId ?? 1;
+            var adventureBody = BuildCharacterListBody(ownerAcctId);
+            var routingByte = _getUserInfoTemplate != null ? _getUserInfoTemplate.Pkt0RoutingByte7 : (byte)0;
 
             foreach (var packet in SelectCharacterPacketBuilder.BuildPacketStream(_selectCharacterDataSource, ownerCharId, ownerAcctId))
                 await session.SendPacketAsync(packet);
@@ -129,6 +131,9 @@ namespace DfoServer.Network.Handlers
                 0x0239,
                 AppearanceService.BuildCloneTitleAckBody(cloneTitle, suppressMessage: 1)));
             FileLogger.Log($"[{ProtocolName}] SELECT_CHARACTER clone title restore: char={ownerCharId} cloneTitle=0x{cloneTitle:X8}");
+
+            // 切角色可能跳过 GET_USERINFO，主选角流后补发账号 subtype2。
+            await session.SendPacketAsync(BuildPacketWithRouting(0x00, 0x0002, adventureBody, routingByte));
         }
 
         public async Task Handle_ENUM_CMDPACKET_GET_USERINFO(EnhancedClientSession session, GamePacketHeader header, byte[] body)
@@ -140,9 +145,6 @@ namespace DfoServer.Network.Handlers
                 byte routingByte = _getUserInfoTemplate != null ? _getUserInfoTemplate.Pkt0RoutingByte7 : (byte)0;
                 await session.SendPacketAsync(BuildPacketWithRouting(0x00, 0x0002, rosterBody, routingByte));
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0286, new byte[] { 0x00, 0x04 }));
-                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x01BA,
-                    new byte[] { 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }));
-                FileLogger.Log($"[{ProtocolName}] GET_USERINFO: 动态 roster+646+442 (account={accountId})");
             }
             catch (Exception ex)
             {
@@ -396,42 +398,7 @@ namespace DfoServer.Network.Handlers
         private byte[] BuildCharacterListBody(int accountId)
         {
             var characters = _characterRepository.ListByAccount(accountId);
-            var writer = new GamePacketWriter();
-
-            var t = _getUserInfoTemplate;
-            var slotLimit = CharacterSlotPolicy.ResolveSlotLimit(t?.GateOrCount1, t?.GateOrCount2);
-            writer.WriteByte(2);                                                      // userInfoType = 2
-            writer.WriteUInt16(slotLimit);                                             // CharacSlotLimit
-            writer.WriteUInt16(t != null ? t.GateOrCount2 : slotLimit);               // SlotEffectCount
-            writer.WriteByte(t != null ? t.FlagOrManage : (byte)0);                   // ManageLevel
-            writer.WriteInt32(t != null ? t.KeyOrPoint : 0);                          // ManagePoint
-            writer.WriteUInt16(t != null ? t.Unknown16 : (ushort)0);                  // unknownA
-            writer.WriteInt32(t != null ? t.Unknown32 : 0);                           // unknownB
-            writer.WriteUInt16((ushort)characters.Count);                              // entryCount
-
-            for (int i = 0; i < characters.Count; i++)
-            {
-                var ch = characters[i];
-
-                writer.WriteUInt16((ushort)i);
-                writer.WriteDstr(ch.Name);
-                writer.WriteByte(0x00);                 // reserved3
-                writer.WriteByte(0x00);                 // reserved4
-                writer.WriteByte(ch.Job);               // job
-                writer.WriteByte(ch.GrowType);          // growType
-                writer.WriteByte(ch.Level);             // level
-                writer.WriteZeroBytes(10);              // reserved5 (10 bytes)
-
-                var appearances = Game.Appearance.AppearanceService.LoadAppearanceFromEquipEntries(ch.CharacterId);
-                writer.WriteByte((byte)appearances.Length);
-                foreach (var a in appearances)
-                    UserInfoSubtype0Builder.WriteAppearanceEntry(writer, a);
-
-                var cloneTitleItemId = AppearanceService.LoadCloneTitleItemId(ch.CharacterId);
-                UserInfoType2RosterTailBuilder.Write(writer, cloneTitleItemId > 0 ? (uint)cloneTitleItemId : 0);
-            }
-
-            return writer.ToArray();
+            return AccountCharacterListBodyBuilder.Build(characters, _getUserInfoTemplate, out _);
         }
     }
 }

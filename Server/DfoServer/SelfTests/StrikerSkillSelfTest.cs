@@ -1,3 +1,4 @@
+using DfoServer.Game.Accounts;
 using DfoServer.Game.Mercenary;
 using DfoServer.Infrastructure;
 using DfoServer.Network.Builders;
@@ -34,6 +35,7 @@ namespace DfoServer.SelfTests
 
             CheckMercenarySupportRepository();
             CheckMercenaryWireSlotMapping();
+            CheckAdventureGroupLevelCalculation();
             CheckStrikerSupportSkillLevels();
             CheckMainApplyTagRecordPatch();
 
@@ -58,6 +60,56 @@ namespace DfoServer.SelfTests
 
             Check("mercenary wire slot uses account roster index", slot2 != null && slot2.CharacterId == 1004);
             Check("mercenary wire slot rejects active character", active == null);
+        }
+
+        private static void CheckAdventureGroupLevelCalculation()
+        {
+            var roster = new List<DfoServer.Game.Characters.CharacterRecord>();
+            for (var i = 0; i < 8; i++)
+                roster.Add(new DfoServer.Game.Characters.CharacterRecord { CharacterId = 92000 + i, Level = 86 });
+            roster.Add(new DfoServer.Game.Characters.CharacterRecord { CharacterId = 92010, Level = 1 });
+            roster.Add(new DfoServer.Game.Characters.CharacterRecord { CharacterId = 92011, Level = 1 });
+
+            const int expectedLevel86Point = 10785; // 40 到 86 级逐级累加。
+            const int expectedTotalPoint = expectedLevel86Point * 8; // 8 个 86 级角色贡献。
+            const byte expectedManageLevel = 7;
+            const ushort expectedManageOption = 125;
+
+            var level86Summary = AdventureGroupDataProvider.Calculate(new[]
+            {
+                new DfoServer.Game.Characters.CharacterRecord { CharacterId = 92100, Level = 86 }
+            });
+
+            var summary = AdventureGroupDataProvider.Calculate(roster);
+            Check("adventure group point accumulates level40-86 bonus for one Lv86 character", level86Summary.TotalPoint == expectedLevel86Point);
+            Check("adventure group point uses cumulative PVF character level table", summary.TotalPoint == expectedTotalPoint);
+            Check("adventure group level uses PVF account point thresholds", summary.ManageLevel == expectedManageLevel);
+            Check("adventure group exp bonus uses account manage level", summary.ExpBonusPercent == 10);
+            Check("adventure group manage option uses account manage level", summary.ManageOption == expectedManageOption);
+
+            var body = AccountCharacterListBodyBuilder.Build(roster, new GetUserInfoTemplate
+            {
+                GateOrCount1 = 32,
+                GateOrCount2 = 32,
+            }, out var bodySummary);
+            Check("USERINFO subtype2 writes adventure group level", body.Length > 10 && body[5] == bodySummary.ManageLevel && body[5] == expectedManageLevel);
+            Check("USERINFO subtype2 writes adventure group point", body.Length > 10 && BitConverter.ToInt32(body, 6) == expectedTotalPoint);
+
+            var addition = new DfoServer.Game.SelectCharacter.UserInfoAdditionSnapshot
+            {
+                StatPhysicalAttack = 10,
+                StatPhysicalDefense = 20,
+                StatMagicalAttack = 30,
+                StatMagicalDefense = 40,
+            };
+            AdventureGroupUserInfoSynchronizer.ApplyToUserInfoAddition(addition, roster);
+            Check("USERINFO subtype1 applies account adventure group level", addition.ManageLevel == expectedManageLevel);
+            Check("USERINFO subtype1 writes adventure group option index byte", addition.FlagByte == expectedManageLevel);
+            Check("adventure group option does not modify base primary stats",
+                addition.StatPhysicalAttack == 10 &&
+                addition.StatPhysicalDefense == 20 &&
+                addition.StatMagicalAttack == 30 &&
+                addition.StatMagicalDefense == 40);
         }
 
         private static void CheckMercenarySupportRepository()
@@ -220,7 +272,6 @@ WHERE character_id=@cid", conn))
             Check("0x019F main apply patch updates traced selected skill",
                 patched[selectedOffset] == 24 &&
                 patched[selectedOffset + 1] == 0);
-
             var asuraPatched = StrikerSupportTagCharacterPacketBuilder.PatchSelectedSkillIntoTagRecord(raw, new MercenarySupportState
             {
                 OwnerCharacterId = 91001,

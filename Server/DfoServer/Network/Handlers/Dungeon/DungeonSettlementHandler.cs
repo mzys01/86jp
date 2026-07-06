@@ -1,3 +1,4 @@
+using DfoServer.Game.Accounts;
 using DfoServer.Game.Dungeon;
 using DfoServer.Game.Inventory;
 using DfoServer.Game.Premium;
@@ -93,13 +94,14 @@ namespace DfoServer.Network.Handlers.Dungeon
                     blackDiamondExp: ToInt32Saturated(clearExp.BlackDiamondBonus),
                     growthContractExp: ToInt32Saturated(clearExp.GrowthContractBonus),
                     monsterGrowthContractExp: ToInt32Saturated(monsterGrowthContractBonus),
+                    adventureGroupExp: ToInt32Saturated(clearExp.AdventureGroupBonus),
                     monsterExp: monsterTotalExp, bossExp: ToInt32Saturated(bossTotalExp),
                     championExp: ToInt32Saturated(championTotalExp),
                     superChampionExp: 0,
                     freeCardGold: freeGold.GoldAmount,
                     freeCardItemId: freeItem.ItemId, freeCardItemCount: freeItem.StackCount)));
 
-            FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] CLEAR_EXP: dungeon={run.DungeonId} diff={run.Difficulty} clientRank={clearRank.ClientRankPoint} rankPoint={clearRank.RankPoint} rankGrade={clearRank.RankGrade} rankBonusIndex={clearRank.RankBonusIndex} base={clearExp.Base} scoreBonus={clearExp.ScoreBonus} growthContract={clearExp.GrowthContractBonus} blackDiamond={clearExp.BlackDiamondBonus} bonus={clearExp.Bonus} total={clearExp.Total} monsterTotalExp={monsterTotalExp} monsterGrowthContract={monsterGrowthContractBonus} bossTotalExp={bossTotalExp} championTotalExp={championTotalExp} superChampionTotalExp={superChampionTotalExp} namedMonsterTotalExp={namedMonsterTotalExp} charExp={session.Player.Exp}");
+            FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] CLEAR_EXP: dungeon={run.DungeonId} diff={run.Difficulty} clientRank={clearRank.ClientRankPoint} rankPoint={clearRank.RankPoint} rankGrade={clearRank.RankGrade} rankBonusIndex={clearRank.RankBonusIndex} base={clearExp.Base} scoreBonus={clearExp.ScoreBonus} growthContract={clearExp.GrowthContractBonus} blackDiamond={clearExp.BlackDiamondBonus} adventureGroup={clearExp.AdventureGroupBonus} bonus={clearExp.Bonus} total={clearExp.Total} monsterTotalExp={monsterTotalExp} monsterGrowthContract={monsterGrowthContractBonus} bossTotalExp={bossTotalExp} championTotalExp={championTotalExp} superChampionTotalExp={superChampionTotalExp} namedMonsterTotalExp={namedMonsterTotalExp} charExp={session.Player.Exp}");
 
             if (leveledUp)
             {
@@ -152,7 +154,7 @@ namespace DfoServer.Network.Handlers.Dungeon
             return body[0];
         }
 
-        private static ClearExpParts CalculateClearRewardExp(EnhancedClientSession session, int rankBonusIndex)
+        private ClearExpParts CalculateClearRewardExp(EnhancedClientSession session, int rankBonusIndex)
         {
             var run = session.Player.CurrentRun;
             int dungeonLevel;
@@ -182,8 +184,47 @@ namespace DfoServer.Network.Handlers.Dungeon
             var blackDiamondBonus = PremiumService.HasActivePremium(connStr, accountId, BlackDiamondPremiumTypes)
                 ? ToUInt32Floor(clearBaseExp * BlackDiamondBonusRate)
                 : 0;
+            var adventureGroupBonus = CalculateAdventureGroupClearExpBonus(session, accountId, clearBaseExp);
 
-            return new ClearExpParts(clearBaseExp, scoreBonus, growthContractBonus, blackDiamondBonus);
+            return new ClearExpParts(clearBaseExp, scoreBonus, growthContractBonus, blackDiamondBonus, adventureGroupBonus);
+        }
+
+        private uint CalculateAdventureGroupClearExpBonus(EnhancedClientSession session, int accountId, uint clearBaseExp)
+        {
+            if (session == null || clearBaseExp == 0)
+                return 0;
+
+            try
+            {
+                var characters = _svc.CharacterRepository.ListByAccount(accountId);
+                var summary = AdventureGroupDataProvider.Calculate(characters);
+                if (summary.ExpBonusPercent == 0 || IsHighestLevelCharacter(session, characters))
+                    return 0;
+
+                return ToUInt32Floor(clearBaseExp * (summary.ExpBonusPercent / 100.0f));
+            }
+            catch (Exception ex)
+            {
+                FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] CLEAR_EXP adventure group bonus skipped: {ex.Message}");
+                return 0;
+            }
+        }
+
+        private static bool IsHighestLevelCharacter(EnhancedClientSession session, IReadOnlyList<Game.Characters.CharacterRecord> characters)
+        {
+            if (session?.Player == null || characters == null || characters.Count == 0)
+                return true;
+
+            var highestLevel = 0;
+            foreach (var character in characters)
+            {
+                if (character == null || character.Deleted)
+                    continue;
+                if (character.Level > highestLevel)
+                    highestLevel = character.Level;
+            }
+
+            return session.Player.Level >= highestLevel;
         }
 
         private static uint ToUInt32Floor(float value)
@@ -224,19 +265,21 @@ namespace DfoServer.Network.Handlers.Dungeon
 
         private readonly struct ClearExpParts
         {
-            internal ClearExpParts(uint baseExp, uint scoreBonus, uint growthContractBonus, uint blackDiamondBonus)
+            internal ClearExpParts(uint baseExp, uint scoreBonus, uint growthContractBonus, uint blackDiamondBonus, uint adventureGroupBonus)
             {
                 Base = baseExp;
                 ScoreBonus = scoreBonus;
                 GrowthContractBonus = growthContractBonus;
                 BlackDiamondBonus = blackDiamondBonus;
+                AdventureGroupBonus = adventureGroupBonus;
             }
 
             internal uint Base { get; }
             internal uint ScoreBonus { get; }
             internal uint GrowthContractBonus { get; }
             internal uint BlackDiamondBonus { get; }
-            internal uint Bonus => AddSaturating(AddSaturating(ScoreBonus, GrowthContractBonus), BlackDiamondBonus);
+            internal uint AdventureGroupBonus { get; }
+            internal uint Bonus => AddSaturating(AddSaturating(AddSaturating(ScoreBonus, GrowthContractBonus), BlackDiamondBonus), AdventureGroupBonus);
             internal uint Total => AddSaturating(Base, Bonus);
         }
 

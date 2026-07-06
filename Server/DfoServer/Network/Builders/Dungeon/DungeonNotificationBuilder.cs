@@ -309,7 +309,7 @@ namespace DfoServer.Network.Builders
         // 槽位：1-13 通关额外奖励，14-25 杀怪额外奖励，101-108 后置额外奖励。
         public static byte[] BuildClearDungeonReward(uint clearBaseExp, int scoreBonusExp = 0, uint clearBonusExp = 0,
             int blackDiamondExp = 0, int growthContractExp = 0,
-            int monsterGrowthContractExp = 0,
+            int monsterGrowthContractExp = 0, int adventureGroupExp = 0,
             uint monsterExp = 0, int bossExp = 0, int championExp = 0, int superChampionExp = 0,
             int freeCardGold = 0, int freeCardItemId = 0, int freeCardItemCount = 0)
         {
@@ -325,6 +325,7 @@ namespace DfoServer.Network.Builders
             {
                 var value = 0;
                 if (i == 2) value = blackDiamondExp;       // 槽位3: 黑钻
+                else if (i == 7) value = adventureGroupExp; // 槽 8：冒险团通关经验
                 else if (i == 9) value = growthContractExp; // 槽位10: 成长之契约
                 else if (i == 18) value = monsterGrowthContractExp; // 槽位19: 杀怪成长之契约
                 w.WriteInt32(value);

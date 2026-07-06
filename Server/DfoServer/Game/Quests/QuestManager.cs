@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
+using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
 using DfoServer.Game.CharacterData;
 using DfoServer.Game.Dungeon;
@@ -299,6 +300,10 @@ namespace DfoServer.Game.Quests
 
                 if (record != null && addition != null)
                 {
+                    var characterRepository = new SqliteCharacterRepository(ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
+                    AdventureGroupUserInfoSynchronizer.ApplyToUserInfoAddition(
+                        addition,
+                        characterRepository.ListByAccount(record.AccountId));
                     var synced = SkillStateService.LoadAndSync(
                         skillRepo, characterId, record.Job, record.Level, record.BonusSp, record.BonusTp, persist: false);
                     var w = new Network.GamePacketWriter();
