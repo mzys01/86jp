@@ -59,6 +59,8 @@ namespace DfoServer.Game.Inventory
                     if (changed)
                         transaction.Commit();
                     result = CreateMoveResult(request, request.MoveCount, mutated: changed);
+                    if (changed)
+                        AttachEquipmentMoveState(connection, null, characterId, result, request.DestinationSlotIndex, outcome, source);
                     result.AckError = outcome == EquipOutcome.ReverseError;
                     return true;
                 }
@@ -67,6 +69,8 @@ namespace DfoServer.Game.Inventory
                     bool ok = _equipStore.HandleUnequipFromSlot(connection, transaction, characterId, accountId, request.SourceSlotIndex);
                     if (ok) transaction.Commit();
                     result = CreateMoveResult(request, request.MoveCount, mutated: ok);
+                    if (ok)
+                        AttachEquipmentMoveState(connection, null, characterId, result, request.SourceSlotIndex, EquipOutcome.Unequipped, null);
                     return true;
                 }
 
@@ -705,6 +709,125 @@ WHERE character_id = @cid AND list_type = @lt
                 DestinationSlotIndex = request.DestinationSlotIndex,
                 Mutated = mutated,
             };
+        }
+
+        private static void AttachEquipmentMoveState(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            int characterId,
+            InventoryMoveResult result,
+            short equipmentSlot,
+            EquipOutcome outcome,
+            ItemRecord equippedSource)
+        {
+            result.AffectedEquipmentSlot = equipmentSlot;
+
+            var mutation = BuildSubtype0TailMutation(
+                connection,
+                transaction,
+                characterId,
+                equipmentSlot,
+                outcome,
+                equippedSource);
+            if (mutation != null)
+                result.Subtype0TailMutation = mutation;
+        }
+
+        private static Subtype0TailMoveMutation BuildSubtype0TailMutation(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            int characterId,
+            short equipmentSlot,
+            EquipOutcome outcome,
+            ItemRecord equippedSource)
+        {
+            bool equipped = outcome == EquipOutcome.Equipped && equippedSource != null;
+
+            if (equipmentSlot == 11)
+            {
+                return new Subtype0TailMoveMutation
+                {
+                    ForgingChanged = true,
+                    Forging = equipped ? ResolveForging(equippedSource) : (byte)0,
+                };
+            }
+
+            if (equipmentSlot == 24)
+            {
+                if (!equipped || equippedSource.PetSerialOrHandle <= 0)
+                {
+                    return new Subtype0TailMoveMutation
+                    {
+                        EquippedCreatureChanged = true,
+                        EquippedCreatureNameBytes = Array.Empty<byte>(),
+                    };
+                }
+
+                return new Subtype0TailMoveMutation
+                {
+                    EquippedCreatureChanged = true,
+                    EquippedCreatureItemId = (uint)equippedSource.ItemTemplateId,
+                    EquippedCreatureNameBytes = LoadCreatureNameBytes(connection, transaction, characterId, equippedSource.PetSerialOrHandle),
+                    EquippedCreatureAliveState = 1,
+                };
+            }
+
+            if (equipmentSlot == 28)
+            {
+                return new Subtype0TailMoveMutation
+                {
+                    NameTagChanged = true,
+                    NameTagItemId = equipped ? (uint)equippedSource.ItemTemplateId : 0u,
+                    NameTagExpireTime = equipped && equippedSource.ExpireTime > 0 ? (uint)equippedSource.ExpireTime : 0u,
+                };
+            }
+
+            return null;
+        }
+
+        private static byte ResolveForging(ItemRecord item)
+        {
+            if (item == null)
+                return 0;
+
+            try
+            {
+                var tail = InventoryItemCodec.ReadHexValue(item.ExtraJson, "tailData2F", 37);
+                return tail.Length > 27 ? tail[27] : (byte)0;
+            }
+            catch
+            {
+                return 0;
+            }
+        }
+
+        private static byte[] LoadCreatureNameBytes(SqliteConnection connection, SqliteTransaction transaction, int characterId, int creatureKey)
+        {
+            if (creatureKey <= 0)
+                return Array.Empty<byte>();
+
+            try
+            {
+                using (var command = connection.CreateCommand())
+                {
+                    command.Transaction = transaction;
+                    command.CommandText = @"
+SELECT creature_text
+FROM character_creatures
+WHERE character_id = @characterId
+  AND creature_key = @creatureKey
+LIMIT 1;";
+                    command.Parameters.AddWithValue("@characterId", characterId);
+                    command.Parameters.AddWithValue("@creatureKey", creatureKey);
+
+                    var value = command.ExecuteScalar();
+                    return value is byte[] bytes ? bytes : Array.Empty<byte>();
+                }
+            }
+            catch
+            {
+                return Array.Empty<byte>();
+            }
         }
 
         private static bool IsSupportedMoveListType(InventoryListType listType)

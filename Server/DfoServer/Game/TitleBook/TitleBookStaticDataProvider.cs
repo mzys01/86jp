@@ -1,8 +1,10 @@
+using DfoServer.GameWorld;
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
+using PvfLib;
 
 namespace DfoServer.Game.TitleBook
 {
@@ -26,12 +28,16 @@ namespace DfoServer.Game.TitleBook
 
         public static TitleBookStaticDataProvider LoadDefault()
         {
-            var path = ResolveTitleBookEtcPath();
-            var quests = ParseTitleQuestDefinitions();
-            if (!string.IsNullOrWhiteSpace(path) && File.Exists(path))
-                return new TitleBookStaticDataProvider(ParseTitleBookEtc(path), quests);
+            var titleBookText = ReadTitleBookEtcText();
+            if (!string.IsNullOrWhiteSpace(titleBookText))
+            {
+                var slots = ParseTitleBookEtc(titleBookText);
+                var quests = ParseTitleQuestDefinitions(slots.Values.Select(s => s.QuestId));
+                return new TitleBookStaticDataProvider(slots, quests);
+            }
 
-            return new TitleBookStaticDataProvider(BuildOpenFallback(), quests);
+            var fallbackSlots = BuildOpenFallback();
+            return new TitleBookStaticDataProvider(fallbackSlots, new Dictionary<int, TitleQuestDefinition>());
         }
 
         public TitleBookSlotDefinition GetSlot(int category, int index)
@@ -59,13 +65,13 @@ namespace DfoServer.Game.TitleBook
             return _quests.TryGetValue(questId, out var quest) ? quest : null;
         }
 
-        private static Dictionary<(int Category, int Index), TitleBookSlotDefinition> ParseTitleBookEtc(string path)
+        private static Dictionary<(int Category, int Index), TitleBookSlotDefinition> ParseTitleBookEtc(string text)
         {
             var slots = BuildClosedDefaults();
             var inSection = false;
             var currentCategory = -1;
 
-            foreach (var originalLine in File.ReadLines(path))
+            foreach (var originalLine in SplitLines(text))
             {
                 var line = StripComment(originalLine).Replace("`", "").Trim();
                 if (line.Length == 0)
@@ -99,78 +105,139 @@ namespace DfoServer.Game.TitleBook
                 if (category >= 0)
                 {
                     currentCategory = category;
+                    ParseTitleBookSlotTokens(slots, currentCategory, tokens, 2);
                     continue;
                 }
 
-                if (currentCategory < 0 || !int.TryParse(tokens[0], out var index))
+                if (currentCategory < 0 || !int.TryParse(tokens[0], out _))
                     continue;
+
+                ParseTitleBookSlotTokens(slots, currentCategory, tokens, 0);
+            }
+
+            return slots;
+        }
+
+        private static void ParseTitleBookSlotTokens(
+            Dictionary<(int Category, int Index), TitleBookSlotDefinition> slots,
+            int currentCategory,
+            string[] tokens,
+            int startIndex)
+        {
+            var position = startIndex;
+            while (position < tokens.Length)
+            {
+                if (!int.TryParse(tokens[position], out var index))
+                    return;
+                position++;
+
+                if (position >= tokens.Length || !int.TryParse(tokens[position], out var slotType))
+                    return;
+                position++;
 
                 var slot = new TitleBookSlotDefinition
                 {
                     Category = currentCategory,
                     Index = index,
-                    SlotType = -1,
+                    SlotType = slotType,
                     QuestId = -1,
                 };
 
-                if (tokens.Length >= 2 && int.TryParse(tokens[1], out var slotType))
-                    slot.SlotType = slotType;
-
-                if (tokens.Length >= 3 && int.TryParse(tokens[2], out var questId))
-                    slot.QuestId = questId;
-
-                if (tokens.Length >= 4 && int.TryParse(tokens[3], out var itemCount))
+                if (slotType >= 0 && position < tokens.Length && int.TryParse(tokens[position], out var questId))
                 {
-                    for (var i = 0; i < itemCount && 4 + i < tokens.Length; i++)
+                    slot.QuestId = questId;
+                    position++;
+                }
+
+                if (slotType >= 0 && position < tokens.Length && int.TryParse(tokens[position], out var itemCount))
+                {
+                    position++;
+                    for (var i = 0; i < itemCount && position < tokens.Length; i++, position++)
                     {
-                        if (int.TryParse(tokens[4 + i], out var itemId))
+                        if (int.TryParse(tokens[position], out var itemId))
                             slot.AllowedTitleItemIds.Add(itemId);
                     }
                 }
 
                 slots[(currentCategory, index)] = slot;
             }
-
-            return slots;
         }
 
-        private static Dictionary<int, TitleQuestDefinition> ParseTitleQuestDefinitions()
+        private static Dictionary<int, TitleQuestDefinition> ParseTitleQuestDefinitions(IEnumerable<int> questIds)
         {
             var result = new Dictionary<int, TitleQuestDefinition>();
-            var root = ResolveTitleQuestRoot();
-            if (string.IsNullOrWhiteSpace(root))
+            var requestedQuestIds = new HashSet<int>((questIds ?? Enumerable.Empty<int>()).Where(id => id > 0));
+            if (requestedQuestIds.Count == 0)
                 return result;
 
-            var listPath = Path.Combine(root, "quest.lst");
-            if (!File.Exists(listPath))
-                return result;
-
-            var lines = File.ReadAllLines(listPath);
-            for (var i = 0; i < lines.Length; i++)
+            var configuredRoot = Environment.GetEnvironmentVariable("TITLEBOOK_QUEST_ROOT");
+            if (!string.IsNullOrWhiteSpace(configuredRoot) && Directory.Exists(configuredRoot))
             {
-                var questLine = NormalizeTokenLine(lines[i]);
-                if (!int.TryParse(questLine, out var questId))
-                    continue;
-
-                var relativePath = FindNextTokenLine(lines, ref i);
-                if (string.IsNullOrWhiteSpace(relativePath))
-                    continue;
-
-                var qstPath = ResolveQstPath(root, relativePath);
-                if (qstPath == null)
-                    continue;
-
-                var definition = ParseQst(questId, qstPath);
-                if (definition != null)
-                    result[questId] = definition;
+                ParseTitleQuestDefinitionsFromFileRoot(configuredRoot, requestedQuestIds, result);
+                return result;
             }
+
+            if (TryReadPvfText(out var questListText, "n_quest/quest.lst", "n_Quest/quest.lst"))
+            {
+                ParseTitleQuestDefinitionsFromPvf(questListText, requestedQuestIds, result);
+                return result;
+            }
+
+            var fallbackRoot = ResolveTitleQuestRoot();
+            if (!string.IsNullOrWhiteSpace(fallbackRoot))
+                ParseTitleQuestDefinitionsFromFileRoot(fallbackRoot, requestedQuestIds, result);
 
             return result;
         }
 
-        private static TitleQuestDefinition ParseQst(int questId, string path)
+        private static void ParseTitleQuestDefinitionsFromFileRoot(
+            string root,
+            HashSet<int> requestedQuestIds,
+            Dictionary<int, TitleQuestDefinition> result)
         {
-            var lines = File.ReadAllLines(path);
+            var listPath = Path.Combine(root, "quest.lst");
+            if (!File.Exists(listPath))
+                return;
+
+            var list = LstFile.Parse(File.ReadAllText(listPath));
+            foreach (var entry in list.Entries)
+            {
+                if (!requestedQuestIds.Contains(entry.Id))
+                    continue;
+
+                var qstPath = ResolveQstPath(root, entry.FilePath);
+                if (qstPath == null)
+                    continue;
+
+                var definition = ParseQst(entry.Id, File.ReadAllText(qstPath));
+                if (definition != null)
+                    result[entry.Id] = definition;
+            }
+        }
+
+        private static void ParseTitleQuestDefinitionsFromPvf(
+            string questListText,
+            HashSet<int> requestedQuestIds,
+            Dictionary<int, TitleQuestDefinition> result)
+        {
+            var list = LstFile.Parse(questListText);
+            foreach (var entry in list.Entries)
+            {
+                if (!requestedQuestIds.Contains(entry.Id))
+                    continue;
+
+                if (!TryReadTitleQuestPvfText(entry.FilePath, out var qstText))
+                    continue;
+
+                var definition = ParseQst(entry.Id, qstText);
+                if (definition != null)
+                    result[entry.Id] = definition;
+            }
+        }
+
+        private static TitleQuestDefinition ParseQst(int questId, string text)
+        {
+            var lines = SplitLines(text);
             var definition = new TitleQuestDefinition { QuestId = questId };
             for (var i = 0; i < lines.Length; i++)
             {
@@ -207,20 +274,6 @@ namespace DfoServer.Game.TitleBook
                     return value;
             }
             return -1;
-        }
-
-        private static string FindNextTokenLine(string[] lines, ref int index)
-        {
-            for (var i = index + 1; i < lines.Length; i++)
-            {
-                var line = NormalizeTokenLine(lines[i]);
-                if (line.Length == 0)
-                    continue;
-
-                index = i;
-                return line;
-            }
-            return null;
         }
 
         private static string ResolveQstPath(string root, string relativePath)
@@ -270,12 +323,21 @@ namespace DfoServer.Game.TitleBook
             return slots;
         }
 
-        private static string ResolveTitleBookEtcPath()
+        private static string ReadTitleBookEtcText()
         {
             var configured = Environment.GetEnvironmentVariable("TITLEBOOK_ETC_PATH");
-            if (!string.IsNullOrWhiteSpace(configured))
-                return configured;
+            if (!string.IsNullOrWhiteSpace(configured) && File.Exists(configured))
+                return File.ReadAllText(configured);
 
+            if (TryReadPvfText(out var pvfText, "etc/titlebook.etc", "Etc/titlebook.etc"))
+                return pvfText;
+
+            var fallbackPath = ResolveTitleBookEtcPath();
+            return !string.IsNullOrWhiteSpace(fallbackPath) ? File.ReadAllText(fallbackPath) : null;
+        }
+
+        private static string ResolveTitleBookEtcPath()
+        {
             var dir = new DirectoryInfo(AppContext.BaseDirectory);
             while (dir != null)
             {
@@ -293,12 +355,56 @@ namespace DfoServer.Game.TitleBook
             return null;
         }
 
+        private static bool TryReadTitleQuestPvfText(string relativePath, out string text)
+        {
+            var normalized = NormalizePvfRelativePath(relativePath);
+            var fileName = Path.GetFileName(normalized.Replace('/', Path.DirectorySeparatorChar));
+            return TryReadPvfText(
+                out text,
+                "n_quest/" + normalized,
+                "n_Quest/" + normalized,
+                "n_quest/" + normalized.ToLowerInvariant(),
+                "n_quest/title/" + fileName,
+                "n_Quest/title/" + fileName);
+        }
+
+        private static bool TryReadPvfText(out string text, params string[] relativePaths)
+        {
+            foreach (var relativePath in relativePaths)
+            {
+                try
+                {
+                    text = PvfArchiveAccessor.ReadText(relativePath);
+                    return true;
+                }
+                catch
+                {
+                }
+            }
+
+            text = null;
+            return false;
+        }
+
+        private static string NormalizePvfRelativePath(string relativePath)
+        {
+            return (relativePath ?? string.Empty)
+                .Replace('\\', '/')
+                .Replace("`", string.Empty)
+                .Trim()
+                .TrimStart('.', '/');
+        }
+
+        private static string[] SplitLines(string text)
+        {
+            return (text ?? string.Empty)
+                .Replace("\r\n", "\n")
+                .Replace('\r', '\n')
+                .Split('\n');
+        }
+
         private static string ResolveTitleQuestRoot()
         {
-            var configured = Environment.GetEnvironmentVariable("TITLEBOOK_QUEST_ROOT");
-            if (!string.IsNullOrWhiteSpace(configured) && Directory.Exists(configured))
-                return configured;
-
             var dir = new DirectoryInfo(AppContext.BaseDirectory);
             while (dir != null)
             {

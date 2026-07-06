@@ -15,10 +15,10 @@ namespace DfoServer.Game.Characters
             DisplayItemId = displayItemId;
             ExpansionLen = expansionLen;
             ExpansionData = expansionData ?? new byte[4];
-            State = state;
+            State = state; // 属性状态: invenitem.Attr * 2 + (invenitem.AmplifyType != 0)
             LinkItemId = linkItemId;
             EnchantValue = enchantValue;
-            Flag20 = flag20;
+            Flag20 = flag20; // 锻造等级: invenitem.EnchantUpgradeCount
         }
 
         public byte Slot { get; set; }

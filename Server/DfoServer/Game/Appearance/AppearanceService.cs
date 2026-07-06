@@ -109,10 +109,25 @@ namespace DfoServer.Game.Appearance
                 }
 
                 result.Add(new CharacterAppearanceEntry(
-                    (byte)entry.Slot, displayItemId, 4, new byte[4], 0, 0, 0u, 0));
+                    (byte)entry.Slot,
+                    displayItemId,
+                    4,
+                    new byte[4],
+                    BuildAppearanceState(entry.Item),
+                    0,
+                    0u,
+                    entry.Item?.EnchantUpgradeCount ?? (byte)0));
             }
 
             return result.ToArray();
+        }
+
+        private static byte BuildAppearanceState(InvenItem item)
+        {
+            if (item == null)
+                return 0;
+
+            return unchecked((byte)(item.Attr * 2 + (item.AmplifyType != 0 ? 1 : 0)));
         }
 
         public static int LoadCloneTitleItemId(int characterId)

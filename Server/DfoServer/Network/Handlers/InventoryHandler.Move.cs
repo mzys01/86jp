@@ -1,4 +1,5 @@
 using DfoServer.Game.Inventory;
+using DfoServer.Game.SelectCharacter;
 using DfoServer.Network.Builders;
 using System;
 using System.Threading.Tasks;
@@ -57,6 +58,8 @@ namespace DfoServer.Network.Handlers
                 return;
             }
 
+            ApplySubtype0TailMutation(session, result.Subtype0TailMutation);
+
             FileLogger.Log($"[{ProtocolName}] MOVE_ITEMSPACE: OK src=({result.SourceListType},{result.SourceSlotIndex}) dst=({result.DestinationListType},{result.DestinationSlotIndex}) moveVal={result.MoveValue32}");
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0013, MoveItemSpaceAckBuilder.Build(result)));
             await _refresh.SendSortItemLockRefresh(session, request.SourceListType);
@@ -64,8 +67,48 @@ namespace DfoServer.Network.Handlers
                 await _refresh.SendSortItemLockRefresh(session, request.DestinationListType);
 
 
-            if (result.Mutated && (request.SourceListType == InventoryListType.Equipment || request.DestinationListType == InventoryListType.Equipment))
+            if (ShouldSendSubtype0AppearanceUpdate(result))
                 await _refresh.SendNoti2AppearanceUpdate(session);
+        }
+
+        private static bool ShouldSendSubtype0AppearanceUpdate(InventoryMoveResult result)
+        {
+            return result != null
+                && result.Mutated
+                && IsSubtype0AppearanceSlot(result.AffectedEquipmentSlot);
+        }
+
+        private static bool IsSubtype0AppearanceSlot(short slot)
+        {
+            return (slot >= 0 && slot <= 12)
+                || slot == 24
+                || slot == 28;
+        }
+
+        private static void ApplySubtype0TailMutation(EnhancedClientSession session, Subtype0TailMoveMutation mutation)
+        {
+            if (session?.Player == null || mutation == null)
+                return;
+
+            var tail = session.Player.Subtype0Tail ?? new UserInfoMinimumTailSnapshot();
+
+            if (mutation.ForgingChanged)
+                tail.Forging = mutation.Forging;
+
+            if (mutation.NameTagChanged)
+            {
+                tail.NameTagItemId = mutation.NameTagItemId;
+                tail.NameTagExpireTime = mutation.NameTagExpireTime;
+            }
+
+            if (mutation.EquippedCreatureChanged)
+            {
+                tail.EquippedCreatureItemId = mutation.EquippedCreatureItemId;
+                tail.EquippedCreatureNameBytes = mutation.EquippedCreatureNameBytes ?? Array.Empty<byte>();
+                tail.EquippedCreatureAliveState = mutation.EquippedCreatureAliveState;
+            }
+
+            session.Player.Subtype0Tail = tail;
         }
 
         public async Task Handle_ENUM_CMDPACKET_SORT_ITEM(EnhancedClientSession session, GamePacketHeader header, byte[] body)

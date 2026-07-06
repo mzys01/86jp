@@ -72,22 +72,23 @@ namespace DfoServer.Network.Builders
             var t = record.Subtype0Tail ?? new UserInfoMinimumTailSnapshot();
 
             writer.WriteUInt32(t.CloneTitleItemId);
-            writer.WriteByte(t.CreatureField1);             
+            writer.WriteByte(t.Forging); // 锻造
             writer.WriteByte(t.CreatureField2);             
             writer.WriteByte(t.CreatureField3);             
             writer.WriteByte(t.CreatureField4);             
-            var cb = t.CreatureBuffer != null && t.CreatureBuffer.Length == 8
-                ? t.CreatureBuffer : new byte[8];
-            writer.WriteBytes(cb);                          
+            writer.WriteUInt32(t.NameTagItemId); // 名称装饰卡ID
+            writer.WriteUInt32(t.NameTagExpireTime); // 名称装饰卡剩余期限
             writer.WriteByte(t.Stamina);                    
             writer.WriteUInt32(t.FatiguePenalty);           
             writer.WriteByte(t.IsEventCharacter);           
-            writer.WriteUInt32(t.PcRoomId);                 
-            writer.WriteByte(t.IsPrivateStore);             
+            writer.WriteUInt32(t.EquippedCreatureItemId); // 宠物ID
+            writer.WriteDstr(t.EquippedCreatureNameBytes); // 宠物名称
+            writer.WriteByte(t.EquippedCreatureAliveState); // 宠物存活状态
             writer.WriteByte(t.IsPremiumPcRoom);            
             writer.WriteByte(t.ServerGroupId);              
             writer.WriteUInt32(t.BlackCount);               
-            writer.WriteByte(t.GuildLevel);                 
+            writer.WriteByte(t.GuildLevel);
+            writer.WriteDstr(t.GuildNameBytes); // 工会名称
             writer.WriteUInt32(t.ChaosPoint);               
             writer.WriteByte(1);                            
             writer.WriteByte(t.DisguiseKind);               
