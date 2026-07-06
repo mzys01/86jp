@@ -1,5 +1,6 @@
 using DfoServer.Game.Appearance;
 using DfoServer.Game.Characters;
+using DfoServer.Game.Names;
 using DfoServer.Game.SelectCharacter;
 using DfoServer.GameWorld;
 using DfoServer.Network.Builders;
@@ -239,7 +240,18 @@ namespace DfoServer.Network.Handlers
                 return;
             }
 
-            var name = Encoding.UTF8.GetString(body, 4, nameLen);
+            var nameRaw = new byte[nameLen];
+            Buffer.BlockCopy(body, 4, nameRaw, 0, nameLen);
+            if (!NameInputValidator.TryValidateRawName(nameRaw, minBytes: 2, maxBytes: 30, out var name, out var failure))
+            {
+                FileLogger.Log($"[{ProtocolName}] CHECK_NAME: invalid name reason={failure}");
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
+                    0x01,
+                    0x02B5,
+                    CommonPacketBodyBuilder.BuildCmdError(NameInputValidator.InvalidNameErrorCode)));
+                return;
+            }
+
             var existing = _characterRepository.GetByName(name);
             if (existing != null)
             {
@@ -275,7 +287,15 @@ namespace DfoServer.Network.Handlers
 
             var nameRaw = new byte[nameLen];
             Buffer.BlockCopy(body, 5, nameRaw, 0, nameLen);
-            var nameStr = Encoding.UTF8.GetString(nameRaw);
+            if (!NameInputValidator.TryValidateRawName(nameRaw, minBytes: 2, maxBytes: 18, out var nameStr, out var nameFailure))
+            {
+                FileLogger.Log($"[{ProtocolName}] CREATE_CHARACTER: invalid name reason={nameFailure}");
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
+                    0x01,
+                    0x0005,
+                    CommonPacketBodyBuilder.BuildCmdError(NameInputValidator.InvalidNameErrorCode)));
+                return;
+            }
 
             var accountId = session.Account?.AccountId ?? 1;
 

@@ -212,6 +212,32 @@ namespace DfoServer.Game.Inventory
         public int PetSerialOrHandle { get; set; }
     }
 
+    public sealed class PetCreatureRenameRequest
+    {
+        public InventoryListType SourceListType { get; set; } = InventoryListType.Pet;
+
+        public short SourceSlotIndex { get; set; }
+
+        public byte[] NameBytes { get; set; } = Array.Empty<byte>();
+    }
+
+    public sealed class PetCreatureRenameResult
+    {
+        public InventoryListType SourceListType { get; set; } = InventoryListType.Pet;
+
+        public short SourceSlotIndex { get; set; }
+
+        public int PetItemTemplateId { get; set; }
+
+        public int CreatureSerial { get; set; }
+
+        public byte[] NameBytes { get; set; } = Array.Empty<byte>();
+
+        public bool SourceItemConsumed { get; set; }
+
+        public int SourceRemainingCount { get; set; }
+    }
+
     public sealed class RepairEquipmentResult
     {
         public short SlotIndex { get; set; }
