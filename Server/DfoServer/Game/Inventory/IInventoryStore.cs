@@ -128,6 +128,8 @@ namespace DfoServer.Game.Inventory
 
         CommonInventoryItem LoadCommonItemForRefresh(int characterId, int accountId, InventoryListType listType, short slotIndex);
 
+        CommonInventoryItem LoadEquipmentCommonItemForRefresh(int characterId, short slotIndex);
+
         AvatarInventoryItem LoadAvatarItemForRefresh(int characterId, short slotIndex);
 
         PetInventoryItem LoadPetItemForRefresh(int characterId, short slotIndex);

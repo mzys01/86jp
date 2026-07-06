@@ -1,4 +1,5 @@
 using DfoServer.Game.Inventory;
+using DfoServer.Game.ItemUpgrade;
 using DfoServer.Game.SelectCharacter;
 using DfoServer.Network.Builders;
 using System;
@@ -66,23 +67,56 @@ namespace DfoServer.Network.Handlers
             if (InventoryRefreshSender.MapToSortLockListType(request.SourceListType) != InventoryRefreshSender.MapToSortLockListType(request.DestinationListType))
                 await _refresh.SendSortItemLockRefresh(session, request.DestinationListType);
 
+            if (result.PetCreatureStateChanged)
+            {
+                _refresh.ReloadSubtype0Tail(session);
+                await _refresh.SendCreatureItemListRefresh(session);
+                await _refresh.SendNoti2AppearanceUpdate(session);
+                FileLogger.Log($"[{ProtocolName}] pet creature switch: 0x0069 + NOTI2 mode0 sent via upstream subtype0 fields");
+            }
 
-            if (ShouldSendSubtype0AppearanceUpdate(result))
+            if (result.PetItemStateChanged
+                || result.PetItemFullRefresh
+                || result.PetCreatureRefreshSlots.Count > 0
+                || result.EquipmentRefreshSlots.Count > 0)
+            {
+                if (result.PetItemFullRefresh)
+                    await _refresh.SendItemListRefresh(session, InventoryListType.Pet);
+                else if (result.PetCreatureRefreshSlots.Count > 0)
+                    await _refresh.SendUpdateItemList(session, InventoryListType.Pet, result.PetCreatureRefreshSlots);
+
+                if (result.EquipmentRefreshSlots.Count > 0)
+                    await _refresh.SendUpdateItemList(session, InventoryListType.Equipment, result.EquipmentRefreshSlots);
+            }
+
+            if (!result.PetCreatureStateChanged
+                && !result.PetItemStateChanged
+                && ShouldSendSubtype0AppearanceUpdate(session, result))
                 await _refresh.SendNoti2AppearanceUpdate(session);
         }
 
-        private static bool ShouldSendSubtype0AppearanceUpdate(InventoryMoveResult result)
+        private static bool ShouldSendSubtype0AppearanceUpdate(EnhancedClientSession session, InventoryMoveResult result)
         {
             return result != null
                 && result.Mutated
-                && IsSubtype0AppearanceSlot(result.AffectedEquipmentSlot);
+                && ShouldSendTownAvatarSubtype0Refresh(session, result.AffectedEquipmentSlot);
         }
 
-        private static bool IsSubtype0AppearanceSlot(short slot)
+        private static bool ShouldSendTownAvatarSubtype0Refresh(EnhancedClientSession session, short equipmentSlot)
         {
-            return (slot >= 0 && slot <= 12)
-                || slot == 24
-                || slot == 28;
+            return session?.Player?.CurrentRun == null
+                && IsAvatarEquipmentSlot(equipmentSlot);
+        }
+
+        private static bool IsAvatarEquipmentSlot(short slot)
+        {
+            return slot >= (short)EquipmentType.HatAvatar
+                && slot <= (short)EquipmentType.WeaponAvatar;
+        }
+
+        private static bool ShouldSuppressSelfUserInfoRefresh(EnhancedClientSession session)
+        {
+            return session?.Player != null;
         }
 
         private static void ApplySubtype0TailMutation(EnhancedClientSession session, Subtype0TailMoveMutation mutation)

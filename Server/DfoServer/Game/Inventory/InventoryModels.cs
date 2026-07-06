@@ -46,6 +46,16 @@ namespace DfoServer.Game.Inventory
         public short AffectedEquipmentSlot { get; set; } = -1;
 
         public Subtype0TailMoveMutation Subtype0TailMutation { get; set; }
+
+        public bool PetCreatureStateChanged { get; set; }
+
+        public bool PetItemStateChanged { get; set; }
+
+        public bool PetItemFullRefresh { get; set; }
+
+        public List<short> PetCreatureRefreshSlots { get; } = new List<short>();
+
+        public List<short> EquipmentRefreshSlots { get; } = new List<short>();
     }
 
     public sealed class Subtype0TailMoveMutation
