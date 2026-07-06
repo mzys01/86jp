@@ -1,7 +1,9 @@
 using DfoServer.Game.Appearance;
+using DfoServer.Game.CharacterData;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory;
 using DfoServer.Game.SelectCharacter;
+using DfoServer.Infrastructure;
 using DfoServer.Network.Builders;
 using System;
 using System.Collections.Generic;
@@ -39,6 +41,30 @@ namespace DfoServer.Network.Handlers
                 session.Player, _dataSource, _characterRepository, cid, aid);
             FileLogger.Log($"[{ProtocolName}] NOTI 2 appearance update: {session.Player.AppearanceEntries.Length} entries, body={noti2Body.Length}B");
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0002, noti2Body));
+        }
+
+        public void ReloadSubtype0Tail(EnhancedClientSession session)
+        {
+            var (cid, _) = SessionOwnerResolver.Resolve(session);
+            var tail = new SqliteSubtype0FieldsRepository(ServerPaths.DatabasePath, ServerPaths.SchemaFilePath)
+                .Load(cid);
+            if (tail != null && session?.Player != null)
+                session.Player.Subtype0Tail = tail;
+        }
+
+        public async Task SendCreatureItemListRefresh(EnhancedClientSession session)
+        {
+            var (cid, _) = SessionOwnerResolver.Resolve(session);
+            var list = _dataSource.LoadCreatureItemListSnapshot(cid);
+            var writer = new GamePacketWriter();
+            writer.WriteByte((byte)(list?.Entries.Count ?? 0));
+            if (list != null)
+            {
+                foreach (var entry in list.Entries)
+                    CreatureListBodyBuilder.WriteCreatureEntry(writer, entry);
+            }
+
+            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0069, writer.ToArray()));
         }
 
         public async Task SendItemListRefresh(EnhancedClientSession session, params InventoryListType[] listTypes)
@@ -85,7 +111,7 @@ namespace DfoServer.Network.Handlers
                 return;
             }
 
-            if (itemSpace == InventoryListType.Avatar || itemSpace == InventoryListType.Equipment)
+            if (itemSpace == InventoryListType.Avatar)
             {
                 var (cid, aid) = SessionOwnerResolver.Resolve(session);
                 var updates = new List<AvatarInventoryItem>();
@@ -110,6 +136,38 @@ namespace DfoServer.Network.Handlers
                 if (emptySlots.Count > 0)
                 {
                     // 时装/穿戴栏空槽刷新先按通用空 entry 测试，若客户端不消费再回退完整 0x0D。
+                    await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
+                        0x00,
+                        0x000E,
+                        ItemListUpdateBuilder.BuildEmptyUpdates(itemSpace, emptySlots)));
+                }
+                return;
+            }
+
+            if (itemSpace == InventoryListType.Equipment)
+            {
+                var (cid, aid) = SessionOwnerResolver.Resolve(session);
+                var updates = new List<CommonInventoryItem>();
+                var emptySlots = new List<short>();
+                foreach (var slotIndex in slots)
+                {
+                    var item = _inventoryStore.LoadEquipmentCommonItemForRefresh(cid, slotIndex);
+                    if (item != null)
+                        updates.Add(item);
+                    else
+                        emptySlots.Add(slotIndex);
+                }
+
+                if (updates.Count > 0)
+                {
+                    await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
+                        0x00,
+                        0x000E,
+                        ItemListUpdateBuilder.BuildEquipmentUpdates(updates)));
+                }
+
+                if (emptySlots.Count > 0)
+                {
                     await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
                         0x00,
                         0x000E,

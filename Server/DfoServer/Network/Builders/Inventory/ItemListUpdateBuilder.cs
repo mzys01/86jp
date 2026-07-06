@@ -77,6 +77,21 @@ namespace DfoServer.Network.Builders
             return writer.ToArray();
         }
 
+        public static byte[] BuildEquipmentUpdates(IReadOnlyList<CommonInventoryItem> items)
+        {
+            var writer = new GamePacketWriter();
+            writer.WriteByte((byte)InventoryListType.Equipment);
+            writer.WriteUInt16((ushort)(items != null ? items.Count : 0));
+
+            if (items != null)
+            {
+                foreach (var item in items)
+                    WriteCommonUpdateEntry(writer, item);
+            }
+
+            return writer.ToArray();
+        }
+
         public static byte[] BuildAvatarUpdates(IReadOnlyList<AvatarInventoryItem> items)
             => BuildAvatarUpdates(InventoryListType.Avatar, items);
 
@@ -206,8 +221,8 @@ namespace DfoServer.Network.Builders
             switch (itemSpace)
             {
                 case InventoryListType.Avatar:
-                case InventoryListType.Equipment:
                     return 0x7E;
+                case InventoryListType.Equipment:
                 case InventoryListType.Main:
                 case InventoryListType.PersonalCargo:
                 case InventoryListType.AccountCargo:

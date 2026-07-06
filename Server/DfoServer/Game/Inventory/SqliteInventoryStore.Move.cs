@@ -52,6 +52,16 @@ namespace DfoServer.Game.Inventory
 
                 FileLogger.Log($"  [MoveItem] source={(source != null ? $"uid={source.ItemUid} kind={source.ItemKind} tmpl=0x{source.ItemTemplateId:X8}" : "null")}, destination={(destination != null ? $"uid={destination.ItemUid} kind={destination.ItemKind} tmpl=0x{destination.ItemTemplateId:X8}" : "null")}");
 
+                if (request.SourceListType == InventoryListType.Pet && source != null)
+                    source = NormalizePetInventoryEquipmentSourceFallback(connection, transaction, characterId, source);
+
+                if (TryHandlePetCreatureEquipMove(connection, transaction, characterId, request, source, destination, out result))
+                {
+                    if (result != null && result.Mutated)
+                        transaction.Commit();
+                    return true;
+                }
+
                 if (request.DestinationListType == InventoryListType.Equipment)
                 {
                     var outcome = _equipStore.HandleEquipSlotMove(connection, transaction, characterId, accountId, request, source, dbSrcList);
