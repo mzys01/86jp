@@ -42,6 +42,31 @@ namespace DfoServer.Game.Inventory
         public bool Mutated { get; set; }
 
         public bool AckError { get; set; }
+
+        public short AffectedEquipmentSlot { get; set; } = -1;
+
+        public Subtype0TailMoveMutation Subtype0TailMutation { get; set; }
+    }
+
+    public sealed class Subtype0TailMoveMutation
+    {
+        public bool ForgingChanged { get; set; }
+
+        public byte Forging { get; set; }
+
+        public bool NameTagChanged { get; set; }
+
+        public uint NameTagItemId { get; set; }
+
+        public uint NameTagExpireTime { get; set; }
+
+        public bool EquippedCreatureChanged { get; set; }
+
+        public uint EquippedCreatureItemId { get; set; }
+
+        public byte[] EquippedCreatureNameBytes { get; set; } = Array.Empty<byte>();
+
+        public byte EquippedCreatureAliveState { get; set; }
     }
 
     internal enum EquipOutcome

@@ -1,5 +1,6 @@
 using System;
 using Microsoft.Data.Sqlite;
+using DfoServer.Game.Inventory;
 using DfoServer.Game.SelectCharacter;
 using DfoServer.Infrastructure;
 
@@ -59,7 +60,7 @@ namespace DfoServer.Game.CharacterData
                 using (var r = cmd.ExecuteReader())
                 {
                     if (!r.Read()) return null;
-                    return new UserInfoMinimumTailSnapshot
+                    var snapshot = new UserInfoMinimumTailSnapshot
                     {
                         CloneTitleItemId = (uint)r.GetInt64(0),
                         CreatureField1 = (byte)r.GetInt32(1),
@@ -108,8 +109,166 @@ namespace DfoServer.Game.CharacterData
                         PvpRankPoint = (uint)r.GetInt64(44),
                         TrailingByte = (byte)r.GetInt32(45),
                     };
+                    RefreshDynamicTailFields(conn, characterId, snapshot);
+                    return snapshot;
                 }
             }
+        }
+
+        public void RefreshDynamicTailFields(int characterId, UserInfoMinimumTailSnapshot snapshot)
+        {
+            using (var conn = new SqliteConnection(_connectionString))
+            {
+                conn.Open();
+                RefreshDynamicTailFields(conn, characterId, snapshot);
+            }
+        }
+
+        public static void RefreshDynamicTailFields(SqliteConnection conn, int characterId, UserInfoMinimumTailSnapshot snapshot)
+        {
+            if (snapshot == null)
+                return;
+
+            ClearDynamicTailFields(snapshot);
+            snapshot.Forging = LoadEquippedWeaponForging(conn, characterId);
+            LoadNameTagFields(conn, characterId, snapshot);
+            LoadEquippedCreatureFields(conn, characterId, snapshot);
+        }
+
+        private static void ClearDynamicTailFields(UserInfoMinimumTailSnapshot snapshot)
+        {
+            snapshot.Forging = 0;
+            snapshot.NameTagItemId = 0;
+            snapshot.NameTagExpireTime = 0;
+            snapshot.EquippedCreatureItemId = 0;
+            snapshot.EquippedCreatureNameBytes = new byte[0];
+            snapshot.EquippedCreatureAliveState = 0;
+            snapshot.GuildNameBytes = new byte[0];
+        }
+
+        private static byte LoadEquippedWeaponForging(SqliteConnection conn, int characterId)
+        {
+            using (var cmd = new SqliteCommand(@"
+SELECT raw_entry
+FROM character_equipped_entries
+WHERE character_id = @cid
+  AND slot = 11
+LIMIT 1;", conn))
+            {
+                cmd.Parameters.AddWithValue("@cid", characterId);
+                var value = cmd.ExecuteScalar();
+                if (!(value is byte[] raw) || raw.Length == 0)
+                    return 0;
+
+                try
+                {
+                    return MakeEquipListCodec.ParseDisplayFields(raw).Forging;
+                }
+                catch
+                {
+                    return raw.Length >= 10 ? raw[raw.Length - 10] : (byte)0;
+                }
+            }
+        }
+
+        private static void LoadNameTagFields(SqliteConnection conn, int characterId, UserInfoMinimumTailSnapshot snapshot)
+        {
+            bool hasSubtype1Row = false;
+            using (var cmd = new SqliteCommand(@"
+SELECT COALESCE(name_tag_item_id, 0), COALESCE(name_tag_expire_time, 0)
+FROM character_subtype1_fields
+WHERE character_id = @cid
+LIMIT 1;", conn))
+            {
+                cmd.Parameters.AddWithValue("@cid", characterId);
+                using (var reader = cmd.ExecuteReader())
+                {
+                    if (reader.Read())
+                    {
+                        hasSubtype1Row = true;
+                        snapshot.NameTagItemId = (uint)reader.GetInt64(0);
+                        snapshot.NameTagExpireTime = (uint)reader.GetInt64(1);
+                    }
+                }
+            }
+
+            if (hasSubtype1Row || snapshot.CreatureBuffer == null || snapshot.CreatureBuffer.Length < 8)
+                return;
+
+            var legacyItemId = BitConverter.ToUInt32(snapshot.CreatureBuffer, 0);
+            if (legacyItemId < 1000000)
+                return;
+
+            snapshot.NameTagItemId = legacyItemId;
+            snapshot.NameTagExpireTime = BitConverter.ToUInt32(snapshot.CreatureBuffer, 4);
+        }
+
+        private static void LoadEquippedCreatureFields(SqliteConnection conn, int characterId, UserInfoMinimumTailSnapshot snapshot)
+        {
+            int creatureKey = 0;
+            using (var cmd = new SqliteCommand(@"
+SELECT item_id, raw_entry
+FROM character_equipped_entries
+WHERE character_id = @cid
+  AND slot = 24
+LIMIT 1;", conn))
+            {
+                cmd.Parameters.AddWithValue("@cid", characterId);
+                using (var reader = cmd.ExecuteReader())
+                {
+                    if (!reader.Read())
+                        return;
+
+                    var itemId = reader.GetInt32(0);
+                    snapshot.EquippedCreatureItemId = itemId > 0 ? (uint)itemId : 0u;
+                    var raw = reader.IsDBNull(1) ? null : (byte[])reader.GetValue(1);
+                    creatureKey = ResolveCreatureKey(raw);
+                }
+            }
+
+            if (snapshot.EquippedCreatureItemId == 0)
+                return;
+
+            snapshot.EquippedCreatureAliveState = 1;
+            if (creatureKey <= 0)
+                return;
+
+            using (var cmd = new SqliteCommand(@"
+SELECT creature_text
+FROM character_creatures
+WHERE character_id = @cid
+  AND creature_key = @creatureKey
+LIMIT 1;", conn))
+            {
+                cmd.Parameters.AddWithValue("@cid", characterId);
+                cmd.Parameters.AddWithValue("@creatureKey", creatureKey);
+                using (var reader = cmd.ExecuteReader())
+                {
+                    if (!reader.Read())
+                        return;
+
+                    snapshot.EquippedCreatureNameBytes = reader.IsDBNull(0) ? new byte[0] : (byte[])reader.GetValue(0);
+                }
+            }
+        }
+
+        private static int ResolveCreatureKey(byte[] raw)
+        {
+            if (raw != null && raw.Length >= 9)
+            {
+                var creatureKey = BitConverter.ToInt32(raw, 5);
+                if (creatureKey > 0 && creatureKey < 1000000)
+                    return creatureKey;
+            }
+
+            if (raw != null && raw.Length >= 28)
+            {
+                var creatureKey = BitConverter.ToInt32(raw, 24);
+                if (creatureKey > 0 && creatureKey < 1000000)
+                    return creatureKey;
+            }
+
+            return 0;
         }
 
         public static void Save(SqliteConnection conn, int characterId, UserInfoMinimumTailSnapshot s)

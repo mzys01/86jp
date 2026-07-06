@@ -38,7 +38,7 @@ namespace DfoServer.Network.Builders
                 writer.WriteByte(entry.Mode1Field0B);
             }
             writer.WriteByte(entry.FieldAfterValue32);
-            writer.WriteRawDstr(entry.CreatureTextBytes);
+            writer.WriteDstr(entry.CreatureTextBytes);
             writer.WriteByte(entry.TailFlag);
         }
     }
