@@ -31,6 +31,7 @@ namespace DfoServer.Network.Handlers.Dungeon
         internal static Task EndRunToTownAsync(EnhancedClientSession session)
         {
             CancelAutoFlip(session);
+            PersistSessionExp(session, "town");
             Game.DeathTower.DeathTowerHandler.ClearTowerState(session);
 
             session.Player.CurrentRun = null;
@@ -42,9 +43,29 @@ namespace DfoServer.Network.Handlers.Dungeon
         internal static void EndRunOnTeardown(EnhancedClientSession session, string source)
         {
             CancelAutoFlip(session);
+            PersistSessionExp(session, source);
             Game.DeathTower.DeathTowerHandler.ClearTowerState(session);
 
             session.Player.CurrentRun = null;
+        }
+
+        // 离开一局时把会话内存的等级/经验落库。
+        // 副本杀怪经验只写内存(升级/通关结算才落库): 放弃副本/断线/换角色若不在此落库,
+        // 这段经验要么随会话消失, 要么之后被读库的结算逻辑用旧值覆盖掉。
+        private static void PersistSessionExp(EnhancedClientSession session, string source)
+        {
+            var player = session?.Player;
+            if (player == null || player.CurrentRun == null || player.CharacterId <= 0)
+                return;
+
+            try
+            {
+                Game.Characters.CharacterProgressService.PersistLevelAndExp(player.CharacterId, player.Level, player.Exp);
+            }
+            catch (System.Exception ex)
+            {
+                FileLogger.Log($"[DungeonRunLifecycle] ERROR: exp persist failed on {source}: cid={player.CharacterId} lv={player.Level} exp={player.Exp}: {ex.Message}");
+            }
         }
 
         // 取消当前局的翻牌自动流程定时器(结算界面 2s 布局 + 4s 自动翻免费卡)。

@@ -77,7 +77,7 @@ namespace DfoServer.Game.Quests
             var qBody = StripEcho(body);
             int cid = _sender.CharacterId;
             if (cid <= 0) return;
-            var result = _service.HandleFinishQuest(cid, qBody);
+            var result = _service.HandleFinishQuest(cid, qBody, _sender.Player?.Exp);
             await _sender.SendCmdAckAsync(wireType, QuestAckBuilder.BuildFinish(result));
 
             if (!result.Success)

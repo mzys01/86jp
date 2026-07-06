@@ -521,7 +521,10 @@ namespace DfoServer.Game.Quests
             return (trigger & ~(0x1FFu << shift)) | (channel << shift);
         }
 
-        public QuestFinishResult HandleFinishQuest(int characterId, byte[] body)
+        // currentExp: 会话内存中的当前经验。副本杀怪经验只写内存(升级/通关结算才落库),
+        // 结算基数必须以会话为准 -- 用库里的陈旧值做基数会把本局杀怪经验覆盖丢失
+        // (实测: 副本内直接与NPC交任务, 经验不增反减)。不传时回退读库(自测/无会话场景)。
+        public QuestFinishResult HandleFinishQuest(int characterId, byte[] body, uint? currentExp = null)
         {
             if (body == null || body.Length < 2) return QuestFinishResult.Fail(22);
             ushort questId = BitConverter.ToUInt16(body, 0);
@@ -668,7 +671,7 @@ namespace DfoServer.Game.Quests
                 // 经验/等级/战斗属性与奖励同一事务落库:
                 // 崩在中间不会再出现"任务已完成但经验丢失且不可重领"。
                 newLevel = (byte)playerLevel;
-                newExp = GetCharacterExp(scope.Connection, scope.Transaction, characterId);
+                newExp = currentExp ?? GetCharacterExp(scope.Connection, scope.Transaction, characterId);
                 if (expReward > 0)
                 {
                     newExp += expReward;
