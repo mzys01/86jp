@@ -879,8 +879,10 @@ namespace DfoServer.Game.Inventory
                 var stackLimit = ceraShopStackLimit;
                 if (existingItem != null && stackLimit > 0 && existingItem.StackCount + effectiveCount > stackLimit)
                 {
-                    FileLogger.Log($"  [CeraShopBuy] REJECT: stack limit reached product=0x{productId:X8} item=0x{itemTemplateId:X8} slot={existingItem.SlotIndex} current={existingItem.StackCount} add={effectiveCount} limit={stackLimit}");
-                    return false;
+                    // 已有堆叠放不下(如 stack limit 1 的礼盒已拥有一个): 不再拒绝购买, 置空落到下方空槽
+                    // 新开一堆(每个礼盒各占一格, 可反复购买)。此前 return false 使 limit=1 商品拥有后再买必失败。
+                    FileLogger.Log($"  [CeraShopBuy] stack full, placing new stack: product=0x{productId:X8} item=0x{itemTemplateId:X8} current={existingItem.StackCount} add={effectiveCount} limit={stackLimit}");
+                    existingItem = null;
                 }
 
                 if (existingItem != null)
