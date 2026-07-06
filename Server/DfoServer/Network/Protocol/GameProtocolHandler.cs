@@ -80,7 +80,7 @@ namespace DfoServer.Network
             var collectBoxProgressRepository = new Game.Inventory.CollectBoxProgressRepository(databasePath, schemaFilePath);
             _collectionBoxHandler = new CollectionBoxHandler(inventoryStore, collectBoxProgressRepository);
             _shopCoinEventHandler = new ShopCoinEventHandler(reviveCoinService, _inventoryRefreshSender);
-            _mercenaryHandler = new MercenaryHandler(characterRepository);
+            _mercenaryHandler = new MercenaryHandler(characterRepository, getUserInfoTemplate);
 
             _cmdDispatch = new Dictionary<ushort, Func<EnhancedClientSession, GamePacketHeader, byte[], Task>>();
             RegisterLoginHandlers(_cmdDispatch);

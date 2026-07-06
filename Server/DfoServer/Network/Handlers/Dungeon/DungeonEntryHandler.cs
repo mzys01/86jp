@@ -1,3 +1,4 @@
+using DfoServer.Game.Accounts;
 using DfoServer.Game.CharacterData;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Dungeon;
@@ -48,6 +49,9 @@ namespace DfoServer.Network.Handlers.Dungeon
                     var addition = _svc.Subtype1Repository.HasData(cid) ? _svc.Subtype1Repository.Load(cid) : null;
                     if (record != null && addition != null)
                     {
+                        var accountId = session.Account?.AccountId ?? record.AccountId;
+                        var accountCharacters = _svc.CharacterRepository.ListByAccount(accountId);
+                        AdventureGroupUserInfoSynchronizer.ApplyToUserInfoAddition(addition, accountCharacters);
                         var skillSnap = _svc.LoadSyncedSkillState(cid, record.Level).Skills;
                         var w = new GamePacketWriter();
                         w.WriteByte(1); // subtype 1 ADDITION

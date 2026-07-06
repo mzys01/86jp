@@ -1,3 +1,4 @@
+using DfoServer.Game.Accounts;
 using DfoServer.Game.CharacterData;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Currency;
@@ -178,11 +179,24 @@ namespace DfoServer.Game.SelectCharacter
                 characterRecord.Appearance = Game.Appearance.AppearanceService.LoadAppearanceFromEquipEntries(characterId);
             }
 
+            var accountCharacters = _characterRepository?.ListByAccount(accountId);
+            var adventureGroup = AdventureGroupDataProvider.Calculate(accountCharacters);
+            // 客户端从角色侧字段读取冒险团常驻状态。
+            PersistAdventureManageLevel(accountCharacters, adventureGroup.ManageLevel);
+
             
             var subtype1Repo = new CharacterData.SqliteSubtype1Repository(
                 Infrastructure.ServerPaths.DatabasePath, Infrastructure.ServerPaths.SchemaFilePath);
             if (subtype1Repo.HasData(characterId))
+            {
                 initSnapshot.UserInfoAddition = subtype1Repo.Load(characterId);
+                if (initSnapshot.UserInfoAddition != null)
+                {
+                    AdventureGroupUserInfoSynchronizer.ApplyToUserInfoAddition(
+                        initSnapshot.UserInfoAddition,
+                        adventureGroup);
+                }
+            }
 
             
             if (characterRecord != null)
@@ -276,6 +290,48 @@ namespace DfoServer.Game.SelectCharacter
             initSnapshot.AckTokenCera = wallet.TokenCera;
             initSnapshot.AckHappyTokenCera = wallet.HappyTokenCera;
             initSnapshot.LuckyStar = wallet.LuckyStar;
+        }
+
+        private void PersistAdventureManageLevel(IReadOnlyList<CharacterRecord> accountCharacters, byte manageLevel)
+        {
+            if (accountCharacters == null || accountCharacters.Count == 0)
+                return;
+
+            try
+            {
+                using (var conn = new SqliteConnection(_connectionString))
+                {
+                    conn.Open();
+                    using (var tx = conn.BeginTransaction())
+                    using (var cmd = conn.CreateCommand())
+                    {
+                        cmd.Transaction = tx;
+                        cmd.CommandText = @"INSERT INTO character_subtype1_fields(character_id, manage_level)
+VALUES (@cid, @level)
+ON CONFLICT(character_id) DO UPDATE SET manage_level=excluded.manage_level;";
+                        var cidParam = cmd.CreateParameter();
+                        cidParam.ParameterName = "@cid";
+                        cmd.Parameters.Add(cidParam);
+                        var levelParam = cmd.CreateParameter();
+                        levelParam.ParameterName = "@level";
+                        levelParam.Value = (int)manageLevel;
+                        cmd.Parameters.Add(levelParam);
+
+                        foreach (var character in accountCharacters)
+                        {
+                            if (character == null || character.CharacterId <= 0)
+                                continue;
+                            cidParam.Value = character.CharacterId;
+                            cmd.ExecuteNonQuery();
+                        }
+                        tx.Commit();
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                FileLogger.Log($"[GameProtocol] Adventure manage_level persist failed: {ex.Message}");
+            }
         }
 
         private void LoadAccountPremiums(int accountId, SelectCharacterInitializationSnapshot initSnapshot)
