@@ -521,14 +521,13 @@ namespace DfoServer.Game.Inventory
             if (metadata.IsStackable)
             {
                 var remaining = reward.Count;
-                var existingItem = _db.FindStackableItemByTemplateIdAndExpireTime(
+                var existingItem = FindPackageRewardStackTarget(
                     connection,
                     transaction,
                     characterId,
                     stackListType,
-                    reward.ItemTemplateId,
-                    reward.ExpireTime,
-                    metadata.StackLimit);
+                    reward,
+                    metadata);
                 while (existingItem != null && remaining > 0)
                 {
                     var capacity = metadata.StackLimit > 0 ? Math.Max(0, metadata.StackLimit - existingItem.StackCount) : remaining;
@@ -550,14 +549,13 @@ namespace DfoServer.Game.Inventory
                         remaining -= addCount;
                     }
 
-                    existingItem = _db.FindStackableItemByTemplateIdAndExpireTime(
+                    existingItem = FindPackageRewardStackTarget(
                         connection,
                         transaction,
                         characterId,
                         stackListType,
-                        reward.ItemTemplateId,
-                        reward.ExpireTime,
-                        metadata.StackLimit);
+                        reward,
+                        metadata);
                 }
 
                 while (remaining > 0)
@@ -693,6 +691,48 @@ namespace DfoServer.Game.Inventory
             }
 
             return true;
+        }
+
+        private SqliteInventoryStore.ItemRecord FindPackageRewardStackTarget(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            int characterId,
+            InventoryListType stackListType,
+            PackageRewardEntry reward,
+            ItemMetadata metadata)
+        {
+            if (stackListType == InventoryListType.Main && IsQuickSlotConsumable(metadata))
+            {
+                var quickSlotItem = _db.FindStackableItemByTemplateIdAndExpireTime(
+                    connection,
+                    transaction,
+                    characterId,
+                    stackListType,
+                    reward.ItemTemplateId,
+                    reward.ExpireTime,
+                    metadata.StackLimit,
+                    SqliteInventoryStore.QuickSlotStart,
+                    SqliteInventoryStore.QuickSlotEnd);
+                if (quickSlotItem != null)
+                    return quickSlotItem;
+            }
+
+            return _db.FindStackableItemByTemplateIdAndExpireTime(
+                connection,
+                transaction,
+                characterId,
+                stackListType,
+                reward.ItemTemplateId,
+                reward.ExpireTime,
+                metadata.StackLimit);
+        }
+
+        private static bool IsQuickSlotConsumable(ItemMetadata metadata)
+        {
+            return metadata != null &&
+                metadata.IsStackable &&
+                metadata.StackableType != null &&
+                metadata.StackableType.IndexOf("[waste]", StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
         private static bool ValidateAvatarPackageChoices(
