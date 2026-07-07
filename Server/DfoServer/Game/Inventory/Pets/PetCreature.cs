@@ -1403,20 +1403,20 @@ LIMIT 1;";
                 Buffer.BlockCopy(fields.Emblem, 0, tail, 0, Math.Min(fields.Emblem.Length, 9));
             BitConverter.GetBytes(fields.Rune).CopyTo(tail, 9);
             tail[27] = fields.Forging;
-            if (fields.SealCount > 0 && fields.SealTypes != null)
+            if (fields.MagicSealCount > 0 && fields.MagicSealTypes != null)
             {
-                tail[11] = fields.SealCount;
-                for (var index = 0; index < fields.SealCount && index < 3; index++)
+                tail[11] = fields.MagicSealCount;
+                for (var index = 0; index < fields.MagicSealCount && index < 3; index++)
                 {
-                    tail[12 + index] = fields.SealTypes[index];
-                    tail[15 + index] = fields.SealVal1s[index];
-                    tail[18 + index] = fields.SealVal2s[index];
+                    tail[12 + index] = fields.MagicSealTypes[index];
+                    tail[15 + index] = fields.MagicSealVal1s[index];
+                    tail[18 + index] = fields.MagicSealVal2s[index];
                 }
 
-                if (fields.SealTail != null)
+                if (fields.MagicSealTail != null)
                 {
-                    for (var index = 0; index < fields.SealTail.Length && 21 + index < tail.Length; index++)
-                        tail[21 + index] = fields.SealTail[index];
+                    for (var index = 0; index < fields.MagicSealTail.Length && 21 + index < tail.Length; index++)
+                        tail[21 + index] = fields.MagicSealTail[index];
                 }
             }
 

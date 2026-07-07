@@ -472,10 +472,10 @@ VALUES(@cid, @slot, @itemId, @expireTime, @equipmentLockId, @raw);";
                 EnchantUpgradeCount = title.EnchantUpgradeCount,
                 AmplifyType = title.AmplifyType,
                 AmplifyValue = title.AmplifyValue,
-                SealTypes = new byte[3],
-                SealVal1s = new byte[3],
-                SealVal2s = new byte[3],
-                SealTail = Array.Empty<byte>(),
+                MagicSealTypes = new byte[3],
+                MagicSealVal1s = new byte[3],
+                MagicSealVal2s = new byte[3],
+                MagicSealTail = Array.Empty<byte>(),
             };
 
             if (tail.Length > 0)
@@ -494,19 +494,19 @@ VALUES(@cid, @slot, @itemId, @expireTime, @equipmentLockId, @raw);";
                 fields.Forging = tail[27];
             if (tail.Length > 11)
             {
-                fields.SealCount = tail[11];
-                for (var i = 0; i < fields.SealCount && i < 3; i++)
+                fields.MagicSealCount = tail[11];
+                for (var i = 0; i < fields.MagicSealCount && i < 3; i++)
                 {
-                    if (12 + i < tail.Length) fields.SealTypes[i] = tail[12 + i];
-                    if (15 + i < tail.Length) fields.SealVal1s[i] = tail[15 + i];
-                    if (18 + i < tail.Length) fields.SealVal2s[i] = tail[18 + i];
+                    if (12 + i < tail.Length) fields.MagicSealTypes[i] = tail[12 + i];
+                    if (15 + i < tail.Length) fields.MagicSealVal1s[i] = tail[15 + i];
+                    if (18 + i < tail.Length) fields.MagicSealVal2s[i] = tail[18 + i];
                 }
 
-                if (fields.SealCount > 0 && tail.Length > 21)
+                if (fields.MagicSealCount > 0 && tail.Length > 21)
                 {
                     var sealTailLen = Math.Min(6, tail.Length - 21);
-                    fields.SealTail = new byte[sealTailLen];
-                    Buffer.BlockCopy(tail, 21, fields.SealTail, 0, sealTailLen);
+                    fields.MagicSealTail = new byte[sealTailLen];
+                    Buffer.BlockCopy(tail, 21, fields.MagicSealTail, 0, sealTailLen);
                 }
             }
 
@@ -521,20 +521,20 @@ VALUES(@cid, @slot, @itemId, @expireTime, @equipmentLockId, @raw);";
 
             BitConverter.GetBytes(fields.Rune).CopyTo(tail, 9);
             tail[27] = fields.Forging;
-            if (fields.SealCount > 0 && fields.SealTypes != null)
+            if (fields.MagicSealCount > 0 && fields.MagicSealTypes != null)
             {
-                tail[11] = fields.SealCount;
-                for (var i = 0; i < fields.SealCount && i < 3; i++)
+                tail[11] = fields.MagicSealCount;
+                for (var i = 0; i < fields.MagicSealCount && i < 3; i++)
                 {
-                    tail[12 + i] = fields.SealTypes[i];
-                    tail[15 + i] = fields.SealVal1s[i];
-                    tail[18 + i] = fields.SealVal2s[i];
+                    tail[12 + i] = fields.MagicSealTypes[i];
+                    tail[15 + i] = fields.MagicSealVal1s[i];
+                    tail[18 + i] = fields.MagicSealVal2s[i];
                 }
 
-                if (fields.SealTail != null)
+                if (fields.MagicSealTail != null)
                 {
-                    for (var i = 0; i < fields.SealTail.Length && 21 + i < tail.Length; i++)
-                        tail[21 + i] = fields.SealTail[i];
+                    for (var i = 0; i < fields.MagicSealTail.Length && 21 + i < tail.Length; i++)
+                        tail[21 + i] = fields.MagicSealTail[i];
                 }
             }
 

@@ -648,23 +648,23 @@ VALUES (@accountId, @selectionKey, @value32, @itemCount, CURRENT_TIMESTAMP);";
                     // seal from tail[11..]
                     if (tail.Length > 11)
                     {
-                        f.SealCount = tail[11];
-                        f.SealTypes = new byte[3];
-                        f.SealVal1s = new byte[3];
-                        f.SealVal2s = new byte[3];
-                        for (int i = 0; i < f.SealCount && i < 3; i++)
+                        f.MagicSealCount = tail[11];
+                        f.MagicSealTypes = new byte[3];
+                        f.MagicSealVal1s = new byte[3];
+                        f.MagicSealVal2s = new byte[3];
+                        for (int i = 0; i < f.MagicSealCount && i < 3; i++)
                         {
-                            if (12 + i < tail.Length) f.SealTypes[i] = tail[12 + i];
-                            if (15 + i < tail.Length) f.SealVal1s[i] = tail[15 + i];
-                            if (18 + i < tail.Length) f.SealVal2s[i] = tail[18 + i];
+                            if (12 + i < tail.Length) f.MagicSealTypes[i] = tail[12 + i];
+                            if (15 + i < tail.Length) f.MagicSealVal1s[i] = tail[15 + i];
+                            if (18 + i < tail.Length) f.MagicSealVal2s[i] = tail[18 + i];
                         }
-                        if (f.SealCount > 0 && 21 < tail.Length)
+                        if (f.MagicSealCount > 0 && 21 < tail.Length)
                         {
                             int sealTailLen = 2; // genuineUpgrade + check
                             if (21 + 1 < tail.Length && tail[22] != 0xFF)
                                 sealTailLen += 4;
-                            f.SealTail = new byte[Math.Min(sealTailLen, tail.Length - 21)];
-                            Buffer.BlockCopy(tail, 21, f.SealTail, 0, f.SealTail.Length);
+                            f.MagicSealTail = new byte[Math.Min(sealTailLen, tail.Length - 21)];
+                            Buffer.BlockCopy(tail, 21, f.MagicSealTail, 0, f.MagicSealTail.Length);
                         }
                     }
                     // forging from tail[27]
@@ -740,19 +740,19 @@ VALUES (@accountId, @selectionKey, @value32, @itemCount, CURRENT_TIMESTAMP);";
                     Buffer.BlockCopy(f.Emblem, 0, tail, 0, Math.Min(f.Emblem.Length, 9));
                 BitConverter.GetBytes(f.Rune).CopyTo(tail, 9); // 84B offset56 → TailData2F[9]
                 tail[27] = f.Forging;                           // 84B genuineUpgrade offset74 → TailData2F[27]
-                if (f.SealCount > 0 && f.SealTypes != null)
+                if (f.MagicSealCount > 0 && f.MagicSealTypes != null)
                 {
-                    tail[11] = f.SealCount;
-                    for (int si = 0; si < f.SealCount && si < 3; si++)
+                    tail[11] = f.MagicSealCount;
+                    for (int si = 0; si < f.MagicSealCount && si < 3; si++)
                     {
-                        tail[12 + si] = f.SealTypes[si];  // 84B offset 59,60,61
-                        tail[15 + si] = f.SealVal1s[si];  // 84B offset 62,63,64
-                        tail[18 + si] = f.SealVal2s[si];  // 84B offset 65,66,67
+                        tail[12 + si] = f.MagicSealTypes[si];  // 84B offset 59,60,61
+                        tail[15 + si] = f.MagicSealVal1s[si];  // 84B offset 62,63,64
+                        tail[18 + si] = f.MagicSealVal2s[si];  // 84B offset 65,66,67
                     }
                     // seal tail → TailData2F[21+] (84B offset 68+)
-                    if (f.SealTail != null)
-                        for (int si = 0; si < f.SealTail.Length && 21 + si < tail.Length; si++)
-                            tail[21 + si] = f.SealTail[si];
+                    if (f.MagicSealTail != null)
+                        for (int si = 0; si < f.MagicSealTail.Length && 21 + si < tail.Length; si++)
+                            tail[21 + si] = f.MagicSealTail[si];
                 }
                 string jewelJson = (f.JewelSocket != null && f.JewelSocket.Length > 0)
                     ? ",\"jewelSocket\":\"" + BitConverter.ToString(f.JewelSocket).Replace("-", "") + "\""

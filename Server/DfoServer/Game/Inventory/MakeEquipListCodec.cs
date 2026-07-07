@@ -96,11 +96,11 @@ namespace DfoServer.Game.Inventory
             public byte[] Emblem;       
             public byte[] JewelSocket;  
             public uint CreatureExtra;
-            public byte SealCount;      
-            public byte[] SealTypes;    
-            public byte[] SealVal1s;    
-            public byte[] SealVal2s;    
-            public byte[] SealTail;     
+            public byte MagicSealCount;      
+            public byte[] MagicSealTypes;    
+            public byte[] MagicSealVal1s;    
+            public byte[] MagicSealVal2s;    
+            public byte[] MagicSealTail;     
         }
 
         
@@ -152,13 +152,13 @@ namespace DfoServer.Game.Inventory
                 off += 2;
                 
                 int sc = raw[off]; off++;
-                f.SealCount = (byte)sc;
-                f.SealTypes = new byte[3];
-                f.SealVal1s = new byte[3];
-                f.SealVal2s = new byte[3];
+                f.MagicSealCount = (byte)sc;
+                f.MagicSealTypes = new byte[3];
+                f.MagicSealVal1s = new byte[3];
+                f.MagicSealVal2s = new byte[3];
                 for (int si = 0; si < sc && si < 3; si++)
                 {
-                    f.SealTypes[si] = raw[off]; f.SealVal1s[si] = raw[off + 1]; f.SealVal2s[si] = raw[off + 2];
+                    f.MagicSealTypes[si] = raw[off]; f.MagicSealVal1s[si] = raw[off + 1]; f.MagicSealVal2s[si] = raw[off + 2];
                     off += 3;
                 }
                 
@@ -168,12 +168,12 @@ namespace DfoServer.Game.Inventory
                     off++; 
                     byte chk = raw[off]; off++;
                     if (chk != 0xFF) off += 4;
-                    f.SealTail = new byte[off - tailStart];
-                    Buffer.BlockCopy(raw, tailStart, f.SealTail, 0, f.SealTail.Length);
+                    f.MagicSealTail = new byte[off - tailStart];
+                    Buffer.BlockCopy(raw, tailStart, f.MagicSealTail, 0, f.MagicSealTail.Length);
                 }
                 else
                 {
-                    f.SealTail = Array.Empty<byte>();
+                    f.MagicSealTail = Array.Empty<byte>();
                 }
             }
             catch { f.Rune = 0; }
@@ -202,8 +202,8 @@ namespace DfoServer.Game.Inventory
             off += 4;                                                    
             int emblemCount = b[off]; off += 1 + emblemCount * 4;        
             off += 2;                                                    
-            int sealCount = b[off]; off += 1 + sealCount * 3;            
-            if (sealCount > 0)
+            int magicSealCount = b[off]; off += 1 + magicSealCount * 3;            
+            if (magicSealCount > 0)
             {
                 off += 1;                  
                 byte check = b[off]; off += 1;
@@ -284,16 +284,16 @@ namespace DfoServer.Game.Inventory
                 
                 bw.Write(f.Rune);
                 
-                bw.Write(f.SealCount);
-                for (int i = 0; i < f.SealCount && i < 3; i++)
+                bw.Write(f.MagicSealCount);
+                for (int i = 0; i < f.MagicSealCount && i < 3; i++)
                 {
-                    bw.Write(f.SealTypes[i]);
-                    bw.Write(f.SealVal1s[i]);
-                    bw.Write(f.SealVal2s[i]);
+                    bw.Write(f.MagicSealTypes[i]);
+                    bw.Write(f.MagicSealVal1s[i]);
+                    bw.Write(f.MagicSealVal2s[i]);
                 }
-                if (f.SealCount > 0 && f.SealTail != null && f.SealTail.Length > 0)
-                    bw.Write(f.SealTail);
-                else if (f.SealCount > 0)
+                if (f.MagicSealCount > 0 && f.MagicSealTail != null && f.MagicSealTail.Length > 0)
+                    bw.Write(f.MagicSealTail);
+                else if (f.MagicSealCount > 0)
                 {
                     bw.Write(f.Forging);     
                     bw.Write((byte)0xFF);    
