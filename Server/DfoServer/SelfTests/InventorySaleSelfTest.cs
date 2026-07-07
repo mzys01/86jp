@@ -50,10 +50,7 @@ namespace DfoServer.SelfTests
             SeedCharacterAndItem(tempDb);
 
             InventoryMutationResult result = null;
-            using (store.BeginScope(CharacterId, AccountId))
-            {
-                Check("zero-price consumable sale succeeds", store.TrySellItem(InventoryListType.Main, ConsumableSlot, 4, out result));
-            }
+            Check("zero-price consumable sale succeeds", store.TrySellItem(CharacterId, AccountId, InventoryListType.Main, ConsumableSlot, 4, out result));
 
             if (result != null)
             {
@@ -69,10 +66,7 @@ namespace DfoServer.SelfTests
             }
 
             InventoryMutationResult legacyPackageResult = null;
-            using (store.BeginScope(CharacterId, AccountId))
-            {
-                Check("legacy special-kind package bead sale succeeds", store.TrySellItem(InventoryListType.Main, LegacyPackageBeadSlot, LegacyPackageBeadSaleCount, out legacyPackageResult));
-            }
+            Check("legacy special-kind package bead sale succeeds", store.TrySellItem(CharacterId, AccountId, InventoryListType.Main, LegacyPackageBeadSlot, LegacyPackageBeadSaleCount, out legacyPackageResult));
 
             if (legacyPackageResult != null)
             {
@@ -87,10 +81,7 @@ namespace DfoServer.SelfTests
             }
 
             InventoryMutationResult lowPositiveResult = null;
-            using (store.BeginScope(CharacterId, AccountId))
-            {
-                Check("low positive stackable sale succeeds", store.TrySellItem(InventoryListType.Main, LowPositiveStackableSlot, 1, out lowPositiveResult));
-            }
+            Check("low positive stackable sale succeeds", store.TrySellItem(CharacterId, AccountId, InventoryListType.Main, LowPositiveStackableSlot, 1, out lowPositiveResult));
 
             if (lowPositiveResult != null)
             {
@@ -104,9 +95,8 @@ namespace DfoServer.SelfTests
                 Check("low positive stackable sell ACK applied count", ack.Length >= 10 && BitConverter.ToInt16(ack, 8) == 1);
             }
 
-            using (store.BeginScope(CharacterId, AccountId))
             {
-                var snapshot = store.LoadCharacterItemListSnapshot();
+                var snapshot = store.LoadCharacterItemListSnapshot(CharacterId, AccountId);
                 var remaining = snapshot.MainItems.Find(x => x.SlotIndex == ConsumableSlot);
                 Check("snapshot still has partial stack", remaining != null);
                 if (remaining != null)
@@ -147,12 +137,8 @@ namespace DfoServer.SelfTests
 INSERT OR IGNORE INTO accounts (account_id, m_id, password_hash)
 VALUES (@accountId, 'inventory-sale-selftest', '');
 
-INSERT OR IGNORE INTO characters (character_id, account_id, name, gold)
-VALUES (@characterId, @accountId, 'inventory-sale-selftest', @gold);
-
-UPDATE characters
-SET gold = @gold
-WHERE character_id = @characterId;
+INSERT OR IGNORE INTO characters (character_id, account_id, name)
+VALUES (@characterId, @accountId, 'inventory-sale-selftest');
 
 INSERT OR REPLACE INTO character_container_state (character_id, list_type, list_param16)
 VALUES (@characterId, 0, 24);

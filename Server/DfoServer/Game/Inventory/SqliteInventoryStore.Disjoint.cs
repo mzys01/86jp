@@ -5,7 +5,7 @@ namespace DfoServer.Game.Inventory
 {
     public sealed partial class SqliteInventoryStore
     {
-        public bool TryDisjointItem(DisjointItemRequest request, out DisjointItemResult result)
+        public bool TryDisjointItem(int characterId, int accountId, DisjointItemRequest request, out DisjointItemResult result)
         {
             result = CreateDisjointErrorResult(request, DisjointItemResult.ErrorInvalidRequest);
             if (request == null || request.TargetSlotIndex < 0)
@@ -15,14 +15,23 @@ namespace DfoServer.Game.Inventory
                 return false;
 
             // TODO: 当前服务端还没有交易状态上下文，这里暂不能校验“角色不能处于交易状态”。
-            // TODO: 当前库存 Store 未暴露物品锁状态，这里暂不能校验“目标槽位不能被物品锁锁定”。
-            using (var connection = _context.OpenConnection())
-            using (var transaction = connection.BeginTransaction())
+            using (var connection = new SqliteConnection(ConnectionString))
             {
-                var source = _db.LoadItemRecord(connection, transaction, _context.CharacterId, InventoryListType.Main, request.TargetSlotIndex);
+                connection.Open();
+                using (var transaction = connection.BeginTransaction())
+                {
+                    var source = _db.LoadItemRecord(connection, transaction, characterId, InventoryListType.Main, request.TargetSlotIndex);
                 if (source == null)
                 {
                     result = CreateDisjointErrorResult(request, DisjointItemResult.ErrorInvalidTarget);
+                    return false;
+                }
+
+                if (IsEquipmentItemLocked(connection, transaction, characterId, source))
+                {
+                    FileLogger.Log($"  [DisjointItem] REJECT: locked item slot={request.TargetSlotIndex} lockId={source.EquipmentLockId}");
+                    result = CreateDisjointErrorResult(request, DisjointItemResult.ErrorInvalidTarget);
+                    result.SourceItemTemplateId = source.ItemTemplateId;
                     return false;
                 }
 
@@ -34,7 +43,7 @@ namespace DfoServer.Game.Inventory
                     return false;
                 }
 
-                if (!TryValidatePortableDisjointItem(connection, transaction, request, metadata, out var disjointTool, out errorCode))
+                if (!TryValidatePortableDisjointItem(connection, transaction, characterId, request, metadata, out var disjointTool, out errorCode))
                 {
                     result = CreateDisjointErrorResult(request, errorCode);
                     result.SourceItemTemplateId = source.ItemTemplateId;
@@ -50,15 +59,15 @@ namespace DfoServer.Game.Inventory
                 }
 
                 _db.DeleteItem(connection, transaction, source.ItemUid);
-                _auditLogger.WriteDeleteAuditLog(connection, transaction, _context.CharacterId, source, 1);
+                _auditLogger.WriteDeleteAuditLog(connection, transaction, characterId, source, 1);
 
                 CommonInventoryItem disjointToolRefresh = null;
                 if (disjointTool != null)
-                    disjointToolRefresh = ConsumePortableDisjointItem(connection, transaction, disjointTool);
+                    disjointToolRefresh = ConsumePortableDisjointItem(connection, transaction, characterId, disjointTool);
 
                 foreach (var material in materials)
                 {
-                    if (!TryPickupItemCore(connection, transaction, _context.CharacterId, _context.AccountId, material.ItemTemplateId, material.Count, out var assignedSlot))
+                    if (!TryPickupItemCore(connection, transaction, characterId, accountId, material.ItemTemplateId, material.Count, out var assignedSlot))
                     {
                         result = CreateDisjointErrorResult(request, DisjointItemResult.ErrorInventoryFull);
                         result.SourceItemTemplateId = source.ItemTemplateId;
@@ -80,12 +89,13 @@ namespace DfoServer.Game.Inventory
                 if (disjointToolRefresh != null)
                     result.RefreshItems.Add(disjointToolRefresh);
                 result.Materials.AddRange(materials);
-                AddRefreshItems(connection, result);
+                AddRefreshItems(connection, characterId, accountId, result);
                 return true;
+                }
             }
         }
 
-        private void AddRefreshItems(SqliteConnection connection, DisjointItemResult result)
+        private void AddRefreshItems(SqliteConnection connection, int characterId, int accountId, DisjointItemResult result)
         {
             if (result == null)
                 return;
@@ -95,17 +105,17 @@ namespace DfoServer.Game.Inventory
                 if (material.SlotIndex < 0)
                     continue;
 
-                var item = LoadCommonRefreshItem(connection, null, material.SlotIndex, material.ItemTemplateId);
+                var item = LoadCommonRefreshItem(connection, null, characterId, accountId, material.SlotIndex, material.ItemTemplateId);
                 if (item != null)
                     result.RefreshItems.Add(item);
             }
         }
 
-        private CommonInventoryItem LoadCommonRefreshItem(SqliteConnection connection, SqliteTransaction transaction, short slotIndex, int itemTemplateId)
+        private CommonInventoryItem LoadCommonRefreshItem(SqliteConnection connection, SqliteTransaction transaction, int characterId, int accountId, short slotIndex, int itemTemplateId)
         {
             if (Game.Currency.CurrencyService.IsCubeFragment(itemTemplateId))
             {
-                var cubes = Game.Currency.CurrencyService.LoadCubeFragments(connection, transaction, _context.AccountId);
+                var cubes = Game.Currency.CurrencyService.LoadCubeFragments(connection, transaction, accountId);
                 foreach (var cube in cubes)
                 {
                     if (cube.ItemId == itemTemplateId)
@@ -127,7 +137,7 @@ namespace DfoServer.Game.Inventory
                 };
             }
 
-            return _db.LoadCommonItem(connection, transaction, _context.CharacterId, InventoryListType.Main, slotIndex);
+            return _db.LoadCommonItem(connection, transaction, characterId, InventoryListType.Main, slotIndex);
         }
 
         private static bool TryValidateDisjoint(ItemRecord source, ItemMetadata metadata, out byte errorCode)
@@ -155,6 +165,7 @@ namespace DfoServer.Game.Inventory
         private bool TryValidatePortableDisjointItem(
             SqliteConnection connection,
             SqliteTransaction transaction,
+            int characterId,
             DisjointItemRequest request,
             ItemMetadata targetMetadata,
             out ItemRecord disjointTool,
@@ -169,7 +180,7 @@ namespace DfoServer.Game.Inventory
             if (request.DisjointItemSlotIndex == request.TargetSlotIndex)
                 return false;
 
-            disjointTool = _db.LoadItemRecord(connection, transaction, _context.CharacterId, InventoryListType.Main, request.DisjointItemSlotIndex);
+            disjointTool = _db.LoadItemRecord(connection, transaction, characterId, InventoryListType.Main, request.DisjointItemSlotIndex);
             if (disjointTool == null
                 || disjointTool.StackCount <= 0
                 || !string.Equals(disjointTool.ItemKind, "stackable", StringComparison.Ordinal))
@@ -187,13 +198,13 @@ namespace DfoServer.Game.Inventory
             return targetLevel <= maxLevel;
         }
 
-        private CommonInventoryItem ConsumePortableDisjointItem(SqliteConnection connection, SqliteTransaction transaction, ItemRecord disjointTool)
+        private CommonInventoryItem ConsumePortableDisjointItem(SqliteConnection connection, SqliteTransaction transaction, int characterId, ItemRecord disjointTool)
         {
             var remainingCount = disjointTool.StackCount - 1;
             if (remainingCount > 0)
             {
                 _db.UpdateStackCount(connection, transaction, disjointTool.ItemUid, remainingCount);
-                return _db.LoadCommonItem(connection, transaction, _context.CharacterId, InventoryListType.Main, disjointTool.SlotIndex)
+                return _db.LoadCommonItem(connection, transaction, characterId, InventoryListType.Main, disjointTool.SlotIndex)
                     ?? new CommonInventoryItem
                     {
                         SlotIndex = disjointTool.SlotIndex,

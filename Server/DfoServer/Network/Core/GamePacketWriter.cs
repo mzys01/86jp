@@ -70,13 +70,6 @@ namespace DfoServer.Network
             WriteBytes(bytes);
         }
 
-        public void WriteRawDstr(byte[] rawBytes)
-        {
-            var bytes = rawBytes ?? Array.Empty<byte>();
-            WriteInt32(bytes.Length);
-            WriteBytes(bytes);
-        }
-
         public byte[] ToArray()
         {
             return _buffer.ToArray();

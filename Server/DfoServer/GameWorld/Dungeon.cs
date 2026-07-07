@@ -8,16 +8,38 @@ namespace DfoServer.GameWorld
 {
     public class Dungeon
     {
+        private const byte StartMapSpecialPassiveObjectType = 9;
+
         private static LstFile LoadLstFile(string relativePath)
         {
             var content = PvfArchiveAccessor.ReadText(relativePath);
             return LstFile.Parse(content);
         }
 
+        private static readonly object _dungeonLstLock = new object();
+        private static LstFile _dungeonLstCache;
+
+        // dungeon.lst 与各 .dgn 解析结果按需缓存(PVF 只读, 解析结果视为不可变共享)。
+        // 击杀热路径每杀一只怪要读 3-4 个副本标量, 此前每次都重新解码+解析整个 .dgn 文本。
         public static LstFile LoadDungeonLstFile()
         {
-            return LoadLstFile(Path.Combine("dungeon", "dungeon.lst"));
+            var cached = _dungeonLstCache;
+            if (cached != null) return cached;
+            lock (_dungeonLstLock)
+            {
+                if (_dungeonLstCache == null)
+                    _dungeonLstCache = LoadLstFile(Path.Combine("dungeon", "dungeon.lst"));
+                return _dungeonLstCache;
+            }
         }
+
+        private static readonly System.Collections.Concurrent.ConcurrentDictionary<int, (DungeonFile File, string FilePath)>
+            _dungeonFileCache = new System.Collections.Concurrent.ConcurrentDictionary<int, (DungeonFile, string)>();
+
+        // 缓存版 .dgn 读取。返回的解析对象是共享实例, 调用方只读不改
+        // (与房间拓扑的迷宫缓存共享同一约定)。
+        public static DungeonFile GetDungeonFile(int dungeonId)
+            => LoadDungeonFileWithPath(dungeonId).File;
 
         private static string ResolveFilePath(LstFile lstFile, int id, string description)
         {
@@ -81,6 +103,17 @@ namespace DfoServer.GameWorld
             public List<MonsterSumInfo> Monsters { get; set; }
         }
 
+        public struct DungeonRoomCoordinate
+        {
+            public int X { get; set; }
+
+            public int Y { get; set; }
+
+            public int MapId { get; set; }
+
+            public string FilePath { get; set; }
+        }
+
         public sealed class HellPartyWaveInfo
         {
             public int GroupId { get; set; }
@@ -105,13 +138,7 @@ namespace DfoServer.GameWorld
 
         public static byte GetDungeonBasicLv(int dungeonId)
         {
-            var dgnlst = LoadLstFile(Path.Combine("dungeon", "dungeon.lst"));
-            if (dgnlst == null)
-                throw new Exception("未能成功解析地下城LST文件 dungeon/dungeon.lst");
-
-            var dgnFilePath = ResolveFilePath(dgnlst, dungeonId, "地下城");
-
-            var dngFile = DungeonFile.Parse(PvfArchiveAccessor.ReadText(Path.Combine("dungeon", dgnFilePath)));
+            var dngFile = GetDungeonFile(dungeonId);
             if (dngFile.Mazes == null || dngFile.Mazes.Count == 0)
                 throw new Exception("未解析到迷宫信息");
 
@@ -134,13 +161,54 @@ namespace DfoServer.GameWorld
             }
         }
 
+        public static bool IsSuitableLevelDungeon(int dungeonId, int characterLevel)
+        {
+            return characterLevel > 0
+                && TryGetSuitableLevelRange(dungeonId, out var minLevel, out var maxLevel)
+                && characterLevel >= minLevel
+                && characterLevel <= maxLevel;
+        }
+
+        public static bool TryGetSuitableLevelRange(int dungeonId, out int minLevel, out int maxLevel)
+        {
+            minLevel = 0;
+            maxLevel = 0;
+
+            try
+            {
+                var file = GetDungeonFile(dungeonId);
+                // 适合等级使用 PVF 最小进入等级到基础等级的闭区间。
+                minLevel = file.MinimumRequiredLevel;
+                maxLevel = file.BasisLevel;
+
+                if (minLevel <= 0 && maxLevel <= 0)
+                    return false;
+                if (minLevel <= 0)
+                    minLevel = maxLevel;
+                if (maxLevel <= 0)
+                    maxLevel = minLevel;
+                if (minLevel > maxLevel)
+                {
+                    var tmp = minLevel;
+                    minLevel = maxLevel;
+                    maxLevel = tmp;
+                }
+
+                return minLevel > 0 && maxLevel > 0;
+            }
+            catch
+            {
+                minLevel = 0;
+                maxLevel = 0;
+                return false;
+            }
+        }
+
         public static int GetMaxDifficultyCount(int dungeonId)
         {
             try
             {
-                var dgnlst = LoadLstFile(Path.Combine("dungeon", "dungeon.lst"));
-                var dgnFilePath = ResolveFilePath(dgnlst, dungeonId, "地下城");
-                var dngFile = DungeonFile.Parse(PvfArchiveAccessor.ReadText(Path.Combine("dungeon", dgnFilePath)));
+                var dngFile = GetDungeonFile(dungeonId);
                 if (dngFile.DifficultyLevel != null && dngFile.DifficultyLevel.Length > 0)
                 {
                     int count = 0;
@@ -157,14 +225,12 @@ namespace DfoServer.GameWorld
             catch { return 0; }
         }
 
-        public static int GetChampionCount(int dungeonId, int difficulty, int mazeIndex, Random rng, out int[] namedMonsterCodes)
+        public static int GetChampionCount(int dungeonId, int difficulty, int mazeIndex, out int[] namedMonsterCodes)
         {
             namedMonsterCodes = null;
             try
             {
-                var dgnlst = LoadLstFile(Path.Combine("dungeon", "dungeon.lst"));
-                var dgnFilePath = ResolveFilePath(dgnlst, dungeonId, "地下城");
-                var dngFile = DungeonFile.Parse(PvfArchiveAccessor.ReadText(Path.Combine("dungeon", dgnFilePath)));
+                var dngFile = GetDungeonFile(dungeonId);
                 namedMonsterCodes = dngFile.NamedMonster;
 
                 if (dngFile.Champion == null || dngFile.Champion.Length == 0)
@@ -192,12 +258,12 @@ namespace DfoServer.GameWorld
                 }
 
                 int area = mazeW * mazeH;
-                return 100 * adjusted / area > rng.Next(100) ? 1 : 0;
+                return 100 * adjusted / area > Infrastructure.ServerRandom.Next(100) ? 1 : 0;
             }
             catch { return 0; }
         }
 
-        public static void PromoteChampions(List<MonsterSumInfo> monsters, int count, Random rng, int[] namedMonsterCodes = null)
+        public static void PromoteChampions(List<MonsterSumInfo> monsters, int count, int[] namedMonsterCodes = null)
         {
             if (count <= 0) return;
 
@@ -206,12 +272,18 @@ namespace DfoServer.GameWorld
 
             var normalIndices = new List<int>();
             for (int i = 0; i < monsters.Count; i++)
-                if (monsters[i].Type == 0 && (namedSet == null || !namedSet.Contains(monsters[i].Code)))
+            {
+                var monster = monsters[i];
+                if (monster.Type == 0
+                    && monster.IsBlocking
+                    && monster.Flag0 == 0
+                    && (namedSet == null || !namedSet.Contains(monster.Code)))
                     normalIndices.Add(i);
+            }
 
             for (int i = 0; i < count && normalIndices.Count > 0; i++)
             {
-                int pick = rng.Next(normalIndices.Count);
+                int pick = Infrastructure.ServerRandom.Next(normalIndices.Count);
                 int idx = normalIndices[pick];
                 normalIndices.RemoveAt(pick);
 
@@ -225,10 +297,7 @@ namespace DfoServer.GameWorld
         {
             try
             {
-                var dgnlst = LoadLstFile(Path.Combine("dungeon", "dungeon.lst"));
-                if (dgnlst == null) return 1.0f;
-                var dgnFilePath = ResolveFilePath(dgnlst, dungeonId, "地下城");
-                var dngFile = DungeonFile.Parse(PvfArchiveAccessor.ReadText(Path.Combine("dungeon", dgnFilePath)));
+                var dngFile = GetDungeonFile(dungeonId);
                 return dngFile.ExperienceIncreasingPoint >= 0 ? dngFile.ExperienceIncreasingPoint : 1.0f;
             }
             catch
@@ -267,20 +336,51 @@ namespace DfoServer.GameWorld
             return defaultMaze;
         }
 
-        private static readonly Random _mazeRng = new Random();
+        
         private static readonly Regex MapCoordinateFileNameRegex =
             new Regex(@"\((?<x>-?\d+)[,.](?<y>-?\d+)\)", RegexOptions.Compiled);
         private static readonly Lazy<Dictionary<int, bool>> _monsterHellFlags =
             new Lazy<Dictionary<int, bool>>(() => LoadHellMonsterFlags("monster/monster.lst", "monster"));
         private static readonly Lazy<Dictionary<int, bool>> _aiCharacterHellFlags =
             new Lazy<Dictionary<int, bool>>(() => LoadHellMonsterFlags("AICharacter/AICharacter.lst", "AICharacter"));
+        private static readonly object _namedMonsterCacheLock = new object();
+        private static readonly Dictionary<int, HashSet<int>> _namedMonsterCache = new Dictionary<int, HashSet<int>>();
+
+        public static bool IsNamedMonster(int dungeonId, int monsterCode)
+        {
+            if (dungeonId <= 0 || monsterCode <= 0)
+                return false;
+
+            HashSet<int> namedSet;
+            lock (_namedMonsterCacheLock)
+            {
+                if (!_namedMonsterCache.TryGetValue(dungeonId, out namedSet))
+                {
+                    namedSet = new HashSet<int>();
+                    try
+                    {
+                        var loaded = LoadDungeonFileWithPath(dungeonId);
+                        if (loaded.File.NamedMonster != null)
+                        {
+                            foreach (var code in loaded.File.NamedMonster)
+                                if (code > 0) namedSet.Add(code);
+                        }
+                    }
+                    catch { }
+
+                    _namedMonsterCache[dungeonId] = namedSet;
+                }
+            }
+
+            return namedSet.Contains(monsterCode);
+        }
 
         public static int[] RandomizeBossPosition(int[] bossMap)
         {
             if (bossMap == null || bossMap.Length < 2) return null;
             int pairCount = bossMap.Length / 2;
             if (pairCount <= 1) return new[] { bossMap[0], bossMap[1] };
-            int pick = _mazeRng.Next(pairCount);
+            int pick = Infrastructure.ServerRandom.Next(pairCount);
             return new[] { bossMap[pick * 2], bossMap[pick * 2 + 1] };
         }
 
@@ -320,8 +420,28 @@ namespace DfoServer.GameWorld
             if (candidates.Count == 0)
                 return (dngFile.Mazes[0], 0);
 
-            var pick = candidates[_mazeRng.Next(candidates.Count)];
+            var pick = candidates[Infrastructure.ServerRandom.Next(candidates.Count)];
             return (pick.maze, pick.index);
+        }
+
+        public static MazeInfo GetDungeonMaze(int dungeonId, int mazeIndex)
+        {
+            try
+            {
+                var loaded = LoadDungeonFileWithPath(dungeonId);
+                var dungeonFile = loaded.File;
+                if (dungeonFile.Mazes == null || dungeonFile.Mazes.Count == 0)
+                    return null;
+
+                return mazeIndex >= 0 && mazeIndex < dungeonFile.Mazes.Count
+                    ? dungeonFile.Mazes[mazeIndex]
+                    : dungeonFile.Mazes[0];
+            }
+            catch (Exception ex)
+            {
+                FileLogger.Log($"[Dungeon] GetDungeonMaze ERROR: dungeon={dungeonId} maze={mazeIndex} {ex.Message}");
+                return null;
+            }
         }
 
         internal static int FindQuestConnectedMazeIndex(
@@ -379,9 +499,7 @@ namespace DfoServer.GameWorld
 
         public static int[] GetLayeredMapIds(int dungeonId, int x, int y, int mazeIndex)
         {
-            var dgnlst = LoadLstFile(Path.Combine("dungeon", "dungeon.lst"));
-            var dgnFilePath = ResolveFilePath(dgnlst, dungeonId, "地下城");
-            var dngFile = DungeonFile.Parse(PvfArchiveAccessor.ReadText(Path.Combine("dungeon", dgnFilePath)));
+            var dngFile = GetDungeonFile(dungeonId);
             if (dngFile.Mazes == null || dngFile.Mazes.Count == 0)
                 return null;
             var maze = (mazeIndex >= 0 && mazeIndex < dngFile.Mazes.Count) ? dngFile.Mazes[mazeIndex] : dngFile.Mazes[0];
@@ -448,6 +566,61 @@ namespace DfoServer.GameWorld
             }
 
             return -1;
+        }
+
+        public static IReadOnlyList<DungeonRoomCoordinate> GetDungeonRoomCoordinates(
+            int dungeonId,
+            int mazeIndex,
+            MazeInfo maze)
+        {
+            var result = new List<DungeonRoomCoordinate>();
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            try
+            {
+                var loaded = LoadDungeonFileWithPath(dungeonId);
+                if (maze == null)
+                {
+                    var dungeonFile = loaded.File;
+                    if (dungeonFile.Mazes == null || dungeonFile.Mazes.Count == 0)
+                        return result;
+
+                    maze = mazeIndex >= 0 && mazeIndex < dungeonFile.Mazes.Count
+                        ? dungeonFile.Mazes[mazeIndex]
+                        : dungeonFile.Mazes[0];
+                }
+
+                var maplst = LoadLstFile(Path.Combine("map", "map.lst"));
+                var mapDirCandidates = BuildMapDirCandidates(maplst, maze, loaded.FilePath);
+
+                foreach (var entry in maplst.Entries)
+                {
+                    if (!IsInCandidateDir(entry.FilePath, mapDirCandidates))
+                        continue;
+
+                    var fileName = Path.GetFileName(entry.FilePath);
+                    if (!TryParseMapFileCoordinate(fileName, out var x, out var y))
+                        continue;
+
+                    var key = x + "," + y;
+                    if (!seen.Add(key))
+                        continue;
+
+                    result.Add(new DungeonRoomCoordinate
+                    {
+                        X = x,
+                        Y = y,
+                        MapId = entry.Id,
+                        FilePath = entry.FilePath,
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                FileLogger.Log($"[Dungeon] GetDungeonRoomCoordinates ERROR: dungeon={dungeonId} maze={mazeIndex} {ex.Message}");
+            }
+
+            return result;
         }
 
         public static HellPartyRoomInfo FindHellMapRoom(int dungeonId, MazeInfo maze, int mazeIndex, byte difficulty)
@@ -624,10 +797,13 @@ namespace DfoServer.GameWorld
 
         private static (DungeonFile File, string FilePath) LoadDungeonFileWithPath(int dungeonId)
         {
-            var dgnlst = LoadLstFile(Path.Combine("dungeon", "dungeon.lst"));
-            var dgnFilePath = ResolveFilePath(dgnlst, dungeonId, "dungeon");
-            var dungeonFile = DungeonFile.Parse(PvfArchiveAccessor.ReadText(Path.Combine("dungeon", dgnFilePath)));
-            return (dungeonFile, dgnFilePath);
+            return _dungeonFileCache.GetOrAdd(dungeonId, id =>
+            {
+                var dgnlst = LoadDungeonLstFile();
+                var dgnFilePath = ResolveFilePath(dgnlst, id, "dungeon");
+                var dungeonFile = DungeonFile.Parse(PvfArchiveAccessor.ReadText(Path.Combine("dungeon", dgnFilePath)));
+                return (dungeonFile, dgnFilePath);
+            });
         }
 
         private static MapFile LoadMapFile(int mapId)
@@ -716,7 +892,7 @@ namespace DfoServer.GameWorld
             if (total <= 0)
                 return entries[0];
 
-            var roll = _mazeRng.Next(total);
+            var roll = Infrastructure.ServerRandom.Next(total);
             foreach (var entry in entries)
             {
                 if (entry.Rate <= 0)
@@ -840,6 +1016,9 @@ namespace DfoServer.GameWorld
                         IsBlocking = true,
                     });
                 }
+
+                AppendSpecialPassiveObjects(listO, mapFileO, dungeonBasicLv, overrideMapId, dungeonId, x, y);
+
                 foreach (var apc in mapFileO.AICharacters)
                 {
                     if (apc.Code <= 0 || !TryGetAICharacterLevel(apc.Code, out var apcLevel))
@@ -858,7 +1037,7 @@ namespace DfoServer.GameWorld
                         Code = apc.Code,
                         Type = apcType,
                         Level = apcLevel,
-                        IsBlocking = false,
+                        IsBlocking = IsBlockingAICharacter(apc),
                     });
                 }
                 return new MazeSumInfo { Monsters = listO, X = x, Y = y, Index = overrideMapId };
@@ -930,7 +1109,7 @@ namespace DfoServer.GameWorld
                 }
                 return false;
             }
-            int FindMapIdByFileName(string[] patterns)
+            int FindMapIdByFileName(string[] patterns, bool allowBossVariant = false)
             {
                 if (maplst == null) return -1;
                 foreach (var pat in patterns)
@@ -940,6 +1119,7 @@ namespace DfoServer.GameWorld
                         if (!InCandidateDir(entry.FilePath)) continue;
                         var fileName = System.IO.Path.GetFileName(entry.FilePath);
                         if (IsQuestVariantFile(fileName)) continue;
+                        if (!allowBossVariant && IsBossVariantFileName(fileName)) continue;
                         if (fileName.IndexOf(pat, StringComparison.OrdinalIgnoreCase) >= 0)
                             return entry.Id;
                     }
@@ -1084,14 +1264,14 @@ namespace DfoServer.GameWorld
                 if (bossActorMapIds != null && bossActorMapIds.Count > 0)
                 {
                     return bossActorMapIds.Count > 1
-                        ? bossActorMapIds[_mazeRng.Next(bossActorMapIds.Count)]
+                        ? bossActorMapIds[Infrastructure.ServerRandom.Next(bossActorMapIds.Count)]
                         : bossActorMapIds[0];
                 }
 
                 if (originalCandidates == null || originalCandidates.Length == 0)
                     return -1;
                 return originalCandidates.Length > 1
-                    ? originalCandidates[_mazeRng.Next(originalCandidates.Length)]
+                    ? originalCandidates[Infrastructure.ServerRandom.Next(originalCandidates.Length)]
                     : originalCandidates[0];
             }
             int FindMapIdByMapSpecification(bool allowMapTypeForBossRoom)
@@ -1135,8 +1315,10 @@ namespace DfoServer.GameWorld
                 {
                     if (item.X != x || item.Y != y)
                         continue;
+                    if (string.Equals(item.Type, "boss", StringComparison.OrdinalIgnoreCase))
+                        continue;
                     if (item.MapCandidates != null && item.MapCandidates.Length > 1)
-                        return item.MapCandidates[_mazeRng.Next(item.MapCandidates.Length)];
+                        return item.MapCandidates[Infrastructure.ServerRandom.Next(item.MapCandidates.Length)];
                     return item.Index;
                 }
 
@@ -1158,6 +1340,15 @@ namespace DfoServer.GameWorld
                 });
             }
 
+            if (mapId == -1 && isStartRoom && !isQuestConnectedMaze)
+            {
+                mapId = FindMapIdByPrefixChar('s');
+                if (mapId == -1)
+                    mapId = FindMapIdByDigitSuffix('S');
+                if (mapId == -1)
+                    mapId = FindMapIdByKeywordPrefix("start");
+            }
+
             if (mapId == -1)
             {
                 mapId = FindMapIdByMapSpecification(allowMapTypeForBossRoom: false);
@@ -1169,7 +1360,7 @@ namespace DfoServer.GameWorld
                 {
                     $"({x},{y})_boss", $"({x},{y})boss",
                     $"({x}.{y})_boss", $"({x}.{y})boss",
-                });
+                }, allowBossVariant: true);
                 if (bossVariant == -1)
                     bossVariant = FindMapIdByPrefixChar('b');
                 if (bossVariant == -1)
@@ -1187,7 +1378,7 @@ namespace DfoServer.GameWorld
                     if (item.X == x && item.Y == y && item.Type == "map")
                     {
                         mapId = (item.MapCandidates != null && item.MapCandidates.Length > 1)
-                            ? item.MapCandidates[_mazeRng.Next(item.MapCandidates.Length)]
+                            ? item.MapCandidates[Infrastructure.ServerRandom.Next(item.MapCandidates.Length)]
                             : item.Index;
                         break;
                     }
@@ -1279,6 +1470,8 @@ namespace DfoServer.GameWorld
                 list.Add(monster);
             }
 
+            AppendSpecialPassiveObjects(list, mapFile, dungeonBasicLv, mapId, dungeonId, x, y);
+
             // APC
             foreach (var apc in mapFile.AICharacters)
             {
@@ -1298,7 +1491,7 @@ namespace DfoServer.GameWorld
                     Code = apc.Code,
                     Type = apcType,
                     Level = apcLevel,
-                    IsBlocking = false,
+                    IsBlocking = IsBlockingAICharacter(apc),
                 });
             }
 
@@ -1309,6 +1502,80 @@ namespace DfoServer.GameWorld
                 Y = y,
                 Index = mapId,
             };
+        }
+
+        private static bool IsBlockingAICharacter(AICharacterInfo apc)
+        {
+            return apc != null && apc.Faction == ApcFaction.Monster;
+        }
+
+        private static void AppendSpecialPassiveObjects(
+            List<MonsterSumInfo> list,
+            MapFile mapFile,
+            byte dungeonBasicLv,
+            int mapId,
+            int dungeonId,
+            int x,
+            int y)
+        {
+            if (list == null || mapFile?.SpecialPassiveObjects == null || mapFile.SpecialPassiveObjects.Count == 0)
+                return;
+
+            var objectRows = 0;
+            var templateRows = 0;
+            for (var objectIndex = 0; objectIndex < mapFile.SpecialPassiveObjects.Count; objectIndex++)
+            {
+                var obj = mapFile.SpecialPassiveObjects[objectIndex];
+                if (obj == null)
+                    continue;
+
+                if (obj.ObjectCode > 0)
+                {
+                    list.Add(new MonsterSumInfo
+                    {
+                        Code = obj.ObjectCode,
+                        Type = StartMapSpecialPassiveObjectType,
+                        Level = 0,
+                        IsBlocking = false,
+                        PacketIndex = objectIndex,
+                    });
+                    objectRows++;
+                }
+            }
+
+            for (var objectIndex = 0; objectIndex < mapFile.SpecialPassiveObjects.Count; objectIndex++)
+            {
+                var obj = mapFile.SpecialPassiveObjects[objectIndex];
+                if (obj?.Spawns == null || obj.Spawns.Count == 0)
+                    continue;
+
+                for (var spawnIndex = 0; spawnIndex < obj.Spawns.Count; spawnIndex++)
+                {
+                    var spawn = obj.Spawns[spawnIndex];
+                    if (spawn.Code <= 0
+                        || !string.Equals(spawn.Kind, "[monster]", StringComparison.OrdinalIgnoreCase))
+                        continue;
+
+                    var level = spawn.Level > 0
+                        ? (byte)Math.Min(spawn.Level, 255)
+                        : dungeonBasicLv;
+                    list.Add(new MonsterSumInfo
+                    {
+                        Code = spawn.Code,
+                        Type = 0,
+                        Level = level,
+                        IsBlocking = false,
+                        TemplateOrder = (ushort)Math.Min(objectIndex, ushort.MaxValue),
+                        PacketIndex = spawnIndex,
+                        Flag0 = 1,
+                        Flag1 = (byte)Math.Min(objectIndex, byte.MaxValue),
+                    });
+                    templateRows++;
+                }
+            }
+
+            if (objectRows > 0 || templateRows > 0)
+                FileLogger.Log($"[Dungeon] special passive objects: dungeon={dungeonId} room=({x},{y}) map={mapId} objects={objectRows} templates={templateRows}");
         }
 
         internal static int SelectFallbackMapIdForUnresolvedRoom(
@@ -1334,27 +1601,10 @@ namespace DfoServer.GameWorld
                 }
             }
 
-            // Some PVFs omit ordinary rooms from [map specification] and keep a
-            // generic maze(x,y) map in the same directory. Use that PVF template
-            // before unrelated specs so a boss-only spec cannot fill normal rooms.
-            var mazeTemplateMapId = FindNearestCoordinateMapId(
-                mapEntries,
-                mapDirCandidates,
-                x,
-                y,
-                requireMazeTemplateName: true,
-                allowBossVariant: false,
-                allowQuestVariant: false,
-                out var mazeTemplateReason);
-            if (mazeTemplateMapId > 0)
-            {
-                reason = mazeTemplateReason;
-                return mazeTemplateMapId;
-            }
-
-            // Without a shared maze template, use nearby ordinary coordinate maps
-            // by filename. This stays below exact map-spec/name matches, but above
-            // the old "first map spec" fallback that can point at an unrelated room.
+            // Use nearby ordinary coordinate maps by filename. This stays below exact
+            // map-spec/name matches, but above the old "first map spec" fallback that
+            // can point at an unrelated room. It must run before generic maze templates:
+            // distant maze(x,y) templates can have incompatible exits for sparse mazes.
             var coordinateMapId = FindNearestCoordinateMapId(
                 mapEntries,
                 mapDirCandidates,
@@ -1370,6 +1620,24 @@ namespace DfoServer.GameWorld
                 return coordinateMapId;
             }
 
+            // Some PVFs omit ordinary rooms from [map specification] and keep a
+            // generic maze(x,y) map in the same directory. Use that PVF template only
+            // after nearby coordinate maps so a distant template cannot trap the client.
+            var mazeTemplateMapId = FindNearestCoordinateMapId(
+                mapEntries,
+                mapDirCandidates,
+                x,
+                y,
+                requireMazeTemplateName: true,
+                allowBossVariant: false,
+                allowQuestVariant: false,
+                out var mazeTemplateReason);
+            if (mazeTemplateMapId > 0)
+            {
+                reason = mazeTemplateReason;
+                return mazeTemplateMapId;
+            }
+
             if (mapSpecifications != null)
             {
                 for (var i = 0; i < mapSpecifications.Count; i++)
@@ -1381,7 +1649,7 @@ namespace DfoServer.GameWorld
                     reason = "first map spec";
                     if (item.MapCandidates != null && item.MapCandidates.Length > 0)
                     {
-                        var pick = _mazeRng.Next(item.MapCandidates.Length);
+                        var pick = Infrastructure.ServerRandom.Next(item.MapCandidates.Length);
                         return item.MapCandidates[pick];
                     }
                     return item.Index;
@@ -1437,6 +1705,8 @@ namespace DfoServer.GameWorld
                 if (!allowBossVariant && IsBossVariantFileName(fileName))
                     continue;
                 if (requireMazeTemplateName && !IsMazeTemplateFileName(fileName))
+                    continue;
+                if (!requireMazeTemplateName && IsMazeTemplateFileName(fileName))
                     continue;
                 if (!TryParseMapFileCoordinate(fileName, out var mapX, out var mapY))
                     continue;

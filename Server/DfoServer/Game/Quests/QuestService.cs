@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using DfoServer.Game.Inventory;
 using Microsoft.Data.Sqlite;
@@ -12,58 +12,31 @@ namespace DfoServer.Game.Quests
         public uint TriggerValue;
     }
 
-    public static class QuestService
+    // 任务命令的业务处理。会话层(QuestManager)持有一个实例; 数据访问走 QuestRepository,
+    // 物品/金币走 IAssetService, 应答包序列化在 QuestAckBuilder。
+    public sealed class QuestService
     {
         private const int MaxActiveQuests = 20;
 
+        private readonly string _connStr;
+        private readonly IAssetService _assetService;
+        private readonly QuestRepository _repo;
+
+        public QuestService(string connectionString, IAssetService assetService)
+        {
+            _connStr = connectionString ?? throw new ArgumentNullException(nameof(connectionString));
+            _assetService = assetService;
+            _repo = new QuestRepository(connectionString);
+        }
+
         public static List<ActiveQuest> LoadActiveQuests(string connStr, int characterId)
         {
-            var list = new List<ActiveQuest>();
-            using (var conn = new SqliteConnection(connStr))
-            {
-                conn.Open();
-                using (var tc = new SqliteCommand(
-                    "CREATE TABLE IF NOT EXISTS character_active_quests (character_id INTEGER NOT NULL, slot INTEGER NOT NULL, quest_id INTEGER NOT NULL, trigger_value INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (character_id, slot))", conn))
-                    tc.ExecuteNonQuery();
-                using (var cmd = new SqliteCommand(
-                    "SELECT slot, quest_id, trigger_value FROM character_active_quests WHERE character_id=@cid ORDER BY slot", conn))
-                {
-                    cmd.Parameters.AddWithValue("@cid", characterId);
-                    using (var r = cmd.ExecuteReader())
-                    {
-                        while (r.Read())
-                            list.Add(new ActiveQuest { Slot = r.GetInt32(0), QuestId = (ushort)r.GetInt32(1), TriggerValue = (uint)r.GetInt64(2) });
-                    }
-                }
-            }
-            return list;
+            return new QuestRepository(connStr).LoadActiveQuests(characterId);
         }
 
         public static void SaveActiveQuests(string connStr, int characterId, List<ActiveQuest> quests)
         {
-            using (var conn = new SqliteConnection(connStr))
-            {
-                conn.Open();
-                using (var tc = new SqliteCommand(
-                    "CREATE TABLE IF NOT EXISTS character_active_quests (character_id INTEGER NOT NULL, slot INTEGER NOT NULL, quest_id INTEGER NOT NULL, trigger_value INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (character_id, slot))", conn))
-                    tc.ExecuteNonQuery();
-                using (var tx = conn.BeginTransaction())
-                {
-                    foreach (var q in quests)
-                    {
-                        using (var cmd = new SqliteCommand(
-                            "INSERT OR REPLACE INTO character_active_quests (character_id, slot, quest_id, trigger_value) VALUES (@cid, @s, @qid, @tv)", conn, tx))
-                        {
-                            cmd.Parameters.AddWithValue("@cid", characterId);
-                            cmd.Parameters.AddWithValue("@s", q.Slot);
-                            cmd.Parameters.AddWithValue("@qid", (int)q.QuestId);
-                            cmd.Parameters.AddWithValue("@tv", (long)q.TriggerValue);
-                            cmd.ExecuteNonQuery();
-                        }
-                    }
-                    tx.Commit();
-                }
-            }
+            new QuestRepository(connStr).SaveActiveQuests(characterId, quests);
         }
 
         public static ActiveQuest FindByQuestId(List<ActiveQuest> active, ushort questId)
@@ -82,49 +55,46 @@ namespace DfoServer.Game.Quests
             return -1;
         }
 
-        public static byte[] HandleAcceptQuest(
-            string connStr,
-            int characterId,
-            byte[] body,
-            IAssetService assetService = null,
-            int accountId = 0)
+        public QuestAcceptResult HandleAcceptQuest(int characterId, byte[] body, int accountId = 0)
         {
-            if (body == null || body.Length < 2) return BuildFailAck(23);
+            if (body == null || body.Length < 2) return QuestAcceptResult.Fail(23);
             ushort questId = BitConverter.ToUInt16(body, 0);
 
-            var active = LoadActiveQuests(connStr, characterId);
-            if (FindByQuestId(active, questId) != null) return BuildFailAck(18);
+            var active = _repo.LoadActiveQuests(characterId);
+            if (FindByQuestId(active, questId) != null) return QuestAcceptResult.Fail(18);
 
             bool repeatable = GameWorld.QuestData.IsRepeatableQuest(questId);
-            if (IsQuestCleared(connStr, characterId, questId) && !repeatable)
-                return BuildFailAck(18);
+            if (IsQuestCleared(characterId, questId) && !repeatable)
+                return QuestAcceptResult.Fail(18);
 
-            if (!CheckPreRequiredQuests(connStr, characterId, questId))
-                return BuildFailAck(21);
+            if (!CheckPreRequiredQuests(characterId, questId))
+                return QuestAcceptResult.Fail(21);
 
             var collisions = GameWorld.QuestData.GetCollisionQuests(questId);
             foreach (var colQid in collisions)
             {
                 if (colQid > 0 && FindByQuestId(active, (ushort)colQid) != null)
-                    return BuildFailAck(21);
+                    return QuestAcceptResult.Fail(21);
             }
 
             int slot = FindFreeSlot(active);
-            if (slot < 0) return BuildFailAck(4);
+            if (slot < 0) return QuestAcceptResult.Fail(4);
 
             uint initTrigger = GameWorld.QuestData.GetInitTrigger(questId);
             var eventItems = GameWorld.QuestData.GetEventItems(questId);
             var seekItems = GameWorld.QuestData.GetSeekingConsumeItems(questId);
             var eventSlots = new List<ushort>(eventItems.Count);
 
-            if (assetService != null && (eventItems.Count > 0 || seekItems.Count > 0))
+            if (_assetService != null && (eventItems.Count > 0 || seekItems.Count > 0))
             {
                 if (accountId <= 0)
-                    accountId = GetAccountIdByConnStr(connStr, characterId);
+                    accountId = GetAccountIdByConnStr(characterId);
 
-                using (var scope = assetService.OpenScope(characterId, accountId))
+                using (var scope = _assetService.OpenScope(characterId, accountId))
                 {
-                    EnsureActiveQuestTable(scope.Connection, scope.Transaction);
+                    if (GameWorld.QuestData.IsQuestClearQuest(questId))
+                        initTrigger = ComputeQuestClearTrigger(scope.Connection, scope.Transaction, characterId, questId);
+
                     // The accept ACK advertises event items; persist them so later quest checks see the same state.
                     foreach (var item in eventItems)
                     {
@@ -135,8 +105,8 @@ namespace DfoServer.Game.Quests
                         }
 
                         short assignedSlot;
-                        if (!assetService.TryAddItem(scope, item.ItemId, item.Count, out assignedSlot))
-                            return BuildFailAck(4);
+                        if (!_assetService.TryAddItem(scope, item.ItemId, item.Count, out assignedSlot))
+                            return QuestAcceptResult.Fail(4);
 
                         eventSlots.Add((ushort)assignedSlot);
                     }
@@ -146,24 +116,26 @@ namespace DfoServer.Game.Quests
                         initTrigger = ApplySeekingItemProgress(
                             initTrigger,
                             seekItems,
-                            itemId => assetService.CountItem(scope, itemId));
+                            itemId => _assetService.CountItem(scope, itemId));
 
-                    InsertActiveQuest(scope.Connection, scope.Transaction, characterId, slot, questId, initTrigger);
+                    QuestRepository.InsertActiveQuest(scope.Connection, scope.Transaction, characterId, slot, questId, initTrigger);
                     if (repeatable)
-                        DeleteQuestClearedFlag(scope.Connection, scope.Transaction, characterId, questId);
+                        QuestRepository.DeleteClearedFlag(scope.Connection, scope.Transaction, characterId, questId);
                     scope.Commit();
                 }
             }
             else
             {
-                using (var conn = new SqliteConnection(connStr))
+                using (var conn = new SqliteConnection(_connStr))
                 {
                     conn.Open();
-                    EnsureActiveQuestTable(conn, null);
-                    InsertActiveQuest(conn, null, characterId, slot, questId, initTrigger);
+                    if (GameWorld.QuestData.IsQuestClearQuest(questId))
+                        initTrigger = ComputeQuestClearTrigger(conn, null, characterId, questId);
+
+                    QuestRepository.InsertActiveQuest(conn, null, characterId, slot, questId, initTrigger);
                     if (repeatable)
                     {
-                        DeleteQuestClearedFlag(conn, null, characterId, questId);
+                        QuestRepository.DeleteClearedFlag(conn, null, characterId, questId);
                     }
                 }
 
@@ -171,71 +143,53 @@ namespace DfoServer.Game.Quests
                     eventSlots.Add(0);
             }
 
-            var w = new Network.GamePacketWriter();
-            w.WriteByte(0x01);
-            w.WriteUInt16(questId);
-            w.WriteUInt32(initTrigger);
-            w.WriteByte((byte)eventItems.Count);
+            var result = new QuestAcceptResult { QuestId = questId, InitTrigger = initTrigger };
             for (int i = 0; i < eventItems.Count; i++)
             {
-                w.WriteUInt16(i < eventSlots.Count ? eventSlots[i] : (ushort)0);
-                w.WriteUInt32((uint)eventItems[i].ItemId);
-                w.WriteUInt32((uint)eventItems[i].Count);
+                result.EventItems.Add(new QuestEventItemGrant
+                {
+                    SlotIndex = i < eventSlots.Count ? eventSlots[i] : (ushort)0,
+                    ItemId = eventItems[i].ItemId,
+                    Count = eventItems[i].Count,
+                });
             }
             FileLogger.Log($"[QuestService] ACCEPT quest={questId} slot={slot} initTrigger={initTrigger} eventItems={eventItems.Count}");
-            return w.ToArray();
+            return result;
         }
 
-        public static byte[] HandleGiveupQuest(string connStr, int characterId, byte[] body)
+        public QuestGiveupResult HandleGiveupQuest(int characterId, byte[] body)
         {
-            if (body == null || body.Length < 2) return BuildFailAck(19);
+            if (body == null || body.Length < 2) return QuestGiveupResult.Fail(19);
             ushort questId = BitConverter.ToUInt16(body, 0);
 
-            var active = LoadActiveQuests(connStr, characterId);
+            var active = _repo.LoadActiveQuests(characterId);
             var q = FindByQuestId(active, questId);
-            if (q == null) return BuildFailAck(19);
-            if (!GameWorld.QuestData.CanGiveup(questId)) return BuildFailAck(20);
+            if (q == null) return QuestGiveupResult.Fail(19);
+            if (!GameWorld.QuestData.CanGiveup(questId)) return QuestGiveupResult.Fail(20);
 
-            using (var conn = new SqliteConnection(connStr))
-            {
-                conn.Open();
-                using (var cmd = new SqliteCommand(
-                    "DELETE FROM character_active_quests WHERE character_id=@cid AND slot=@s", conn))
-                {
-                    cmd.Parameters.AddWithValue("@cid", characterId);
-                    cmd.Parameters.AddWithValue("@s", q.Slot);
-                    cmd.ExecuteNonQuery();
-                }
-            }
+            _repo.DeleteActiveQuest(characterId, q.Slot);
 
-            var w = new Network.GamePacketWriter();
-            w.WriteByte(0x01);
-            w.WriteUInt16(questId);
             FileLogger.Log($"[QuestService] GIVEUP quest={questId}");
-            return w.ToArray();
+            return new QuestGiveupResult { QuestId = questId };
         }
 
-        public static byte[] HandleSetTrigger(string connStr, int characterId, byte[] body)
+        public QuestSetTriggerResult HandleSetTrigger(int characterId, byte[] body)
         {
             // Body after 2B wire-type echo strip: u16 questId + u8 triggerType + u8 isIncrement
             // triggerType is a channel bitmask: 0x10=ch0, 0x20=ch1, 0x40=ch2, 0=raw decrement
             // isIncrement: 0=decrement channel, 1=simple ++trigger, nonzero=increment channel
             // Server computes new trigger and echoes back
-            if (body == null || body.Length < 3) return BuildFailAck(22);
+            if (body == null || body.Length < 3) return QuestSetTriggerResult.Fail(22);
             ushort questId = BitConverter.ToUInt16(body, 0);
             byte triggerType = body[2];
             bool isIncrement = body.Length >= 4 && body[3] != 0;
 
-            var active = LoadActiveQuests(connStr, characterId);
+            var active = _repo.LoadActiveQuests(characterId);
             var q = FindByQuestId(active, questId);
             if (q == null)
             {
                 FileLogger.Log($"[QuestService] SET_TRIGGER quest={questId} not in active list, echo back");
-                var w2 = new Network.GamePacketWriter();
-                w2.WriteByte(0x01);
-                w2.WriteUInt16(questId);
-                w2.WriteUInt32(0);
-                return w2.ToArray();
+                return new QuestSetTriggerResult { QuestId = questId, TriggerValue = 0 };
             }
 
             uint oldTrigger = q.TriggerValue;
@@ -256,36 +210,21 @@ namespace DfoServer.Game.Quests
             }
 
             q.TriggerValue = newTrigger;
-            using (var conn = new SqliteConnection(connStr))
-            {
-                conn.Open();
-                using (var cmd = new SqliteCommand(
-                    "UPDATE character_active_quests SET trigger_value=@tv WHERE character_id=@cid AND slot=@s", conn))
-                {
-                    cmd.Parameters.AddWithValue("@tv", (long)newTrigger);
-                    cmd.Parameters.AddWithValue("@cid", characterId);
-                    cmd.Parameters.AddWithValue("@s", q.Slot);
-                    cmd.ExecuteNonQuery();
-                }
-            }
+            _repo.UpdateTriggerValue(characterId, q.Slot, newTrigger);
 
             FileLogger.Log($"[QuestService] SET_TRIGGER quest={questId} type=0x{triggerType:X2} inc={isIncrement} trigger={oldTrigger}→{newTrigger}");
-            var w = new Network.GamePacketWriter();
-            w.WriteByte(0x01);
-            w.WriteUInt16(questId);
-            w.WriteUInt32(newTrigger);
-            return w.ToArray();
+            return new QuestSetTriggerResult { QuestId = questId, TriggerValue = newTrigger };
         }
 
-        public static bool SyncMonsterRewardItemProgress(
-            string connStr,
-            int characterId,
-            IAssetService assetService,
-            int accountId,
-            ICollection<int> itemFilter)
+        public bool SyncMonsterRewardItemProgress(int characterId, int accountId, ICollection<int> itemFilter)
         {
-            var active = LoadActiveQuests(connStr, characterId);
-            if (active.Count == 0 || assetService == null)
+            return SyncItemSeekingQuestProgress(characterId, accountId, itemFilter);
+        }
+
+        public bool SyncItemSeekingQuestProgress(int characterId, int accountId, ICollection<int> itemFilter)
+        {
+            var active = _repo.LoadActiveQuests(characterId);
+            if (active.Count == 0 || _assetService == null)
                 return false;
 
             var itemCountCache = new Dictionary<int, int>();
@@ -297,11 +236,12 @@ namespace DfoServer.Game.Quests
 
                 try
                 {
-                    using (var scope = assetService.OpenScope(characterId, accountId))
-                        count = assetService.CountItem(scope, itemId);
+                    using (var scope = _assetService.OpenScope(characterId, accountId))
+                        count = _assetService.CountItem(scope, itemId);
                 }
-                catch
+                catch (Exception ex)
                 {
+                    FileLogger.Log($"[QuestService] ERROR: held count read failed, assuming 0: cid={characterId} item={itemId}: {ex.Message}");
                     count = 0;
                 }
 
@@ -344,39 +284,15 @@ namespace DfoServer.Game.Quests
             }
 
             if (changed.Count > 0)
-            {
-                using (var conn = new SqliteConnection(connStr))
-                {
-                    conn.Open();
-                    using (var tx = conn.BeginTransaction())
-                    {
-                        foreach (var q in changed)
-                        {
-                            using (var cmd = new SqliteCommand(
-                                "UPDATE character_active_quests SET trigger_value=@tv WHERE character_id=@cid AND slot=@s", conn, tx))
-                            {
-                                cmd.Parameters.AddWithValue("@tv", (long)q.TriggerValue);
-                                cmd.Parameters.AddWithValue("@cid", characterId);
-                                cmd.Parameters.AddWithValue("@s", q.Slot);
-                                cmd.ExecuteNonQuery();
-                            }
-                        }
-                        tx.Commit();
-                    }
-                }
-            }
+                _repo.UpdateTriggerValues(characterId, changed);
 
             return matchedQuestItem;
         }
 
-        public static bool SyncClearMapQuestProgress(
-            string connStr,
-            int characterId,
-            int dungeonId,
-            int mapId)
+        public bool SyncClearMapQuestProgress(int characterId, int dungeonId, int mapId)
         {
             var changed = SyncClearMapQuestProgressCore(
-                connStr,
+                _connStr,
                 characterId,
                 dungeonId,
                 mapId,
@@ -398,7 +314,8 @@ namespace DfoServer.Game.Quests
             if (string.IsNullOrWhiteSpace(connStr) || characterId <= 0 || matchesClearMapQuest == null)
                 return 0;
 
-            var active = LoadActiveQuests(connStr, characterId);
+            var repo = new QuestRepository(connStr);
+            var active = repo.LoadActiveQuests(characterId);
             if (active.Count == 0)
                 return 0;
 
@@ -413,8 +330,9 @@ namespace DfoServer.Game.Quests
                 {
                     matched = matchesClearMapQuest(q.QuestId, dungeonId, mapId);
                 }
-                catch
+                catch (Exception ex)
                 {
+                    FileLogger.Log($"[QuestService] ERROR: clear-map match failed, quest {q.QuestId} skipped: dungeon={dungeonId} map={mapId}: {ex.Message}");
                     matched = false;
                 }
 
@@ -428,24 +346,7 @@ namespace DfoServer.Game.Quests
             if (changed.Count == 0)
                 return 0;
 
-            using (var conn = new SqliteConnection(connStr))
-            {
-                conn.Open();
-                using (var tx = conn.BeginTransaction())
-                {
-                    foreach (var q in changed)
-                    {
-                        using (var cmd = new SqliteCommand(
-                            "UPDATE character_active_quests SET trigger_value=0 WHERE character_id=@cid AND slot=@s", conn, tx))
-                        {
-                            cmd.Parameters.AddWithValue("@cid", characterId);
-                            cmd.Parameters.AddWithValue("@s", q.Slot);
-                            cmd.ExecuteNonQuery();
-                        }
-                    }
-                    tx.Commit();
-                }
-            }
+            repo.UpdateTriggerValues(characterId, changed);
 
             return changed.Count;
         }
@@ -473,12 +374,12 @@ namespace DfoServer.Game.Quests
         }
 
         private static void EnsureMissingCarryForwardEventItems(
-            IAssetService assetService,
+            IAssetService _assetService,
             DbScope scope,
             List<GameWorld.QuestRewardItem> eventItems,
             List<InsertedItemEntry> insertedEntries)
         {
-            if (assetService == null || scope == null || eventItems == null || eventItems.Count == 0)
+            if (_assetService == null || scope == null || eventItems == null || eventItems.Count == 0)
                 return;
 
             // Repair old active quests that missed the accept-time grant, but only for carry-forward items.
@@ -487,31 +388,31 @@ namespace DfoServer.Game.Quests
                 if (eventItem.ItemId <= 0 || eventItem.Count <= 0)
                     continue;
 
-                int held = Math.Max(0, assetService.CountItem(scope, eventItem.ItemId));
+                int held = Math.Max(0, _assetService.CountItem(scope, eventItem.ItemId));
                 int missing = Math.Max(0, eventItem.Count - held);
                 if (missing <= 0)
                     continue;
 
                 short assignedSlot;
-                if (!assetService.TryAddItem(scope, eventItem.ItemId, missing, out assignedSlot))
+                if (!_assetService.TryAddItem(scope, eventItem.ItemId, missing, out assignedSlot))
                     continue;
 
                 var meta = ItemMetadataResolver.Resolve(eventItem.ItemId);
                 insertedEntries.Add(meta.IsStackable
                     ? new InsertedItemEntry { SlotIndex = (ushort)assignedSlot, ItemId = eventItem.ItemId, CountOrSeed = (uint)missing }
-                    : new InsertedItemEntry { SlotIndex = (ushort)assignedSlot, ItemId = eventItem.ItemId, IsEquipment = true, CountOrSeed = 999999998u, EquipDurability = (ushort)meta.Durability });
+                    : new InsertedItemEntry { SlotIndex = (ushort)assignedSlot, ItemId = eventItem.ItemId, IsEquipment = true, CountOrSeed = ItemQuality.TopQualitySeed, EquipDurability = (ushort)meta.Durability });
             }
         }
 
         private static void ConsumeNonCarryForwardEventItems(
-            IAssetService assetService,
+            IAssetService _assetService,
             DbScope scope,
             List<GameWorld.QuestRewardItem> eventItems,
             List<GameWorld.QuestRewardItem> seekItems,
             List<GameWorld.QuestRewardItem> carryForwardEventItems,
             List<ConsumedItemEntry> consumedEntries)
         {
-            if (assetService == null || scope == null || eventItems == null || eventItems.Count == 0)
+            if (_assetService == null || scope == null || eventItems == null || eventItems.Count == 0)
                 return;
 
             // Event items that are neither seek requirements nor carry-forward items should not remain after finish.
@@ -544,46 +445,53 @@ namespace DfoServer.Game.Quests
 
                 short slot;
                 int remaining;
-                if (assetService.TryRemoveItem(scope, eventItem.ItemId, eventItem.Count, out slot, out remaining))
+                if (_assetService.TryRemoveItem(scope, eventItem.ItemId, eventItem.Count, out slot, out remaining))
                     consumedEntries.Add(new ConsumedItemEntry { UpdateType = 0, SlotIndex = (ushort)slot, RemainingCount = (uint)remaining });
             }
         }
 
-        private static void EnsureActiveQuestTable(SqliteConnection conn, SqliteTransaction tx)
+        private bool CanFinishQuestClearQuest(int characterId, ushort questId)
         {
-            using (var tc = new SqliteCommand(
-                "CREATE TABLE IF NOT EXISTS character_active_quests (character_id INTEGER NOT NULL, slot INTEGER NOT NULL, quest_id INTEGER NOT NULL, trigger_value INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (character_id, slot))",
-                conn,
-                tx))
-                tc.ExecuteNonQuery();
-        }
+            if (!GameWorld.QuestData.IsQuestClearQuest(questId))
+                return false;
 
-        private static void InsertActiveQuest(SqliteConnection conn, SqliteTransaction tx, int characterId, int slot, ushort questId, uint triggerValue)
-        {
-            using (var cmd = new SqliteCommand(
-                "INSERT OR REPLACE INTO character_active_quests (character_id, slot, quest_id, trigger_value) VALUES (@cid, @s, @qid, @tv)",
-                conn,
-                tx))
+            using (var conn = new SqliteConnection(_connStr))
             {
-                cmd.Parameters.AddWithValue("@cid", characterId);
-                cmd.Parameters.AddWithValue("@s", slot);
-                cmd.Parameters.AddWithValue("@qid", (int)questId);
-                cmd.Parameters.AddWithValue("@tv", (long)triggerValue);
-                cmd.ExecuteNonQuery();
+                conn.Open();
+                return ComputeQuestClearTrigger(conn, null, characterId, questId) == 0;
             }
         }
 
-        private static void DeleteQuestClearedFlag(SqliteConnection conn, SqliteTransaction tx, int characterId, ushort questId)
+        private static void SyncQuestClearParentProgress(SqliteConnection conn, SqliteTransaction tx, int characterId)
         {
-            using (var cmd = new SqliteCommand(
-                "DELETE FROM character_invisible_falgs WHERE character_id=@cid AND slot_index=@idx",
-                conn,
-                tx))
+            foreach (var parent in QuestRepository.LoadActiveQuests(conn, tx, characterId))
             {
-                cmd.Parameters.AddWithValue("@cid", characterId);
-                cmd.Parameters.AddWithValue("@idx", (int)questId);
-                cmd.ExecuteNonQuery();
+                if (!GameWorld.QuestData.IsQuestClearQuest(parent.QuestId))
+                    continue;
+
+                var nextTrigger = ComputeQuestClearTrigger(conn, tx, characterId, parent.QuestId);
+                if (nextTrigger == parent.TriggerValue)
+                    continue;
+
+                QuestRepository.UpdateTriggerValue(conn, tx, characterId, parent.Slot, nextTrigger);
+                FileLogger.Log($"[QuestService] QUEST_CLEAR sync parent={parent.QuestId} trigger={parent.TriggerValue}->{nextTrigger}");
             }
+        }
+
+        private static uint ComputeQuestClearTrigger(SqliteConnection conn, SqliteTransaction tx, int characterId, ushort questId)
+        {
+            var requiredQuestIds = GameWorld.QuestData.GetQuestClearRequiredQuestIds(questId);
+            if (requiredQuestIds.Count == 0)
+                return 1;
+
+            var missing = 0;
+            foreach (var requiredQuestId in requiredQuestIds)
+            {
+                if (!QuestRepository.IsQuestCleared(conn, tx, characterId, requiredQuestId))
+                    missing++;
+            }
+
+            return (uint)missing;
         }
 
         private static uint DecrementTriggerChannel(uint trigger, byte triggerType)
@@ -613,40 +521,66 @@ namespace DfoServer.Game.Quests
             return (trigger & ~(0x1FFu << shift)) | (channel << shift);
         }
 
-        public static byte[] HandleFinishQuest(string connStr, int characterId, byte[] body, IAssetService assetService)
+        // currentExp: 会话内存中的当前经验。副本杀怪经验只写内存(升级/通关结算才落库),
+        // 结算基数必须以会话为准 -- 用库里的陈旧值做基数会把本局杀怪经验覆盖丢失
+        // (实测: 副本内直接与NPC交任务, 经验不增反减)。不传时回退读库(自测/无会话场景)。
+        public QuestFinishResult HandleFinishQuest(int characterId, byte[] body, uint? currentExp = null)
         {
-            if (body == null || body.Length < 2) return BuildFailAck(22);
+            if (body == null || body.Length < 2) return QuestFinishResult.Fail(22);
             ushort questId = BitConverter.ToUInt16(body, 0);
             ushort rewardSelectIdx = (body.Length >= 4) ? BitConverter.ToUInt16(body, 2) : (ushort)0;
+            bool hasRewardSelectIdx = body.Length >= 4 && rewardSelectIdx != ushort.MaxValue;
             ushort multiplier = (body.Length >= 6) ? BitConverter.ToUInt16(body, 4) : (ushort)1;
             if (multiplier == 0) multiplier = 1;
 
-            var active = LoadActiveQuests(connStr, characterId);
+            var active = _repo.LoadActiveQuests(characterId);
             var q = FindByQuestId(active, questId);
-            if (q != null && q.TriggerValue != 0) return BuildFailAck(22);
 
-            int playerLevel = GetCharacterLevel(connStr, characterId);
-            int playerJob = GetCharacterJob(connStr, characterId);
-            int playerGrowType = GetCharacterGrowType(connStr, characterId);
+            // 已完成且不在任务栏的任务不能再次交付 -- 否则奖励会重复发放。
+            // (可重复任务的完成标记在重新接取时清除, 走不到这里。)
+            if (q == null && IsQuestCleared(characterId, questId))
+            {
+                FileLogger.Log($"[QuestService] FINISH rejected: quest={questId} already cleared and not active, cid={characterId}");
+                return QuestFinishResult.Fail(22);
+            }
+
+            int clearedFlagValue = 1;
+            if (GameWorld.QuestData.IsQuestClearQuest(questId))
+            {
+                if (!CanFinishQuestClearQuest(characterId, questId))
+                    return QuestFinishResult.Fail(22);
+
+                if (q != null)
+                    q.TriggerValue = 0;
+            }
+            else if (GameWorld.QuestData.IsQuestionQuest(questId))
+            {
+                if (!TryResolveQuestionQuestClearFlagValue(questId, q, hasRewardSelectIdx, rewardSelectIdx, out clearedFlagValue))
+                    return QuestFinishResult.Fail(22);
+            }
+            else if (q != null && q.TriggerValue != 0)
+            {
+                return QuestFinishResult.Fail(22);
+            }
+
+            int playerLevel = GetCharacterLevel(characterId);
+            int playerJob = GetCharacterJob(characterId);
+            int playerGrowType = GetCharacterGrowType(characterId);
             var reward = GameWorld.QuestData.GetRewardExp(questId, rewardSelectIdx, playerLevel, playerJob, playerGrowType);
+            bool isTitleRewardQuest = GameWorld.QuestData.IsTitleRewardQuest(questId);
             var consumedEntries = new List<ConsumedItemEntry>();
             var insertedEntries = new List<InsertedItemEntry>();
 
             uint goldReward;
-            int accountId = GetAccountIdByConnStr(connStr, characterId);
+            uint expReward = reward.Exp * multiplier;
+            byte newLevel;
+            uint newExp;
+            int accountId = GetAccountIdByConnStr(characterId);
 
-            using (var scope = assetService.OpenScope(characterId, accountId))
+            using (var scope = _assetService.OpenScope(characterId, accountId))
             {
                 if (q != null)
-                {
-                    using (var cmd = new SqliteCommand(
-                        "DELETE FROM character_active_quests WHERE character_id=@cid AND slot=@s", scope.Connection, scope.Transaction))
-                    {
-                        cmd.Parameters.AddWithValue("@cid", characterId);
-                        cmd.Parameters.AddWithValue("@s", q.Slot);
-                        cmd.ExecuteNonQuery();
-                    }
-                }
+                    QuestRepository.DeleteActiveQuest(scope.Connection, scope.Transaction, characterId, q.Slot);
 
                 if (reward.ConsumeItems != null)
                 {
@@ -654,7 +588,7 @@ namespace DfoServer.Game.Quests
                     {
                         short slot;
                         int remaining;
-                        if (assetService.TryRemoveItem(scope, ci.ItemId, ci.Count, out slot, out remaining))
+                        if (_assetService.TryRemoveItem(scope, ci.ItemId, ci.Count, out slot, out remaining))
                             consumedEntries.Add(new ConsumedItemEntry { UpdateType = 0, SlotIndex = (ushort)slot, RemainingCount = (uint)remaining });
                     }
                 }
@@ -667,12 +601,12 @@ namespace DfoServer.Game.Quests
                     if (si.ItemId <= 0 || si.Count <= 0) continue;
                     short slot;
                     int remaining;
-                    if (assetService.TryRemoveItem(scope, si.ItemId, si.Count, out slot, out remaining))
+                    if (_assetService.TryRemoveItem(scope, si.ItemId, si.Count, out slot, out remaining))
                         consumedEntries.Add(new ConsumedItemEntry { UpdateType = 0, SlotIndex = (ushort)slot, RemainingCount = (uint)remaining });
                 }
 
                 ConsumeNonCarryForwardEventItems(
-                    assetService,
+                    _assetService,
                     scope,
                     eventItems,
                     seekItems,
@@ -680,14 +614,14 @@ namespace DfoServer.Game.Quests
                     consumedEntries);
 
                 EnsureMissingCarryForwardEventItems(
-                    assetService,
+                    _assetService,
                     scope,
                     carryForwardEventItems,
                     insertedEntries);
 
                 goldReward = reward.Gold * multiplier;
                 if (goldReward > 0)
-                    assetService.AddGold(scope, (int)goldReward);
+                    _assetService.GrantGold(scope, (int)goldReward);
 
                 if (reward.ChainType == 0)
                 {
@@ -699,14 +633,20 @@ namespace DfoServer.Game.Quests
                         foreach (var ri in reward.Items)
                         {
                             if (ri.ItemId <= 0) continue;
+                            if (isTitleRewardQuest)
+                            {
+                                FileLogger.Log($"[QuestService] FINISH title reward skipped from inventory: quest={questId} item={ri.ItemId}");
+                                continue;
+                            }
+
                             int count = ri.Count * multiplier;
                             short assignedSlot;
-                            if (assetService.TryAddItem(scope, ri.ItemId, count, out assignedSlot))
+                            if (_assetService.TryAddItem(scope, ri.ItemId, count, out assignedSlot))
                             {
                                 var meta = ItemMetadataResolver.Resolve(ri.ItemId);
                                 insertedEntries.Add(meta.IsStackable
                                     ? new InsertedItemEntry { SlotIndex = (ushort)assignedSlot, ItemId = ri.ItemId, CountOrSeed = (uint)count }
-                                    : new InsertedItemEntry { SlotIndex = (ushort)assignedSlot, ItemId = ri.ItemId, IsEquipment = true, CountOrSeed = 999999998u, EquipDurability = (ushort)meta.Durability });
+                                    : new InsertedItemEntry { SlotIndex = (ushort)assignedSlot, ItemId = ri.ItemId, IsEquipment = true, CountOrSeed = ItemQuality.TopQualitySeed, EquipDurability = (ushort)meta.Durability });
                             }
                         }
                     }
@@ -725,146 +665,157 @@ namespace DfoServer.Game.Quests
                 }
 
                 if (!GameWorld.QuestData.IsRepeatableQuest(questId))
-                    MarkQuestCleared(scope.Connection, scope.Transaction, characterId, questId);
+                    QuestRepository.MarkQuestCleared(scope.Connection, scope.Transaction, characterId, questId, clearedFlagValue);
+                SyncQuestClearParentProgress(scope.Connection, scope.Transaction, characterId);
+
+                // 经验/等级/战斗属性与奖励同一事务落库:
+                // 崩在中间不会再出现"任务已完成但经验丢失且不可重领"。
+                newLevel = (byte)playerLevel;
+                newExp = currentExp ?? GetCharacterExp(scope.Connection, scope.Transaction, characterId);
+                if (expReward > 0)
+                {
+                    newExp += expReward;
+                    newLevel = Dungeon.ExpTableProvider.ApplyLevelUps(newLevel, newExp);
+                    Characters.CharacterProgressService.PersistLevelAndExp(
+                        scope.Connection, scope.Transaction, characterId, newLevel, newExp);
+                }
+
                 scope.Commit();
             }
 
-            // Build ACK
-            var w = new Network.GamePacketWriter();
-            w.WriteByte(0x01);
-            w.WriteUInt16(questId);
-            w.WriteByte(0x00); // completionType=0 (type 0/25)
-            w.WriteUInt32(reward.Exp * multiplier);
-            w.WriteUInt32(reward.Gold * multiplier);
-
-            // Phase 3: consumed items
-            w.WriteByte((byte)consumedEntries.Count);
-            foreach (var ce in consumedEntries)
+            FileLogger.Log($"[QuestService] FINISH quest={questId} rewardIdx={rewardSelectIdx} mult={multiplier} flag={clearedFlagValue} gold={goldReward} consumed={consumedEntries.Count} rewarded={insertedEntries.Count}");
+            return new QuestFinishResult
             {
-                w.WriteByte(ce.UpdateType);
-                w.WriteUInt16(ce.SlotIndex);
-                w.WriteUInt32(ce.RemainingCount);
-            }
-
-            // Phase 4: chainType + reward data
-            w.WriteByte((byte)reward.ChainType);
-            if (reward.ChainType == 0)
-            {
-                w.WriteByte((byte)insertedEntries.Count);
-                foreach (var ie in insertedEntries)
-                {
-                    w.WriteUInt16(ie.SlotIndex);
-                    w.WriteUInt32((uint)ie.ItemId);
-                    w.WriteUInt32(ie.CountOrSeed);
-                    w.WriteByte(0);   // upgradeLevel
-                    w.WriteUInt16(ie.EquipDurability);
-                    w.WriteUInt32(0); // reserved
-                    w.WriteByte(0);   // extraFlags
-                }
-            }
-            else if (reward.ChainType == 1 || reward.ChainType == 2)
-            {
-                w.WriteByte((byte)reward.GrowNumber);
-                w.WriteByte(0); // npcCount layer 1
-                w.WriteByte(0); // npcCount layer 2
-            }
-            else if (reward.ChainType == 20)
-            {
-                w.WriteByte((byte)reward.GrowNumber); // expert job type
-                w.WriteByte(0); // npcCount layer 1
-                w.WriteByte(0); // npcCount layer 2
-            }
-            else if (reward.ChainType == GameWorld.QuestData.ChainTypeSlotExpansion)
-            {
-                w.WriteByte((byte)reward.GrowNumber); // expanded equipment slot id (21=support, 22=magic stone)
-                w.WriteByte(0); // npcCount layer 1
-                w.WriteByte(0); // npcCount layer 2
-            }
-
-            FileLogger.Log($"[QuestService] FINISH quest={questId} rewardIdx={rewardSelectIdx} mult={multiplier} gold={reward.Gold * multiplier} consumed={consumedEntries.Count} rewarded={insertedEntries.Count}");
-            return w.ToArray();
+                QuestId = questId,
+                Exp = expReward,
+                Gold = goldReward,
+                NewLevel = newLevel,
+                NewExp = newExp,
+                ChainType = reward.ChainType,
+                GrowNumber = reward.GrowNumber,
+                ConsumedEntries = consumedEntries,
+                InsertedEntries = insertedEntries,
+            };
         }
 
-        private static void MarkQuestCleared(SqliteConnection conn, SqliteTransaction tx, int characterId, ushort questId)
+        private static bool TryResolveQuestionQuestClearFlagValue(
+            ushort questId,
+            ActiveQuest activeQuest,
+            bool hasRewardSelectIdx,
+            ushort rewardSelectIdx,
+            out int flagValue)
         {
-            using (var cmd = new SqliteCommand(
-                "INSERT OR REPLACE INTO character_invisible_falgs (character_id, slot_index, flag_value) VALUES (@cid, @idx, 1)", conn, tx))
+            flagValue = 1;
+            int answerCount = GameWorld.QuestData.GetQuestionAnswerCount(questId);
+            if (answerCount <= 0)
+                return activeQuest == null || activeQuest.TriggerValue == 0;
+
+            if (activeQuest != null && TryResolveQuestionQuestFlagValueFromTrigger(activeQuest.TriggerValue, answerCount, out flagValue))
+                return true;
+
+            if (hasRewardSelectIdx && rewardSelectIdx < answerCount)
             {
-                cmd.Parameters.AddWithValue("@cid", characterId);
-                cmd.Parameters.AddWithValue("@idx", (int)questId);
-                cmd.ExecuteNonQuery();
+                flagValue = GameWorld.QuestData.GetRequiredQuestAnswerFlagValue(rewardSelectIdx);
+                return true;
             }
 
-            uint requiredLen = (uint)(questId + 1);
-            using (var cmd = new SqliteCommand(
-                "UPDATE character_init_flags SET charac_invisible_falgs_payload_len = MAX(charac_invisible_falgs_payload_len, @len) WHERE character_id = @cid", conn, tx))
-            {
-                cmd.Parameters.AddWithValue("@len", (long)requiredLen);
-                cmd.Parameters.AddWithValue("@cid", characterId);
-                cmd.ExecuteNonQuery();
-            }
+            uint trigger = activeQuest != null ? activeQuest.TriggerValue : uint.MaxValue;
+            FileLogger.Log($"[QuestService] Question quest finish rejected: quest={questId} trigger={trigger} answerCount={answerCount}");
+            return false;
         }
 
-        public static bool IsQuestCleared(string connStr, int characterId, ushort questId)
+        private static bool TryResolveQuestionQuestFlagValueFromTrigger(uint trigger, int answerCount, out int flagValue)
         {
-            using (var conn = new SqliteConnection(connStr))
+            if (trigger == 0)
             {
-                conn.Open();
-                using (var cmd = new SqliteCommand(
-                    "SELECT flag_value FROM character_invisible_falgs WHERE character_id=@cid AND slot_index=@idx", conn))
-                {
-                    cmd.Parameters.AddWithValue("@cid", characterId);
-                    cmd.Parameters.AddWithValue("@idx", (int)questId);
-                    var result = cmd.ExecuteScalar();
-                    return result != null && Convert.ToInt32(result) != 0;
-                }
+                flagValue = GameWorld.QuestData.GetRequiredQuestAnswerFlagValue(0);
+                return true;
             }
+
+            if (trigger <= (uint)answerCount)
+            {
+                flagValue = (int)trigger;
+                return true;
+            }
+
+            flagValue = 1;
+            return false;
         }
 
-        private static ConsumedItemEntry DeleteItemByTemplateId(SqliteConnection conn, SqliteTransaction tx, int characterId, int itemTemplateId, int count)
+        public bool IsQuestCleared(int characterId, ushort questId)
         {
-            var result = Game.Inventory.InventoryDbPrimitives.RemoveItemByTemplateId(conn, tx, characterId, itemTemplateId, count);
-            if (result == null) return null;
-            var (slotIndex, removedCount, remainingCount) = result.Value;
-            return new ConsumedItemEntry { UpdateType = 0, SlotIndex = (ushort)slotIndex, RemainingCount = (uint)removedCount };
+            return _repo.IsQuestCleared(characterId, questId);
         }
 
-        private static bool CheckPreRequiredQuests(string connStr, int characterId, int questId)
+        private bool CheckPreRequiredQuests(int characterId, int questId)
         {
             var qst = GameWorld.QuestData.GetQuestFile(questId);
             if (qst == null) return true;
 
+            bool preQuestOk = true;
             if (qst.PreRequiredQuestGroups != null && qst.PreRequiredQuestGroups.Count > 0)
             {
+                preQuestOk = false;
                 foreach (var group in qst.PreRequiredQuestGroups)
                 {
                     var ids = GameWorld.QuestData.ParseIntList(group);
                     bool groupOk = true;
                     foreach (var pq in ids)
                     {
-                        if (pq > 0 && !IsQuestCleared(connStr, characterId, (ushort)pq))
+                        if (pq > 0 && !IsQuestCleared(characterId, (ushort)pq))
                         { groupOk = false; break; }
                     }
-                    if (groupOk) return true;
+                    if (groupOk) { preQuestOk = true; break; }
                 }
-                return false;
+            }
+            else
+            {
+                var preReqs = GameWorld.QuestData.GetPreRequiredQuests(questId);
+                if (preReqs.Count > 0)
+                {
+                    foreach (var preQid in preReqs)
+                    {
+                        if (preQid > 0 && !IsQuestCleared(characterId, (ushort)preQid))
+                        {
+                            preQuestOk = false;
+                            break;
+                        }
+                    }
+                }
             }
 
-            var preReqs = GameWorld.QuestData.GetPreRequiredQuests(questId);
-            if (preReqs.Count > 0)
+            return preQuestOk && CheckPreRequiredQuestAnswers(characterId, qst);
+        }
+
+        private bool CheckPreRequiredQuestAnswers(int characterId, PvfLib.QuestFile qst)
+        {
+            var preReqAns = GameWorld.QuestData.ParseIntList(qst.PreRequiredQuestAnswer);
+            if (preReqAns.Count == 0)
+                return true;
+
+            using (var conn = new SqliteConnection(_connStr))
             {
-                foreach (var preQid in preReqs)
+                conn.Open();
+                for (int i = 0; i + 1 < preReqAns.Count; i += 2)
                 {
-                    if (preQid > 0 && !IsQuestCleared(connStr, characterId, (ushort)preQid))
+                    int reqQid = preReqAns[i];
+                    int reqAnswer = preReqAns[i + 1];
+                    if (reqQid <= 0)
+                        continue;
+
+                    int expectedFlag = GameWorld.QuestData.GetRequiredQuestAnswerFlagValue(reqAnswer);
+                    int actualFlag = QuestRepository.ReadClearedFlagValue(conn, null, characterId, reqQid);
+                    if (expectedFlag <= 0 || actualFlag != expectedFlag)
                         return false;
                 }
             }
+
             return true;
         }
 
-        private static int GetCharacterLevel(string connStr, int characterId)
+        private int GetCharacterLevel(int characterId)
         {
-            using (var conn = new SqliteConnection(connStr))
+            using (var conn = new SqliteConnection(_connStr))
             {
                 conn.Open();
                 using (var cmd = new SqliteCommand("SELECT level FROM characters WHERE character_id=@cid", conn))
@@ -876,9 +827,19 @@ namespace DfoServer.Game.Quests
             }
         }
 
-        private static int GetCharacterJob(string connStr, int characterId)
+        private static uint GetCharacterExp(SqliteConnection conn, SqliteTransaction tx, int characterId)
         {
-            using (var conn = new SqliteConnection(connStr))
+            using (var cmd = new SqliteCommand("SELECT exp FROM characters WHERE character_id=@cid", conn, tx))
+            {
+                cmd.Parameters.AddWithValue("@cid", characterId);
+                var result = cmd.ExecuteScalar();
+                return result != null ? (uint)Convert.ToInt64(result) : 0u;
+            }
+        }
+
+        private int GetCharacterJob(int characterId)
+        {
+            using (var conn = new SqliteConnection(_connStr))
             {
                 conn.Open();
                 using (var cmd = new SqliteCommand("SELECT job FROM characters WHERE character_id=@cid", conn))
@@ -890,9 +851,9 @@ namespace DfoServer.Game.Quests
             }
         }
 
-        private static int GetCharacterGrowType(string connStr, int characterId)
+        private int GetCharacterGrowType(int characterId)
         {
-            using (var conn = new SqliteConnection(connStr))
+            using (var conn = new SqliteConnection(_connStr))
             {
                 conn.Open();
                 using (var cmd = new SqliteCommand("SELECT grow_type FROM characters WHERE character_id=@cid", conn))
@@ -1005,9 +966,9 @@ namespace DfoServer.Game.Quests
             return list.ToArray();
         }
 
-        private static int GetAccountIdByConnStr(string connStr, int characterId)
+        private int GetAccountIdByConnStr(int characterId)
         {
-            using (var conn = new SqliteConnection(connStr))
+            using (var conn = new SqliteConnection(_connStr))
             {
                 conn.Open();
                 using (var cmd = new SqliteCommand("SELECT account_id FROM characters WHERE character_id=@cid", conn))
@@ -1019,25 +980,5 @@ namespace DfoServer.Game.Quests
             }
         }
 
-        private static byte[] BuildFailAck(byte errorCode)
-        {
-            return new byte[] { 0x00, errorCode };
-        }
-    }
-
-    internal sealed class ConsumedItemEntry
-    {
-        public byte UpdateType;
-        public ushort SlotIndex;
-        public uint RemainingCount;
-    }
-
-    internal sealed class InsertedItemEntry
-    {
-        public ushort SlotIndex;
-        public int ItemId;
-        public bool IsEquipment;
-        public uint CountOrSeed;
-        public ushort EquipDurability;
     }
 }

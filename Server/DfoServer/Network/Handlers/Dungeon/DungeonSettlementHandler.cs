@@ -1,4 +1,7 @@
+using DfoServer.Game.Accounts;
 using DfoServer.Game.Dungeon;
+using DfoServer.Game.Inventory;
+using DfoServer.Game.Premium;
 using DfoServer.Game.Skills;
 using DfoServer.Infrastructure;
 using DfoServer.Network.Builders;
@@ -16,11 +19,16 @@ namespace DfoServer.Network.Handlers.Dungeon
 
         // PVF [visible on dungeon clear]=1: Delilah(1000) Gabriel(1002/1003/1004) Yunmi(1203, invalid in 86JP)
         private static readonly int[] SecretShopNpcIds = { 1000, 1002, 1003, 1004 };
+        private const int SetPlayResultRankPointOffset = 10;
+        private const int GrowthContractPremiumType = 84; // PVF premiumlist_new.etc: growth contract
+        private const float GrowthContractBonusRate = 0.20f;
+        private const float BlackDiamondBonusRate = 0.10f;
+        private static readonly int[] BlackDiamondPremiumTypes = { 1, 17 };
 
         internal DungeonSettlementHandler(DungeonSharedServices svc) => _svc = svc;
 
-        // ── Settlement result ──────────────────────────────────────────────────
-        // df_game_r CParty::CheckPlayResult → CParty::SetPlayResult
+        // Settlement result.
+        // df_game_r CParty::CheckPlayResult -> CParty::SetPlayResult
         // Sends 3 NOTI packets (34, 37, 35) to show the settlement screen.
         // Card layout is deferred: a 2 s server timer sends it automatically
         // so the player sees the settlement summary first, then the cards appear.
@@ -30,98 +38,289 @@ namespace DfoServer.Network.Handlers.Dungeon
         // is sent immediately and a fresh 3 s auto-flip timer starts.
         internal async Task HandleSetPlayResult(EnhancedClientSession session, GamePacketHeader header, byte[] body)
         {
-            if (!session.Player.CurBossKilled) return;
-            session.Player.CurBossKilled = false;
+            var run = session.Player.CurrentRun;
+            if (run == null) return;
+            if (run.Phase != DungeonRunPhase.Cleared) return;
+            run.Phase = DungeonRunPhase.ResultShown;
+
+            var clearRank = CalculateClearRank(body);
+            var clearExp = CalculateClearRewardExp(session, clearRank.RankBonusIndex);
+            var prevLevel = session.Player.Level;
+            if (clearExp.Total > 0)
+            {
+                session.Player.Exp = AddSaturating(session.Player.Exp, clearExp.Total);
+                session.Player.Level = ExpTableProvider.ApplyLevelUps(session.Player.Level, session.Player.Exp);
+            }
+            var leveledUp = session.Player.Level > prevLevel;
             _svc.PersistLevelAndExp(session.Player.CharacterId, session.Player.Level, session.Player.Exp);
 
             // Pre-generate card rewards (df_game_r: clear_reward generated before NOTI 35)
             int dungeonLevel = 85;
-            try { dungeonLevel = DungeonData.GetDungeonBasicLv(session.Player.CurDungeon); } catch { }
-            var lcg = session.Player.CurRoomLcg ?? new DnfLcg(session.Player.CurDungeonSeed);
+            try { dungeonLevel = DungeonData.GetDungeonBasicLv(run.DungeonId); } catch (Exception ex) { FileLogger.Log($"[DungeonHandler] SET_PLAY_RESULT ERROR: dungeon level fallback dungeon={run.DungeonId} default={dungeonLevel}, card rewards will use the fallback level: {ex.Message}"); }
+            var lcg = run.RoomLcg ?? new DnfLcg(run.Seed);
             var freeGold = ClearRewardGenerator.GenerateGoldCard(
-                dungeonLevel, session.Player.CurDungeonDifficulty, lcg);
+                dungeonLevel, run.Difficulty, lcg);
             var freeItem = ClearRewardGenerator.GenerateItemCard(
-                dungeonLevel, session.Player.CurDungeonDifficulty, lcg);
+                dungeonLevel, run.Difficulty, lcg);
             var paidGold = ClearRewardGenerator.GenerateGoldCard(
-                dungeonLevel, session.Player.CurDungeonDifficulty, lcg);
+                dungeonLevel, run.Difficulty, lcg);
             var paidItem = ClearRewardGenerator.GenerateItemCard(
-                dungeonLevel, session.Player.CurDungeonDifficulty, lcg);
-            session.Player.CurCardRewards = new List<ClearRewardGenerator.CardReward>
+                dungeonLevel, run.Difficulty, lcg);
+            run.CardRewards = new List<ClearRewardGenerator.CardReward>
             {
                 freeGold, freeItem, default, default,  // free: [0]gold [1]item [2-3]empty(solo)
                 paidGold, paidItem, default, default    // paid: [4]gold [5]item [6-7]empty(solo)
             };
 
+            var monsterTotalExp = run.TotalExp;
+            var bossTotalExp = Math.Min(run.BossTotalExp, monsterTotalExp);
+            var championTotalExp = Math.Min(run.ChampionTotalExp, monsterTotalExp);
+            var superChampionTotalExp = Math.Min(run.SuperChampionTotalExp, monsterTotalExp);
+            var namedMonsterTotalExp = Math.Min(run.NamedMonsterTotalExp, monsterTotalExp);
+            var monsterGrowthContractBonus = run.MonsterGrowthContractBonusExp;
+
             // Settlement 3 packets: NOTI 34, NOTI 37, NOTI 35
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0022,
                 DungeonNotificationBuilder.BuildPlayResult(
-                    session.Player.UserId, session.Player.CurBossCode,
-                    session.Player.CurDungeonTotalExp, allKill: true)));
-            ushort remainSp = 0, remainTp = 0;
-            try
-            {
-                var synced = _svc.LoadSyncedSkillState(session.Player.CharacterId, session.Player.Level, persist: false);
-                if (synced.Points != null)
-                {
-                    var pageIndex = session.Player.Subtype0Tail?.SkillTreeIndex == 1 ? 1 : 0;
-                    remainSp = SkillStateService.GetPageRemainingSp(synced.Skills, synced.Points, pageIndex);
-                    remainTp = (ushort)synced.Points.RemainingTp;
-                }
-            }
-            catch { }
+                    session.Player.UserId, monsterTotalExp, allKill: true,
+                    rankGrade: clearRank.RankGrade, clientRankPoint: clearRank.ClientRankPoint)));
+            var (remainSp, remainTp) = _svc.GetRemainingSpTp(session, persist: leveledUp, logTag: "SET_PLAY_RESULT");
+
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0025,
                 DungeonNotificationBuilder.BuildExp(session.Player.Level, session.Player.Exp, remainSp, remainTp)));
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0023,
                 DungeonNotificationBuilder.BuildClearDungeonReward(
-                    session.Player.CurDungeonTotalExp, session.Player.CurDungeonTotalGold,
-                    goldCardCost: 10180, freeCardGold: freeGold.GoldAmount,
+                    clearExp.Base, scoreBonusExp: ToInt32Saturated(clearExp.ScoreBonus), clearBonusExp: 0,
+                    blackDiamondExp: ToInt32Saturated(clearExp.BlackDiamondBonus),
+                    growthContractExp: ToInt32Saturated(clearExp.GrowthContractBonus),
+                    monsterGrowthContractExp: ToInt32Saturated(monsterGrowthContractBonus),
+                    adventureGroupExp: ToInt32Saturated(clearExp.AdventureGroupBonus),
+                    monsterExp: monsterTotalExp, bossExp: ToInt32Saturated(bossTotalExp),
+                    championExp: ToInt32Saturated(championTotalExp),
+                    superChampionExp: 0,
+                    freeCardGold: freeGold.GoldAmount,
                     freeCardItemId: freeItem.ItemId, freeCardItemCount: freeItem.StackCount)));
 
-            // Card layout is deferred: 2 s timer → layout, then 3 s → auto-flip free card.
-            session.Player.CurDungeonClearState = 4;
-            session.Player.CurCardFlipCount = 0;
-            session.Player.CurFreeCardSlots = new byte[] { 0xFF, 0xFF, 0xFF, 0xFF };
-            session.Player.CurPaidCardSlots = new byte[] { 0xFF, 0xFF, 0xFF, 0xFF };
+            // 符合判断使用结算前等级，奖励通知放在结算三包之后。
+            await _svc.GrantSuitableDungeonLuckyStar(session, prevLevel);
+
+            FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] CLEAR_EXP: dungeon={run.DungeonId} diff={run.Difficulty} clientRank={clearRank.ClientRankPoint} rankPoint={clearRank.RankPoint} rankGrade={clearRank.RankGrade} rankBonusIndex={clearRank.RankBonusIndex} base={clearExp.Base} scoreBonus={clearExp.ScoreBonus} growthContract={clearExp.GrowthContractBonus} blackDiamond={clearExp.BlackDiamondBonus} adventureGroup={clearExp.AdventureGroupBonus} bonus={clearExp.Bonus} total={clearExp.Total} monsterTotalExp={monsterTotalExp} monsterGrowthContract={monsterGrowthContractBonus} bossTotalExp={bossTotalExp} championTotalExp={championTotalExp} superChampionTotalExp={superChampionTotalExp} namedMonsterTotalExp={namedMonsterTotalExp} charExp={session.Player.Exp}");
+
+            if (leveledUp)
+            {
+                FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] LEVEL UP from dungeon clear: cid={session.Player.CharacterId} {prevLevel}->{session.Player.Level} exp={session.Player.Exp}");
+                await _svc.SendInDungeonLevelUpFollowups(session);
+            }
+
+            // Card layout is deferred: 2 s timer -> layout, then 4 s -> auto-flip free card.
+            // Phase is already ResultShown (set at method entry); the lazy-layout branches key off it.
+            run.CardFlipCount = 0;
+            run.FreeCardSlots = new byte[] { 0xFF, 0xFF, 0xFF, 0xFF };
+            run.PaidCardSlots = new byte[] { 0xFF, 0xFF, 0xFF, 0xFF };
 
             ScheduleAutoFlow(session, layoutDelayMs: 2000, autoFlipDelayMs: 4000);
 
-            await _svc.UpdateDungeonPermission(session, session.Player.CurDungeon, session.Player.CurDungeonDifficulty);
+            await _svc.UpdateDungeonPermission(session, run.DungeonId, run.Difficulty);
         }
 
-        // ── Auto-flow timer ────────────────────────────────────────────────────
+        // Auto-flow timer.
         // Phase 1: after layoutDelayMs, send the card layout (0x0045 + 0x0046).
         // Phase 2: after autoFlipDelayMs more, flip the free card.
         // If the player presses a key before phase 1 fires, HandleSelectCard (state==4)
         // cancels this timer and shows the layout immediately, then starts a fresh
         // phase-2 timer so the free card still auto-flips after 3 s.
 
+        private static ClearRankParts CalculateClearRank(byte[] body)
+        {
+            var clientRankPoint = ExtractClientRankPoint(body);
+            var timeBonusPoint = 0;
+            var rankPoint = Math.Min(255, clientRankPoint + timeBonusPoint);
+            var rankGrade = MonsterRewardTable.GetClearRankGrade(rankPoint);
+            var rankBonusIndex = MonsterRewardTable.GetClearRankBonusIndex(rankPoint);
+
+            return new ClearRankParts(
+                (byte)clientRankPoint,
+                timeBonusPoint,
+                rankPoint,
+                (byte)rankGrade,
+                rankBonusIndex);
+        }
+
+        private static int ExtractClientRankPoint(byte[] body)
+        {
+            if (body == null || body.Length == 0)
+                return 0;
+
+            if (body.Length > SetPlayResultRankPointOffset)
+                return body[SetPlayResultRankPointOffset];
+
+            return body[0];
+        }
+
+        private ClearExpParts CalculateClearRewardExp(EnhancedClientSession session, int rankBonusIndex)
+        {
+            var run = session.Player.CurrentRun;
+            int dungeonLevel;
+            try { dungeonLevel = DungeonData.GetDungeonBasicLv(run.DungeonId); }
+            catch (Exception ex) { dungeonLevel = session.Player.Level; FileLogger.Log($"[DungeonHandler] CLEAR_EXP ERROR: dungeon level fallback to player level {dungeonLevel}: {ex.Message}"); }
+
+            var baseExp = ExpTableProvider.GetExpRewardBase(dungeonLevel);
+            if (baseExp <= 0)
+                return default;
+
+            float expWeight;
+            try { expWeight = DungeonData.GetExperienceWeight(run.DungeonId); }
+            catch { expWeight = 1.0f; }
+
+            var scaledBase = baseExp * expWeight * MonsterRewardTable.GetDifficultyExpRate(run.Difficulty);
+            var clearBaseExp = ToUInt32Floor(scaledBase);
+            if (clearBaseExp == 0)
+                return default;
+
+            var connStr = SqliteDatabaseBootstrap.Initialize(ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
+            var accountId = session.Account?.AccountId ?? 1;
+            var scoreBonusRate = MonsterRewardTable.GetClearRankExpBonusRate(rankBonusIndex);
+            var scoreBonus = ToUInt32Floor(clearBaseExp * scoreBonusRate);
+            var growthContractBonus = PremiumService.HasActivePremium(connStr, accountId, GrowthContractPremiumType)
+                ? ToUInt32Floor(clearBaseExp * GrowthContractBonusRate)
+                : 0;
+            var blackDiamondBonus = PremiumService.HasActivePremium(connStr, accountId, BlackDiamondPremiumTypes)
+                ? ToUInt32Floor(clearBaseExp * BlackDiamondBonusRate)
+                : 0;
+            var adventureGroupBonus = CalculateAdventureGroupClearExpBonus(session, accountId, clearBaseExp);
+
+            return new ClearExpParts(clearBaseExp, scoreBonus, growthContractBonus, blackDiamondBonus, adventureGroupBonus);
+        }
+
+        private uint CalculateAdventureGroupClearExpBonus(EnhancedClientSession session, int accountId, uint clearBaseExp)
+        {
+            if (session == null || clearBaseExp == 0)
+                return 0;
+
+            try
+            {
+                var characters = _svc.CharacterRepository.ListByAccount(accountId);
+                var summary = AdventureGroupDataProvider.Calculate(characters);
+                if (summary.ExpBonusPercent == 0 || IsHighestLevelCharacter(session, characters))
+                    return 0;
+
+                return ToUInt32Floor(clearBaseExp * (summary.ExpBonusPercent / 100.0f));
+            }
+            catch (Exception ex)
+            {
+                FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] CLEAR_EXP adventure group bonus skipped: {ex.Message}");
+                return 0;
+            }
+        }
+
+        private static bool IsHighestLevelCharacter(EnhancedClientSession session, IReadOnlyList<Game.Characters.CharacterRecord> characters)
+        {
+            if (session?.Player == null || characters == null || characters.Count == 0)
+                return true;
+
+            var highestLevel = 0;
+            foreach (var character in characters)
+            {
+                if (character == null || character.Deleted)
+                    continue;
+                if (character.Level > highestLevel)
+                    highestLevel = character.Level;
+            }
+
+            return session.Player.Level >= highestLevel;
+        }
+
+        private static uint ToUInt32Floor(float value)
+        {
+            if (value <= 0)
+                return 0;
+            return value >= uint.MaxValue ? uint.MaxValue : (uint)value;
+        }
+
+        private static uint AddSaturating(uint current, uint add)
+        {
+            var value = (ulong)current + add;
+            return value > uint.MaxValue ? uint.MaxValue : (uint)value;
+        }
+
+        private static int ToInt32Saturated(uint value)
+        {
+            return value > int.MaxValue ? int.MaxValue : (int)value;
+        }
+
+        private readonly struct ClearRankParts
+        {
+            internal ClearRankParts(byte clientRankPoint, int timeBonusPoint, int rankPoint, byte rankGrade, int rankBonusIndex)
+            {
+                ClientRankPoint = clientRankPoint;
+                TimeBonusPoint = timeBonusPoint;
+                RankPoint = rankPoint;
+                RankGrade = rankGrade;
+                RankBonusIndex = rankBonusIndex;
+            }
+
+            internal byte ClientRankPoint { get; }
+            internal int TimeBonusPoint { get; }
+            internal int RankPoint { get; }
+            internal byte RankGrade { get; }
+            internal int RankBonusIndex { get; }
+        }
+
+        private readonly struct ClearExpParts
+        {
+            internal ClearExpParts(uint baseExp, uint scoreBonus, uint growthContractBonus, uint blackDiamondBonus, uint adventureGroupBonus)
+            {
+                Base = baseExp;
+                ScoreBonus = scoreBonus;
+                GrowthContractBonus = growthContractBonus;
+                BlackDiamondBonus = blackDiamondBonus;
+                AdventureGroupBonus = adventureGroupBonus;
+            }
+
+            internal uint Base { get; }
+            internal uint ScoreBonus { get; }
+            internal uint GrowthContractBonus { get; }
+            internal uint BlackDiamondBonus { get; }
+            internal uint AdventureGroupBonus { get; }
+            internal uint Bonus => AddSaturating(AddSaturating(AddSaturating(ScoreBonus, GrowthContractBonus), BlackDiamondBonus), AdventureGroupBonus);
+            internal uint Total => AddSaturating(Base, Bonus);
+        }
+
+        // The detached timer captures its own DungeonRun instance and re-checks that it is
+        // still the current run before acting -- a leftover timer from a previous run must
+        // never touch the next run's state or send packets after returning to town.
         private void ScheduleAutoFlow(EnhancedClientSession session, int layoutDelayMs, int autoFlipDelayMs)
         {
-            CancelAutoFlip(session);
+            DungeonRunLifecycle.CancelAutoFlip(session);
+            var run = session.Player.CurrentRun;
+            if (run == null) return;
+
             var cts = new CancellationTokenSource();
-            session.Player.CardAutoFlipCts = cts;
+            run.AutoFlipCts = cts;
             var token = cts.Token;
 
             _ = Task.Run(async () =>
             {
                 try
                 {
-                    // Phase 1 — wait, then show card layout
+                    // Phase 1: wait, then show card layout.
                     await Task.Delay(layoutDelayMs, token);
                     if (token.IsCancellationRequested) return;
-                    if (session.Player.CurDungeonClearState != 4) return;
+                    if (!ReferenceEquals(session.Player.CurrentRun, run)) return;
+                    if (run.Phase != DungeonRunPhase.ResultShown) return;
 
                     FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] Auto-layout timer fired, sending card layout");
                     await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0045, new byte[] { 0x01 }));
                     await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0046, BuildCardLayoutAck()));
-                    session.Player.CurDungeonClearState = 5;
+                    run.Phase = DungeonRunPhase.CardsRevealed;
 
-                    // Phase 2 — wait, then auto-flip free card
+                    // Phase 2: wait, then auto-flip free card.
                     await Task.Delay(autoFlipDelayMs, token);
                     if (token.IsCancellationRequested) return;
+                    if (!ReferenceEquals(session.Player.CurrentRun, run)) return;
 
                     FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] Auto-flip timer fired, flipping free card");
-                    await AutoFlipFreeCard(session);
+                    await AutoFlipFreeCard(session, run);
                 }
                 catch (TaskCanceledException) { /* player acted before timer */ }
                 catch (Exception ex)
@@ -137,9 +336,12 @@ namespace DfoServer.Network.Handlers.Dungeon
         // auto-flip timer).
         private void StartDelayedAutoFlip(EnhancedClientSession session, int delayMs)
         {
-            CancelAutoFlip(session);
+            DungeonRunLifecycle.CancelAutoFlip(session);
+            var run = session.Player.CurrentRun;
+            if (run == null) return;
+
             var cts = new CancellationTokenSource();
-            session.Player.CardAutoFlipCts = cts;
+            run.AutoFlipCts = cts;
             var token = cts.Token;
 
             _ = Task.Run(async () =>
@@ -148,8 +350,9 @@ namespace DfoServer.Network.Handlers.Dungeon
                 {
                     await Task.Delay(delayMs, token);
                     if (token.IsCancellationRequested) return;
+                    if (!ReferenceEquals(session.Player.CurrentRun, run)) return;
                     FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] Standalone auto-flip timer fired");
-                    await AutoFlipFreeCard(session);
+                    await AutoFlipFreeCard(session, run);
                 }
                 catch (TaskCanceledException) { }
                 catch (Exception ex)
@@ -159,94 +362,94 @@ namespace DfoServer.Network.Handlers.Dungeon
             }, token);
         }
 
-        private static void CancelAutoFlip(EnhancedClientSession session)
-        {
-            var cts = Interlocked.Exchange(ref session.Player.CardAutoFlipCts, null);
-            if (cts == null) return;
-            try { cts.Cancel(); } catch { }
-            cts.Dispose();
-        }
-
         // Auto-flips only the free card (never the paid card).
         // Sends ACK 0x0047 with flipped card info, then delivers free card
-        // rewards via NOTI 14. CurCardRewards is NOT cleared — the paid card
+        // rewards via NOTI 14. CardRewards is NOT cleared; the paid card
         // stays available for the player to flip/EPLP.
-        private async Task AutoFlipFreeCard(EnhancedClientSession session)
+        private async Task AutoFlipFreeCard(EnhancedClientSession session, Game.Dungeon.DungeonRun run)
         {
-            if (session.Player.CurFreeCardSlots[0] != 0xFF) return; // already flipped
+            if (run.FreeCardSlots[0] != 0xFF) return; // already flipped
 
-            session.Player.CurCardFlipCount++;
-            session.Player.CurFreeCardSlots[0] = 0x00;
+            run.CardFlipCount++;
+            run.FreeCardSlots[0] = 0x00;
 
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0047,
                 BuildCardInfoAck(session)));
 
-            bool hasPaid = HasPaidCardReward(session.Player.CurCardRewards);
-            if (!hasPaid)
+            bool hasPaid = HasPaidCardReward(run.CardRewards);
+            bool paidAlreadyFlipped = hasPaid && run.PaidCardSlots[0] != 0xFF;
+            if (!hasPaid || paidAlreadyFlipped)
             {
-                // No paid card — deliver free rewards and clear cards so EPLP works.
+                // No paid card, or paid card was already manually flipped:
+                // deliver all rewards and clear cards so EPLP works.
                 await DeliverCardRewards(session);
-                session.Player.CurCardRewards = null;
+                run.CardRewards = null;
             }
             else
             {
-                // Paid card pending — only deliver free card rewards; keep cards alive.
+                // Paid card still pending: only deliver free card rewards; keep cards alive.
                 await DeliverFreeCardRewardsOnly(session);
             }
         }
 
-        // ── SELECT_CARD (CMD 0x0047) — card flip only ──────────────────────────
+        // SELECT_CARD (CMD 0x0047): card flip only.
         // body[0]: 0=free card, 1=paid card
         // body[1]: cardIndex (0-3)
-        // EPLP buttons come via CMD 0x0048 → HandleEplpCommand, never here.
+        // EPLP buttons come via CMD 0x0048 -> HandleEplpCommand, never here.
         internal async Task HandleSelectCard(EnhancedClientSession session, GamePacketHeader header, byte[] body)
         {
+            var run = session.Player.CurrentRun;
+            if (run == null) return;
             if (body.Length < 2) return;
             byte cardType = body[0];
             byte cardIndex = body[1];
 
             // Lazy card layout: player pressed a key while settlement is showing.
-            if (session.Player.CurDungeonClearState == 4)
+            if (run.Phase == DungeonRunPhase.ResultShown)
             {
                 FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] Lazy card layout by SELECT_CARD: type={cardType} idx={cardIndex}");
-                CancelAutoFlip(session);
+                DungeonRunLifecycle.CancelAutoFlip(session);
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0045, new byte[] { 0x01 }));
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0046, BuildCardLayoutAck()));
-                session.Player.CurDungeonClearState = 5;
+                run.Phase = DungeonRunPhase.CardsRevealed;
                 StartDelayedAutoFlip(session, delayMs: 4000);
                 return;
             }
 
-            CancelAutoFlip(session);
-
-            // Only card flips here — EPLP goes through CMD 0x0048.
+            // Only card flips here; EPLP goes through CMD 0x0048.
             if (cardType > 1 || cardIndex > 3) return;
 
-            session.Player.CurCardFlipCount++;
-            FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] SELECT_CARD flip#{session.Player.CurCardFlipCount} type={cardType} idx={cardIndex}");
+            // Only cancel auto-flip timer when user manually flips a free card.
+            // Flipping a paid card must not cancel the timer so the free card
+            // still gets auto-flipped when the timer expires.
+            if (cardType == 0)
+                DungeonRunLifecycle.CancelAutoFlip(session);
+
+            run.CardFlipCount++;
+            FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] SELECT_CARD flip#{run.CardFlipCount} type={cardType} idx={cardIndex}");
 
             if (cardType == 0)
-                session.Player.CurFreeCardSlots[cardIndex] = 0x00;
+                run.FreeCardSlots[cardIndex] = 0x00;
             else
-                session.Player.CurPaidCardSlots[cardIndex] = 0x00;
+                run.PaidCardSlots[cardIndex] = 0x00;
 
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0047,
                 BuildCardInfoAck(session)));
 
-            bool freeSelected = session.Player.CurFreeCardSlots[0] != 0xFF;
-            bool paidSelected = session.Player.CurPaidCardSlots[0] != 0xFF;
-            bool allDone = freeSelected && (paidSelected || !HasPaidCardReward(session.Player.CurCardRewards));
+            bool freeSelected = run.FreeCardSlots[0] != 0xFF;
+            bool paidSelected = run.PaidCardSlots[0] != 0xFF;
+            bool allDone = freeSelected && (paidSelected || !HasPaidCardReward(run.CardRewards));
 
             if (allDone)
             {
                 await DeliverCardRewards(session);
-                session.Player.CurCardRewards = null;
+                run.CardRewards = null;
             }
         }
 
-        // ── EPLP (CMD 0x0048) — settlement option buttons ──────────────────────
+        // EPLP (CMD 0x0048): settlement option buttons.
         // body[0]: 1=confirm, 2=status update
-        // body[1]: 0=再次挑战, 1=选择其他地下城, 2=返回城镇
+        // body[1]: 0=retry, 1=select another dungeon, 2=return to town
         // If a paid card is still pending, auto-flip it before returning to town
         // (matches DNF behaviour: clicking any EPLP button auto-pays the card).
         internal async Task HandleEplpCommand(EnhancedClientSession session, GamePacketHeader header, byte[] body)
@@ -255,34 +458,39 @@ namespace DfoServer.Network.Handlers.Dungeon
             byte state = body[0];
             byte option = body[1];
 
+            // run 可能为空(如重复收到 EPLP, 首次已返城): 跳过翻牌相关分支,
+            // 仍回 ACK 并按 state 返城, 与旧行为一致。
+            var run = session.Player.CurrentRun;
+
             // Lazy card layout via EPLP button press
-            if (session.Player.CurDungeonClearState == 4)
+            if (run != null && run.Phase == DungeonRunPhase.ResultShown)
             {
                 FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] Lazy card layout by EPLP: state={state} option={option}");
-                CancelAutoFlip(session);
+                DungeonRunLifecycle.CancelAutoFlip(session);
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0045, new byte[] { 0x01 }));
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0046, BuildCardLayoutAck()));
-                session.Player.CurDungeonClearState = 5;
+                run.Phase = DungeonRunPhase.CardsRevealed;
                 StartDelayedAutoFlip(session, delayMs: 4000);
                 return;
             }
 
-            CancelAutoFlip(session);
+            DungeonRunLifecycle.CancelAutoFlip(session);
 
             FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] EPLP: state={state} option={option}");
 
             // Auto-flip pending paid card (DNF: clicking EPLP auto-pays remaining card)
-            bool pendingPaidCard = HasPaidCardReward(session.Player.CurCardRewards) &&
-                                   session.Player.CurPaidCardSlots[0] == 0xFF;
+            bool pendingPaidCard = run != null
+                                   && HasPaidCardReward(run.CardRewards)
+                                   && run.PaidCardSlots[0] == 0xFF;
             if (state == 1 && pendingPaidCard)
             {
                 FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] EPLP auto-flipping pending paid card");
-                session.Player.CurPaidCardSlots[0] = 0x00;
-                session.Player.CurCardFlipCount++;
+                run.PaidCardSlots[0] = 0x00;
+                run.CardFlipCount++;
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0047,
                     BuildCardInfoAck(session)));
                 await DeliverCardRewards(session);
-                session.Player.CurCardRewards = null;
+                run.CardRewards = null;
             }
 
             // Send EPLP ACK
@@ -299,7 +507,7 @@ namespace DfoServer.Network.Handlers.Dungeon
         // Delivers both free and paid card rewards via NOTI 0x000E.
         private async Task DeliverCardRewards(EnhancedClientSession session)
         {
-            var cards = session.Player.CurCardRewards;
+            var cards = session.Player.CurrentRun?.CardRewards;
             if (cards == null) return;
 
             var entries = new List<byte[]>();
@@ -310,7 +518,7 @@ namespace DfoServer.Network.Handlers.Dungeon
             {
                 _svc.PersistGold(session.Player.CharacterId, accountId, cards[0].GoldAmount);
                 int totalGold = _svc.ReadGold(session.Player.CharacterId, accountId);
-                entries.Add(DungeonSharedServices.BuildItemEntry(0, 0, (uint)totalGold));
+                entries.Add(ItemListUpdateBuilder.BuildRawItemEntry(0, 0, (uint)totalGold));
             }
             AddCardItemEntry(session, accountId, cards, 1, entries);
 
@@ -319,7 +527,7 @@ namespace DfoServer.Network.Handlers.Dungeon
             {
                 _svc.PersistGold(session.Player.CharacterId, accountId, cards[4].GoldAmount);
                 int totalGold = _svc.ReadGold(session.Player.CharacterId, accountId);
-                entries.Add(DungeonSharedServices.BuildItemEntry(0, 0, (uint)totalGold));
+                entries.Add(ItemListUpdateBuilder.BuildRawItemEntry(0, 0, (uint)totalGold));
             }
             AddCardItemEntry(session, accountId, cards, 5, entries);
 
@@ -338,7 +546,7 @@ namespace DfoServer.Network.Handlers.Dungeon
         // Free card rewards only (used when paid card is still pending after auto-flip).
         private async Task DeliverFreeCardRewardsOnly(EnhancedClientSession session)
         {
-            var cards = session.Player.CurCardRewards;
+            var cards = session.Player.CurrentRun?.CardRewards;
             if (cards == null) return;
 
             var entries = new List<byte[]>();
@@ -348,7 +556,7 @@ namespace DfoServer.Network.Handlers.Dungeon
             {
                 _svc.PersistGold(session.Player.CharacterId, accountId, cards[0].GoldAmount);
                 int totalGold = _svc.ReadGold(session.Player.CharacterId, accountId);
-                entries.Add(DungeonSharedServices.BuildItemEntry(0, 0, (uint)totalGold));
+                entries.Add(ItemListUpdateBuilder.BuildRawItemEntry(0, 0, (uint)totalGold));
             }
             AddCardItemEntry(session, accountId, cards, 1, entries);
 
@@ -375,52 +583,56 @@ namespace DfoServer.Network.Handlers.Dungeon
             if (!_svc.TryPickupItemToInventory(session.Player.CharacterId, accountId, card.ItemId, card.StackCount, out slot))
                 return;
 
+            var sealFlag = card.IsEquipment && ItemMetadataResolver.Resolve(card.ItemId).IsSealed ? (byte)1 : (byte)0;
             entries.Add(card.IsEquipment
-                ? DungeonSharedServices.BuildEquipEntry(slot, (uint)card.ItemId, durability: card.Durability)
-                : DungeonSharedServices.BuildItemEntry(slot, (uint)card.ItemId, (uint)card.StackCount));
+                ? ItemListUpdateBuilder.BuildRawEquipEntry(slot, (uint)card.ItemId, durability: card.Durability, sealFlag: sealFlag)
+                : ItemListUpdateBuilder.BuildRawItemEntry(slot, (uint)card.ItemId, (uint)card.StackCount));
         }
 
-        // CMD 0x0045 — client requests card layout after settlement screen.
+        // CMD 0x0045: client requests card layout after settlement screen.
         // Send the deferred card layout and start a fresh 3 s auto-flip timer.
         internal async Task HandleCardStartRequest(EnhancedClientSession session, GamePacketHeader header, byte[] body)
         {
-            if (session.Player.CurDungeonClearState != 4) return;
+            var run = session.Player.CurrentRun;
+            if (run == null) return;
+            if (run.Phase != DungeonRunPhase.ResultShown) return;
             FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] Card start requested by client (CMD 0x0045), sending deferred layout");
 
-            CancelAutoFlip(session);
+            DungeonRunLifecycle.CancelAutoFlip(session);
 
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0045, new byte[] { 0x01 }));
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0046, BuildCardLayoutAck()));
-            session.Player.CurDungeonClearState = 5;
+            run.Phase = DungeonRunPhase.CardsRevealed;
 
             StartDelayedAutoFlip(session, delayMs: 4000);
         }
 
         // df_game_r CParty::ClearDungeon (0x85A9330)
         // Preamble: if (!cleared_flag) return; Epilogue: cleared_flag = 1;
-        // Normal dungeon sends NOTI 31 (ENABLE_CLEAR_DUNGEON), sets CurBossKilled
-        // + NOTI 279 (0x0117) SECRET_SHOP_NPC — settlement mystery merchant NPC ID
+        // Normal dungeon sends NOTI 31 (ENABLE_CLEAR_DUNGEON), advances phase to Cleared
+        // + NOTI 279 (0x0117) SECRET_SHOP_NPC: settlement mystery merchant NPC ID
         internal async Task TryClearDungeon(EnhancedClientSession session, string reason, int bossCode = 0)
         {
-            if (session.Player.CurDungeonCleared) return;
-            session.Player.CurDungeonCleared = true;
-            session.Player.CurBossKilled = true;
-            if (bossCode != 0) session.Player.CurBossCode = bossCode;
+            var run = session.Player.CurrentRun;
+            if (run == null) return;
+            if (run.Phase != DungeonRunPhase.InProgress) return;
+            run.Phase = DungeonRunPhase.Cleared;
+            if (bossCode != 0) run.BossCode = bossCode;
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x001F, DungeonNotificationBuilder.BuildEnableClearDungeon()));
-            var npcId = SecretShopNpcIds[DungeonSharedServices.SeedGen.Next(SecretShopNpcIds.Length)];
+            var npcId = SecretShopNpcIds[ServerRandom.Next(SecretShopNpcIds.Length)];
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0117, BitConverter.GetBytes(npcId)));
             if (session.GameSession?.QuestManager != null)
             {
                 var currentMapId = ResolveCurrentMapId(session);
                 await session.GameSession.QuestManager.SyncClearMapQuestProgressAsync(
-                    session.Player.CurDungeon,
+                    run.DungeonId,
                     currentMapId);
                 if (ShouldSyncQuestConnectedStartMapOnDungeonClear(session, currentMapId))
                 {
-                    FileLogger.Log($"[DungeonHandler] CLEAR_MAP sync deferred quest-connected start map: dungeon={session.Player.CurDungeon} maze={session.Player.CurMazeIndex} map={session.Player.CurMazeStartMapId}");
+                    FileLogger.Log($"[DungeonHandler] CLEAR_MAP sync deferred quest-connected start map: dungeon={run.DungeonId} maze={run.MazeIndex} map={run.MazeStartMapId}");
                     await session.GameSession.QuestManager.SyncClearMapQuestProgressAsync(
                         0,
-                        session.Player.CurMazeStartMapId);
+                        run.MazeStartMapId);
                 }
             }
             FileLogger.Log($"[DungeonHandler] ClearDungeon: {reason} secretShopNpc={npcId}");
@@ -428,25 +640,26 @@ namespace DfoServer.Network.Handlers.Dungeon
 
         private static int ResolveCurrentMapId(EnhancedClientSession session)
         {
-            if (session?.Player == null)
+            var run = session?.Player?.CurrentRun;
+            if (run == null)
                 return 0;
 
             RoomState state;
-            if (session.Player.DungeonRoomStates != null
-                && session.Player.DungeonRoomStates.TryGetValue(session.Player.CurRoomKey, out state)
+            if (run.RoomStates != null
+                && run.RoomStates.TryGetValue(run.RoomKey, out state)
                 && state != null
                 && state.Maze.Index > 0)
                 return state.Maze.Index;
 
-            return session.Player.CurMap;
+            return 0;
         }
 
         private static bool ShouldSyncQuestConnectedStartMapOnDungeonClear(EnhancedClientSession session, int currentMapId)
         {
-            var player = session?.Player;
-            if (player == null || !player.CurMazeQuestConnected)
+            var run = session?.Player?.CurrentRun;
+            if (run == null || !run.MazeQuestConnected)
                 return false;
-            if (player.CurMazeStartMapId <= 0 || player.CurMazeStartMapId == currentMapId)
+            if (run.MazeStartMapId <= 0 || run.MazeStartMapId == currentMapId)
                 return false;
             return true;
         }
@@ -463,8 +676,7 @@ namespace DfoServer.Network.Handlers.Dungeon
         // Key points: UserState=0x00 (not 0x01), sync await (not fire-and-forget), includes NOTI 0x00CA.
         private async Task ReturnToVillage(EnhancedClientSession session)
         {
-            CancelAutoFlip(session);
-            DungeonSharedServices.ResetDungeonState(session);
+            await DungeonRunLifecycle.EndRunToTownAsync(session);
             session.Player.UserState = 0x00;
 
             var snapshot = TownAreaNotificationBuilder.CreateCurrentSnapshot(session.Player);
@@ -481,11 +693,12 @@ namespace DfoServer.Network.Handlers.Dungeon
             FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] ReturnToVillage: 4 town packets sent");
         }
 
-        // CMD ACK 71 body — 86JP 8-seat format
+        // CMD ACK 71 body: 86JP 8-seat format
         // seat[0-3]: active seats (solo uses seat0 only)
         // seat[4-7]: 0xFF*4 (hidden/disabled)
         private byte[] BuildCardInfoAck(EnhancedClientSession session)
         {
+            var run = session.Player.CurrentRun;
             var w = new GamePacketWriter();
             w.WriteByte(0x01);  // resultCode
 
@@ -501,8 +714,8 @@ namespace DfoServer.Network.Handlers.Dungeon
                     continue;
                 }
 
-                bool freeSelected = session.Player.CurFreeCardSlots[i] != 0xFF;
-                bool paidSelected = session.Player.CurPaidCardSlots[i] != 0xFF;
+                bool freeSelected = run.FreeCardSlots[i] != 0xFF;
+                bool paidSelected = run.PaidCardSlots[i] != 0xFF;
 
                 if (i != 0)
                 {
@@ -521,7 +734,7 @@ namespace DfoServer.Network.Handlers.Dungeon
                 if (paidSelected)
                 {
                     // Paid card: count=2, item[0]=gold{0,gold}, item[1]=item{id,count}
-                    var cards = session.Player.CurCardRewards;
+                    var cards = run.CardRewards;
                     int paidGoldAmt = (cards != null && cards.Count > 4 && cards[4].IsGold) ? cards[4].GoldAmount : 0;
                     int paidItemId = (cards != null && cards.Count > 5 && !cards[5].IsGold) ? cards[5].ItemId : 0;
                     int paidItemCnt = (cards != null && cards.Count > 5 && !cards[5].IsGold) ? cards[5].StackCount : 0;
@@ -543,7 +756,7 @@ namespace DfoServer.Network.Handlers.Dungeon
             return w.ToArray();
         }
 
-        // CMD ACK 70 — card layout: u8 resultCode + u16[8] slotStatus
+        // CMD ACK 70: card layout, u8 resultCode + u16[8] slotStatus
         // Solo: slot[0]=0x0001(flippable) slot[1-7]=0xFFFF(disabled)
         private static byte[] BuildCardLayoutAck()
         {

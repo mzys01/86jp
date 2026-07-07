@@ -6,11 +6,23 @@ namespace DfoServer.Game.Dungeon
 {
     public static class ExpTableProvider
     {
+        // 服务端等级上限(86 版)。
+        public const int MaxLevel = 86;
+
         private static readonly object _lock = new object();
         private static int[] _levelThresholds;
         private static int[] _monsterBaseExp;
         private static int[] _monsterGold;
         private static int[] _monsterGoldVariance;
+
+        // 按经验阈值表结算连续升级, 返回结算后的等级。
+        // 四条经验入口(打怪/通关结算/教程/交任务)共用, 升级规则只在这里改。
+        public static byte ApplyLevelUps(int level, uint totalExp)
+        {
+            while (level < MaxLevel && totalExp >= (uint)GetLevelThreshold(level))
+                level++;
+            return (byte)level;
+        }
 
         public static int GetLevelThreshold(int level)
         {
@@ -24,6 +36,13 @@ namespace DfoServer.Game.Dungeon
             EnsureLoaded();
             if (monsterLevel < 1 || monsterLevel > _monsterBaseExp.Length) return 0;
             return _monsterBaseExp[monsterLevel - 1];
+        }
+
+        public static int GetExpRewardBase(int level)
+        {
+            EnsureLoaded();
+            if (level < 1 || level > _monsterBaseExp.Length) return 0;
+            return _monsterBaseExp[level - 1];
         }
 
         public static int GetMonsterGold(int monsterLevel, out int variancePercent)

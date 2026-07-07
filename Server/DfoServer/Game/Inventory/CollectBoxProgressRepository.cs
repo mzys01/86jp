@@ -12,7 +12,7 @@ namespace DfoServer.Game.Inventory
 
     // 收集箱槛位存档。宝珠本质是背包道具(character_items)，
     // 这里只维护"哪个 itemId 被摆在哪个收集箱槛位"的状态表。
-    // 放入/取出时由 CollectionBoxHandler 联动背包扣减/归还后再调用本类。
+    // 放入/取出经 (conn,tx) 变体与背包扣减/归还在同一事务内提交, 崩溃整体回滚。
     public sealed class CollectBoxProgressRepository
     {
         private readonly string _connectionString;
@@ -64,18 +64,24 @@ namespace DfoServer.Game.Inventory
             using (var conn = new SqliteConnection(_connectionString))
             {
                 conn.Open();
-                using (var cmd = new SqliteCommand(
-                    @"INSERT INTO character_collectbox_slots (character_id, box_index, slot_index, item_id)
-                      VALUES (@cid, @box, @slot, @item)
-                      ON CONFLICT(character_id, box_index, slot_index) DO UPDATE SET item_id=@item",
-                    conn))
-                {
-                    cmd.Parameters.AddWithValue("@cid", characterId);
-                    cmd.Parameters.AddWithValue("@box", boxIndex);
-                    cmd.Parameters.AddWithValue("@slot", slotIndex);
-                    cmd.Parameters.AddWithValue("@item", itemId);
-                    cmd.ExecuteNonQuery();
-                }
+                PutSlot(conn, null, characterId, boxIndex, slotIndex, itemId);
+            }
+        }
+
+        // 事务内变体: 与背包扣减同一事务提交/回滚
+        public void PutSlot(SqliteConnection conn, SqliteTransaction tx, int characterId, int boxIndex, int slotIndex, int itemId)
+        {
+            using (var cmd = new SqliteCommand(
+                @"INSERT INTO character_collectbox_slots (character_id, box_index, slot_index, item_id)
+                  VALUES (@cid, @box, @slot, @item)
+                  ON CONFLICT(character_id, box_index, slot_index) DO UPDATE SET item_id=@item",
+                conn, tx))
+            {
+                cmd.Parameters.AddWithValue("@cid", characterId);
+                cmd.Parameters.AddWithValue("@box", boxIndex);
+                cmd.Parameters.AddWithValue("@slot", slotIndex);
+                cmd.Parameters.AddWithValue("@item", itemId);
+                cmd.ExecuteNonQuery();
             }
         }
 
@@ -84,15 +90,21 @@ namespace DfoServer.Game.Inventory
             using (var conn = new SqliteConnection(_connectionString))
             {
                 conn.Open();
-                using (var cmd = new SqliteCommand(
-                    "DELETE FROM character_collectbox_slots WHERE character_id=@cid AND box_index=@box AND item_id=@item",
-                    conn))
-                {
-                    cmd.Parameters.AddWithValue("@cid", characterId);
-                    cmd.Parameters.AddWithValue("@box", boxIndex);
-                    cmd.Parameters.AddWithValue("@item", itemId);
-                    return cmd.ExecuteNonQuery() > 0;
-                }
+                return RemoveItem(conn, null, characterId, boxIndex, itemId);
+            }
+        }
+
+        // 事务内变体: 与背包归还同一事务提交/回滚
+        public bool RemoveItem(SqliteConnection conn, SqliteTransaction tx, int characterId, int boxIndex, int itemId)
+        {
+            using (var cmd = new SqliteCommand(
+                "DELETE FROM character_collectbox_slots WHERE character_id=@cid AND box_index=@box AND item_id=@item",
+                conn, tx))
+            {
+                cmd.Parameters.AddWithValue("@cid", characterId);
+                cmd.Parameters.AddWithValue("@box", boxIndex);
+                cmd.Parameters.AddWithValue("@item", itemId);
+                return cmd.ExecuteNonQuery() > 0;
             }
         }
 

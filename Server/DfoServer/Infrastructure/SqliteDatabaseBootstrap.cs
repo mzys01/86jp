@@ -1,64 +1,45 @@
-using DfoServer.Game.Currency;
 using Microsoft.Data.Sqlite;
+using System;
+using System.Collections.Generic;
 using System.IO;
 
 namespace DfoServer.Infrastructure
 {
     public static class SqliteDatabaseBootstrap
     {
+        private static readonly object InitLock = new object();
+        private static readonly HashSet<string> InitializedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        // 每个数据库文件每进程只执行一次 schema + 版本化迁移(SqliteMigrations, user_version 门控)。
+        // 全库 40+ 处调用点(repo 构造函数/部分请求路径)无需改动, 后续调用降为一次哈希查询。
         public static string Initialize(string databasePath, string schemaFilePath)
         {
-            EnsureDatabaseFile(databasePath);
-
             var connectionString = BuildConnectionString(databasePath);
-            using (var conn = new SqliteConnection(connectionString))
+            var key = Path.GetFullPath(databasePath);
+
+            lock (InitLock)
             {
-                conn.Open();
-                using (var cmd = conn.CreateCommand())
+                if (InitializedPaths.Contains(key))
+                    return connectionString;
+
+                EnsureDatabaseFile(databasePath);
+                using (var conn = new SqliteConnection(connectionString))
                 {
-                    cmd.CommandText = File.ReadAllText(schemaFilePath);
-                    cmd.ExecuteNonQuery();
+                    conn.Open();
+                    using (var cmd = conn.CreateCommand())
+                    {
+                        // item_schema.sql = 新库的完整最终形态(CREATE ... IF NOT EXISTS 幂等)
+                        cmd.CommandText = File.ReadAllText(schemaFilePath);
+                        cmd.ExecuteNonQuery();
+                    }
+
+                    // 旧库升级: 编号迁移每库只跑一次(见 SqliteMigrations 头注释)
+                    DfoServer.Sqlite.SqliteMigrations.Apply(conn);
                 }
 
-                // 点券/代币券/欢乐代币券账号化迁移。
-                // 必须放在这里: 当前启动流程只走 Initialize(执行 schema), RunMigrations() 无人调用,
-                // 而 schema 的 CREATE TABLE IF NOT EXISTS 对已存在的旧 accounts 表是空操作 → 三列补不上。
-                // 1) 旧库补列; 2) 把历史角色级 coin 归集为账号级 cera 并回镜像到同账号所有角色。
-                DfoServer.Sqlite.SqliteSchemaMigrator.EnsureColumns(conn, "accounts", new[]
-                {
-                    ("cera", "INTEGER NOT NULL DEFAULT 0"),
-                    ("token_cera", "INTEGER NOT NULL DEFAULT 0"),
-                    ("happy_token_cera", "INTEGER NOT NULL DEFAULT 0"),
-                    ("lucky_star", "INTEGER NOT NULL DEFAULT 0"),
-                    ("seria_luck_value", "INTEGER NOT NULL DEFAULT 0"),
-                });
-                DfoServer.Sqlite.SqliteSchemaMigrator.EnsureColumns(conn, "character_equipped_entries", new[]
-                {
-                    ("expire_time", "INTEGER NOT NULL DEFAULT 0"),
-                    ("equipment_lock_id", "INTEGER NOT NULL DEFAULT 0"),
-                });
-                DfoServer.Sqlite.SqliteSchemaMigrator.EnsureColumns(conn, "character_items", new[]
-                {
-                    ("equipment_lock_id", "INTEGER NOT NULL DEFAULT 0"),
-                });
-                DfoServer.Sqlite.SqliteSchemaMigrator.MigrateCharacterItemLocks(conn);
-                DfoServer.Sqlite.SqliteSchemaMigrator.MigrateCharacterItemsUniqueConstraint(conn);
-                DfoServer.Sqlite.SqliteSchemaMigrator.EnsureColumns(conn, "character_init_flags", new[]
-                {
-                    ("character_option_blob", "BLOB"),
-                });
-                // 晶块账号化: 旧库补列 + 从 character_items slot 354-359 迁移到 accounts 表
-                DfoServer.Sqlite.SqliteSchemaMigrator.EnsureColumns(conn, "accounts", new[]
-                {
-                    ("cube_black", "INTEGER NOT NULL DEFAULT 0"),
-                    ("cube_white", "INTEGER NOT NULL DEFAULT 0"),
-                    ("cube_red", "INTEGER NOT NULL DEFAULT 0"),
-                    ("cube_blue", "INTEGER NOT NULL DEFAULT 0"),
-                    ("cube_clear", "INTEGER NOT NULL DEFAULT 0"),
-                    ("cube_gold", "INTEGER NOT NULL DEFAULT 0"),
-                });
-                DfoServer.Game.Currency.CurrencyService.MigrateCubeFragmentsFromCharacterItems(conn);
+                InitializedPaths.Add(key);
             }
+
             return connectionString;
         }
 

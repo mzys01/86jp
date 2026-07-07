@@ -5,7 +5,7 @@ namespace DfoServer.GameWorld
 {
     public static class AreaMaterialDropProvider
     {
-        private static readonly Random _rng = new Random();
+        
 
         private static readonly Dictionary<int, int> _dungeonToItem = BuildDungeonItemMap();
 
@@ -34,7 +34,7 @@ namespace DfoServer.GameWorld
 
         public static int RollDrop()
         {
-            return _rng.Next(100) < DropRatePercent ? 1 : 0;
+            return Infrastructure.ServerRandom.Next(100) < DropRatePercent ? 1 : 0;
         }
     }
 }

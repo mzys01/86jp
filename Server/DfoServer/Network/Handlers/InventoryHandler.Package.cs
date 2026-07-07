@@ -26,7 +26,21 @@ namespace DfoServer.Network.Handlers
 
             var (cid, aid) = ResolveOwner(session);
 
-            var premiumConsumed = _sqliteSelectCharacterDataSource.TryUsePremiumContractItem(
+            if (_inventoryStore.TryUseAccountCargoUpgradeTool(cid, aid, listType, slotIndex, out var accountCargoToolResult)
+                && accountCargoToolResult.Handled)
+            {
+                await SendAccountCargoUpgradeToolResponse(session, listType, slotIndex, instanceValue, itemCode, accountCargoToolResult);
+                return;
+            }
+
+            if (_inventoryStore.TryUsePersonalCargoUpgradeTicket(cid, aid, listType, slotIndex, itemCode, out var cargoTicketResult)
+                && cargoTicketResult.Handled)
+            {
+                await SendPersonalCargoUpgradeTicketResponse(session, listType, slotIndex, instanceValue, itemCode, cargoTicketResult);
+                return;
+            }
+
+            var premiumConsumed = _inventoryStore.TryUsePremiumContractItem(
                 cid,
                 aid,
                 listType,
@@ -45,9 +59,8 @@ namespace DfoServer.Network.Handlers
             }
             else
             {
-                consumed = _sqliteSelectCharacterDataSource.TryDeleteItem(cid, aid, listType, slotIndex, 1, out result);
+                consumed = _inventoryStore.TryDeleteItem(cid, aid, listType, slotIndex, 1, out result);
             }
-
             var responsePlan = BuildUseStackableResponsePlan(consumed, result, listType, slotIndex, instanceValue, itemCode);
             if (!consumed)
             {
@@ -61,22 +74,6 @@ namespace DfoServer.Network.Handlers
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x002C, responsePlan.AckBody));
             if (responsePlan.ItemListUpdateBody != null)
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000E, responsePlan.ItemListUpdateBody));
-
-            if (result != null && result.ListType == InventoryListType.Pet)
-            {
-                await SendUpdateItemList(session, InventoryListType.Pet, result.SlotIndex);
-            }
-
-            if (result != null && result.PetSatietyChanged)
-            {
-                var creatureStateBody = BuildCreatureStateRefreshBody(cid, result.PetCreatureKey);
-                if (creatureStateBody != null)
-                    await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0067, creatureStateBody));
-
-                var creatureListBody = BuildCreatureListRefreshBody(cid);
-                if (creatureListBody != null)
-                    await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0069, creatureListBody));
-            }
 
             var premiumNoticeBody = BuildPremiumContractNotificationBody(premiumUseResult);
             if (premiumNoticeBody != null)
@@ -92,7 +89,7 @@ namespace DfoServer.Network.Handlers
                 }
 
                 if (premiumUseResult.Mutation != null)
-                    await SendUpdateItemList(session, premiumUseResult.Mutation.ListType, premiumUseResult.Mutation.SlotIndex);
+                    await _refresh.SendUpdateItemList(session, premiumUseResult.Mutation.ListType, premiumUseResult.Mutation.SlotIndex);
             }
 
             var petSatietyLog = result != null && result.PetSatietyChanged
@@ -101,25 +98,62 @@ namespace DfoServer.Network.Handlers
             FileLogger.Log($"[{ProtocolName}] USE_STACKABLE: consumed 1x item 0x{itemCode:X8} from slot {slotIndex}, remaining={result?.RemainingStackCount ?? 0}{petSatietyLog}");
         }
 
-        internal static UseStackableResponsePlan BuildUseStackableResponsePlan(
-            bool consumed,
-            InventoryMutationResult result,
+        private async Task SendPersonalCargoUpgradeTicketResponse(
+            EnhancedClientSession session,
             InventoryListType listType,
             short slotIndex,
             int instanceValue,
-            int itemCode)
+            int itemCode,
+            PersonalCargoUpgradeTicketResult result)
         {
-            var stalePetConsumable = !consumed && IsPetConsumableSlot(listType, slotIndex);
-            var ackBody = consumed || stalePetConsumable
-                ? UseStackableAckBuilder.BuildSuccess(slotIndex, (byte)listType, instanceValue, itemCode)
-                : UseStackableAckBuilder.BuildError((byte)listType, itemCode, instanceValue);
+            var responseItemCode = itemCode != 0 ? itemCode : result.ItemTemplateId;
+            var ackBody = result.Success
+                ? UseStackableAckBuilder.BuildSuccess(slotIndex, (byte)listType, instanceValue, responseItemCode)
+                : UseStackableAckBuilder.BuildError((byte)listType, responseItemCode, instanceValue);
 
-            return new UseStackableResponsePlan
+            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x002C, ackBody));
+
+            if (!result.Success)
             {
-                AckBody = ackBody,
-                ItemListUpdateBody = null,
-                StalePetConsumable = stalePetConsumable,
-            };
+                FileLogger.Log($"[{ProtocolName}] USE_STACKABLE upgrade-cargo: failed status={result.Status} item=0x{result.ItemTemplateId:X8} listType={listType} slot={slotIndex} current={result.PreviousListParam16}");
+                return;
+            }
+
+            if (result.ConsumedItem != null)
+                await _refresh.SendUpdateItemList(session, result.ConsumedItem.ListType, result.ConsumedItem.SlotIndex);
+
+            await _refresh.SendItemListRefresh(session, InventoryListType.PersonalCargo);
+            FileLogger.Log($"[{ProtocolName}] USE_STACKABLE upgrade-cargo: item=0x{result.ItemTemplateId:X8} slot={slotIndex} personalCargo={result.PreviousListParam16}->{result.NewListParam16} remaining={result.ConsumedItem?.RemainingStackCount ?? 0}");
+        }
+
+        private async Task SendAccountCargoUpgradeToolResponse(
+            EnhancedClientSession session,
+            InventoryListType listType,
+            short slotIndex,
+            int instanceValue,
+            int itemCode,
+            AccountCargoUpgradeToolResult result)
+        {
+            var responseItemCode = itemCode != 0 ? itemCode : result.ItemTemplateId;
+            var ackBody = result.Success
+                ? UseStackableAckBuilder.BuildSuccess(slotIndex, (byte)listType, instanceValue, responseItemCode)
+                : UseStackableAckBuilder.BuildError((byte)listType, responseItemCode, instanceValue);
+
+            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x002C, ackBody));
+
+            if (!result.Success)
+            {
+                FileLogger.Log($"[{ProtocolName}] USE_STACKABLE account-cargo-upgrade: failed status={result.Status} item=0x{result.ItemTemplateId:X8} listType={listType} slot={slotIndex} current={result.PreviousSelectionKey}");
+                return;
+            }
+
+            if (result.ConsumedItem != null)
+                await _refresh.SendUpdateItemList(session, result.ConsumedItem.ListType, result.ConsumedItem.SlotIndex);
+
+            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0132,
+                CommonPacketBodyBuilder.BuildSuccessAck()));
+            await _refresh.SendItemListRefresh(session, InventoryListType.AccountCargo);
+            FileLogger.Log($"[{ProtocolName}] USE_STACKABLE account-cargo-upgrade: item=0x{result.ItemTemplateId:X8} slot={slotIndex} accountCargo={result.PreviousSelectionKey}->{result.NewSelectionKey} remaining={result.ConsumedItem?.RemainingStackCount ?? 0}");
         }
 
         internal static byte[] BuildPremiumContractNotificationBody(PremiumContractUseResult result)
@@ -159,21 +193,25 @@ namespace DfoServer.Network.Handlers
             return writer.ToArray();
         }
 
-        internal byte[] BuildCreatureListRefreshBody(int characterId)
+        internal static UseStackableResponsePlan BuildUseStackableResponsePlan(
+            bool consumed,
+            InventoryMutationResult result,
+            InventoryListType listType,
+            short slotIndex,
+            int instanceValue,
+            int itemCode)
         {
-            var snapshot = new SelectCharacterDataSnapshot();
-            snapshot.InitializationSnapshot.CreatureItemList = _sqliteSelectCharacterDataSource.LoadCreatureItemListSnapshot(characterId);
-            return new CreatureListBodyBuilder().TryBuild(snapshot, 0, out var body) ? body : null;
-        }
+            var stalePetConsumable = !consumed && IsPetConsumableSlot(listType, slotIndex);
+            var ackBody = consumed || stalePetConsumable
+                ? UseStackableAckBuilder.BuildSuccess(slotIndex, (byte)listType, instanceValue, itemCode)
+                : UseStackableAckBuilder.BuildError((byte)listType, itemCode, instanceValue);
 
-        internal byte[] BuildCreatureStateRefreshBody(int characterId, int creatureKey)
-        {
-            if (creatureKey <= 0)
-                return null;
-
-            var snapshot = _sqliteSelectCharacterDataSource.LoadCreatureItemListSnapshot(characterId);
-            var entry = snapshot.Entries.FirstOrDefault(x => x.CreatureKey == creatureKey);
-            return entry != null ? CreatureListBodyBuilder.BuildCreatureStateBody(entry) : null;
+            return new UseStackableResponsePlan
+            {
+                AckBody = ackBody,
+                ItemListUpdateBody = null,
+                StalePetConsumable = stalePetConsumable,
+            };
         }
 
         private static bool IsPetConsumableSlot(InventoryListType listType, short slotIndex)
@@ -192,47 +230,6 @@ namespace DfoServer.Network.Handlers
             public bool StalePetConsumable { get; set; }
         }
 
-        public async Task Handle_HATCH_CREATURE_EGG(EnhancedClientSession session, GamePacketHeader header, byte[] body)
-        {
-            if (!TryParseCreatureEggHatchRequest(body, out var listType, out var slotIndex, out var expectedItemTemplateId))
-            {
-                FileLogger.Log($"[{ProtocolName}] HATCH_CREATURE_EGG: parse failed type=0x{header.type:X4} body({body?.Length ?? 0}B): {(body != null ? BitConverter.ToString(body) : "null")}");
-                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, header.type, new byte[] { 0x00 }));
-                return;
-            }
-
-            var (cid, aid) = ResolveOwner(session);
-            if (!_sqliteSelectCharacterDataSource.TryHatchCreatureEgg(cid, aid, listType, slotIndex, expectedItemTemplateId, out var result))
-            {
-                FileLogger.Log($"[{ProtocolName}] HATCH_CREATURE_EGG: failed type=0x{header.type:X4} list={listType} slot={slotIndex} expected=0x{expectedItemTemplateId:X8}");
-                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, header.type, new byte[] { 0x00 }));
-                return;
-            }
-
-            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, header.type, CommonPacketBodyBuilder.BuildSuccessAck()));
-
-            await SendUpdateItemList(session, InventoryListType.Pet, result.SlotIndex);
-            await SendCreatureListRefresh(session);
-
-            FileLogger.Log($"[{ProtocolName}] HATCH_CREATURE_EGG: OK type=0x{header.type:X4} slot={result.SlotIndex} egg=0x{result.EggItemTemplateId:X8} -> pet=0x{result.HatchedItemTemplateId:X8} serial={result.PetSerialOrHandle}");
-        }
-
-        public async Task Handle_REQUEST_HATCHED_CREATURE(EnhancedClientSession session, GamePacketHeader header, byte[] body)
-        {
-            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, header.type, CommonPacketBodyBuilder.BuildSuccessAck()));
-            await SendCreatureListRefresh(session);
-            FileLogger.Log($"[{ProtocolName}] REQUEST_HATCHED_CREATURE: refreshed creature list type=0x{header.type:X4} body({body?.Length ?? 0}B)");
-        }
-
-        private async Task SendCreatureListRefresh(EnhancedClientSession session)
-        {
-            var (cid, aid) = ResolveOwner(session);
-            var snapshot = _sqliteSelectCharacterDataSource.Load(cid, aid);
-            var builder = new CreatureListBodyBuilder();
-            if (builder.TryBuild(snapshot, 0, out var creatureListBody))
-                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0069, creatureListBody));
-        }
-
         public async Task Handle_OPEN_AVATAR_PACKAGE(EnhancedClientSession session, GamePacketHeader header, byte[] body)
         {
             FileLogger.Log($"[{ProtocolName}] OPEN_AVATAR_PACKAGE raw({body?.Length ?? 0}B): {(body != null ? BitConverter.ToString(body) : "null")}");
@@ -245,7 +242,7 @@ namespace DfoServer.Network.Handlers
             else
             {
                 var (cid, aid) = ResolveOwner(session);
-                if (_sqliteSelectCharacterDataSource.TryOpenAvatarPackage(cid, aid, request, out var result))
+                if (_inventoryStore.TryOpenAvatarPackage(cid, aid, request, out var result))
                 {
                     await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0207, AvatarPackageAckBuilder.BuildSuccess(result.SlotIndex)));
                     if (result.GrantedItems.Count > 0)
@@ -257,7 +254,7 @@ namespace DfoServer.Network.Handlers
                     if (result.SourceRemainingStackCount <= 0)
                         await SendConsumedSourceItemUpdate(session, result.SlotIndex, result.PackageItemTemplateId);
 
-                    var snapshot = _sqliteSelectCharacterDataSource.LoadItemListSnapshot(cid, aid);
+                    var snapshot = _inventoryStore.LoadCharacterItemListSnapshot(cid, aid);
                     var mainUpdateBody = BuildGrantedMainItemUpdates(snapshot, result.GrantedItems, result.SlotIndex, result.PackageItemTemplateId, result.SourceRemainingStackCount > 0);
                     if (mainUpdateBody != null)
                         await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000E, mainUpdateBody));
@@ -289,14 +286,14 @@ namespace DfoServer.Network.Handlers
             else
             {
                 var (cid, aid) = ResolveOwner(session);
-                if (_sqliteSelectCharacterDataSource.TryOpenSelectablePackage(cid, aid, request, out var result))
+                if (_inventoryStore.TryOpenSelectablePackage(cid, aid, request, out var result))
                 {
                     await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x00A0, SelectablePackageAckBuilder.BuildSuccess(result.SlotIndex, result.GrantedItems)));
 
                     if (result.SourceRemainingStackCount <= 0)
                         await SendConsumedSourceItemUpdate(session, result.SlotIndex, result.PackageItemTemplateId);
 
-                    var snapshot = _sqliteSelectCharacterDataSource.LoadItemListSnapshot(cid, aid);
+                    var snapshot = _inventoryStore.LoadCharacterItemListSnapshot(cid, aid);
                     var mainUpdateBody = BuildGrantedMainItemUpdates(snapshot, result.GrantedItems, result.SlotIndex, result.PackageItemTemplateId, result.SourceRemainingStackCount > 0);
                     if (mainUpdateBody != null)
                         await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000E, mainUpdateBody));
@@ -342,7 +339,7 @@ namespace DfoServer.Network.Handlers
                 : 0;
 
             var (cid, aid) = ResolveOwner(session);
-            if (!_sqliteSelectCharacterDataSource.TryUseBoosterItem(
+            if (!_inventoryStore.TryUseBoosterItem(
                     cid,
                     aid,
                     new BoosterUseRequest
@@ -386,7 +383,7 @@ namespace DfoServer.Network.Handlers
                 : 0;
 
             var (cid, aid) = ResolveOwner(session);
-            if (!_sqliteSelectCharacterDataSource.TryUseBoosterItem(
+            if (!_inventoryStore.TryUseBoosterItem(
                     cid,
                     aid,
                     new BoosterUseRequest
@@ -422,6 +419,20 @@ namespace DfoServer.Network.Handlers
                 : string.Join(",", selectedItemTemplateIds.Select(id => $"0x{id:X8}"));
             FileLogger.Log($"[{ProtocolName}] USE_BOOSTER raw({body?.Length ?? 0}B): {(body != null ? BitConverter.ToString(body) : "null")} slot={(slotIndex.HasValue ? slotIndex.Value.ToString() : "auto")} selected={selectedText}");
 
+            if (TryBuildCrystalContractBodyFromUpdateRequest(header.type, body, out var crystalContractBody))
+            {
+                var owner = ResolveOwner(session);
+                if (!_sqliteSelectCharacterDataSource.TrySaveCrystalContractSelection(owner.characterId, crystalContractBody))
+                {
+                    FileLogger.Log($"[{ProtocolName}] UPDATE_CONTRACT_OF_CUBE_INFO: failed cid={owner.characterId} body={BitConverter.ToString(crystalContractBody)}");
+                    return false;
+                }
+
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, header.type, CommonPacketBodyBuilder.BuildSuccessAck()));
+                FileLogger.Log($"[{ProtocolName}] UPDATE_CONTRACT_OF_CUBE_INFO: saved cid={owner.characterId} body={BitConverter.ToString(crystalContractBody)}");
+                return true;
+            }
+
             if (slotIndex == 0 && header.type == 0x0218)
             {
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, header.type, CommonPacketBodyBuilder.BuildSuccessAck()));
@@ -430,7 +441,7 @@ namespace DfoServer.Network.Handlers
             }
 
             var (cid, aid) = ResolveOwner(session);
-            if (!_sqliteSelectCharacterDataSource.TryUseBoosterItem(cid, aid, new BoosterUseRequest
+            if (!_inventoryStore.TryUseBoosterItem(cid, aid, new BoosterUseRequest
             {
                 SlotIndex = slotIndex,
                 SelectedItemTemplateIds = selectedItemTemplateIds,
@@ -445,6 +456,19 @@ namespace DfoServer.Network.Handlers
             return true;
         }
 
+        internal static bool TryBuildCrystalContractBodyFromUpdateRequest(ushort requestType, byte[] body, out byte[] crystalContractBody)
+        {
+            crystalContractBody = null;
+            if (requestType != 0x0218 || body == null || body.Length != 2)
+                return false;
+
+            if (body[0] != 0x00 || body[1] > 0x05)
+                return false;
+
+            crystalContractBody = new byte[] { body[0], body[1] };
+            return true;
+        }
+
         private async Task<bool> TryHandleOpenPackage0207(EnhancedClientSession session, GamePacketHeader header, byte[] body)
         {
             if (body == null || body.Length < 3)
@@ -455,7 +479,7 @@ namespace DfoServer.Network.Handlers
             FileLogger.Log($"[{ProtocolName}] OPEN_PACKAGE_0207 raw({body.Length}B): {BitConverter.ToString(body)} slot={slotIndex} selected={string.Join(",", selectedItemTemplateIds.Select(id => $"0x{id:X8}"))}");
 
             var (cid, aid) = ResolveOwner(session);
-            if (!_sqliteSelectCharacterDataSource.TryOpenPackage0207(cid, aid, slotIndex, selectedItemTemplateIds, out var result))
+            if (!_inventoryStore.TryOpenPackage0207(cid, aid, slotIndex, selectedItemTemplateIds, out var result))
             {
                 FileLogger.Log($"[{ProtocolName}] OPEN_PACKAGE_0207: failed slot={slotIndex}");
                 return false;
@@ -534,7 +558,7 @@ namespace DfoServer.Network.Handlers
             if (result.SourceRemainingStackCount <= 0)
                 await SendConsumedSourceItemUpdate(session, result.SourceSlotIndex, result.SourceItemTemplateId);
 
-            var snapshot = _sqliteSelectCharacterDataSource.LoadItemListSnapshot(cid, aid);
+            var snapshot = _inventoryStore.LoadCharacterItemListSnapshot(cid, aid);
             var mainUpdateBody = BuildBoosterMainItemUpdates(snapshot, result, result.SourceRemainingStackCount > 0);
             if (mainUpdateBody != null)
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000E, mainUpdateBody));
@@ -562,6 +586,22 @@ namespace DfoServer.Network.Handlers
             return result != null && result.IsSeriaLuckValueSource;
         }
 
+        internal static bool ShouldSendObtainedItemsPopupForBoosterResponse(ushort responseType)
+        {
+            return responseType != 0x00D0 && responseType != 0x03F3;
+        }
+
+        internal static bool ShouldSendObtainedItemsPopupForBoosterResponse(ushort responseType, BoosterUseResult result)
+        {
+            if (responseType == 0x00D0)
+                return false;
+
+            if (responseType == 0x03F3)
+                return !ShouldUseNativeMagicBoxBatchAck(result);
+
+            return true;
+        }
+
         private static string FormatPacketHead(byte[] body, int maxBytes)
         {
             if (body == null || body.Length == 0)
@@ -581,22 +621,6 @@ namespace DfoServer.Network.Handlers
                 return state;
 
             return state + $" seriaLuck={result.SeriaLuckValueBefore}->{result.SeriaLuckValueAfter}/{result.SeriaLuckValueMax} doubleTriggered={result.SeriaLuckDoubleTriggered}";
-        }
-
-        internal static bool ShouldSendObtainedItemsPopupForBoosterResponse(ushort responseType)
-        {
-            return responseType != 0x00D0 && responseType != 0x03F3;
-        }
-
-        internal static bool ShouldSendObtainedItemsPopupForBoosterResponse(ushort responseType, BoosterUseResult result)
-        {
-            if (responseType == 0x00D0)
-                return false;
-
-            if (responseType == 0x03F3)
-                return !ShouldUseNativeMagicBoxBatchAck(result);
-
-            return true;
         }
 
         private async Task SendConsumedSourceItemUpdate(EnhancedClientSession session, short sourceSlotIndex, int sourceItemTemplateId)
@@ -644,7 +668,6 @@ namespace DfoServer.Network.Handlers
             if (updates.Count == 0)
                 return null;
 
-            FileLogger.Log($"[Inventory] BOOSTER_MAIN_UPDATE rows={FormatCommonItems(updates, 16)}");
             return ItemListUpdateBuilder.BuildCommonUpdates(updates);
         }
 
@@ -703,9 +726,9 @@ namespace DfoServer.Network.Handlers
             }
 
             if (avatarSlots.Count > 0)
-                await SendUpdateItemList(session, InventoryListType.Avatar, avatarSlots);
+                await _refresh.SendUpdateItemList(session, InventoryListType.Avatar, avatarSlots);
             if (petSlots.Count > 0)
-                await SendUpdateItemList(session, InventoryListType.Pet, petSlots);
+                await _refresh.SendUpdateItemList(session, InventoryListType.Pet, petSlots);
         }
 
         private async Task SendAvatarOrPetUpdateListForBoosterRewards(EnhancedClientSession session, BoosterUseResult result)
@@ -724,45 +747,9 @@ namespace DfoServer.Network.Handlers
             }
 
             if (avatarSlots.Count > 0)
-                await SendUpdateItemList(session, InventoryListType.Avatar, avatarSlots);
+                await _refresh.SendUpdateItemList(session, InventoryListType.Avatar, avatarSlots);
             if (petSlots.Count > 0)
-                await SendUpdateItemList(session, InventoryListType.Pet, petSlots);
-        }
-
-        private static bool TryParseCreatureEggHatchRequest(byte[] body, out InventoryListType listType, out short slotIndex, out int expectedItemTemplateId)
-        {
-            listType = InventoryListType.Pet;
-            slotIndex = 0;
-            expectedItemTemplateId = 0;
-
-            if (body == null || body.Length < 2)
-                return false;
-
-            if (body[0] == (byte)InventoryListType.Pet && body.Length >= 3)
-            {
-                slotIndex = BitConverter.ToInt16(body, 1);
-            }
-            else
-            {
-                slotIndex = BitConverter.ToInt16(body, 0);
-                if (body.Length >= 3 && body[2] == (byte)InventoryListType.Pet)
-                    listType = InventoryListType.Pet;
-            }
-
-            foreach (var offset in new[] { 7, 2, 3 })
-            {
-                if (body.Length < offset + 4)
-                    continue;
-
-                var candidate = BitConverter.ToInt32(body, offset);
-                if (candidate > 0 && CreatureEggResolver.TryResolveHatchedCreatureItemId(candidate, out _))
-                {
-                    expectedItemTemplateId = candidate;
-                    break;
-                }
-            }
-
-            return slotIndex >= 0;
+                await _refresh.SendUpdateItemList(session, InventoryListType.Pet, petSlots);
         }
 
         private static CommonInventoryItem CreateConsumedSourceItem(BoosterUseResult result)
@@ -825,25 +812,6 @@ namespace DfoServer.Network.Handlers
 
             if (rows.Count > limit)
                 parts.Add($"...+{rows.Count - limit}");
-
-            return string.Join(",", parts);
-        }
-
-        private static string FormatCommonItems(IReadOnlyList<CommonInventoryItem> items, int maxRows)
-        {
-            if (items == null || items.Count == 0)
-                return "none";
-
-            var limit = Math.Min(items.Count, Math.Max(0, maxRows));
-            var parts = new List<string>();
-            for (var i = 0; i < limit; i++)
-            {
-                var item = items[i];
-                parts.Add($"slot{item.SlotIndex}:0x{item.ItemTemplateId:X8}x{item.CountOrInstanceValue}/ext0={item.ExtData0}");
-            }
-
-            if (items.Count > limit)
-                parts.Add($"...+{items.Count - limit}");
 
             return string.Join(",", parts);
         }
@@ -927,7 +895,7 @@ namespace DfoServer.Network.Handlers
             var job = _characterRepository.GetById(cid)?.Job ?? 0;
             byte newOption = 0;
 
-            if (!_sqliteSelectCharacterDataSource.TryCompoundAvatar(cid, aid, slot1, slot2, consumeSlot,
+            if (!_inventoryStore.TryCompoundAvatar(cid, aid, slot1, slot2, consumeSlot,
                     (old1, old2, materialId) =>
                     {
                         var prob = CompoundAvatarProbabilityService.Resolve(job, old1, old2, materialId, reqItemId);
@@ -1022,7 +990,7 @@ namespace DfoServer.Network.Handlers
                 return -1;
             }
 
-            if (!_sqliteSelectCharacterDataSource.TryCompoundAvatarSet(cid, aid, consumeSlots, consumeSlotItemIds, ResolveNewItemId, (byte)option,
+            if (!_inventoryStore.TryCompoundAvatarSet(cid, aid, consumeSlots, consumeSlotItemIds, ResolveNewItemId, (byte)option,
                     consumeStackableSlot, out int newSlot, out var oldItemIds, out int newItemId, out int consumedTemplateId, out int consumedRemaining))
             {
                 var err = new GamePacketWriter();

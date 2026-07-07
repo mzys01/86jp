@@ -1,3 +1,4 @@
+using DfoServer.Game.Accounts;
 using DfoServer.Game.Mercenary;
 using DfoServer.Infrastructure;
 using DfoServer.Network.Builders;
@@ -34,6 +35,8 @@ namespace DfoServer.SelfTests
 
             CheckMercenarySupportRepository();
             CheckMercenaryWireSlotMapping();
+            CheckAdventureGroupLevelCalculation();
+            CheckStrikerSupportSkillLevels();
             CheckMainApplyTagRecordPatch();
 
             Console.WriteLine("sample: " + string.Join(", ", mage.Take(3).Select(x => $"{x.SkillIndex}/{x.ComboIndex}:{x.SkillName ?? "?"}")));
@@ -57,6 +60,56 @@ namespace DfoServer.SelfTests
 
             Check("mercenary wire slot uses account roster index", slot2 != null && slot2.CharacterId == 1004);
             Check("mercenary wire slot rejects active character", active == null);
+        }
+
+        private static void CheckAdventureGroupLevelCalculation()
+        {
+            var roster = new List<DfoServer.Game.Characters.CharacterRecord>();
+            for (var i = 0; i < 8; i++)
+                roster.Add(new DfoServer.Game.Characters.CharacterRecord { CharacterId = 92000 + i, Level = 86 });
+            roster.Add(new DfoServer.Game.Characters.CharacterRecord { CharacterId = 92010, Level = 1 });
+            roster.Add(new DfoServer.Game.Characters.CharacterRecord { CharacterId = 92011, Level = 1 });
+
+            const int expectedLevel86Point = 10785; // 40 到 86 级逐级累加。
+            const int expectedTotalPoint = expectedLevel86Point * 8; // 8 个 86 级角色贡献。
+            const byte expectedManageLevel = 7;
+            const ushort expectedManageOption = 125;
+
+            var level86Summary = AdventureGroupDataProvider.Calculate(new[]
+            {
+                new DfoServer.Game.Characters.CharacterRecord { CharacterId = 92100, Level = 86 }
+            });
+
+            var summary = AdventureGroupDataProvider.Calculate(roster);
+            Check("adventure group point accumulates level40-86 bonus for one Lv86 character", level86Summary.TotalPoint == expectedLevel86Point);
+            Check("adventure group point uses cumulative PVF character level table", summary.TotalPoint == expectedTotalPoint);
+            Check("adventure group level uses PVF account point thresholds", summary.ManageLevel == expectedManageLevel);
+            Check("adventure group exp bonus uses account manage level", summary.ExpBonusPercent == 10);
+            Check("adventure group manage option uses account manage level", summary.ManageOption == expectedManageOption);
+
+            var body = AccountCharacterListBodyBuilder.Build(roster, new GetUserInfoTemplate
+            {
+                GateOrCount1 = 32,
+                GateOrCount2 = 32,
+            }, out var bodySummary);
+            Check("USERINFO subtype2 writes adventure group level", body.Length > 10 && body[5] == bodySummary.ManageLevel && body[5] == expectedManageLevel);
+            Check("USERINFO subtype2 writes adventure group point", body.Length > 10 && BitConverter.ToInt32(body, 6) == expectedTotalPoint);
+
+            var addition = new DfoServer.Game.SelectCharacter.UserInfoAdditionSnapshot
+            {
+                StatPhysicalAttack = 10,
+                StatPhysicalDefense = 20,
+                StatMagicalAttack = 30,
+                StatMagicalDefense = 40,
+            };
+            AdventureGroupUserInfoSynchronizer.ApplyToUserInfoAddition(addition, roster);
+            Check("USERINFO subtype1 applies account adventure group level", addition.ManageLevel == expectedManageLevel);
+            Check("USERINFO subtype1 writes adventure group option index byte", addition.FlagByte == expectedManageLevel);
+            Check("adventure group option does not modify base primary stats",
+                addition.StatPhysicalAttack == 10 &&
+                addition.StatPhysicalDefense == 20 &&
+                addition.StatMagicalAttack == 30 &&
+                addition.StatMagicalDefense == 40);
         }
 
         private static void CheckMercenarySupportRepository()
@@ -137,6 +190,28 @@ WHERE character_id=@cid", conn))
             }
         }
 
+        private static void CheckStrikerSupportSkillLevels()
+        {
+            var sampleSkill = new StrikerSkillEntry
+            {
+                SkillIndex = 24,
+                RequiredLevel = 60,
+            };
+
+            Check("striker support learned level uses real skill level",
+                StrikerSupportSkillLevelSource.ResolveBaseLevel(
+                    new Dictionary<ushort, byte> { { 24, 7 } },
+                    sampleSkill) == 7);
+            Check("striker support unlearned level defaults to one",
+                StrikerSupportSkillLevelSource.ResolveBaseLevel(
+                    new Dictionary<ushort, byte>(),
+                    sampleSkill) == 1);
+            Check("striker support explicit zero level defaults to one",
+                StrikerSupportSkillLevelSource.ResolveBaseLevel(
+                    new Dictionary<ushort, byte> { { 24, 0 } },
+                    sampleSkill) == 1);
+        }
+
         private static void CheckMainApplyTagRecordPatch()
         {
             var raw = new byte[1913];
@@ -177,7 +252,7 @@ WHERE character_id=@cid", conn))
                 SkillId = 24,
                 StrikerSkillId = 1,
             });
-            var expectedLevel = StrikerSupportSkillLevelSource.ResolveBaseLevel(1002, 24, 1);
+            var expectedLevel = StrikerSupportSkillLevelSource.ResolveBaseLevel(1002, 24);
 
             Check("0x019F main apply patch keeps record length", patched.Length == raw.Length);
             Check("0x019F main apply patch appends missing support skill",
@@ -197,7 +272,28 @@ WHERE character_id=@cid", conn))
             Check("0x019F main apply patch updates traced selected skill",
                 patched[selectedOffset] == 24 &&
                 patched[selectedOffset + 1] == 0);
-
+            var asuraPatched = StrikerSupportTagCharacterPacketBuilder.PatchSelectedSkillIntoTagRecord(raw, new MercenarySupportState
+            {
+                OwnerCharacterId = 91001,
+                Slot = 0,
+                SupportCharacterId = 1009,
+                SkillId = 74,
+                StrikerSkillId = 43,
+            });
+            var asuraRequiredLevel = StrikerSupportSkillLevelSource.ResolveBaseLevel(1009, 47);
+            var asuraLevel = StrikerSupportSkillLevelSource.ResolveBaseLevel(1009, 74);
+            var asuraRequiredOffset = appendedOffset;
+            var asuraSelectedOffset = appendedOffset + 4;
+            Check("0x019F main apply patch appends striker required skill before selected skill",
+                asuraPatched[tableOffset] == 43 &&
+                asuraPatched[asuraRequiredOffset] == 47 &&
+                asuraPatched[asuraRequiredOffset + 1] == 47 &&
+                asuraPatched[asuraRequiredOffset + 2] == 0 &&
+                asuraPatched[asuraRequiredOffset + 3] == asuraRequiredLevel &&
+                asuraPatched[asuraSelectedOffset] == 43 &&
+                asuraPatched[asuraSelectedOffset + 1] == 74 &&
+                asuraPatched[asuraSelectedOffset + 2] == 0 &&
+                asuraPatched[asuraSelectedOffset + 3] == asuraLevel);
 
             var fallback = StrikerSupportTagCharacterPacketBuilder.CloneTagCharacterRawRecordTemplate();
             var fallbackPatched = StrikerSupportTagCharacterPacketBuilder.PatchSelectedSkillIntoTagRecord(fallback, new MercenarySupportState
@@ -217,6 +313,63 @@ WHERE character_id=@cid", conn))
             Check("0x019F owner mirror patch rewrites record character id",
                 patched[0] == 0x79 &&
                 patched[1] == 0x63);
+
+            var missingEquipmentPatched = StrikerSupportTagCharacterPacketBuilder.PatchMissingTemplateEquipmentEntriesForTest(
+                StrikerSupportTagCharacterPacketBuilder.CloneTagCharacterRawRecordTemplate(),
+                11, 13, 15);
+            var equipmentBlockOffset = FindAvatarEquipmentBlockOffsetForSelfTest(missingEquipmentPatched);
+            Check("0x019F missing template equipment removal keeps record length",
+                missingEquipmentPatched.Length == fallback.Length);
+            Check("0x019F missing template equipment removal keeps slot0 default-avatar entries",
+                equipmentBlockOffset > 0 &&
+                missingEquipmentPatched[equipmentBlockOffset] == 0 &&
+                missingEquipmentPatched[equipmentBlockOffset + 8 * 85] == 8);
+            Check("0x019F missing template equipment removal removes optional slots only",
+                equipmentBlockOffset > 0 &&
+                missingEquipmentPatched[equipmentBlockOffset - 1] == 13 &&
+                missingEquipmentPatched[equipmentBlockOffset + 9 * 85] == 11);
+
+            var knightGrow2Defaults = StrikerSupportTagCharacterPacketBuilder.ResolveDefaultAvatarItemIdsForTest(12, 34);
+            Check("0x019F default avatar lookup handles PVF header offset",
+                knightGrow2Defaults != null &&
+                knightGrow2Defaults.Length >= 11 &&
+                knightGrow2Defaults[0] == 413550014 &&
+                knightGrow2Defaults[3] == 413500014 &&
+                knightGrow2Defaults[8] == 413580005 &&
+                knightGrow2Defaults[9] == -1 &&
+                knightGrow2Defaults[10] == -1);
+        }
+
+        private static int FindAvatarEquipmentBlockOffsetForSelfTest(byte[] rawRecord)
+        {
+            if (rawRecord == null)
+                return -1;
+
+            for (var offset = 0; offset + 8 * 85 + 5 <= rawRecord.Length; offset++)
+            {
+                var ok = true;
+                for (var slot = 0; slot <= 8; slot++)
+                {
+                    var slotOffset = offset + slot * 85;
+                    if (slotOffset + 4 >= rawRecord.Length || rawRecord[slotOffset] != slot)
+                    {
+                        ok = false;
+                        break;
+                    }
+
+                    var itemId = BitConverter.ToInt32(rawRecord, slotOffset + 1);
+                    if (itemId <= 0 || itemId > 500000000)
+                    {
+                        ok = false;
+                        break;
+                    }
+                }
+
+                if (ok)
+                    return offset;
+            }
+
+            return -1;
         }
 
         private static void Check(string name, bool ok)

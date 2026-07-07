@@ -113,23 +113,7 @@ namespace DfoServer.Network.Builders
             foreach (var a in filtered)
                 UserInfoSubtype0Builder.WriteAppearanceEntry(writer, a);
 
-            
-            writer.WriteInt32(0);                   
-            writer.WriteByte(0x00);                 
-            writer.WriteByte(0x00);                 
-            writer.WriteByte(0x00);                 
-            writer.WriteByte(0x00);                 
-            writer.WriteZeroBytes(8);               
-            writer.WriteByte(0x00);                 
-            writer.WriteInt32(0);                   
-            writer.WriteByte(0x00);                 
-            writer.WriteByte(0x00);                 
-            writer.WriteByte(0x00);                 
-            writer.WriteInt32(0);                   
-            writer.WriteByte(0x00);                 
-            writer.WriteByte(0x00);                 
-            writer.WriteByte(0x00);                 
-            writer.WriteByte(0x00);                 
+            UserInfoType2RosterTailBuilder.Write(writer, record.Subtype0Tail?.CloneTitleItemId ?? 0);
 
             var body = writer.ToArray();
             return BuildPacketWithRouting(0x00, 0x0002, body, template.Pkt0RoutingByte7);

@@ -40,10 +40,9 @@ namespace DfoServer.SelfTests
             var store = new SqliteInventoryStore(dbPath, ServerPaths.SchemaFilePath);
             SeedPetInventoryPet(dbPath);
 
-            using (store.BeginScope(CharacterId, AccountId))
             {
                 Check("pet body can move from pet inventory into equipped slot 24",
-                    store.TryMoveItem(new InventoryMoveRequest
+                    store.TryMoveItem(CharacterId, AccountId, new InventoryMoveRequest
                     {
                         SourceListType = InventoryListType.Pet,
                         SourceSlotIndex = PetInventorySourceSlot,

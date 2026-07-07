@@ -23,7 +23,7 @@ namespace DfoServer.Network.Handlers
 
             var (cid, aid) = ResolveOwner(session);
             var command = request.ToCommand();
-            if (!_sqliteSelectCharacterDataSource.TryEnchantByBead(cid, aid, command, out var result))
+            if (!_inventoryStore.TryEnchantByBead(cid, aid, command, out var result))
             {
                 var errorCode = result != null ? result.ErrorCode : EnchantByBeadResult.ErrorInvalidBead;
                 FileLogger.Log($"[{ProtocolName}] ENCHANT_BY_BEAD: FAILED error=0x{errorCode:X2}");
@@ -32,8 +32,8 @@ namespace DfoServer.Network.Handlers
             }
 
             var updateBody = ItemListUpdateBuilder.BuildCommonUpdates(new[] { result.TargetItem, result.BeadItem });
-            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0110, EnchantByBeadAckBuilder.BuildSuccess(result)));
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000E, updateBody));
+            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0110, EnchantByBeadAckBuilder.BuildSuccess(result)));
 
             FileLogger.Log($"[{ProtocolName}] ENCHANT_BY_BEAD: OK target=({request.TargetListType},{request.TargetSlotIndex}) enchantCard=0x{result.EnchantCardItemId:X8}");
         }
@@ -51,7 +51,7 @@ namespace DfoServer.Network.Handlers
 
             var (cid, aid) = ResolveOwner(session);
             var command = request.ToCommand();
-            if (!_sqliteSelectCharacterDataSource.TryUpgradeItem(cid, aid, command, out var result))
+            if (!_inventoryStore.TryUpgradeItem(cid, aid, command, out var result))
             {
                 var errorCode = result != null ? result.ErrorCode : ItemUpgradeResult.ErrorInvalidTarget;
                 FileLogger.Log($"[{ProtocolName}] UPGRADE_ITEM: FAILED error={errorCode} mode={request.Mode} targetSlot={request.TargetSlotIndex} materialSlot={request.MaterialSlotIndex}");
@@ -77,7 +77,7 @@ namespace DfoServer.Network.Handlers
                 FileLogger.Log($"[{ProtocolName}] UPGRADE_ITEM: gold refresh queued gold={result.UpdatedGold}");
             }
 
-            await SendSortItemLockRefresh(session, InventoryListType.Main);
+            await _refresh.SendSortItemLockRefresh(session, InventoryListType.Main);
 
             if (result.NoticeRequired)
                 await BroadcastItemUpgradeNotice(session, result);
@@ -117,7 +117,7 @@ namespace DfoServer.Network.Handlers
             }
 
             var (cid, aid) = ResolveOwner(session);
-            if (!_sqliteSelectCharacterDataSource.TryOpenEquipmentSocket(cid, aid, targetSlot, targetItemId, materialSlot, out var result))
+            if (!_inventoryStore.TryOpenEquipmentSocket(cid, targetSlot, targetItemId, materialSlot, out var result))
             {
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x031D, new byte[] { 0x00, 0x04 }));
                 return;
@@ -135,7 +135,7 @@ namespace DfoServer.Network.Handlers
             if (result.MaterialConsumed && result.MaterialItem != null)
                 await SendCommonMaterialRefresh(session, result.MaterialItem);
 
-            await SendSortItemLockRefresh(session, InventoryListType.Main);
+            await _refresh.SendSortItemLockRefresh(session, InventoryListType.Main);
             if (result.MaterialConsumed && result.MaterialItem != null)
                 FileLogger.Log($"[{ProtocolName}] EQUIP_SOCKET_OPEN: OK targetSlot={targetSlot} item=0x{targetItemId:X8} materialSlot={materialSlot} left={result.MaterialItem.RemainingStackCount}");
             else
@@ -153,7 +153,7 @@ namespace DfoServer.Network.Handlers
             }
 
             var (cid, aid) = ResolveOwner(session);
-            if (!_sqliteSelectCharacterDataSource.TrySetEquipmentEmblems(cid, aid, targetSlot, targetItemId, emblems, out var result))
+            if (!_inventoryStore.TrySetEquipmentEmblems(cid, targetSlot, targetItemId, emblems, out var result))
             {
                 if (await TryHandleAvatarEmblemAttach(session, 0x031C, targetSlot, targetItemId, emblems, cid, aid))
                     return;
@@ -170,7 +170,7 @@ namespace DfoServer.Network.Handlers
                     0x000E,
                     ItemListUpdateBuilder.BuildCommonUpdates(new[] { result.TargetItem })));
             }
-            await SendSortItemLockRefresh(session, InventoryListType.Main);
+            await _refresh.SendSortItemLockRefresh(session, InventoryListType.Main);
             FileLogger.Log($"[{ProtocolName}] EQUIP_EMBLEM_ATTACH: OK targetSlot={targetSlot} item=0x{targetItemId:X8} emblems={emblems.Count}");
         }
 
@@ -185,7 +185,7 @@ namespace DfoServer.Network.Handlers
             }
 
             var (cid, aid) = ResolveOwner(session);
-            if (!_sqliteSelectCharacterDataSource.TryOpenAvatarSocket(cid, aid, targetSlot, targetItemId, materialSlot, out var result))
+            if (!_inventoryStore.TryOpenAvatarSocket(cid, targetSlot, targetItemId, materialSlot, out var result))
             {
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x00CE, new byte[] { 0x00, 0x04 }));
                 return;
@@ -196,8 +196,8 @@ namespace DfoServer.Network.Handlers
             if (result.MaterialConsumed && result.MaterialItem != null)
                 await SendCommonMaterialRefresh(session, result.MaterialItem);
 
-            await SendUpdateItemList(session, InventoryListType.Avatar, targetSlot);
-            await SendSortItemLockRefresh(session, InventoryListType.Avatar);
+            await _refresh.SendUpdateItemList(session, InventoryListType.Avatar, targetSlot);
+            await _refresh.SendSortItemLockRefresh(session, InventoryListType.Avatar);
 
             if (result.MaterialConsumed && result.MaterialItem != null)
                 FileLogger.Log($"[{ProtocolName}] AVATAR_SOCKET_OPEN: OK targetSlot={targetSlot} item=0x{targetItemId:X8} materialSlot={materialSlot} left={result.MaterialItem.RemainingStackCount}");
@@ -222,18 +222,18 @@ namespace DfoServer.Network.Handlers
 
         private async Task<bool> TryHandleAvatarEmblemAttach(EnhancedClientSession session, ushort ackType, short targetSlot, int targetItemId, IReadOnlyList<EquipmentEmblemApplyRequest> emblems, int cid, int aid)
         {
-            if (!_sqliteSelectCharacterDataSource.TrySetAvatarEmblems(cid, aid, targetSlot, targetItemId, emblems, out var result))
+            if (!_inventoryStore.TrySetAvatarEmblems(cid, targetSlot, targetItemId, emblems, out var result))
                 return false;
 
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, ackType, BuildEmblemAttachAck(targetSlot, targetItemId, emblems.Count)));
             if (!result.TargetEquipped && result.TargetItem != null)
             {
-                await SendUpdateItemList(session, InventoryListType.Avatar, targetSlot);
+                await _refresh.SendUpdateItemList(session, InventoryListType.Avatar, targetSlot);
             }
 
-            await SendSortItemLockRefresh(session, InventoryListType.Main);
+            await _refresh.SendSortItemLockRefresh(session, InventoryListType.Main);
             if (!result.TargetEquipped)
-                await SendSortItemLockRefresh(session, InventoryListType.Avatar);
+                await _refresh.SendSortItemLockRefresh(session, InventoryListType.Avatar);
             FileLogger.Log($"[{ProtocolName}] AVATAR_EMBLEM_ATTACH: OK targetSlot={targetSlot} item=0x{targetItemId:X8} emblems={emblems.Count} ack=0x{ackType:X4}");
             return true;
         }
@@ -243,7 +243,7 @@ namespace DfoServer.Network.Handlers
             if (material == null)
                 return;
 
-            await SendUpdateItemList(session, material.ListType, material.SlotIndex);
+            await _refresh.SendUpdateItemList(session, material.ListType, material.SlotIndex);
         }
 
         private static bool TryParseSocketOpenBody(byte[] body, out short targetSlot, out int targetItemId, out short materialSlot)

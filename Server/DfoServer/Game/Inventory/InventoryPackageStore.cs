@@ -700,6 +700,7 @@ namespace DfoServer.Game.Inventory
                     return false;
 
                 var instanceValue = InventoryDbPrimitives.GenerateInstanceValue(reward.ItemTemplateId, targetSlot);
+                var pkgSealFlag = metadata.IsSealed ? (byte)1 : (byte)0;
                 _db.InsertCharacterItem(
                     connection,
                     transaction,
@@ -711,7 +712,7 @@ namespace DfoServer.Game.Inventory
                     instanceValue,
                     instanceValue,
                     metadata.Durability,
-                    0,
+                    pkgSealFlag,
                     0,
                     reward.ExpireTime,
                     -1,
@@ -901,8 +902,11 @@ namespace DfoServer.Game.Inventory
         {
             rewards = new List<PvfLib.BoosterRewardEntry>();
             if (stackableType.Equals("[booster]", StringComparison.OrdinalIgnoreCase)
-                || stackableType.Equals("[cera booster]", StringComparison.OrdinalIgnoreCase))
+                || stackableType.Equals("[cera booster]", StringComparison.OrdinalIgnoreCase)
+                || stackableType.Equals("[booster random]", StringComparison.OrdinalIgnoreCase))
             {
+                // [booster random] 与 [booster] 一样把奖励池声明在 [booster info](stackable.BoosterRewards),
+                // 之前未登记 -> 开箱走不到任何分支, 静默无奖励(eg 10093384 斗兽场礼包)。
                 if (TryResolveMagicHammerBundleRewards(sourceItemTemplateId, stackable, out rewards))
                     return true;
 
@@ -1076,6 +1080,7 @@ namespace DfoServer.Game.Inventory
         {
             return stackableType.Equals("[booster]", StringComparison.OrdinalIgnoreCase)
                 || stackableType.Equals("[cera booster]", StringComparison.OrdinalIgnoreCase)
+                || stackableType.Equals("[booster random]", StringComparison.OrdinalIgnoreCase)
                 || stackableType.Equals("[cera package]", StringComparison.OrdinalIgnoreCase)
                 || stackableType.Equals("[random upgradable legacy]", StringComparison.OrdinalIgnoreCase)
                 || stackableType.Equals("[usable cera package]", StringComparison.OrdinalIgnoreCase)

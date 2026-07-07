@@ -7,7 +7,7 @@ using DfoServer.Infrastructure;
 using DfoServer.GameWorld;
 using DfoServer.Network.Builders;
 using DfoServer.Network.Handlers;
-using DfoServer.Network.Legacy;
+using DfoServer.Network.Handlers.Pets;
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
@@ -21,6 +21,7 @@ namespace DfoServer.Network
         private readonly InventoryHandler _inventoryHandler;
         private readonly TownHandler _townHandler;
         private readonly DungeonHandler _dungeonHandler;
+        private readonly StaminaHandler _staminaHandler;
         private readonly SkillHandler _skillHandler;
         private readonly SettingsHandler _settingsHandler;
         private readonly CeraShopHandler _ceraShopHandler;
@@ -28,6 +29,9 @@ namespace DfoServer.Network
         private readonly RentalHandler _rentalHandler;
         private readonly MailboxHandler _mailboxHandler;
         private readonly CollectionBoxHandler _collectionBoxHandler;
+        private readonly ShopCoinEventHandler _shopCoinEventHandler;
+        private readonly InventoryRefreshSender _inventoryRefreshSender;
+        private readonly PetCreatureHandler _petCreatureHandler;
         private readonly MercenaryHandler _mercenaryHandler;
         private readonly ICharacterRepository _characterRepository;
         private readonly SqliteSelectCharacterDataSource _selectCharacterDataSource;
@@ -43,14 +47,20 @@ namespace DfoServer.Network
 
             var characterRepository = new SqliteCharacterRepository(databasePath, schemaFilePath);
             var accountRepository = new SqliteAccountRepository(databasePath, schemaFilePath);
+            // 租赁全链路共用同一时间源，保持绝对 Unix 到期时间模型。
+            var rentalTimeProvider = SystemRentalTimeProvider.Instance;
 
-            _assetService = new SqliteAssetService(databasePath, schemaFilePath);
+            // 全程序共享一个 SqliteInventoryStore(无状态, 只持连接串): 旧版门面与 AssetService 各自 new 一个
+            var inventoryStore = new Game.Inventory.SqliteInventoryStore(databasePath, schemaFilePath, rentalTimeProvider);
+            _assetService = new SqliteAssetService(databasePath, schemaFilePath, inventoryStore);
 
             var sqliteSelectCharacterDataSource = new SqliteSelectCharacterDataSource(
                 databasePath,
                 schemaFilePath,
                 characterRepository,
-                _assetService);
+                _assetService,
+                inventoryStore,
+                rentalTimeProvider);
 
             var userInfoBlobRepository = new Game.CharacterData.SqliteUserInfoBlobRepository(databasePath, schemaFilePath);
             var getUserInfoTemplate = userInfoBlobRepository.LoadGetUserInfoTemplate();
@@ -59,23 +69,35 @@ namespace DfoServer.Network
             _selectCharacterDataSource = sqliteSelectCharacterDataSource;
             _loginHandler = new LoginHandler(accountRepository);
             _characterSelectHandler = new CharacterSelectHandler(sqliteSelectCharacterDataSource, characterRepository, getUserInfoTemplate);
-            _inventoryHandler = new InventoryHandler(sqliteSelectCharacterDataSource, characterRepository, broadcastGamePacket);
-            _townHandler = new TownHandler(characterRepository, sqliteSelectCharacterDataSource);
-            _dungeonHandler = new DungeonHandler(_assetService);
+            _inventoryRefreshSender = new InventoryRefreshSender(inventoryStore, sqliteSelectCharacterDataSource, characterRepository);
+            _inventoryHandler = new InventoryHandler(inventoryStore, sqliteSelectCharacterDataSource, characterRepository, _inventoryRefreshSender, broadcastGamePacket);
+            _petCreatureHandler = new PetCreatureHandler(inventoryStore, sqliteSelectCharacterDataSource, _inventoryRefreshSender);
+            _townHandler = new TownHandler(characterRepository, inventoryStore);
+            var dailyResetService = new Game.DailyReset.DailyResetService(databasePath, schemaFilePath);
+            var reviveCoinService = new Game.ReviveCoin.ReviveCoinService(inventoryStore, _assetService, dailyResetService);
+            _dungeonHandler = new DungeonHandler(
+                _assetService,
+                reviveCoinService,
+                characterRepository,
+                sqliteSelectCharacterDataSource,
+                rentalTimeProvider);
+            _staminaHandler = new StaminaHandler(_assetService);
             _skillHandler = new SkillHandler(characterRepository);
             _settingsHandler = new SettingsHandler();
-            _ceraShopHandler = new CeraShopHandler(sqliteSelectCharacterDataSource);
-            _luckyStarHandler = new LuckyStarHandler(_assetService, sqliteSelectCharacterDataSource);
-            _rentalHandler = new RentalHandler(_assetService, sqliteSelectCharacterDataSource);
+            _ceraShopHandler = new CeraShopHandler(inventoryStore, sqliteSelectCharacterDataSource, _inventoryRefreshSender);
+            _luckyStarHandler = new LuckyStarHandler(_assetService, sqliteSelectCharacterDataSource, rentalTimeProvider);
+            _rentalHandler = new RentalHandler(_assetService, inventoryStore, sqliteSelectCharacterDataSource, rentalTimeProvider);
             _mailboxHandler = new MailboxHandler();
             var collectBoxProgressRepository = new Game.Inventory.CollectBoxProgressRepository(databasePath, schemaFilePath);
-            _collectionBoxHandler = new CollectionBoxHandler(sqliteSelectCharacterDataSource, collectBoxProgressRepository);
-            _mercenaryHandler = new MercenaryHandler(characterRepository);
+            _collectionBoxHandler = new CollectionBoxHandler(inventoryStore, collectBoxProgressRepository);
+            _shopCoinEventHandler = new ShopCoinEventHandler(reviveCoinService, _inventoryRefreshSender);
+            _mercenaryHandler = new MercenaryHandler(characterRepository, getUserInfoTemplate);
 
             _cmdDispatch = new Dictionary<ushort, Func<EnhancedClientSession, GamePacketHeader, byte[], Task>>();
             RegisterLoginHandlers(_cmdDispatch);
             RegisterCharacterHandlers(_cmdDispatch);
             RegisterInventoryHandlers(_cmdDispatch);
+            RegisterPetHandlers(_cmdDispatch);
             RegisterSortItemLockHandlers(_cmdDispatch);
             RegisterEquipmentItemLockHandlers(_cmdDispatch);
             RegisterEquipmentSocketHandlers(_cmdDispatch);
@@ -91,6 +113,7 @@ namespace DfoServer.Network
             RegisterCollectionBoxHandlers(_cmdDispatch);
             RegisterMercenaryHandlers(_cmdDispatch);
             RegisterMiscHandlers(_cmdDispatch);
+            _cmdDispatch[0x00CF] = _shopCoinEventHandler.HandleShopCoinEvent;   // 207 SHOP_COIN_EVENT 每日免费复活币
         }
 
         public override async Task OnClientConnected(EnhancedClientSession session)
@@ -102,6 +125,7 @@ namespace DfoServer.Network
         public override Task OnClientDisconnected(EnhancedClientSession session)
         {
             FileLogger.Log($"[{ProtocolName}] Admin client disconnected: {session.SessionId}");
+            Handlers.Dungeon.DungeonRunLifecycle.EndRunOnTeardown(session, "disconnect");
             _townHandler.PersistPosition(session, forceImmediate: true, source: "disconnect");
             return Task.CompletedTask;
         }
@@ -157,15 +181,15 @@ namespace DfoServer.Network
                     var gsConnStr = SqliteDatabaseBootstrap.Initialize(
                         ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
                     s.GameSession = new Game.Session.GameSession(s, gsConnStr, _assetService);
-                    await _inventoryHandler.SendAllSortItemLockRefresh(s);
-                    await _inventoryHandler.SendAllEquipmentItemLockListRefresh(s);
+                    await _inventoryRefreshSender.SendAllSortItemLockRefresh(s);
+                    await _inventoryRefreshSender.SendAllEquipmentItemLockListRefresh(s);
                 }
             };
             d[0x0005] = _characterSelectHandler.Handle_ENUM_CMDPACKET_CREATE_CHARACTER;
             d[0x0006] = _characterSelectHandler.Handle_ENUM_CMDPACKET_DELETE_CHARACTER;
             d[0x0007] = _characterSelectHandler.Handle_ENUM_CMDPACKET_RETURN_SELECT_CHARACTER;
             d[0x0008] = _characterSelectHandler.Handle_ENUM_CMDPACKET_GET_USERINFO;
-            d[0x0009] = _dungeonHandler.Handle_ENUM_CMDPACKET_RECOVER_STAMINA;
+            d[0x0009] = _staminaHandler.Handle_ENUM_CMDPACKET_RECOVER_STAMINA;
             d[0x02B5] = _characterSelectHandler.Handle_ENUM_CMDPACKET_CHECK_DOUBLE_CHARACTER_NAME;
         }
 
@@ -176,16 +200,16 @@ namespace DfoServer.Network
             d[0x0014] = _inventoryHandler.Handle_ENUM_CMDPACKET_SORT_ITEM;         //20
             d[0x0015] = _inventoryHandler.Handle_ENUM_CMDPACKET_BUY_ITEM;          //21
             d[0x0016] = _inventoryHandler.Handle_ENUM_CMDPACKET_SELL_ITEM;         //22
+            d[0x0017] = _inventoryHandler.Handle_ENUM_CMDPACKET_REPAIR_EQUIPMENT;  //23 装备修理
             d[0x001A] = _inventoryHandler.Handle_ENUM_CMDPACKET_DISJOINT_ITEM;     //26 系统分解
             d[0x002C] = _inventoryHandler.Handle_ENUM_CMDPACKET_USE_STACKABLE;
             d[0x00D0] = _inventoryHandler.Handle_OPEN_MAGIC_BOX_SINGLE;
             d[0x0050] = _inventoryHandler.Handle_ENUM_CMDPACKET_UPGRADE_ITEM;      //80
-            d[0x0066] = _inventoryHandler.Handle_HATCH_CREATURE_EGG;                //102
             d[0x00A0] = _inventoryHandler.Handle_OPEN_SELECTABLE_PACKAGE;
-            d[0x00AD] = _inventoryHandler.Handle_HATCH_CREATURE_EGG;                //173
-            d[0x00AE] = _inventoryHandler.Handle_REQUEST_HATCHED_CREATURE;          //174
             d[0x0110] = _inventoryHandler.Handle_ENUM_CMDPACKET_ENCHANT_BY_BEAD;   //272
+            d[0x0191] = _inventoryHandler.Handle_UNSEAL_RANDOM_OPTION;             //401
             d[0x019C] = _inventoryHandler.Handle_TITLE_BOOK;                       //412
+            d[0x01B6] = _inventoryHandler.Handle_CHANGE_RANDOM_OPTION;             //438
             d[0x019D] = _inventoryHandler.Handle_TITLE_BOOK;                       //413
             d[0x0207] = _inventoryHandler.Handle_OPEN_AVATAR_PACKAGE;
             d[0x0218] = _inventoryHandler.Handle_USE_BOOSTER_ITEM;
@@ -197,6 +221,22 @@ namespace DfoServer.Network
             d[0x0132] = _inventoryHandler.Handle_UPGRADE_ACCOUNT_CARGO;             //306 扩容金库
             d[0x0133] = _inventoryHandler.Handle_DEPOSIT_MONEY;                    //307 金库存金币
             d[0x0134] = _inventoryHandler.Handle_WITHDRAW_MONEY;                   //308 金库取金币
+            d[0x0198] = _inventoryHandler.Handle_UPGRADE_CARGO;                    //408 扩容个人仓库
+        }
+
+        private void RegisterPetHandlers(Dictionary<ushort, Func<EnhancedClientSession, GamePacketHeader, byte[], Task>> d)
+        {
+            d[0x002C] = async (s, h, b) =>
+            {
+                if (await _petCreatureHandler.TryHandleUseStackable(s, h, b))
+                    return;
+
+                await _inventoryHandler.Handle_ENUM_CMDPACKET_USE_STACKABLE(s, h, b);
+            };
+            d[0x0064] = _petCreatureHandler.HandleRenameCreature;
+            d[0x0066] = _petCreatureHandler.HandleHatchCreatureEgg;
+            d[0x00AD] = _petCreatureHandler.HandleHatchCreatureEgg;
+            d[0x00AE] = _petCreatureHandler.HandleRequestHatchedCreature;
         }
 
         private void RegisterSortItemLockHandlers(Dictionary<ushort, Func<EnhancedClientSession, GamePacketHeader, byte[], Task>> d)
@@ -249,8 +289,9 @@ namespace DfoServer.Network
             d[0x008F] = _dungeonHandler.Handle_ENUM_CMDPACKET_CHANGE_TUTORIAL_FLAG; //143
             d[0x00BF] = _dungeonHandler.Handle_ENUM_CMDPACKET_DUNGEON_EVENT_STORY_PAUSE; //191
             d[0x01E4] = _dungeonHandler.Handle_ENUM_CMDPACKET_TUTORIAL_LEVEL_UP;   //484
-            d[0x0312] = _dungeonHandler.Handle_PREMIUM_SERVICE;                    //786
+            d[0x0312] = PremiumQueryHandler.Handle_PREMIUM_SERVICE;                //786
             d[0x03B6] = _dungeonHandler.Handle_ENUM_CMDPACKET_GORGEOUS_CHALLENGE_TOGGLE;
+            d[0x009F] = _dungeonHandler.Handle_ENUM_CMDPACKET_DEATH_TOWER_STAGE_CMD; // 159
         }
 
         private void RegisterSkillHandlers(Dictionary<ushort, Func<EnhancedClientSession, GamePacketHeader, byte[], Task>> d)
@@ -330,8 +371,7 @@ namespace DfoServer.Network
             d[0x0003] = (s, h, b) =>
                 s.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0003, CommonPacketBodyBuilder.BuildSuccessAck()));
             d[0x0040] = _ceraShopHandler.HandleCeraShopPurchase;                   //64
-            d[0x01A1] = (s, h, b) =>                                               //417
-                s.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x01A1, LegacyPacketBodyBuilder.BuildVerifyPvpLagResponse(b)));
+            d[0x01A1] = _inventoryHandler.Handle_ACHIEVEMENT_TRIGGER;              //417
             d[0x01DE] = (s, h, b) =>                                               //478
                 s.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x01DE, CommonPacketBodyBuilder.BuildSuccessAck()));
             d[0x02A8] = (s, h, b) =>

@@ -1,3 +1,4 @@
+using DfoServer.Game.Accounts;
 using DfoServer.Game.CharacterData;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Currency;
@@ -5,6 +6,7 @@ using DfoServer.Game.ExpertJob;
 using DfoServer.Game.Inventory;
 using DfoServer.Game.ItemUpgrade;
 using DfoServer.Game.Settings;
+using DfoServer.Game.TitleBook;
 using System;
 using System.Collections.Generic;
 using Microsoft.Data.Sqlite;
@@ -21,16 +23,28 @@ namespace DfoServer.Game.SelectCharacter
         private readonly PacketSequenceRepository _packetSequenceRepository;
         private readonly ICharacterRepository _characterRepository;
         private readonly AccountSettingsRepository _accountSettingsRepository;
+        private readonly CharacterTitleBookRepository _titleBookRepository;
+        private readonly DailyReset.DailyResetService _dailyResetService;
+        private readonly TitleBookMutationService _titleBookMutationService;
+        private readonly CharacterAchievementProgressRepository _achievementProgressRepository;
         private readonly string _connectionString;
         private readonly string _databasePath;
         private readonly string _schemaFilePath;
+        private readonly IRentalTimeProvider _rentalTimeProvider;
 
-        public SqliteSelectCharacterDataSource(string databasePath, string schemaFilePath, ICharacterRepository characterRepository, IAssetService assetService = null)
+        public SqliteSelectCharacterDataSource(
+            string databasePath,
+            string schemaFilePath,
+            ICharacterRepository characterRepository,
+            IAssetService assetService = null,
+            IInventoryStore inventoryStore = null,
+            IRentalTimeProvider rentalTimeProvider = null)
         {
             _databasePath = databasePath;
             _schemaFilePath = schemaFilePath;
             _connectionString = Infrastructure.SqliteDatabaseBootstrap.Initialize(databasePath, schemaFilePath);
-            _inventoryStore = new SqliteInventoryStore(databasePath, schemaFilePath);
+            _rentalTimeProvider = rentalTimeProvider ?? SystemRentalTimeProvider.Instance;
+            _inventoryStore = inventoryStore ?? new SqliteInventoryStore(databasePath, schemaFilePath, _rentalTimeProvider);
             _assetService = assetService;
             _initDataRepository = new SqliteCharacterProgressRepository(databasePath, schemaFilePath);
             _userInfoBlobRepository = new SqliteUserInfoBlobRepository(databasePath, schemaFilePath);
@@ -38,6 +52,10 @@ namespace DfoServer.Game.SelectCharacter
             _packetSequenceRepository = new PacketSequenceRepository(databasePath, schemaFilePath);
             _characterRepository = characterRepository;
             _accountSettingsRepository = new AccountSettingsRepository(databasePath, schemaFilePath);
+            _titleBookRepository = new CharacterTitleBookRepository(_connectionString);
+            _dailyResetService = new DailyReset.DailyResetService(databasePath, schemaFilePath);
+            _titleBookMutationService = new TitleBookMutationService(_connectionString);
+            _achievementProgressRepository = new CharacterAchievementProgressRepository(_connectionString);
         }
 
         public int GetSeedCharacterId()
@@ -51,14 +69,39 @@ namespace DfoServer.Game.SelectCharacter
             return _initDataRepository.LoadCreatures(characterId);
         }
 
+        public List<TitleBookCategorySnapshot> LoadTitleBookSnapshots(int characterId)
+        {
+            return _titleBookRepository.LoadSnapshots(characterId);
+        }
+
+        public TitleBookCategorySnapshot LoadTitleBookSnapshot(int characterId, int category)
+        {
+            return _titleBookRepository.LoadSnapshot(characterId, category);
+        }
+
+        public bool TryPutTitleBook(int characterId, int accountId, InventoryListType sourceList, short sourceSlot, int itemId, int category, int bookIndex, out TitleBookMutationResult result)
+        {
+            result = _titleBookMutationService.PutTitle(characterId, accountId, sourceList, sourceSlot, itemId, category, bookIndex);
+            return result.Success;
+        }
+
+        public bool TryGetTitleBook(int characterId, int accountId, InventoryListType targetList, short targetSlot, int itemId, int category, int bookIndex, out TitleBookMutationResult result)
+        {
+            result = _titleBookMutationService.GetTitle(characterId, accountId, targetList, targetSlot, itemId, category, bookIndex);
+            return result.Success;
+        }
+
+        public bool TryTriggerAchievement(int characterId, int questId, ushort delta1, ushort delta2, ushort delta3, out AchievementTriggerResult result)
+        {
+            result = _titleBookMutationService.TriggerAchievement(characterId, questId, delta1, delta2, delta3);
+            return result.Success;
+        }
+
         public SelectCharacterDataSnapshot Load(int characterId, int accountId)
         {
             CharacterItemListSnapshot itemList;
-            using (_inventoryStore.BeginScope(characterId, accountId))
-            {
-                _inventoryStore.DeleteExpiredRentalEquipment();
-                itemList = _inventoryStore.LoadCharacterItemListSnapshot();
-            }
+            _inventoryStore.DeleteExpiredRentalEquipment(characterId, accountId);
+            itemList = _inventoryStore.LoadCharacterItemListSnapshot(characterId, accountId);
 
             var initSnapshot = new SelectCharacterInitializationSnapshot();
 
@@ -68,6 +111,11 @@ namespace DfoServer.Game.SelectCharacter
                 initSnapshot.CreatureItemList = _initDataRepository.LoadCreatures(characterId);
 
             _initFlagsRepository.LoadAll(characterId, initSnapshot);
+            initSnapshot.TitleBookCategories.Clear();
+            for (var category = 0; category < TitleBookStaticDataProvider.CategoryCapacities.Count; category++)
+                initSnapshot.TitleBookCategories.Add(
+                    _titleBookRepository.LoadSnapshot(characterId, category));
+            MergeAchievementProgress(initSnapshot, _achievementProgressRepository.LoadSnapshot(characterId));
 
             
             {
@@ -88,6 +136,13 @@ namespace DfoServer.Game.SelectCharacter
 
             
             LoadInitFieldsFromPacketTemplates(characterId, initSnapshot);
+            // 0x0357 是可变状态，加载模板后立即用当前背包/装备租赁重建。
+            var rebuiltRentalInfo = _inventoryStore.RebuildRentalInfoFromInventory(
+                characterId,
+                accountId,
+                initSnapshot.RentalInfo);
+            initSnapshot.RentalInfo.ReplaceItems(rebuiltRentalInfo.Items);
+            SaveRentalInfo(characterId, initSnapshot.RentalInfo);
 
             if (_assetService != null)
             {
@@ -106,23 +161,36 @@ namespace DfoServer.Game.SelectCharacter
                     ApplyWallet(initSnapshot, wallet);
                 }
             }
-            initSnapshot.BoosterGage = (ushort)InventoryDbPrimitives.NormalizeSeriaLuckValue(LoadSeriaLuckValue(accountId));
 
             var acctSettings = _accountSettingsRepository.Load(accountId);
+            var character = _characterRepository?.GetById(characterId);
             initSnapshot.MainGameOptionBlob = acctSettings?.MainGameOption ?? Settings.AccountSettings.DefaultMainGameOption;
             initSnapshot.QuickchatBank0 = acctSettings?.QuickchatBank0;
             initSnapshot.QuickchatBank1 = acctSettings?.QuickchatBank1;
-            initSnapshot.HotkeyConfigSlots.Clear();
-            var hkSlots = acctSettings?.HotkeySlots ?? Settings.AccountSettings.DefaultHotkeySlots;
+            var hkSlots = initSnapshot.HotkeyConfigSlots.Count > 0
+                ? BuildHotkeyBlob(initSnapshot.HotkeyConfigSlots)
+                : Settings.CharacterKeyboardDefaults.BuildHotkeySlots((byte)(character?.Job ?? 0));
+            if (character != null
+                && Settings.CharacterKeyboardDefaults.IsCreatorMage(character.Job)
+                && Settings.CharacterKeyboardDefaults.LooksLikeNormalDefaultHotkeySlots(hkSlots))
+            {
+                hkSlots = Settings.CharacterKeyboardDefaults.BuildHotkeySlots(character.Job);
+                _initFlagsRepository.SaveHotkeyConfig(characterId, hkSlots);
+            }
+            Settings.AccountSettings.ApplyAccountScopedHotkeySlots(hkSlots, acctSettings?.HotkeySlots);
             if (hkSlots != null && hkSlots.Length >= 2)
             {
-                initSnapshot.HotkeyKeyType = acctSettings?.HotkeyKeyType ?? 0;
+                initSnapshot.HotkeyKeyType = character != null && Settings.CharacterKeyboardDefaults.IsCreatorMage(character.Job)
+                    ? (byte)1
+                    : (acctSettings?.HotkeyKeyType ?? 0);
+                initSnapshot.HotkeyConfigSlots.Clear();
                 for (int i = 0; i + 1 < hkSlots.Length; i += 2)
                     initSnapshot.HotkeyConfigSlots.Add(BitConverter.ToUInt16(hkSlots, i));
             }
 
 
             initSnapshot.ServerEventPhaseBitmap = _initFlagsRepository.LoadServerEventPhaseBitmap();
+            initSnapshot.ShopCoinEventFlag = _dailyResetService.IsClaimed(characterId, ReviveCoin.ReviveCoinService.DailyClaimKey) ? (byte)1 : (byte)0;
 
             initSnapshot.PremiumServiceType = 1;
             initSnapshot.PremiumServiceData = Premium.PremiumService.BuildPremiumServiceData(
@@ -139,11 +207,24 @@ namespace DfoServer.Game.SelectCharacter
                 characterRecord.Appearance = Game.Appearance.AppearanceService.LoadAppearanceFromEquipEntries(characterId);
             }
 
+            var accountCharacters = _characterRepository?.ListByAccount(accountId);
+            var adventureGroup = AdventureGroupDataProvider.Calculate(accountCharacters);
+            // 客户端从角色侧字段读取冒险团常驻状态。
+            PersistAdventureManageLevel(accountCharacters, adventureGroup.ManageLevel);
+
             
             var subtype1Repo = new CharacterData.SqliteSubtype1Repository(
                 Infrastructure.ServerPaths.DatabasePath, Infrastructure.ServerPaths.SchemaFilePath);
             if (subtype1Repo.HasData(characterId))
+            {
                 initSnapshot.UserInfoAddition = subtype1Repo.Load(characterId);
+                if (initSnapshot.UserInfoAddition != null)
+                {
+                    AdventureGroupUserInfoSynchronizer.ApplyToUserInfoAddition(
+                        initSnapshot.UserInfoAddition,
+                        adventureGroup);
+                }
+            }
 
             
             if (characterRecord != null)
@@ -211,6 +292,23 @@ namespace DfoServer.Game.SelectCharacter
             });
         }
 
+        private static void MergeAchievementProgress(
+            SelectCharacterInitializationSnapshot initSnapshot,
+            AchievementCompleteSnapshot progress)
+        {
+            if (progress == null || progress.Entries.Count == 0)
+                return;
+
+            var merged = new Dictionary<int, AchievementCompleteEntrySnapshot>();
+            foreach (var entry in initSnapshot.AchievementComplete.Entries)
+                merged[entry.AchievementId] = entry;
+            foreach (var entry in progress.Entries)
+                merged[entry.AchievementId] = entry;
+
+            initSnapshot.AchievementComplete = new AchievementCompleteSnapshot();
+            initSnapshot.AchievementComplete.Entries.AddRange(merged.Values);
+        }
+
         private static void ApplyWallet(SelectCharacterInitializationSnapshot initSnapshot, WalletSnapshot wallet)
         {
             if (initSnapshot == null || wallet == null)
@@ -222,21 +320,54 @@ namespace DfoServer.Game.SelectCharacter
             initSnapshot.LuckyStar = wallet.LuckyStar;
         }
 
-        private int LoadSeriaLuckValue(int accountId)
+        private static byte[] BuildHotkeyBlob(IReadOnlyList<ushort> slots)
         {
-            using (var conn = new SqliteConnection(_connectionString))
+            var count = slots?.Count ?? 0;
+            var result = new byte[count * 2];
+            for (var i = 0; i < count; i++)
+                Buffer.BlockCopy(BitConverter.GetBytes(slots[i]), 0, result, i * 2, 2);
+            return result;
+        }
+
+        private void PersistAdventureManageLevel(IReadOnlyList<CharacterRecord> accountCharacters, byte manageLevel)
+        {
+            if (accountCharacters == null || accountCharacters.Count == 0)
+                return;
+
+            try
             {
-                conn.Open();
-                using (var cmd = conn.CreateCommand())
+                using (var conn = new SqliteConnection(_connectionString))
                 {
-                    cmd.CommandText = @"
-SELECT seria_luck_value
-FROM accounts
-WHERE account_id=@aid;";
-                    cmd.Parameters.AddWithValue("@aid", accountId);
-                    var raw = cmd.ExecuteScalar();
-                    return raw == null || raw == DBNull.Value ? 0 : Convert.ToInt32(raw);
+                    conn.Open();
+                    using (var tx = conn.BeginTransaction())
+                    using (var cmd = conn.CreateCommand())
+                    {
+                        cmd.Transaction = tx;
+                        cmd.CommandText = @"INSERT INTO character_subtype1_fields(character_id, manage_level)
+VALUES (@cid, @level)
+ON CONFLICT(character_id) DO UPDATE SET manage_level=excluded.manage_level;";
+                        var cidParam = cmd.CreateParameter();
+                        cidParam.ParameterName = "@cid";
+                        cmd.Parameters.Add(cidParam);
+                        var levelParam = cmd.CreateParameter();
+                        levelParam.ParameterName = "@level";
+                        levelParam.Value = (int)manageLevel;
+                        cmd.Parameters.Add(levelParam);
+
+                        foreach (var character in accountCharacters)
+                        {
+                            if (character == null || character.CharacterId <= 0)
+                                continue;
+                            cidParam.Value = character.CharacterId;
+                            cmd.ExecuteNonQuery();
+                        }
+                        tx.Commit();
+                    }
                 }
+            }
+            catch (Exception ex)
+            {
+                FileLogger.Log($"[GameProtocol] Adventure manage_level persist failed: {ex.Message}");
             }
         }
 
@@ -288,262 +419,35 @@ WHERE account_id=@aid;";
                 });
             }
         }
-
-        public CharacterItemListSnapshot LoadItemListSnapshot(int characterId, int accountId)
-        {
-            if (_assetService != null)
-            {
-                using (var scope = _assetService.OpenScope(characterId, accountId))
-                    return _assetService.LoadSnapshot(scope);
-            }
-            using (_inventoryStore.BeginScope(characterId, accountId))
-                return _inventoryStore.LoadCharacterItemListSnapshot();
-        }
-
-        public bool TryMoveItem(int characterId, int accountId, InventoryMoveRequest request, out InventoryMoveResult result)
-        {
-            using (_inventoryStore.BeginScope(characterId, accountId))
-                return _inventoryStore.TryMoveItem(request, out result);
-        }
-
-        public bool TryDeleteItem(int characterId, int accountId, InventoryListType listType, short slotIndex, short deleteCount, out InventoryMutationResult result)
-        {
-            using (_inventoryStore.BeginScope(characterId, accountId))
-                return _inventoryStore.TryDeleteItem(listType, slotIndex, deleteCount, out result);
-        }
-
-        public bool TryUsePremiumContractItem(int characterId, int accountId, InventoryListType listType, short slotIndex, int expectedItemTemplateId, out PremiumContractUseResult result)
-        {
-            using (_inventoryStore.BeginScope(characterId, accountId))
-                return _inventoryStore.TryUsePremiumContractItem(listType, slotIndex, expectedItemTemplateId, out result);
-        }
-
-        public int CountItem(int characterId, int accountId, int itemTemplateId)
-        {
-            using (_inventoryStore.BeginScope(characterId, accountId))
-                return _inventoryStore.CountItem(itemTemplateId);
-        }
-
-        public bool TryRemoveItemByTemplateId(int characterId, int accountId, int itemTemplateId, out short slotIndex, out InventoryMutationResult result)
-        {
-            using (_inventoryStore.BeginScope(characterId, accountId))
-                return _inventoryStore.TryRemoveItemByTemplateId(itemTemplateId, out slotIndex, out result);
-        }
-
-        public bool TryPickupItem(int characterId, int accountId, int itemTemplateId, int stackCount, out short assignedSlot, out int newStackCount)
-        {
-            using (_inventoryStore.BeginScope(characterId, accountId))
-                return _inventoryStore.TryPickupItem(itemTemplateId, stackCount, out assignedSlot, out newStackCount);
-        }
-
-        public bool TryOpenAvatarPackage(int characterId, int accountId, AvatarPackageOpenRequest request, out AvatarPackageOpenResult result)
-        {
-            using (_inventoryStore.BeginScope(characterId, accountId))
-                return _inventoryStore.TryOpenAvatarPackage(request, out result);
-        }
-
-        public bool TryOpenSelectablePackage(int characterId, int accountId, SelectablePackageOpenRequest request, out SelectablePackageOpenResult result)
-        {
-            using (_inventoryStore.BeginScope(characterId, accountId))
-                return _inventoryStore.TryOpenSelectablePackage(request, out result);
-        }
-
-        public bool TryUseBoosterItem(int characterId, int accountId, BoosterUseRequest request, out BoosterUseResult result)
-        {
-            using (_inventoryStore.BeginScope(characterId, accountId))
-                return _inventoryStore.TryUseBoosterItem(request, out result);
-        }
-
-        public bool TryHatchCreatureEgg(int characterId, int accountId, InventoryListType listType, short slotIndex, int expectedItemTemplateId, out CreatureHatchResult result)
-        {
-            using (_inventoryStore.BeginScope(characterId, accountId))
-                return _inventoryStore.TryHatchCreatureEgg(listType, slotIndex, expectedItemTemplateId, out result);
-        }
-
-        public bool TryOpenPackage0207(int characterId, int accountId, short slotIndex, IReadOnlyList<int> selectedItemTemplateIds, out BoosterUseResult result)
-        {
-            using (_inventoryStore.BeginScope(characterId, accountId))
-                return _inventoryStore.TryOpenPackage0207(slotIndex, selectedItemTemplateIds, out result);
-        }
-
-        public bool TryBuyItem(int characterId, int accountId, int itemTemplateId, int buyCount, out InventoryMutationResult result)
-        {
-            using (_inventoryStore.BeginScope(characterId, accountId))
-                return _inventoryStore.TryBuyItem(itemTemplateId, buyCount, out result);
-        }
-
-        // 透传 paymentMode 与 attributeValue 到下层 InventoryStore。
-        // 此方法仅做 Scope 管理，实际逻辑在 InventoryShopStore.TryBuyCeraShopItem。
-        public bool TryBuyCeraShopItem(int characterId, int accountId, int productId, int buyCount, int paymentMode, byte attributeValue, out InventoryMutationResult result)
-        {
-            using (_inventoryStore.BeginScope(characterId, accountId))
-                return _inventoryStore.TryBuyCeraShopItem(productId, buyCount, paymentMode, attributeValue, out result);
-        }
-
-        public bool TrySellItem(int characterId, int accountId, InventoryListType listType, short slotIndex, short sellCount, out InventoryMutationResult result)
-        {
-            using (_inventoryStore.BeginScope(characterId, accountId))
-                return _inventoryStore.TrySellItem(listType, slotIndex, sellCount, out result);
-        }
-
-        public bool TryDisjointItem(int characterId, int accountId, DisjointItemRequest request, out DisjointItemResult result)
-        {
-            using (_inventoryStore.BeginScope(characterId, accountId))
-                return _inventoryStore.TryDisjointItem(request, out result);
-        }
-
-        public bool TryEnchantByBead(int characterId, int accountId, EnchantByBeadCommand command, out EnchantByBeadResult result)
-        {
-            using (_inventoryStore.BeginScope(characterId, accountId))
-                return _inventoryStore.TryEnchantByBead(command, out result);
-        }
-
-        public bool TryUpgradeItem(int characterId, int accountId, ItemUpgradeCommand command, out ItemUpgradeResult result)
-        {
-            using (_inventoryStore.BeginScope(characterId, accountId))
-                return _inventoryStore.TryUpgradeItem(command, out result);
-        }
-
-        public bool TryCompoundAvatar(int characterId, int accountId, short slot1, short slot2, short consumeSlot,
-                Func<int, int, int, System.Collections.Generic.List<int>> resolveNewItemIds, byte newOption,
-                out System.Collections.Generic.List<int> newSlots, out int oldItemId1, out int oldItemId2, out System.Collections.Generic.List<int> newItemIds,
-                out int consumedItemTemplateId, out int consumedItemRemainingCount)
-        {
-            using (_inventoryStore.BeginScope(characterId, accountId))
-                return _inventoryStore.TryCompoundAvatar(slot1, slot2, consumeSlot, resolveNewItemIds, newOption,
-                    out newSlots, out oldItemId1, out oldItemId2, out newItemIds, out consumedItemTemplateId, out consumedItemRemainingCount);
-        }
-
-        public bool TryCompoundAvatarSet(int characterId, int accountId, short[] consumeSlots, int[] expectedItemIds, Func<int, int> resolveNewItemId, byte newOption,
-                short consumeStackableSlot, out int newSlot, out System.Collections.Generic.List<int> oldItemIds, out int newItemId,
-                out int consumedItemTemplateId, out int consumedItemRemainingCount)
-        {
-            using (_inventoryStore.BeginScope(characterId, accountId))
-                return _inventoryStore.TryCompoundAvatarSet(consumeSlots, expectedItemIds, resolveNewItemId, newOption, consumeStackableSlot, out newSlot, out oldItemIds, out newItemId, out consumedItemTemplateId, out consumedItemRemainingCount);
-        }
-
-        public bool TryOpenEquipmentSocket(int characterId, int accountId, short targetSlotIndex, int targetItemTemplateId, short materialSlotIndex, out EquipmentSocketMutationResult result)
-        {
-            using (_inventoryStore.BeginScope(characterId, accountId))
-                return _inventoryStore.TryOpenEquipmentSocket(targetSlotIndex, targetItemTemplateId, materialSlotIndex, out result);
-        }
-
-        public bool TrySetEquipmentEmblems(int characterId, int accountId, short targetSlotIndex, int targetItemTemplateId, IReadOnlyList<EquipmentEmblemApplyRequest> emblems, out EquipmentEmblemMutationResult result)
-        {
-            using (_inventoryStore.BeginScope(characterId, accountId))
-                return _inventoryStore.TrySetEquipmentEmblems(targetSlotIndex, targetItemTemplateId, emblems, out result);
-        }
-
-        public bool TryOpenAvatarSocket(int characterId, int accountId, short targetSlotIndex, int targetItemTemplateId, short materialSlotIndex, out AvatarSocketMutationResult result)
-        {
-            using (_inventoryStore.BeginScope(characterId, accountId))
-                return _inventoryStore.TryOpenAvatarSocket(targetSlotIndex, targetItemTemplateId, materialSlotIndex, out result);
-        }
-
-        public bool TrySetAvatarEmblems(int characterId, int accountId, short targetSlotIndex, int targetItemTemplateId, IReadOnlyList<EquipmentEmblemApplyRequest> emblems, out AvatarEmblemMutationResult result)
-        {
-            using (_inventoryStore.BeginScope(characterId, accountId))
-                return _inventoryStore.TrySetAvatarEmblems(targetSlotIndex, targetItemTemplateId, emblems, out result);
-        }
-
-        public bool TrySortItems(int characterId, int accountId, InventoryListType listType, byte category)
-        {
-            using (_inventoryStore.BeginScope(characterId, accountId))
-                return _inventoryStore.TrySortItems(characterId, listType, category);
-        }
-
-        public bool TryToggleSortItemLock(int characterId, int accountId, InventoryListType listType, short slotIndex, out SortItemLockEntry entry)
-        {
-            using (_inventoryStore.BeginScope(characterId, accountId))
-                return _inventoryStore.TryToggleSortItemLock(listType, slotIndex, out entry);
-        }
-
-        public bool TryUnlockSortItemLock(int characterId, int accountId, InventoryListType listType, short slotIndex)
-        {
-            using (_inventoryStore.BeginScope(characterId, accountId))
-                return _inventoryStore.TryUnlockSortItemLock(listType, slotIndex);
-        }
-
-        public IReadOnlyList<SortItemLockEntry> LoadSortItemLocks(int characterId, int accountId)
-        {
-            using (_inventoryStore.BeginScope(characterId, accountId))
-                return _inventoryStore.LoadSortItemLocks();
-        }
-
-        public IReadOnlyList<SortItemLockEntry> LoadSortItemLocks(int characterId, int accountId, InventoryListType listType)
-        {
-            using (_inventoryStore.BeginScope(characterId, accountId))
-                return _inventoryStore.LoadSortItemLocks(listType);
-        }
-
-        public bool TryLockEquipmentItem(int characterId, int accountId, InventoryListType listType, short slotIndex, out EquipmentItemLockResult result)
-        {
-            using (_inventoryStore.BeginScope(characterId, accountId))
-                return _inventoryStore.TryLockEquipmentItem(listType, slotIndex, out result);
-        }
-
-        public bool TryUnlockEquipmentItem(int characterId, int accountId, InventoryListType listType, short slotIndex, out EquipmentItemLockResult result)
-        {
-            using (_inventoryStore.BeginScope(characterId, accountId))
-                return _inventoryStore.TryUnlockEquipmentItem(listType, slotIndex, out result);
-        }
-
-        public bool TryCancelEquipmentItemUnlock(int characterId, int accountId, InventoryListType listType, short slotIndex, out EquipmentItemLockResult result)
-        {
-            using (_inventoryStore.BeginScope(characterId, accountId))
-                return _inventoryStore.TryCancelEquipmentItemUnlock(listType, slotIndex, out result);
-        }
-
-        public IReadOnlyList<EquipmentItemLockEntry> LoadEquipmentItemLocks(int characterId, int accountId)
-        {
-            using (_inventoryStore.BeginScope(characterId, accountId))
-                return _inventoryStore.LoadEquipmentItemLocks();
-        }
-
-        public IReadOnlyList<EquipmentItemLockEntry> LoadEquipmentItemLocks(int characterId, int accountId, InventoryListType listType)
-        {
-            using (_inventoryStore.BeginScope(characterId, accountId))
-                return _inventoryStore.LoadEquipmentItemLocks(listType);
-        }
-
-        public CommonInventoryItem LoadCommonItemForRefresh(int characterId, int accountId, InventoryListType listType, short slotIndex)
-        {
-            using (_inventoryStore.BeginScope(characterId, accountId))
-                return _inventoryStore.LoadCommonItemForRefresh(listType, slotIndex);
-        }
-
-        public AvatarInventoryItem LoadAvatarItemForRefresh(int characterId, int accountId, short slotIndex)
-        {
-            using (_inventoryStore.BeginScope(characterId, accountId))
-                return _inventoryStore.LoadAvatarItemForRefresh(slotIndex);
-        }
-
-        public PetInventoryItem LoadPetItemForRefresh(int characterId, int accountId, short slotIndex)
-        {
-            using (_inventoryStore.BeginScope(characterId, accountId))
-                return _inventoryStore.LoadPetItemForRefresh(slotIndex);
-        }
-
         public byte[] LoadCharacterInitBody(int characterId, ushort notiType, int occurrenceIndex = 0)
             => LoadInitBody(characterId, notiType, occurrenceIndex);
+
+        public bool TrySaveCrystalContractSelection(int characterId, byte[] body)
+        {
+            if (characterId <= 0 || body == null || body.Length < 2)
+                return false;
+
+            var storage = new byte[] { body[0], body[1] };
+            using (var conn = new SqliteConnection(_connectionString))
+            {
+                conn.Open();
+                using (var cmd = new SqliteCommand(
+                    @"INSERT INTO character_init_bodies (character_id, noti_type, occurrence_index, body)
+                      VALUES (@cid, @nt, 0, @body)
+                      ON CONFLICT(character_id, noti_type, occurrence_index)
+                      DO UPDATE SET body=@body", conn))
+                {
+                    cmd.Parameters.AddWithValue("@cid", characterId);
+                    cmd.Parameters.AddWithValue("@nt", 0x0300);
+                    cmd.Parameters.AddWithValue("@body", storage);
+                    return cmd.ExecuteNonQuery() > 0;
+                }
+            }
+        }
 
         public byte[] LoadAccountMainOption(int accountId)
             => _accountSettingsRepository.Load(accountId)?.MainGameOption;
 
-        public bool TryPickupRentalWeapon(
-            SqliteConnection connection,
-            SqliteTransaction transaction,
-            int characterId,
-            int accountId,
-            int itemTemplateId,
-            int expireTime,
-            out short assignedSlot,
-            out int instanceValue)
-        {
-            using (_inventoryStore.BeginScope(characterId, accountId))
-                return _inventoryStore.TryPickupRentalWeapon(
-                    connection, transaction, itemTemplateId, expireTime, out assignedSlot, out instanceValue);
-        }
 
         public void SaveRentalInfo(SqliteConnection connection, SqliteTransaction transaction, int characterId, RentalInfoSnapshot rental)
         {
@@ -564,6 +468,22 @@ WHERE account_id=@aid;";
             }
         }
 
+        private void SaveRentalInfo(int characterId, RentalInfoSnapshot rental)
+        {
+            if (characterId <= 0 || rental == null)
+                return;
+
+            using (var connection = new SqliteConnection(_connectionString))
+            {
+                connection.Open();
+                using (var transaction = connection.BeginTransaction())
+                {
+                    SaveRentalInfo(connection, transaction, characterId, rental);
+                    transaction.Commit();
+                }
+            }
+        }
+
         private void LoadFieldFromInitBody(int characterId, int notiType, Action<byte[]> parse)
         {
             var body = LoadInitBody(characterId, notiType, 0);
@@ -574,7 +494,7 @@ WHERE account_id=@aid;";
         {
             using (var conn = new SqliteConnection(
                 Infrastructure.SqliteDatabaseBootstrap.Initialize(
-                    Infrastructure.ServerPaths.DatabasePath, Infrastructure.ServerPaths.SchemaFilePath)))
+                    _databasePath, _schemaFilePath)))
             {
                 conn.Open();
                 using (var cmd = new SqliteCommand(
@@ -590,8 +510,7 @@ WHERE account_id=@aid;";
 
         public void InitializeNewCharacter(int characterId, int accountId, byte job)
         {
-            using (_inventoryStore.BeginScope(characterId, accountId))
-                _inventoryStore.EnsureContainerState(characterId);
+            _inventoryStore.EnsureContainerState(characterId, accountId);
 
             var emptySnapshot = new SelectCharacterInitializationSnapshot();
             _initFlagsRepository.SeedFromSnapshot(characterId, emptySnapshot);
@@ -609,11 +528,11 @@ WHERE account_id=@aid;";
             var initialEquip = InitialCharacterEquipment.Get(job);
             if (initialEquip != null)
             {
-                using (_inventoryStore.BeginScope(characterId, accountId))
-                    _inventoryStore.SeedNewCharacterEquipment(initialEquip);
+                _inventoryStore.SeedNewCharacterEquipment(characterId, accountId, initialEquip);
             }
 
-            
+            _initFlagsRepository.SaveHotkeyConfig(characterId, Settings.CharacterKeyboardDefaults.BuildHotkeySlots(job));
+
             SeedNewCharacterStructuredData(characterId, job);
         }
 
@@ -677,6 +596,7 @@ WHERE account_id=@aid;";
                     (0x0077, new byte[] { 0x00 }),              
                     (0x0111, new byte[8]),                      
                     (0x019F, new byte[] { 0x00, 0x00 }),        
+                    (0x0300, new byte[] { 0x00, 0x00 }),
                     (0x0357, new byte[] { 0x7B, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }),
                     (0x03D8, new byte[204]),                    
                 };
@@ -738,6 +658,13 @@ WHERE account_id=@aid;";
             LoadFieldFromInitBody(characterId, 0x0357, body => {
                 if (body == null || body.Length < 8) return;
                 RentalInfoSnapshot.ParseStorageBody(body, snap.RentalInfo);
+                snap.RentalInfo.RemoveExpired(_rentalTimeProvider.UtcNowUnixSeconds());
+            });
+
+            LoadFieldFromInitBody(characterId, 0x0300, body => {
+                if (body == null || body.Length < 2) return;
+                snap.CubeType = body[0];
+                snap.CubeGrade = body[1];
             });
 
             

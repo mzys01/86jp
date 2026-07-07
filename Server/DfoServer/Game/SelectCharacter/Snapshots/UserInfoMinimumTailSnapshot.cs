@@ -15,21 +15,28 @@ namespace DfoServer.Game.SelectCharacter
     
     public sealed class UserInfoMinimumTailSnapshot
     {
-        public uint NameTagItemId { get; set; }              
+        public uint CloneTitleItemId { get; set; }
+        public byte Forging { get; set; }
         public byte CreatureField1 { get; set; }             
         public byte CreatureField2 { get; set; }             
         public byte CreatureField3 { get; set; }             
         public byte CreatureField4 { get; set; }             
         public byte[] CreatureBuffer { get; set; }           
+        public uint NameTagItemId { get; set; }
+        public uint NameTagExpireTime { get; set; }
         public byte Stamina { get; set; }                    
         public uint FatiguePenalty { get; set; }             
         public byte IsEventCharacter { get; set; }           
+        public uint EquippedCreatureItemId { get; set; }
+        public byte[] EquippedCreatureNameBytes { get; set; } = new byte[0];
+        public byte EquippedCreatureAliveState { get; set; }
         public uint PcRoomId { get; set; } = 0x00010001;     
         public byte IsPrivateStore { get; set; }             
         public byte IsPremiumPcRoom { get; set; }            
         public byte ServerGroupId { get; set; }              
         public uint BlackCount { get; set; }                 
         public byte GuildLevel { get; set; }                 
+        public byte[] GuildNameBytes { get; set; } = new byte[0];
         public uint ChaosPoint { get; set; }                 
         public byte DisguiseKind { get; set; }               
         public byte IsDisguised { get; set; }                
@@ -78,12 +85,15 @@ namespace DfoServer.Game.SelectCharacter
 
             return new UserInfoMinimumTailSnapshot
             {
-                NameTagItemId = BitConverter.ToUInt32(t, 0),
+                CloneTitleItemId = BitConverter.ToUInt32(t, 0),
+                Forging = t[4],
                 CreatureField1 = t[4],
                 CreatureField2 = t[5],
                 CreatureField3 = t[6],
                 CreatureField4 = t[7],
                 CreatureBuffer = buf8,
+                NameTagItemId = BitConverter.ToUInt32(buf8, 0),
+                NameTagExpireTime = BitConverter.ToUInt32(buf8, 4),
                 Stamina = t[16],
                 FatiguePenalty = BitConverter.ToUInt32(t, 17),
                 IsEventCharacter = t[21],

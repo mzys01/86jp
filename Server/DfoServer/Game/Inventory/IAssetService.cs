@@ -11,11 +11,12 @@ namespace DfoServer.Game.Inventory
         int CountItem(DbScope scope, int itemTemplateId);
 
         WalletSnapshot LoadWallet(DbScope scope);
-        void AddGold(DbScope scope, int delta);
-        void AddCera(DbScope scope, int delta);
-        void AddTokenCera(DbScope scope, int delta);
-        void AddHappyTokenCera(DbScope scope, int delta);
-        void AddLuckyStar(DbScope scope, int delta);
+
+        // 发放: SQL原子增量。扣费: 条件扣减, 余额不足返回false且余额不变(旧Add*负数会静默clamp到0, 已废除)。
+        void GrantGold(DbScope scope, int amount);
+        bool TrySpendGold(DbScope scope, int amount);
+        void GrantLuckyStar(DbScope scope, int amount);
+        bool TrySpendLuckyStar(DbScope scope, int amount);
 
         CharacterItemListSnapshot LoadSnapshot(DbScope scope);
     }

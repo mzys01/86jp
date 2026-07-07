@@ -30,8 +30,7 @@ CREATE TABLE IF NOT EXISTS characters (
     pvp_grade INTEGER NOT NULL DEFAULT 0,
     pvp_rating_grade INTEGER NOT NULL DEFAULT 0,
     user_state INTEGER NOT NULL DEFAULT 0,
-    gold INTEGER NOT NULL DEFAULT 0,
-    coin INTEGER NOT NULL DEFAULT 0,
+    -- 货币不在本表: 金币=character_items slot0, 点券系=accounts.cera等 (旧 gold/coin 影子列已由迁移v12删除)
     town_id INTEGER NOT NULL DEFAULT 0,
     area_id INTEGER NOT NULL DEFAULT 0,
     pos_x INTEGER NOT NULL DEFAULT 0,
@@ -40,7 +39,12 @@ CREATE TABLE IF NOT EXISTS characters (
     area_state INTEGER NOT NULL DEFAULT 3,
     name_bytes BLOB,
     appearance_blob BLOB,
+    clone_title_item_id INTEGER NOT NULL DEFAULT 0,
     delete_flag INTEGER NOT NULL DEFAULT 0,
+    exp INTEGER NOT NULL DEFAULT 0,
+    ex_equip_slot_stat INTEGER NOT NULL DEFAULT 0,
+    bonus_sp INTEGER NOT NULL DEFAULT 0,
+    bonus_tp INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (account_id) REFERENCES accounts(account_id) ON DELETE CASCADE
@@ -94,6 +98,9 @@ CREATE INDEX IF NOT EXISTS idx_character_items_template
 CREATE INDEX IF NOT EXISTS idx_character_items_character
     ON character_items(character_id, list_type, slot_index);
 
+CREATE INDEX IF NOT EXISTS idx_character_items_char_template
+    ON character_items(character_id, list_type, item_template_id);
+
 CREATE TABLE IF NOT EXISTS account_cargo_state (
     account_id INTEGER PRIMARY KEY,
     selection_key INTEGER NOT NULL DEFAULT 0,
@@ -145,6 +152,9 @@ CREATE TABLE IF NOT EXISTS item_audit_log (
     payload_json TEXT NOT NULL DEFAULT '{}',
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE INDEX IF NOT EXISTS idx_item_audit_log_char_time
+    ON item_audit_log(character_id, created_at);
 
 CREATE TABLE IF NOT EXISTS character_skills (
     character_id INTEGER NOT NULL,
@@ -206,40 +216,32 @@ CREATE TABLE IF NOT EXISTS character_creatures (
     FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
 );
 
+CREATE INDEX IF NOT EXISTS idx_character_creatures_key
+    ON character_creatures(character_id, creature_key);
+
+-- Removed 18 columns verified via seed DB (DfoDbGenerator) as safe:
+--   A) Overwritten by account_settings/account_premiums: hotkey_key_type, main_game_option_blob,
+--      quickchat_bank0, quickchat_bank1, ack_premium_blob
+--   B) Seed value = 0/all-zero, no dynamic write: shop_coin_event_flag, level60_ui_state,
+--      boss_tower_placeholder, event_info_tail_byte, mailbox_loaded_count, mailbox_mode,
+--      mailbox_not_loaded_count, mailbox_unknown_count_c, ack_account_reg_time,
+--      ack_quest_display_ids, racing_dungeon_group_flags, ack_post_tutorial_u16, ack_unread_tail
 CREATE TABLE IF NOT EXISTS character_init_flags (
     character_id INTEGER PRIMARY KEY,
-    shop_coin_event_flag INTEGER NOT NULL DEFAULT 0,
-    level60_ui_state INTEGER NOT NULL DEFAULT 0,
-    pc_room_state INTEGER NOT NULL DEFAULT 0,
-    expert_job_blob BLOB,
-    champion_break_blob BLOB,
-    boss_tower_placeholder INTEGER NOT NULL DEFAULT 0,
-    mailbox_loaded_count INTEGER NOT NULL DEFAULT 0,
-    mailbox_mode INTEGER NOT NULL DEFAULT 0,
-    mailbox_not_loaded_count INTEGER NOT NULL DEFAULT 0,
-    mailbox_unknown_count_c INTEGER NOT NULL DEFAULT 0,
-    event_info_tail_byte INTEGER NOT NULL DEFAULT 0,
-    hotkey_key_type INTEGER NOT NULL DEFAULT 0,
-    main_game_option_blob BLOB,
-    quickchat_bank0 BLOB,
-    quickchat_bank1 BLOB,
-    character_option_blob BLOB,       -- NOTI 0x0187 CHARACTER_OPTION, saved by CMD 0x01C0 SAVE_CHARACTER_OPTION
-    charac_invisible_falgs_payload_len INTEGER NOT NULL DEFAULT 0,  -- IDA 正名: CLEAR_QUEST_LIST payload 长度
-    racing_dungeon_current_enter_count INTEGER NOT NULL DEFAULT 0,  -- IDA 正名: DAILY_CHALLENGE 当日进入次数
-    racing_dungeon_group_flags BLOB,  -- IDA 正名: DAILY_CHALLENGE 组标志
-    -- CMD 0x0004 SELECT_CHARACTER ACK 结构化字段
-    ack_account_reg_time INTEGER NOT NULL DEFAULT 0,
-    ack_premium_blob BLOB,           -- premiumCount(1) + N×(type(1)+endTime(8))
-    ack_quest_display_ids BLOB,      -- 4×u32 (sub_A44480 消费的16B)
-    ack_char_slot_index INTEGER NOT NULL DEFAULT 0,
-    ack_fatigue_battery INTEGER NOT NULL DEFAULT 0,
-    ack_fatigue_grownup_buff INTEGER NOT NULL DEFAULT 0,
-    ack_trade_punish_flag INTEGER NOT NULL DEFAULT 0,
-    ack_extra_field_86jp INTEGER NOT NULL DEFAULT 0,
-    ack_reserved_8b BLOB,            -- 8B 客户端不读取但需保留
-    ack_tutorial_skipable INTEGER NOT NULL DEFAULT 0,
-    ack_post_tutorial_u16 INTEGER NOT NULL DEFAULT 0,
-    ack_unread_tail BLOB,            -- 剩余尾部 客户端不读取
+    pc_room_state INTEGER NOT NULL DEFAULT 0,                       -- seed=2
+    expert_job_blob BLOB,                                           -- QuestService writes on job change
+    champion_break_blob BLOB,                                       -- seed has data
+    character_option_blob BLOB,                                     -- CMD 0x01C0 SAVE_CHARACTER_OPTION
+    charac_invisible_falgs_payload_len INTEGER NOT NULL DEFAULT 0,  -- QuestService writes; seed=21000
+    racing_dungeon_current_enter_count INTEGER NOT NULL DEFAULT 0,  -- seed=5
+    -- CMD 0x0004 SELECT_CHARACTER ACK (non-zero seeds retained)
+    ack_char_slot_index INTEGER NOT NULL DEFAULT 0,                 -- overwritten by TownId at runtime; seed=2
+    ack_fatigue_battery INTEGER NOT NULL DEFAULT 0,                 -- seed=3073
+    ack_fatigue_grownup_buff INTEGER NOT NULL DEFAULT 0,            -- seed=513
+    ack_trade_punish_flag INTEGER NOT NULL DEFAULT 0,               -- seed=30
+    ack_extra_field_86jp INTEGER NOT NULL DEFAULT 0,                -- seed=9247
+    ack_reserved_8b BLOB,                                           -- seed has data
+    ack_tutorial_skipable INTEGER NOT NULL DEFAULT 0,               -- DungeonTutorialHandler writes
     FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
 );
 
@@ -289,6 +291,9 @@ CREATE TABLE IF NOT EXISTS character_dungeon_permissions (
     PRIMARY KEY (character_id, sort_order),
     FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
 );
+
+CREATE INDEX IF NOT EXISTS idx_dungeon_permissions_dungeon
+    ON character_dungeon_permissions(character_id, dungeon_id);
 
 CREATE TABLE IF NOT EXISTS character_event_info (
     character_id INTEGER NOT NULL,
@@ -354,6 +359,27 @@ CREATE TABLE IF NOT EXISTS character_achievement_complete (
     p3 INTEGER NOT NULL DEFAULT 0,
     p4 INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (character_id, sort_order),
+    FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS character_titlebook (
+    character_id INTEGER NOT NULL PRIMARY KEY,
+    format_version INTEGER NOT NULL DEFAULT 1,
+    general BLOB,
+    specific BLOB,
+    pvp BLOB,
+    despair BLOB,
+    event BLOB,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS character_achievement (
+    character_id INTEGER NOT NULL PRIMARY KEY,
+    format_version INTEGER NOT NULL DEFAULT 1,
+    achievement BLOB,
+    last_update_time INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
 );
 
@@ -464,7 +490,7 @@ CREATE TABLE IF NOT EXISTS character_init_bodies (
 --               progressA/B(+57/+61) 与 skillTreeIndex(+79) 同源 character_subtype1_fields (客户端同 obj 偏移 0x394/0x398)
 CREATE TABLE IF NOT EXISTS character_subtype0_fields (
     character_id INTEGER PRIMARY KEY,
-    name_tag_item_id INTEGER NOT NULL DEFAULT 0,        -- +0  u32 名称装饰卡 itemId → vfunc+20 (语义已解2026-06-10: 100330501=[name tag]模板"我在恋爱")
+    name_tag_item_id INTEGER NOT NULL DEFAULT 0,        -- 旧列保留兼容；86 tail首u32改由 characters.clone_title_item_id 提供
     creature_field1 INTEGER NOT NULL DEFAULT 0,         -- +4  u8
     creature_field2 INTEGER NOT NULL DEFAULT 0,         -- +5  u8
     creature_field3 INTEGER NOT NULL DEFAULT 0,         -- +6  u8 (客户端读后未用)
@@ -620,6 +646,38 @@ CREATE TABLE IF NOT EXISTS character_collectbox_slots (
     slot_index INTEGER NOT NULL,
     item_id INTEGER NOT NULL,
     PRIMARY KEY (character_id, box_index, slot_index),
+    FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS character_active_quests (
+    character_id INTEGER NOT NULL,
+    slot INTEGER NOT NULL,
+    quest_id INTEGER NOT NULL,
+    trigger_value INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (character_id, slot),
+    FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
+);
+
+-- 每日/周常门控。日界=北京时间06:00, 周界=ISO周一(DailyResetService)。
+-- 本表只记录"该角色的周期状态属于哪一天/哪一周"; 所有具体状态(标记/次数)
+-- 一律存 character_daily_counters, 不在本表加任何业务列。
+CREATE TABLE IF NOT EXISTS character_daily_reset (
+    character_id INTEGER PRIMARY KEY,
+    day_id       INTEGER NOT NULL DEFAULT 0,
+    week_id      INTEGER NOT NULL DEFAULT 0,
+    FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
+);
+
+-- 每日/周常状态账本: 一功能一 key, 新功能零 schema 改动。
+-- counter_key 用自描述蛇形名(如 'tower_entry_used'); 布尔标记=cap1计数(领取即 value=1)。
+-- period 决定清理周期: 跨天删 'day' 行 / 跨周删 'week' 行(DailyResetService.EnsureRowAndRollover)。
+-- 同一 key 的 period 以首次写入为准, 调用方必须始终传同一值。
+CREATE TABLE IF NOT EXISTS character_daily_counters (
+    character_id INTEGER NOT NULL,
+    counter_key  TEXT    NOT NULL,
+    period       TEXT    NOT NULL DEFAULT 'day' CHECK (period IN ('day', 'week')),
+    value        INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (character_id, counter_key),
     FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
 );
 

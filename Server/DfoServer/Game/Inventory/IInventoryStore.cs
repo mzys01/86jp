@@ -1,5 +1,6 @@
 using DfoServer.Game.ExpertJob;
 using DfoServer.Game.ItemUpgrade;
+using DfoServer.Game.SelectCharacter;
 using Microsoft.Data.Sqlite;
 using System;
 using System.Collections.Generic;
@@ -8,104 +9,141 @@ namespace DfoServer.Game.Inventory
 {
     public interface IInventoryStore
     {
-        IDisposable BeginScope(int characterId, int accountId);
+        int CountItem(int characterId, int itemTemplateId);
 
-        int CountItem(int itemTemplateId);
+        void EnsureDatabase(int characterId, int accountId, CharacterItemListSnapshot seedSnapshot);
 
-        bool TryRemoveItemByTemplateId(int itemTemplateId, out short slotIndex, out InventoryMutationResult result);
+        void EnsureContainerState(int characterId, int accountId);
 
-        void RunMigrations();
+        CharacterItemListSnapshot LoadCharacterItemListSnapshot(int characterId, int accountId);
 
-        void EnsureDatabase(CharacterItemListSnapshot seedSnapshot);
+        int DeleteExpiredRentalEquipment(int characterId, int accountId);
 
-        void EnsureContainerState(int characterId);
+        RentalInfoSnapshot RebuildRentalInfoFromInventory(
+            int characterId,
+            int accountId,
+            RentalInfoSnapshot storedRentalInfo);
 
-        CharacterItemListSnapshot LoadCharacterItemListSnapshot();
+        bool TryDeleteItem(int characterId, int accountId, InventoryListType listType, short slotIndex, short deleteCount, out InventoryMutationResult result);
 
-        int DeleteExpiredRentalEquipment();
+        bool TryUsePremiumContractItem(int characterId, int accountId, InventoryListType listType, short slotIndex, int expectedItemTemplateId, out PremiumContractUseResult result);
 
-        bool TryDeleteItem(InventoryListType listType, short slotIndex, short deleteCount, out InventoryMutationResult result);
+        bool TryOpenAvatarPackage(int characterId, int accountId, AvatarPackageOpenRequest request, out AvatarPackageOpenResult result);
 
-        bool TryUsePremiumContractItem(InventoryListType listType, short slotIndex, int expectedItemTemplateId, out PremiumContractUseResult result);
+        bool TryOpenSelectablePackage(int characterId, int accountId, SelectablePackageOpenRequest request, out SelectablePackageOpenResult result);
 
-        bool TryOpenAvatarPackage(AvatarPackageOpenRequest request, out AvatarPackageOpenResult result);
+        bool TryUseBoosterItem(int characterId, int accountId, BoosterUseRequest request, out BoosterUseResult result);
 
-        bool TryOpenSelectablePackage(SelectablePackageOpenRequest request, out SelectablePackageOpenResult result);
+        bool TryOpenPackage0207(int characterId, int accountId, short slotIndex, IReadOnlyList<int> selectedItemTemplateIds, out BoosterUseResult result);
 
-        bool TryUseBoosterItem(BoosterUseRequest request, out BoosterUseResult result);
+        bool TryHatchCreatureEgg(int characterId, InventoryListType listType, short slotIndex, int expectedItemTemplateId, out CreatureHatchResult result);
 
-        bool TryOpenPackage0207(short slotIndex, IReadOnlyList<int> selectedItemTemplateIds, out BoosterUseResult result);
+        bool TryRenameEquippedPetCreature(int characterId, int accountId, PetCreatureRenameRequest request, out PetCreatureRenameResult result);
 
-        bool TryHatchCreatureEgg(InventoryListType listType, short slotIndex, int expectedItemTemplateId, out CreatureHatchResult result);
-
-        bool TryBuyItem(int itemTemplateId, int buyCount, out InventoryMutationResult result);
+        bool TryBuyItem(int characterId, int accountId, int itemTemplateId, int buyCount, out InventoryMutationResult result);
 
         bool TryPickupRentalWeapon(
             SqliteConnection connection,
             SqliteTransaction transaction,
+            int characterId,
+            int accountId,
             int itemTemplateId,
             int expireTime,
             out short assignedSlot,
             out int instanceValue);
 
-        bool TryPickupItem(int itemTemplateId, int stackCount, out short assignedSlot, out int newStackCount);
+        bool TryPickupItem(int characterId, int accountId, int itemTemplateId, int stackCount, out short assignedSlot);
 
-        bool TrySellItem(InventoryListType listType, short slotIndex, short sellCount, out InventoryMutationResult result);
+        bool TryPickupItem(int characterId, int accountId, int itemTemplateId, int stackCount, out short assignedSlot, out int newStackCount,
+            Action<SqliteConnection, SqliteTransaction> alsoInSameTransaction = null);
 
-        bool TryDisjointItem(DisjointItemRequest request, out DisjointItemResult result);
+        bool TryRemoveItemByTemplateId(int characterId, int accountId, int itemTemplateId, out short slotIndex, out InventoryMutationResult result,
+            Action<SqliteConnection, SqliteTransaction> alsoInSameTransaction = null);
 
-        bool TryEnchantByBead(EnchantByBeadCommand command, out EnchantByBeadResult result);
+        bool TryRepairEquipment(int characterId, int accountId, InventoryListType listType, short slotIndex, bool quickRepair, bool freeRepair, out RepairEquipmentResult result);
 
-        bool TryUpgradeItem(ItemUpgradeCommand command, out ItemUpgradeResult result);
+        bool TryDepositCargoGold(int characterId, int accountId, int amount, out int newCharGold, out int newCargoGold);
 
-        bool TryOpenEquipmentSocket(short targetSlotIndex, int targetItemTemplateId, short materialSlotIndex, out EquipmentSocketMutationResult result);
+        bool TryWithdrawCargoGold(int characterId, int accountId, int amount, out int newCharGold, out int newCargoGold);
 
-        bool TrySetEquipmentEmblems(short targetSlotIndex, int targetItemTemplateId, IReadOnlyList<EquipmentEmblemApplyRequest> emblems, out EquipmentEmblemMutationResult result);
+        bool TryCreateAccountCargo(int characterId, int accountId, out InventoryMutationResult costResult, out byte errorCode);
 
-        bool TryOpenAvatarSocket(short targetSlotIndex, int targetItemTemplateId, short materialSlotIndex, out AvatarSocketMutationResult result);
+        bool TryUpgradeAccountCargo(int characterId, int accountId, out InventoryMutationResult costResult, out byte errorCode);
 
-        bool TrySetAvatarEmblems(short targetSlotIndex, int targetItemTemplateId, IReadOnlyList<EquipmentEmblemApplyRequest> emblems, out AvatarEmblemMutationResult result);
+        bool TryUpgradePersonalCargo(int characterId, int accountId, out ushort newListParam16, out byte errorCode);
 
-        bool TryCompoundAvatar(short slot1, short slot2, short consumeSlot,
+        bool TryUsePersonalCargoUpgradeTicket(
+            int characterId,
+            int accountId,
+            InventoryListType listType,
+            short slotIndex,
+            int expectedItemTemplateId,
+            out PersonalCargoUpgradeTicketResult result);
+
+        bool TryUseAccountCargoUpgradeTool(
+            int characterId,
+            int accountId,
+            InventoryListType listType,
+            short slotIndex,
+            out AccountCargoUpgradeToolResult result);
+
+        bool TrySellItem(int characterId, int accountId, InventoryListType listType, short slotIndex, short sellCount, out InventoryMutationResult result);
+
+        bool TryBuyCeraShopItem(int characterId, int accountId, int productId, int buyCount, int paymentMode, byte attributeValue, out InventoryMutationResult result);
+
+        bool TryDisjointItem(int characterId, int accountId, DisjointItemRequest request, out DisjointItemResult result);
+
+        bool TryEnchantByBead(int characterId, int accountId, EnchantByBeadCommand command, out EnchantByBeadResult result);
+
+        bool TryUpgradeItem(int characterId, int accountId, ItemUpgradeCommand command, out ItemUpgradeResult result);
+
+        bool TryOpenEquipmentSocket(int characterId, short targetSlotIndex, int targetItemTemplateId, short materialSlotIndex, out EquipmentSocketMutationResult result);
+
+        bool TrySetEquipmentEmblems(int characterId, short targetSlotIndex, int targetItemTemplateId, IReadOnlyList<EquipmentEmblemApplyRequest> emblems, out EquipmentEmblemMutationResult result);
+
+        bool TryOpenAvatarSocket(int characterId, short targetSlotIndex, int targetItemTemplateId, short materialSlotIndex, out AvatarSocketMutationResult result);
+
+        bool TrySetAvatarEmblems(int characterId, short targetSlotIndex, int targetItemTemplateId, IReadOnlyList<EquipmentEmblemApplyRequest> emblems, out AvatarEmblemMutationResult result);
+
+        bool TryCompoundAvatar(int characterId, int accountId, short slot1, short slot2, short consumeSlot,
             Func<int, int, int, List<int>> resolveNewItemIds, byte newOption,
             out List<int> newSlotsOut, out int oldItemId1, out int oldItemId2, out List<int> newItemIdsOut,
             out int consumedItemTemplateId, out int consumedItemRemainingCount);
 
-        bool TryCompoundAvatarSet(short[] consumeSlots, int[] expectedItemIds, Func<int, int> resolveNewItemId, byte newOption,
+        bool TryCompoundAvatarSet(int characterId, int accountId, short[] consumeSlots, int[] expectedItemIds, Func<int, int> resolveNewItemId, byte newOption,
             short consumeStackableSlot,
             out int newSlot, out List<int> oldItemIds, out int newItemId, out int consumedItemTemplateId, out int consumedItemRemainingCount);
 
-        bool TryMoveItem(InventoryMoveRequest request, out InventoryMoveResult result);
+        bool TryMoveItem(int characterId, int accountId, InventoryMoveRequest request, out InventoryMoveResult result);
 
-        bool TrySortItems(int characterId, InventoryListType listType, byte category);
+        bool TrySortItems(int characterId, int accountId, InventoryListType listType, byte category);
 
-        bool TryToggleSortItemLock(InventoryListType listType, short slotIndex, out SortItemLockEntry entry);
+        bool TryToggleSortItemLock(int characterId, InventoryListType listType, short slotIndex, out SortItemLockEntry entry);
 
-        bool TryUnlockSortItemLock(InventoryListType listType, short slotIndex);
+        bool TryUnlockSortItemLock(int characterId, InventoryListType listType, short slotIndex);
 
-        IReadOnlyList<SortItemLockEntry> LoadSortItemLocks();
+        IReadOnlyList<SortItemLockEntry> LoadSortItemLocks(int characterId);
 
-        IReadOnlyList<SortItemLockEntry> LoadSortItemLocks(InventoryListType listType);
+        IReadOnlyList<SortItemLockEntry> LoadSortItemLocks(int characterId, InventoryListType listType);
 
-        bool TryLockEquipmentItem(InventoryListType listType, short slotIndex, out EquipmentItemLockResult result);
+        bool TryLockEquipmentItem(int characterId, InventoryListType listType, short slotIndex, out EquipmentItemLockResult result);
 
-        bool TryUnlockEquipmentItem(InventoryListType listType, short slotIndex, out EquipmentItemLockResult result);
+        bool TryUnlockEquipmentItem(int characterId, InventoryListType listType, short slotIndex, out EquipmentItemLockResult result);
 
-        bool TryCancelEquipmentItemUnlock(InventoryListType listType, short slotIndex, out EquipmentItemLockResult result);
+        bool TryCancelEquipmentItemUnlock(int characterId, InventoryListType listType, short slotIndex, out EquipmentItemLockResult result);
 
-        IReadOnlyList<EquipmentItemLockEntry> LoadEquipmentItemLocks();
+        IReadOnlyList<EquipmentItemLockEntry> LoadEquipmentItemLocks(int characterId);
 
-        IReadOnlyList<EquipmentItemLockEntry> LoadEquipmentItemLocks(InventoryListType listType);
+        IReadOnlyList<EquipmentItemLockEntry> LoadEquipmentItemLocks(int characterId, InventoryListType listType);
 
-        CommonInventoryItem LoadCommonItemForRefresh(InventoryListType listType, short slotIndex);
+        CommonInventoryItem LoadCommonItemForRefresh(int characterId, int accountId, InventoryListType listType, short slotIndex);
 
-        AvatarInventoryItem LoadAvatarItemForRefresh(short slotIndex);
+        CommonInventoryItem LoadEquipmentCommonItemForRefresh(int characterId, short slotIndex);
 
-        PetInventoryItem LoadPetItemForRefresh(short slotIndex);
+        AvatarInventoryItem LoadAvatarItemForRefresh(int characterId, short slotIndex);
 
-        void SeedNewCharacterEquipment((short slot, int itemId)[] equipment);
+        PetInventoryItem LoadPetItemForRefresh(int characterId, short slotIndex);
 
-        // 商城购买: paymentMode=0 走点券瀑布扣减, paymentMode=1 走装扮兑换券抵扣(不扣Cera)。
-        bool TryBuyCeraShopItem(int productId, int buyCount, int paymentMode, byte attributeValue, out InventoryMutationResult result);
+        void SeedNewCharacterEquipment(int characterId, int accountId, (short slot, int itemId)[] equipment);
     }
 }

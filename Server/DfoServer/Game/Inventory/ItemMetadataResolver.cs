@@ -41,6 +41,8 @@ namespace DfoServer.Game.Inventory
 
         public IReadOnlyList<string> ImpossibleContents { get; set; } = Array.Empty<string>();
 
+        public bool IsSealed => string.Equals(AttachType?.Trim('[', ']', ' '), "sealing", StringComparison.OrdinalIgnoreCase);
+
         public bool IsStackable => string.Equals(ItemKind, "stackable", StringComparison.Ordinal);
 
         public bool IsMaterialExchange => NeedMaterialId > 0 && NeedMaterialCount > 0;
@@ -541,6 +543,23 @@ namespace DfoServer.Game.Inventory
             return false;
         }
 
+        // 全部修理("一键修理")适用的装备类型 (客户端 handler 过滤一致)。
+        // 只修这 13 类穿戴装备; 
+        private static readonly HashSet<string> RepairAllEquipmentTypes = new HashSet<string>
+        {
+            "[weapon]", "[coat]", "[pants]", "[hat]", "[shoulder]", "[waist]",
+            "[shoes]", "[amulet]", "[wrist]", "[ring]", "[support]",
+            "[aurora avatar]", "[magic stone]",
+        };
+
+        // itemTemplateId 是否属于"全部修理"适用的装备类型。
+        public static bool IsRepairAllEligible(int itemTemplateId)
+        {
+            return TryGetEquipmentType(itemTemplateId, out var type)
+                && type != null
+                && RepairAllEquipmentTypes.Contains(type);
+        }
+
         private static string NormalizeEquipmentType(string raw)
         {
             if (string.IsNullOrWhiteSpace(raw))
@@ -563,6 +582,14 @@ namespace DfoServer.Game.Inventory
             if (equipmentEntry == null) return false;
             var equipment = EquipmentFile.Parse(PvfArchiveAccessor.ReadText(Path.Combine("equipment", equipmentEntry.FilePath)));
             return string.Equals(equipment.ItemCategory, "clear avatar", StringComparison.OrdinalIgnoreCase);
+        }
+
+        public static bool IsNameTagItem(int itemTemplateId)
+        {
+            var meta = Resolve(itemTemplateId);
+            return meta != null
+                && string.Equals(meta.ItemKind, "equipment", StringComparison.Ordinal)
+                && string.Equals(meta.EquipmentType, "[name tag]", StringComparison.OrdinalIgnoreCase);
         }
 
         public static bool IsPetInventoryEquipment(int itemTemplateId)

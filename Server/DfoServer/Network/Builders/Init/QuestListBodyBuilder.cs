@@ -17,17 +17,22 @@ namespace DfoServer.Network.Builders
             int job = (character != null) ? character.Job : 0;
             int growType = (character != null) ? character.GrowType : -1;
 
-            var clearedSet = new HashSet<int>();
             var clearedFlags = new Dictionary<int, int>();
             foreach (var entry in init.CharacInvisibleFalgs)
             {
                 if (entry.FlagValue != 0)
-                {
-                    clearedSet.Add(entry.SlotIndex);
                     clearedFlags[entry.SlotIndex] = entry.FlagValue;
-                }
             }
 
+            body = BuildBody(level, job, growType, clearedFlags);
+            return true;
+        }
+
+        // 可接任务列表(NOTI 0x0015)包体的唯一构建点 --
+        // 选角初始化、交任务后的刷新、副本返城后的刷新三条路径共用。
+        public static byte[] BuildBody(int level, int job, int growType, Dictionary<int, int> clearedFlags)
+        {
+            var clearedSet = new HashSet<int>(clearedFlags.Keys);
             var questIds = GameWorld.QuestData.ComputeAcceptableQuests(level, job, growType, clearedSet, clearedFlags);
 
             var writer = new GamePacketWriter();
@@ -35,8 +40,7 @@ namespace DfoServer.Network.Builders
             writer.WriteUInt16((ushort)questIds.Count);
             foreach (var questId in questIds)
                 writer.WriteUInt16(questId);
-            body = writer.ToArray();
-            return true;
+            return writer.ToArray();
         }
     }
 }

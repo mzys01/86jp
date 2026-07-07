@@ -68,10 +68,9 @@ namespace DfoServer.SelfTests
             CheckUseStackableProtocolPlan(ref failures);
             CheckCreatureStateProtocolBody(ref failures);
 
-            using (store.BeginScope(CharacterId, AccountId))
             {
                 Check("using one pet consumable succeeds",
-                    store.TryDeleteItem(InventoryListType.Pet, PetFoodSlot, 1, out var result),
+                    store.TryDeleteItem(CharacterId, AccountId, InventoryListType.Pet, PetFoodSlot, 1, out var result),
                     ref failures);
                 if (result != null)
                 {
@@ -112,10 +111,9 @@ namespace DfoServer.SelfTests
                     ref failures);
             }
 
-            using (store.BeginScope(CharacterId, AccountId))
             {
                 Check("non-feed pet consumable succeeds",
-                    store.TryDeleteItem(InventoryListType.Pet, RenameCardSlot, 1, out var renameResult),
+                    store.TryDeleteItem(CharacterId, AccountId, InventoryListType.Pet, RenameCardSlot, 1, out var renameResult),
                     ref failures);
                 if (renameResult != null)
                     Check("non-feed pet consumable decrements",
@@ -137,9 +135,8 @@ namespace DfoServer.SelfTests
                     ref failures);
             }
 
-            using (store.BeginScope(CharacterId, AccountId))
             {
-                var snapshot = store.LoadCharacterItemListSnapshot();
+                var snapshot = store.LoadCharacterItemListSnapshot(CharacterId, AccountId);
                 var petItem = snapshot.PetItems.FirstOrDefault(x => x.SlotIndex == PetFoodSlot);
                 Check("pet consumable snapshot still has slot", petItem != null, ref failures);
                 if (petItem != null)
@@ -150,7 +147,7 @@ namespace DfoServer.SelfTests
                 }
 
                 Check("second pet consumable use succeeds",
-                    store.TryDeleteItem(InventoryListType.Pet, PetFoodSlot, 1, out var secondResult),
+                    store.TryDeleteItem(CharacterId, AccountId, InventoryListType.Pet, PetFoodSlot, 1, out var secondResult),
                     ref failures);
                 if (secondResult != null)
                     Check("second pet consumable use decrements again",
@@ -179,10 +176,10 @@ namespace DfoServer.SelfTests
             }
 
             SetCreatureVisibleSatiety(dbPath, PetCreatureKey, 42);
-            using (store.BeginScope(CharacterId, AccountId))
+
             {
                 Check("third pet consumable use at full active satiety succeeds",
-                    store.TryDeleteItem(InventoryListType.Pet, PetFoodSlot, 1, out var thirdResult),
+                    store.TryDeleteItem(CharacterId, AccountId, InventoryListType.Pet, PetFoodSlot, 1, out var thirdResult),
                     ref failures);
                 if (thirdResult != null)
                 {
@@ -213,10 +210,10 @@ namespace DfoServer.SelfTests
             }
 
             SeedNoActivePetConsumable(dbPath);
-            using (store.BeginScope(NoActiveCharacterId, AccountId))
+
             {
                 Check("no-active pet consumable succeeds",
-                    store.TryDeleteItem(InventoryListType.Pet, PetFoodSlot, 1, out var noActiveResult),
+                    store.TryDeleteItem(NoActiveCharacterId, AccountId, InventoryListType.Pet, PetFoodSlot, 1, out var noActiveResult),
                     ref failures);
                 if (noActiveResult != null)
                     Check("no-active pet consumable does not report satiety sync",
@@ -242,10 +239,10 @@ namespace DfoServer.SelfTests
             }
 
             SeedEquippedActivePetConsumable(dbPath);
-            using (store.BeginScope(EquippedActiveCharacterId, AccountId))
+
             {
                 Check("equipped-active pet consumable succeeds",
-                    store.TryDeleteItem(InventoryListType.Pet, PetFoodSlot, 1, out var equippedResult),
+                    store.TryDeleteItem(EquippedActiveCharacterId, AccountId, InventoryListType.Pet, PetFoodSlot, 1, out var equippedResult),
                     ref failures);
                 if (equippedResult != null)
                 {
@@ -276,7 +273,7 @@ namespace DfoServer.SelfTests
             }
 
             SeedMoveEquippedPetConsumable(dbPath);
-            using (store.BeginScope(MoveEquippedCharacterId, AccountId))
+
             {
                 var moveRequest = new InventoryMoveRequest
                 {
@@ -290,7 +287,7 @@ namespace DfoServer.SelfTests
                 };
 
                 Check("pet creature equipment move succeeds",
-                    store.TryMoveItem(moveRequest, out var moveResult),
+                    store.TryMoveItem(MoveEquippedCharacterId, AccountId, moveRequest, out var moveResult),
                     ref failures);
                 if (moveResult != null)
                 {
@@ -299,7 +296,7 @@ namespace DfoServer.SelfTests
                 }
 
                 Check("moved-equipped pet consumable succeeds",
-                    store.TryDeleteItem(InventoryListType.Pet, PetFoodSlot, 1, out var movedFeedResult),
+                    store.TryDeleteItem(MoveEquippedCharacterId, AccountId, InventoryListType.Pet, PetFoodSlot, 1, out var movedFeedResult),
                     ref failures);
                 if (movedFeedResult != null)
                 {

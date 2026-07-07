@@ -15,6 +15,16 @@ namespace DfoServer.Game.CharacterData
             _connectionString = SqliteDatabaseBootstrap.Initialize(databasePath, schemaFilePath);
         }
 
+        private SqliteSubtype1Repository(string connectionString)
+        {
+            _connectionString = connectionString ?? throw new ArgumentNullException(nameof(connectionString));
+        }
+
+        public static SqliteSubtype1Repository FromConnectionString(string connectionString)
+        {
+            return new SqliteSubtype1Repository(connectionString);
+        }
+
         public bool HasData(int characterId)
         {
             using (var conn = Open())
@@ -71,7 +81,6 @@ namespace DfoServer.Game.CharacterData
                         snap.NameTagExpireTime = (uint)r.GetInt64(21);
                         snap.SkillTreeIndex = NormalizeSkillTreeIndex(r.GetInt32(22));
                         snap.EquippedCreatureLevel = (byte)r.GetInt32(23);
-                        snap.EquipListTrailing = r.IsDBNull(24) ? 0u : (uint)r.GetInt64(24);
                         snap.ManageLevel = (byte)r.GetInt32(25);
                         snap.FlagByte = (byte)r.GetInt32(26);
                         snap.GuildPowerWar = (uint)r.GetInt64(27);
@@ -83,7 +92,7 @@ namespace DfoServer.Game.CharacterData
                 }
 
                 
-                using (var cmd = new SqliteCommand("SELECT exp, ex_equip_slot_stat FROM characters WHERE character_id=@cid", conn))
+                using (var cmd = new SqliteCommand("SELECT exp, ex_equip_slot_stat, clone_title_item_id FROM characters WHERE character_id=@cid", conn))
                 {
                     cmd.Parameters.AddWithValue("@cid", characterId);
                     using (var r = cmd.ExecuteReader())
@@ -92,6 +101,7 @@ namespace DfoServer.Game.CharacterData
                         {
                             snap.CharacExp = (uint)r.GetInt64(0);
                             snap.ExEquipSlotStat = (byte)r.GetInt32(1);
+                            snap.CloneTitleItemId = r.IsDBNull(2) ? 0u : (uint)r.GetInt64(2);
                         }
                     }
                 }
@@ -297,11 +307,12 @@ ON CONFLICT(character_id) DO UPDATE SET skill_tree_index=@idx;", conn))
         public int UpdateCombatStats(int characterId, byte[] statBlob)
         {
             using (var conn = Open())
-                return UpdateCombatStats(conn, characterId, statBlob);
+                return UpdateCombatStatsOnConnection(conn, characterId, statBlob);
         }
 
-        /// <summary>同连接版本, 供 RecomputeAllCombatStats 在单连接内顺序执行避免锁冲突。</summary>
-        internal int UpdateCombatStats(SqliteConnection conn, int characterId, byte[] statBlob)
+        /// <summary>同连接版本, 供 RecomputeAllCombatStats 在单连接内顺序执行避免锁冲突;
+        /// 传入 tx 可并入外部事务(等级与属性写同生共死)。</summary>
+        internal static int UpdateCombatStatsOnConnection(SqliteConnection conn, int characterId, byte[] statBlob, SqliteTransaction tx = null)
         {
             var f = CombatStatFields.Parse(statBlob);
             using (var cmd = new SqliteCommand(@"
@@ -318,6 +329,7 @@ UPDATE character_subtype1_fields SET
     stat_jump_power=@jp, stat_weight=@wt, stat_level=@sl
 WHERE character_id=@cid;", conn))
             {
+                cmd.Transaction = tx;
                 f.AddTo(cmd);
                 cmd.Parameters.AddWithValue("@cid", characterId);
                 // stat_level 固定 100, 与种子创建(SqliteSelectCharacterDataSource 建号 INSERT)保持一致;
@@ -354,7 +366,7 @@ JOIN characters c ON c.character_id = s.character_id;", conn))
                     {
                         DfoServer.Game.Characters.CharacterStatComputer.DecodeGrowType(grow, out int first, out int second);
                         var blob = DfoServer.Game.Characters.CharacterStatComputer.BuildAdditionalInfo(job, level, first, second);
-                        if (UpdateCombatStats(conn, cid, blob) > 0)
+                        if (UpdateCombatStatsOnConnection(conn, cid, blob) > 0)
                             repaired++;
                     }
                     catch (Exception ex)

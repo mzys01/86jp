@@ -136,6 +136,29 @@ ALTER TABLE character_item_locks_new RENAME TO character_item_locks;";
             }
         }
 
+        // 幂等删列: 列不存在则跳过。需要 SQLite ≥3.35 (随包 e_sqlite3 满足);
+        // 列被索引/约束引用时 DROP 会失败, 属于迁移编写错误, 应当在启动时炸出来。
+        public static void DropColumnsIfExist(SqliteConnection connection, string tableName, params string[] columns)
+        {
+            if (connection == null) throw new ArgumentNullException(nameof(connection));
+
+            var existing = ReadColumnNames(connection, tableName);
+            if (existing.Count == 0)
+                return;
+
+            foreach (var column in columns)
+            {
+                if (!existing.Contains(column))
+                    continue;
+
+                using (var cmd = connection.CreateCommand())
+                {
+                    cmd.CommandText = $"ALTER TABLE {tableName} DROP COLUMN {column};";
+                    cmd.ExecuteNonQuery();
+                }
+            }
+        }
+
         public static void MigrateCharactersNameUniqueIndex(SqliteConnection connection)
         {
             if (connection == null) return;

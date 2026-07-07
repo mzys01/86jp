@@ -39,16 +39,19 @@ namespace DfoServer.Network.Handlers.Dungeon
             w.WriteByte(requestType);
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x00AA, w.ToArray()));
 
-            // After APC dialog ends: when room has APC and all non-APC monsters killed -> ClearDungeon
-            if (pauseFlag == 1 && session.Player.CurDungeon > 0)
+            // After APC dialog ends: only non-blocking APC rooms may clear from dialog flow.
+            // Enemy APC/BOSS actors still block the room until their DIE_MONSTER is received.
+            if (pauseFlag == 1 && (session.Player.CurrentRun?.DungeonId ?? 0) > 0)
             {
-                int apcCount = 0, normalCount = 0;
-                if (session.Player.CurRoomMonsters != null)
-                    foreach (var m in session.Player.CurRoomMonsters)
-                    { if (m.Type >= 5) apcCount++; else normalCount++; }
-
-                if (apcCount > 0 && session.Player.CurRoomKilledSeqIds.Count >= normalCount)
+                var progress = DungeonSharedServices.GetCurrentRoomProgress(session);
+                if (DungeonSharedServices.ShouldClearAfterApcDialog(progress))
+                {
                     await _settlement.TryClearDungeon(session, "APC dialog + all normals dead");
+                }
+                else if (progress.ApcCount > 0 && progress.KilledNormalCount >= progress.NormalCount)
+                {
+                    FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] STORY_PAUSE clear skipped: blockingRemaining={progress.BlockingRemainingCount} remaining={progress.RemainingCount}");
+                }
             }
         }
 
@@ -63,7 +66,7 @@ namespace DfoServer.Network.Handlers.Dungeon
             uint flagIndex = BitConverter.ToUInt32(body, 0);
             byte rewardFlag = body[4];
 
-            FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] CHANGE_TUTORIAL_FLAG: flagIndex={flagIndex} rewardFlag={rewardFlag} dungeon={session.Player.CurDungeon} cid={session.Player.CharacterId}");
+            FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] CHANGE_TUTORIAL_FLAG: flagIndex={flagIndex} rewardFlag={rewardFlag} dungeon={(session.Player.CurrentRun?.DungeonId ?? 0)} cid={session.Player.CharacterId}");
 
             // RewardTutorial: PVF serverparameter.etc [escalade tutorial reward]
             var inserted = new List<(short slot, int itemId, int count)>();
@@ -107,16 +110,14 @@ namespace DfoServer.Network.Handlers.Dungeon
                 var cid = session.Player.CharacterId;
                 FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] CHANGE_TUTORIAL_FLAG: tutorial complete (flag=31), marking skip. cid={cid}");
 
-                var stateRepo = new SqliteCharacterStateRepository(
-                    ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
                 var snap = new SelectCharacterInitializationSnapshot();
-                stateRepo.LoadFlags(cid, snap);
+                _svc.CharacterStateRepository.LoadFlags(cid, snap);
                 snap.AckTutorialSkipable = 1;
-                stateRepo.SaveFlags(cid, snap);
+                _svc.CharacterStateRepository.SaveFlags(cid, snap);
 
-                if (session.Player.CurDungeon > 0)
+                if ((session.Player.CurrentRun?.DungeonId ?? 0) > 0)
                 {
-                    FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] CHANGE_TUTORIAL_FLAG: returning to town from dungeon={session.Player.CurDungeon}");
+                    FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] CHANGE_TUTORIAL_FLAG: returning to town from dungeon={(session.Player.CurrentRun?.DungeonId ?? 0)}");
                     await ReturnToVillage(session);
                 }
             }
@@ -127,9 +128,9 @@ namespace DfoServer.Network.Handlers.Dungeon
         // CalLevelUpItemState(1, targetLevel) bulk exp to target level, SendCmdOkPacket(484)
         internal async Task HandleTutorialLevelUp(EnhancedClientSession session, GamePacketHeader header, byte[] body)
         {
-            FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] TUTORIAL_LEVEL_UP: cid={session.Player.CharacterId} level={session.Player.Level} dungeon={session.Player.CurDungeon}");
+            FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] TUTORIAL_LEVEL_UP: cid={session.Player.CharacterId} level={session.Player.Level} dungeon={(session.Player.CurrentRun?.DungeonId ?? 0)}");
 
-            if (session.Player.Level != 1 || session.Player.CurDungeon <= 0)
+            if (session.Player.Level != 1 || (session.Player.CurrentRun?.DungeonId ?? 0) <= 0)
             {
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x01E4, new byte[] { 0x13 }));
                 return;
@@ -148,24 +149,12 @@ namespace DfoServer.Network.Handlers.Dungeon
             _svc.PersistLevelAndExp(session.Player.CharacterId, session.Player.Level, session.Player.Exp);
             FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] TUTORIAL_LEVEL_UP: {1}->{target} exp={targetExp}");
 
-            ushort remainSp = 0, remainTp = 0;
-            try
-            {
-                var synced = _svc.LoadSyncedSkillState(session.Player.CharacterId, session.Player.Level, persist: true);
-                if (synced.Points != null)
-                {
-                    var pageIndex = session.Player.Subtype0Tail?.SkillTreeIndex == 1 ? 1 : 0;
-                    remainSp = SkillStateService.GetPageRemainingSp(synced.Skills, synced.Points, pageIndex);
-                    remainTp = (ushort)synced.Points.RemainingTp;
-                }
-            }
-            catch { }
+            var (remainSp, remainTp) = _svc.GetRemainingSpTp(session, persist: true, logTag: "TUTORIAL_LEVEL_UP");
 
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0025,
                 ExpNotificationBuilder.Build(session.Player.Level, session.Player.Exp, remainSp, remainTp)));
 
-            await _svc.SendQuestListRefresh(session);
-            await _svc.SendUserInfoBroadcast(session);
+            await _svc.SendInDungeonLevelUpFollowups(session);
 
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x01E4, new byte[] { 0x01 }));
         }
@@ -178,7 +167,7 @@ namespace DfoServer.Network.Handlers.Dungeon
 
         private async Task ReturnToVillage(EnhancedClientSession session)
         {
-            DungeonSharedServices.ResetDungeonState(session);
+            await DungeonRunLifecycle.EndRunToTownAsync(session);
             session.Player.UserState = 0x00;
 
             var snapshot = TownAreaNotificationBuilder.CreateCurrentSnapshot(session.Player);

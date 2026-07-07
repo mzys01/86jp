@@ -36,6 +36,31 @@ namespace DfoServer.Network.Builders
         public static byte[] BuildGoldUpdate(int gold)
             => BuildCommonSlotUpdate(InventoryListType.Main, 0, 0, gold);
 
+        // NOTI 14 UPDATE_ITEM_LIST - 84B raw item entry (Reverse/SUBSYSTEMS/inventory_system.md)
+        // 客户端按 PacketPopBuffer(84) 整块 memcpy, 不逐字段读取。全仓 84B 条目构造只此一处。
+        public static byte[] BuildRawItemEntry(short slotIndex, uint itemId, uint instanceValue)
+        {
+            var buf = new byte[84];
+            BitConverter.GetBytes(slotIndex).CopyTo(buf, 0);
+            BitConverter.GetBytes(itemId).CopyTo(buf, 2);
+            BitConverter.GetBytes(instanceValue).CopyTo(buf, 6);
+            return buf;
+        }
+
+        public static byte[] BuildRawEquipEntry(short slotIndex, uint itemId,
+            uint qualitySeed = Game.Inventory.ItemQuality.TopQualitySeed, ushort durability = 32,
+            byte sealFlag = 0)
+        {
+            var buf = new byte[84];
+            BitConverter.GetBytes(slotIndex).CopyTo(buf, 0);
+            BitConverter.GetBytes(itemId).CopyTo(buf, 2);
+            BitConverter.GetBytes(qualitySeed).CopyTo(buf, 6);
+            BitConverter.GetBytes(durability).CopyTo(buf, 11);
+            buf[13] = sealFlag;
+            BitConverter.GetBytes(0xFFFFFFFF).CopyTo(buf, 22);
+            return buf;
+        }
+
         public static byte[] BuildPetUpdates(IReadOnlyList<PetInventoryItem> items)
         {
             var writer = new GamePacketWriter();
@@ -47,6 +72,21 @@ namespace DfoServer.Network.Builders
             {
                 foreach (var item in items)
                     ItemListPacketBuilder.WritePetEntry(writer, item);
+            }
+
+            return writer.ToArray();
+        }
+
+        public static byte[] BuildEquipmentUpdates(IReadOnlyList<CommonInventoryItem> items)
+        {
+            var writer = new GamePacketWriter();
+            writer.WriteByte((byte)InventoryListType.Equipment);
+            writer.WriteUInt16((ushort)(items != null ? items.Count : 0));
+
+            if (items != null)
+            {
+                foreach (var item in items)
+                    WriteCommonUpdateEntry(writer, item);
             }
 
             return writer.ToArray();
@@ -181,8 +221,8 @@ namespace DfoServer.Network.Builders
             switch (itemSpace)
             {
                 case InventoryListType.Avatar:
-                case InventoryListType.Equipment:
                     return 0x7E;
+                case InventoryListType.Equipment:
                 case InventoryListType.Main:
                 case InventoryListType.PersonalCargo:
                 case InventoryListType.AccountCargo:

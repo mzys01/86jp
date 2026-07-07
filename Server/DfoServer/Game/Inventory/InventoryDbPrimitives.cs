@@ -302,7 +302,7 @@ WHERE character_id = @characterId AND list_type = @listType AND slot_index = @sl
                 command.Transaction = transaction;
                 command.CommandText = @"
 SELECT list_type, slot_index, item_template_id, item_kind, stack_count, instance_value,
-       durability, seal_flag, option_value, expire_time, marker_16, pet_serial_or_handle, extra_json
+       durability, seal_flag, option_value, expire_time, marker_16, pet_serial_or_handle, equipment_lock_id, extra_json
 FROM character_items
 WHERE character_id = @characterId AND list_type = @listType AND slot_index = @slotIndex;";
                 command.Parameters.AddWithValue("@characterId", characterId);
@@ -314,7 +314,7 @@ WHERE character_id = @characterId AND list_type = @listType AND slot_index = @sl
                     if (!reader.Read())
                         return null;
 
-                    return InventoryItemCodec.ReadCommonItem(reader, reader.IsDBNull(12) ? "{}" : reader.GetString(12));
+                    return InventoryItemCodec.ReadCommonItem(reader, reader.IsDBNull(13) ? "{}" : reader.GetString(13));
                 }
             }
         }
@@ -326,7 +326,7 @@ WHERE character_id = @characterId AND list_type = @listType AND slot_index = @sl
                 command.Transaction = transaction;
                 command.CommandText = @"
 SELECT list_type, slot_index, item_template_id, item_kind, stack_count, instance_value,
-       durability, seal_flag, option_value, expire_time, marker_16, pet_serial_or_handle, extra_json
+       durability, seal_flag, option_value, expire_time, marker_16, pet_serial_or_handle, equipment_lock_id, extra_json
 FROM character_items
 WHERE character_id = @characterId AND list_type = @listType AND slot_index = @slotIndex
 ORDER BY CASE item_kind
@@ -347,7 +347,7 @@ LIMIT 1;";
                         return null;
 
                     var itemKind = reader.IsDBNull(3) ? "" : reader.GetString(3);
-                    var extraJson = reader.IsDBNull(12) ? "{}" : reader.GetString(12);
+                    var extraJson = reader.IsDBNull(13) ? "{}" : reader.GetString(13);
                     return itemKind == "avatar"
                         ? InventoryItemCodec.ReadAvatarItem(reader, extraJson)
                         : InventoryItemCodec.ReadEquipmentAsAvatarItem(reader, extraJson);
@@ -362,7 +362,7 @@ LIMIT 1;";
                 command.Transaction = transaction;
                 command.CommandText = @"
 SELECT list_type, slot_index, item_template_id, item_kind, stack_count, instance_value,
-       durability, seal_flag, option_value, expire_time, marker_16, pet_serial_or_handle, extra_json
+       durability, seal_flag, option_value, expire_time, marker_16, pet_serial_or_handle, equipment_lock_id, extra_json
 FROM character_items
 WHERE character_id = @characterId AND list_type = @listType AND slot_index = @slotIndex;";
                 command.Parameters.AddWithValue("@characterId", characterId);
@@ -374,7 +374,7 @@ WHERE character_id = @characterId AND list_type = @listType AND slot_index = @sl
                     if (!reader.Read())
                         return null;
 
-                    return InventoryItemCodec.ReadPetItem(reader, reader.IsDBNull(12) ? "{}" : reader.GetString(12));
+                    return InventoryItemCodec.ReadPetItem(reader, reader.IsDBNull(13) ? "{}" : reader.GetString(13));
                 }
             }
         }
@@ -386,7 +386,7 @@ WHERE character_id = @characterId AND list_type = @listType AND slot_index = @sl
                 command.Transaction = transaction;
                 command.CommandText = @"
 SELECT 12 AS list_type, slot_index, item_template_id, item_kind, stack_count, instance_value,
-       durability, seal_flag, option_value, expire_time, marker_16, 0 AS pet_serial_or_handle, extra_json
+       durability, seal_flag, option_value, expire_time, marker_16, 0 AS pet_serial_or_handle, 0 AS equipment_lock_id, extra_json
 FROM account_cargo_items
 WHERE account_id = @accountId AND slot_index = @slotIndex;";
                 command.Parameters.AddWithValue("@accountId", accountId);
@@ -397,7 +397,7 @@ WHERE account_id = @accountId AND slot_index = @slotIndex;";
                     if (!reader.Read())
                         return null;
 
-                    return InventoryItemCodec.ReadCommonItem(reader, reader.IsDBNull(12) ? "{}" : reader.GetString(12));
+                    return InventoryItemCodec.ReadCommonItem(reader, reader.IsDBNull(13) ? "{}" : reader.GetString(13));
                 }
             }
         }
@@ -466,7 +466,7 @@ VALUES (
 
         internal void InsertCommonItem(SqliteConnection connection, SqliteTransaction transaction, int characterId, InventoryListType listType, CommonInventoryItem item)
         {
-            InsertCharacterItem(connection, transaction, characterId, listType, item.SlotIndex, item.ItemTemplateId, InventoryItemCodec.InferCommonItemKind(item), item.CountOrInstanceValue, item.CountOrInstanceValue, item.Durability, item.SealFlag, 0, item.ExpireTime, item.Marker16, 0, InventoryItemCodec.SerializeCommon(item));
+            InsertCharacterItem(connection, transaction, characterId, listType, item.SlotIndex, item.ItemTemplateId, InventoryItemCodec.InferCommonItemKind(item), item.CountOrInstanceValue, item.CountOrInstanceValue, item.Durability, item.SealFlag, 0, item.ExpireTime, item.Marker16, 0, InventoryItemCodec.SerializeCommon(item), item.EquipmentLockId);
         }
 
         internal void InsertAvatarItem(SqliteConnection connection, SqliteTransaction transaction, int characterId, AvatarInventoryItem item)
@@ -765,10 +765,9 @@ DELETE FROM character_items WHERE item_uid = @itemUid;";
 
         // ── Wallet ─────────────────────────────────────────────
 
-        internal SqliteInventoryStore.WalletState LoadWallet(SqliteConnection connection, SqliteTransaction transaction, int characterId)
+        internal WalletSnapshot LoadWallet(SqliteConnection connection, SqliteTransaction transaction, int characterId)
         {
-            var snap = CurrencyService.LoadWallet(connection, transaction, characterId);
-            var w = new SqliteInventoryStore.WalletState { Gold = snap.Gold, Coin = snap.Cera, TokenCera = snap.TokenCera, HappyTokenCera = snap.HappyTokenCera };
+            var w = CurrencyService.LoadWallet(connection, transaction, characterId);
             using (var cmd = connection.CreateCommand())
             {
                 cmd.Transaction = transaction;
@@ -779,12 +778,6 @@ DELETE FROM character_items WHERE item_uid = @itemUid;";
                     w.Sp = Convert.ToInt32(result);
             }
             return w;
-        }
-
-        internal void UpdateWallet(SqliteConnection connection, SqliteTransaction transaction, int characterId, int gold, int coin)
-        {
-            CurrencyService.UpdateGold(connection, transaction, characterId, gold);
-            CurrencyService.UpdateCera(connection, transaction, characterId, coin);
         }
 
         // ── Tool ───────────────────────────────────────────────
@@ -807,7 +800,7 @@ WHERE character_id = @characterId AND list_type = @listType;";
 
         internal static int GenerateInstanceValue(int itemTemplateId, int slotIndex)
         {
-            return 999999998;
+            return (int)ItemQuality.TopQualitySeed;
         }
 
         // ── Package / Booster shared ───────────────────────────
@@ -930,16 +923,34 @@ WHERE character_id = @characterId AND list_type = @listType;";
 
             if (metadata.IsStackable && !isAvatarReward)
             {
-                var existing = FindStackableItemByTemplateIdAndExpireTime(
-                    connection,
-                    transaction,
-                    characterId,
-                    insertListType,
-                    itemTemplateId,
-                    expireTime,
-                    metadata.StackLimit,
-                    slotStart,
-                    slotEnd);
+                var preferQuickSlotStack = insertListType == InventoryListType.Main &&
+                    IsQuickSlotConsumable(metadata);
+                var existing = preferQuickSlotStack
+                    ? FindStackableItemByTemplateIdAndExpireTime(
+                        connection,
+                        transaction,
+                        characterId,
+                        insertListType,
+                        itemTemplateId,
+                        expireTime,
+                        metadata.StackLimit,
+                        SqliteInventoryStore.QuickSlotStart,
+                        SqliteInventoryStore.QuickSlotEnd,
+                        effectiveCount)
+                    : null;
+
+                if (existing == null)
+                    existing = FindStackableItemByTemplateIdAndExpireTime(
+                        connection,
+                        transaction,
+                        characterId,
+                        insertListType,
+                        itemTemplateId,
+                        expireTime,
+                        metadata.StackLimit,
+                        slotStart,
+                        slotEnd,
+                        effectiveCount);
                 if (existing != null && (metadata.StackLimit <= 0 || existing.StackCount + effectiveCount <= metadata.StackLimit))
                 {
                     var newStackCount = existing.StackCount + effectiveCount;
@@ -983,6 +994,7 @@ WHERE character_id = @characterId AND list_type = @listType;";
                 extraJson = InventoryItemCodec.SerializeAvatar(avatarItem);
             }
 
+            var sealFlag = metadata.IsSealed ? (byte)1 : (byte)0;
             InsertCharacterItem(
                 connection,
                 transaction,
@@ -994,7 +1006,7 @@ WHERE character_id = @characterId AND list_type = @listType;";
                 storedStackCount,
                 instanceValue,
                 durability,
-                0,
+                sealFlag,
                 optionValue,
                 expireTime,
                 marker16,
@@ -1010,6 +1022,14 @@ WHERE character_id = @characterId AND list_type = @listType;";
                 GrantedCount = effectiveCount,
             };
             return true;
+        }
+
+        private static bool IsQuickSlotConsumable(ItemMetadata metadata)
+        {
+            return metadata != null &&
+                metadata.IsStackable &&
+                metadata.StackableType != null &&
+                metadata.StackableType.IndexOf("[waste]", StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
         private static int ResolveBoosterRewardExpireTime(int itemTemplateId, ItemMetadata metadata)
@@ -1172,45 +1192,36 @@ WHERE character_id = @characterId AND list_type = @listType;";
             }
 
             // ── Normal item path ──
+            // 走正规 DeleteItem/UpdateStackCount(按item_uid): 整删带排列锁清理, 部分扣减维护 instance_value/updated_at。
+            // 旧版自写 DELETE/UPDATE 会留孤儿排列锁、instance_value 滞留旧值。
             using (var cmd = conn.CreateCommand())
             {
                 cmd.Transaction = tx;
-                cmd.CommandText = "SELECT slot_index, stack_count FROM character_items WHERE character_id = @cid AND list_type = 0 AND item_template_id = @tid LIMIT 1;";
+                cmd.CommandText = "SELECT item_uid, slot_index, stack_count FROM character_items WHERE character_id = @cid AND list_type = 0 AND item_template_id = @tid LIMIT 1;";
                 cmd.Parameters.AddWithValue("@cid", characterId);
                 cmd.Parameters.AddWithValue("@tid", itemTemplateId);
                 using (var reader = cmd.ExecuteReader())
                 {
                     if (!reader.Read()) return null;
-                    int slot = reader.GetInt32(0);
-                    int stackCount = reader.GetInt32(1);
+                    long itemUid = reader.GetInt64(0);
+                    int slot = reader.GetInt32(1);
+                    int stackCount = reader.GetInt32(2);
                     reader.Close();
 
+                    // Material costs must be all-or-nothing; a short stack cannot be
+                    // partially deleted and reported as a successful fixed-count spend.
+                    if (stackCount < count) return null;
+
+                    var db = new InventoryDbPrimitives();
                     if (stackCount <= count)
                     {
-                        // Full removal
-                        using (var del = conn.CreateCommand())
-                        {
-                            del.Transaction = tx;
-                            del.CommandText = "DELETE FROM character_items WHERE character_id = @cid AND list_type = 0 AND slot_index = @slot;";
-                            del.Parameters.AddWithValue("@cid", characterId);
-                            del.Parameters.AddWithValue("@slot", slot);
-                            del.ExecuteNonQuery();
-                        }
+                        db.DeleteItem(conn, tx, itemUid);
                         return ((short)slot, count, 0);
                     }
                     else
                     {
-                        // Partial deduction
                         int remaining = stackCount - count;
-                        using (var upd = conn.CreateCommand())
-                        {
-                            upd.Transaction = tx;
-                            upd.CommandText = "UPDATE character_items SET stack_count = @ns WHERE character_id = @cid AND list_type = 0 AND slot_index = @slot;";
-                            upd.Parameters.AddWithValue("@ns", remaining);
-                            upd.Parameters.AddWithValue("@cid", characterId);
-                            upd.Parameters.AddWithValue("@slot", slot);
-                            upd.ExecuteNonQuery();
-                        }
+                        db.UpdateStackCount(conn, tx, itemUid, remaining);
                         return ((short)slot, count, remaining);
                     }
                 }

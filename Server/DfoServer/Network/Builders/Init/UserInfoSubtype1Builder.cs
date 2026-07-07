@@ -109,7 +109,8 @@ namespace DfoServer.Network.Builders
             
             
             
-            w.WriteUInt32(a.EquipListTrailing);
+            // 客户端在装备列表后读取独立 clone_title_item_id，不能从物品结构里取。
+            w.WriteUInt32(a.CloneTitleItemId);
 
             
             w.WriteUInt32(a.NameTagItemId);

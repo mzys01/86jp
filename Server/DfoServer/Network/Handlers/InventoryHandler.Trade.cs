@@ -32,7 +32,7 @@ namespace DfoServer.Network.Handlers
                     var deleteCount = (short)BitConverter.ToInt32(body, offset + 8);
                     offset += 12;
 
-                    if (!_sqliteSelectCharacterDataSource.TryDeleteItem(cid, aid, listType, slotIndex, deleteCount, out var result))
+                    if (!_inventoryStore.TryDeleteItem(cid, aid, listType, slotIndex, deleteCount, out var result))
                     {
                         FileLogger.Log($"[{ProtocolName}] DELETE_ITEM(ext): failed at listType={listType} slot={slotIndex} count={deleteCount}");
                         var errAck = new byte[] { 0x00, 0x17, (byte)listType };
@@ -51,7 +51,7 @@ namespace DfoServer.Network.Handlers
             if (!TryParseDeleteOrSellRequest(body, out var lt, out var si, out var ic))
                 return;
 
-            if (!_sqliteSelectCharacterDataSource.TryDeleteItem(cid, aid, lt, si, ic, out var simpleResult))
+            if (!_inventoryStore.TryDeleteItem(cid, aid, lt, si, ic, out var simpleResult))
             {
                 var errAck = new byte[] { 0x00, 0x17, (byte)lt };
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0012, errAck));
@@ -72,7 +72,7 @@ namespace DfoServer.Network.Handlers
             FileLogger.Log($"[{ProtocolName}] BUY_ITEM: itemTemplateId=0x{itemTemplateId:X8} count={buyCount}");
 
             var (cid, aid) = ResolveOwner(session);
-            if (!_sqliteSelectCharacterDataSource.TryBuyItem(cid, aid, itemTemplateId, buyCount, out var result))
+            if (!_inventoryStore.TryBuyItem(cid, aid, itemTemplateId, buyCount, out var result))
             {
                 FileLogger.Log($"[{ProtocolName}] BUY_ITEM: FAILED itemTemplateId=0x{itemTemplateId:X8}");
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0015, BuyItemAckBuilder.BuildError(0x04)));
@@ -97,7 +97,7 @@ namespace DfoServer.Network.Handlers
 
             if (result.ListType == InventoryListType.Pet)
             {
-                await SendUpdateItemList(session, InventoryListType.Pet, result.SlotIndex);
+                await _refresh.SendUpdateItemList(session, InventoryListType.Pet, result.SlotIndex);
                 FileLogger.Log($"[{ProtocolName}] BUY_ITEM: pet ITEM_LIST update sent slot={result.SlotIndex}");
             }
         }
@@ -112,7 +112,7 @@ namespace DfoServer.Network.Handlers
             FileLogger.Log($"[{ProtocolName}] SELL_ITEM: listType={listType}({(byte)listType}) slot={slotIndex} count={sellCount}");
 
             var (cid, aid) = ResolveOwner(session);
-            if (!_sqliteSelectCharacterDataSource.TrySellItem(cid, aid, listType, slotIndex, sellCount, out var result))
+            if (!_inventoryStore.TrySellItem(cid, aid, listType, slotIndex, sellCount, out var result))
             {
                 FileLogger.Log($"[{ProtocolName}] SELL_ITEM: FAILED listType={listType} slot={slotIndex} count={sellCount}");
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0016, SellItemBuilder.BuildError(0x11)));
@@ -126,32 +126,156 @@ namespace DfoServer.Network.Handlers
         public async Task Handle_SET_CLONE_TITLE(EnhancedClientSession session, GamePacketHeader header, byte[] body)
         {
             var cloneTitle = (body != null && body.Length >= 4) ? BitConverter.ToInt32(body, 0) : 0;
-            var ack = new byte[5];
-            ack[0] = 0x01;
-            BitConverter.GetBytes(cloneTitle).CopyTo(ack, 1);
-            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0239, ack));
-            var (cid, aid) = ResolveOwner(session);
-            var noti2 = Game.Appearance.AppearanceService.UpdateAndBroadcast(
-                session.Player, _sqliteSelectCharacterDataSource, _characterRepository, cid, aid);
-            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0002, noti2));
+            var (cid, _) = ResolveOwner(session);
+            Game.Appearance.AppearanceService.SaveCloneTitleItemId(cid, cloneTitle);
+            if (session.Player != null)
+            {
+                var tail = session.Player.Subtype0Tail ?? new Game.SelectCharacter.UserInfoMinimumTailSnapshot();
+                tail.CloneTitleItemId = (uint)(cloneTitle > 0 ? cloneTitle : 0);
+                session.Player.Subtype0Tail = tail;
+            }
+            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
+                0x01,
+                0x0239,
+                Game.Appearance.AppearanceService.BuildCloneTitleAckBody(cloneTitle)));
+            FileLogger.Log($"[{ProtocolName}] SET_CLONE_TITLE: cloneTitle=0x{cloneTitle:X8} persisted, ackExtra=00-00");
         }
 
         public async Task Handle_TITLE_BOOK(EnhancedClientSession session, GamePacketHeader header, byte[] body)
         {
-            if (body == null || body.Length < 20) return;
+            if (body == null || body.Length < 20)
+                return;
+
+            var itemSpaceRaw = BitConverter.ToInt32(body, 0);
+            var slot = (short)BitConverter.ToInt32(body, 4);
+            var itemId = BitConverter.ToInt32(body, 8);
+            var category = BitConverter.ToInt32(body, 12);
+            var index = BitConverter.ToInt32(body, 16);
+
+            if (!TryParseInventoryListType(itemSpaceRaw, out var itemSpace))
+            {
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
+                    0x01, header.type, BuildTitleBookFailure(itemSpaceRaw, category, 0x0A)));
+                return;
+            }
+
+            var (cid, aid) = ResolveOwner(session);
+            bool ok;
+            Game.TitleBook.TitleBookMutationResult result;
+            if (header.type == 0x019C)
+                ok = _sqliteSelectCharacterDataSource.TryPutTitleBook(cid, aid, itemSpace, slot, itemId, category, index, out result);
+            else
+                ok = _sqliteSelectCharacterDataSource.TryGetTitleBook(cid, aid, itemSpace, slot, itemId, category, index, out result);
+
+            if (!ok)
+            {
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
+                    0x01, header.type, BuildTitleBookFailure(itemSpaceRaw, category, result != null ? result.ErrorCode : (byte)0x0A)));
+                return;
+            }
+
+            if (result.EquipmentChanged)
+            {
+                _refresh.ReloadSubtype0Tail(session);
+                await _refresh.SendNoti2AppearanceUpdate(session);
+            }
+
+            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
+                0x01, header.type, BuildTitleBookSuccess(itemSpaceRaw, slot, result.Category, result.BookIndex)));
+
+            if (result.ItemLockChanged)
+                await _refresh.SendAllEquipmentItemLockListRefresh(session);
+        }
+
+        public async Task Handle_ACHIEVEMENT_TRIGGER(EnhancedClientSession session, GamePacketHeader header, byte[] body)
+        {
+            if (body == null || body.Length < 10)
+                return;
+
+            var questId = BitConverter.ToInt32(body, 0);
+            var delta1 = BitConverter.ToUInt16(body, 4);
+            var delta2 = BitConverter.ToUInt16(body, 6);
+            var delta3 = BitConverter.ToUInt16(body, 8);
+            var (cid, _) = ResolveOwner(session);
+
+            if (!_sqliteSelectCharacterDataSource.TryTriggerAchievement(cid, questId, delta1, delta2, delta3, out var result))
+            {
+                var fail = new GamePacketWriter();
+                fail.WriteByte(0);
+                fail.WriteByte(result != null ? result.ErrorCode : (byte)0x0A);
+                fail.WriteInt32(questId);
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, header.type, fail.ToArray()));
+                return;
+            }
+
             var w = new GamePacketWriter();
-            w.WriteByte(0x01);
-            w.WriteInt32(BitConverter.ToInt32(body, 0));
-            w.WriteInt32(BitConverter.ToInt32(body, 4));
-            w.WriteInt32(BitConverter.ToInt32(body, 12));
-            w.WriteInt32(BitConverter.ToInt32(body, 16));
+            w.WriteByte(1);
+            w.WriteInt32(result.QuestId);
+            w.WriteUInt16(result.Remain1);
+            w.WriteUInt16(result.Remain2);
+            w.WriteUInt16(result.Remain3);
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, header.type, w.ToArray()));
+
+            if (result.Completed && result.TitleItemId > 0)
+            {
+                var complete = new GamePacketWriter();
+                complete.WriteInt32(result.QuestId);
+                complete.WriteInt32(result.Category);
+                complete.WriteInt32(result.BookIndex);
+                complete.WriteInt32(result.TitleItemId);
+                complete.WriteUInt16((ushort)Math.Max(0, result.BookIndex));
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0168, complete.ToArray()));
+                await SendTitleBookCategoryRefresh(session, cid, result.Category);
+            }
+        }
+
+        private static byte[] BuildTitleBookSuccess(int itemSpace, short slot, int category, int index)
+        {
+            var w = new GamePacketWriter();
+            w.WriteByte(1);
+            w.WriteInt32(itemSpace);
+            w.WriteInt32(slot);
+            w.WriteInt32(category);
+            w.WriteInt32(index);
+            return w.ToArray();
+        }
+
+        private static byte[] BuildTitleBookFailure(int itemSpace, int category, byte errorCode)
+        {
+            var w = new GamePacketWriter();
+            w.WriteByte(0);
+            w.WriteByte(errorCode);
+            w.WriteInt32(itemSpace);
+            w.WriteInt32(category);
+            return w.ToArray();
+        }
+
+        private async Task SendTitleBookCategoryRefresh(EnhancedClientSession session, int characterId, int category)
+        {
+            var snapshot = _sqliteSelectCharacterDataSource.LoadTitleBookSnapshot(characterId, category);
+            if (snapshot == null)
+                return;
+
+            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
+                0x00,
+                0x0166,
+                TitleBookListBodyBuilder.BuildCategoryBody(snapshot)));
+        }
+
+        private static bool TryParseInventoryListType(int value, out InventoryListType listType)
+        {
+            if (value >= byte.MinValue && value <= byte.MaxValue && Enum.IsDefined(typeof(InventoryListType), (byte)value))
+            {
+                listType = (InventoryListType)(byte)value;
+                return true;
+            }
+
+            listType = InventoryListType.Main;
+            return false;
         }
 
         // ── 账号金库 ──────────────────────────────────────────────────────────
-
-        private const int CargoInitialCapacity = 1;
-        private static readonly int[] CargoCapacityTiers = { 1, 8, 16, 24, 32, 40, 48, 56, 64 };
+        // SQL 已下沉 SqliteInventoryStore.Cargo.cs; handler 只留解析+ACK。
 
         public async Task Handle_DEPOSIT_MONEY(EnhancedClientSession session, GamePacketHeader header, byte[] body)
         {
@@ -179,144 +303,99 @@ namespace DfoServer.Network.Handlers
             }
 
             var (cid, aid) = ResolveOwner(session);
-            var connStr = Infrastructure.SqliteDatabaseBootstrap.Initialize(
-                Infrastructure.ServerPaths.DatabasePath, Infrastructure.ServerPaths.SchemaFilePath);
-
-            using (var conn = new Microsoft.Data.Sqlite.SqliteConnection(connStr))
+            int newCharGold, newCargoGold;
+            var ok = isDeposit
+                ? _inventoryStore.TryDepositCargoGold(cid, aid, amount, out newCharGold, out newCargoGold)
+                : _inventoryStore.TryWithdrawCargoGold(cid, aid, amount, out newCharGold, out newCargoGold);
+            if (!ok)
             {
-                conn.Open();
-                using (var tx = conn.BeginTransaction())
-                {
-                    var wallet = CurrencyService.LoadWallet(conn, tx, cid);
-                    int cargoGold = LoadCargoStateField(conn, tx, aid, "value32");
-
-                    int newCharGold, newCargoGold;
-                    if (isDeposit)
-                    {
-                        if (wallet.Gold < amount)
-                        {
-                            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, wireType, new byte[] { 0x00, 0x0A }));
-                            return;
-                        }
-                        newCharGold = wallet.Gold - amount;
-                        newCargoGold = cargoGold + amount;
-                    }
-                    else
-                    {
-                        if (cargoGold < amount)
-                        {
-                            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, wireType, new byte[] { 0x00, 0x0A }));
-                            return;
-                        }
-                        newCargoGold = cargoGold - amount;
-                        newCharGold = wallet.Gold + amount;
-                    }
-
-                    CurrencyService.UpdateGold(conn, tx, cid, newCharGold);
-                    SaveCargoGold(conn, tx, aid, newCargoGold);
-                    tx.Commit();
-
-                    var ack = new GamePacketWriter();
-                    ack.WriteByte(0x01);
-                    ack.WriteInt32(newCargoGold);
-                    await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, wireType, ack.ToArray()));
-
-                    await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000E,
-                        ItemListUpdateBuilder.BuildGoldUpdate(newCharGold)));
-
-                    FileLogger.Log($"[{ProtocolName}] {(isDeposit ? "DEPOSIT" : "WITHDRAW")}_MONEY: amount={amount} charGold={newCharGold} cargoGold={newCargoGold}");
-                }
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, wireType, new byte[] { 0x00, 0x0A }));
+                return;
             }
+
+            var ack = new GamePacketWriter();
+            ack.WriteByte(0x01);
+            ack.WriteInt32(newCargoGold);
+            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, wireType, ack.ToArray()));
+
+            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000E,
+                ItemListUpdateBuilder.BuildGoldUpdate(newCharGold)));
+
+            FileLogger.Log($"[{ProtocolName}] {(isDeposit ? "DEPOSIT" : "WITHDRAW")}_MONEY: amount={amount} charGold={newCharGold} cargoGold={newCargoGold}");
         }
 
-        private static int LoadCargoStateField(Microsoft.Data.Sqlite.SqliteConnection conn, Microsoft.Data.Sqlite.SqliteTransaction tx, int accountId, string column)
-        {
-            using (var cmd = conn.CreateCommand())
-            {
-                cmd.Transaction = tx;
-                cmd.CommandText = $"SELECT {column} FROM account_cargo_state WHERE account_id=@aid;";
-                cmd.Parameters.AddWithValue("@aid", accountId);
-                var result = cmd.ExecuteScalar();
-                return result != null && result != DBNull.Value ? Convert.ToInt32(result) : 0;
-            }
-        }
-
-        private static void SaveCargoGold(Microsoft.Data.Sqlite.SqliteConnection conn, Microsoft.Data.Sqlite.SqliteTransaction tx, int accountId, int gold)
-        {
-            using (var cmd = conn.CreateCommand())
-            {
-                cmd.Transaction = tx;
-                cmd.CommandText = "UPDATE account_cargo_state SET value32=@gold, updated_at=CURRENT_TIMESTAMP WHERE account_id=@aid;";
-                cmd.Parameters.AddWithValue("@gold", gold);
-                cmd.Parameters.AddWithValue("@aid", accountId);
-                cmd.ExecuteNonQuery();
-            }
-        }
         public async Task Handle_CREATE_ACCOUNT_CARGO(EnhancedClientSession session, GamePacketHeader header, byte[] body)
         {
             var (cid, aid) = ResolveOwner(session);
-            var connStr = Infrastructure.SqliteDatabaseBootstrap.Initialize(
-                Infrastructure.ServerPaths.DatabasePath, Infrastructure.ServerPaths.SchemaFilePath);
-
-            using (var conn = new Microsoft.Data.Sqlite.SqliteConnection(connStr))
+            if (!_inventoryStore.TryCreateAccountCargo(cid, aid, out var costResult, out var errorCode))
             {
-                conn.Open();
-                int existing = LoadCargoStateField(conn, null, aid, "selection_key");
-                if (existing > 0)
-                {
-                    await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0131, new byte[] { 0x00, 0x14 }));
-                    return;
-                }
-
-                using (var cmd = conn.CreateCommand())
-                {
-                    cmd.CommandText = @"
-INSERT OR REPLACE INTO account_cargo_state (account_id, selection_key, value32, updated_at)
-VALUES (@aid, @cap, 0, CURRENT_TIMESTAMP);";
-                    cmd.Parameters.AddWithValue("@aid", aid);
-                    cmd.Parameters.AddWithValue("@cap", CargoInitialCapacity);
-                    cmd.ExecuteNonQuery();
-                }
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0131, new byte[] { 0x00, errorCode }));
+                return;
             }
 
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0131, new byte[] { 0x01 }));
-            FileLogger.Log($"[{ProtocolName}] CREATE_ACCOUNT_CARGO: aid={aid} selectionKey={CargoInitialCapacity}");
+            await SendAccountCargoCostRefresh(session, costResult);
+            await _refresh.SendItemListRefresh(session, InventoryListType.AccountCargo);
+            FileLogger.Log($"[{ProtocolName}] CREATE_ACCOUNT_CARGO: aid={aid} cargo created costGold={costResult?.GoldSpent == true} costItem=0x{costResult?.CostItemTemplateId ?? 0:X8}");
         }
 
         public async Task Handle_UPGRADE_ACCOUNT_CARGO(EnhancedClientSession session, GamePacketHeader header, byte[] body)
         {
             var (cid, aid) = ResolveOwner(session);
-            var connStr = Infrastructure.SqliteDatabaseBootstrap.Initialize(
-                Infrastructure.ServerPaths.DatabasePath, Infrastructure.ServerPaths.SchemaFilePath);
-
-            using (var conn = new Microsoft.Data.Sqlite.SqliteConnection(connStr))
+            if (!_inventoryStore.TryUpgradeAccountCargo(cid, aid, out var costResult, out var errorCode))
             {
-                conn.Open();
-                int current = LoadCargoStateField(conn, null, aid, "selection_key");
-                if (current <= 0)
-                {
-                    await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0132, new byte[] { 0x00, 0x15 }));
-                    return;
-                }
-                int nextTierIndex = Array.IndexOf(CargoCapacityTiers, current) + 1;
-                if (nextTierIndex <= 0 || nextTierIndex >= CargoCapacityTiers.Length)
-                {
-                    await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0132, new byte[] { 0x00, 0x13 }));
-                    return;
-                }
-                int newCap = CargoCapacityTiers[nextTierIndex];
-
-                using (var cmd = conn.CreateCommand())
-                {
-                    cmd.CommandText = "UPDATE account_cargo_state SET selection_key=@cap, updated_at=CURRENT_TIMESTAMP WHERE account_id=@aid;";
-                    cmd.Parameters.AddWithValue("@cap", newCap);
-                    cmd.Parameters.AddWithValue("@aid", aid);
-                    cmd.ExecuteNonQuery();
-                }
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0132, new byte[] { 0x00, errorCode }));
+                return;
             }
 
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0132, new byte[] { 0x01 }));
-            FileLogger.Log($"[{ProtocolName}] UPGRADE_ACCOUNT_CARGO: aid={aid} selectionKey upgraded");
+            await SendAccountCargoCostRefresh(session, costResult);
+            await _refresh.SendItemListRefresh(session, InventoryListType.AccountCargo);
+            FileLogger.Log($"[{ProtocolName}] UPGRADE_ACCOUNT_CARGO: aid={aid} selectionKey upgraded costGold={costResult?.GoldSpent == true} costItem=0x{costResult?.CostItemTemplateId ?? 0:X8} costItemNew={costResult?.CostItemNewStackCount ?? 0} coin={costResult?.UpdatedCoin ?? 0}");
+        }
+
+        private async Task SendAccountCargoCostRefresh(EnhancedClientSession session, InventoryMutationResult costResult)
+        {
+            if (costResult == null)
+                return;
+
+            if (costResult.GoldSpent)
+            {
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000E,
+                    ItemListUpdateBuilder.BuildGoldUpdate(costResult.UpdatedGold)));
+                return;
+            }
+
+            if (costResult.CostItemTemplateId > 0)
+            {
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000E,
+                    ItemListUpdateBuilder.BuildCommonSlotUpdate(
+                        costResult.CostItemSlotIndex,
+                        costResult.CostItemTemplateId,
+                        costResult.CostItemNewStackCount)));
+                return;
+            }
+
+            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0035,
+                CeraUpdateBuilder.Build(
+                    costResult.UpdatedCoin,
+                    costResult.UpdatedTokenCera,
+                    costResult.UpdatedHappyTokenCera)));
+        }
+
+        public async Task Handle_UPGRADE_CARGO(EnhancedClientSession session, GamePacketHeader header, byte[] body)
+        {
+            var (cid, aid) = ResolveOwner(session);
+            if (!_inventoryStore.TryUpgradePersonalCargo(cid, aid, out var newListParam16, out var errorCode))
+            {
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, header.type, new byte[] { 0x00, errorCode }));
+                FileLogger.Log($"[{ProtocolName}] UPGRADE_CARGO: failed cid={cid} aid={aid} error=0x{errorCode:X2} rawBody({body?.Length ?? 0}B)={(body != null ? BitConverter.ToString(body) : "null")}");
+                return;
+            }
+
+            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, header.type, new byte[] { 0x01 }));
+            await _refresh.SendItemListRefresh(session, InventoryListType.PersonalCargo);
+            FileLogger.Log($"[{ProtocolName}] UPGRADE_CARGO: cid={cid} aid={aid} personalCargoListParam16={newListParam16} rawBody({body?.Length ?? 0}B)={(body != null ? BitConverter.ToString(body) : "null")}");
         }
     }
 }

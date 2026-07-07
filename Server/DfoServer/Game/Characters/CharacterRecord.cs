@@ -14,8 +14,6 @@ namespace DfoServer.Game.Characters
         public byte PvpGrade { get; set; }
         public byte PvpRatingGrade { get; set; }
         public byte UserState { get; set; }
-        public long Gold { get; set; }
-        public long Coin { get; set; }
         public byte TownId { get; set; }
         public byte AreaId { get; set; }
         public short PosX { get; set; }

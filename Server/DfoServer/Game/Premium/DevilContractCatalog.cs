@@ -41,6 +41,11 @@ namespace DfoServer.Game.Premium
         public static bool IsDevilContractSlotType(int premiumType) => premiumType >= SlotPremiumTypeBase && premiumType < SlotPremiumTypeBase + 8;
         public static int PremiumTypeToSlot(int premiumType) => premiumType - SlotPremiumTypeBase;
 
+        // "自动修理"服务 = 魔王契约 slot 6 (实测确认), premium_type=586。
+        // 激活且未过期时装备修理免费。
+        public const int AutoRepairSlotIndex = 6;
+        public const int AutoRepairPremiumType = SlotPremiumTypeBase + AutoRepairSlotIndex;   // 586
+
         // ack_premium_blob 中魔王契約整体激活标记
         public const int ActivationPremiumType = 58;
 

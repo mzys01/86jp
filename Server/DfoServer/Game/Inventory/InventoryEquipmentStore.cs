@@ -1,4 +1,3 @@
-using DfoServer.Infrastructure;
 using System;
 using System.Collections.Generic;
 using System.Globalization;
@@ -34,7 +33,7 @@ namespace DfoServer.Game.Inventory
 
                 var fields = new MakeEquipListCodec.DisplayFields
                 {
-                    InstanceValue = 999999998u,
+                    InstanceValue = ItemQuality.TopQualitySeed,
                     Durability = meta.Durability,
                 };
                 var raw = MakeEquipListCodec.BuildEntryFromDisplayFields(slot, itemId, fields);
@@ -72,9 +71,9 @@ namespace DfoServer.Game.Inventory
             if (!RentalWeaponInventoryMapper.IsValidInventoryTemplate(itemTemplateId))
                 return false;
 
-            var seriesKey = RentalWeaponInventoryMapper.GetSeriesKey(itemTemplateId);
-
-            var equipped = FindEquippedRentalBySeriesKey(connection, transaction, characterId, seriesKey);
+            // 续租只刷新同一背包模板，避免同商店条目ID的不同武器互相覆盖。
+            var equipped = FindEquippedRentalByInventoryTemplate(
+                connection, transaction, characterId, itemTemplateId);
             if (equipped != null)
             {
                 instanceValue = RentalWeaponRequestCodec.RentalWeaponQualitySeed;
@@ -83,8 +82,8 @@ namespace DfoServer.Game.Inventory
                 return true;
             }
 
-            var existing = FindRentalBySeriesKey(
-                connection, transaction, characterId, InventoryListType.Main, seriesKey,
+            var existing = FindRentalByInventoryTemplate(
+                connection, transaction, characterId, InventoryListType.Main, itemTemplateId,
                 SqliteInventoryStore.QuickSlotStart, SqliteInventoryStore.RentalBagSlotEnd);
 
             if (existing != null
@@ -98,6 +97,7 @@ namespace DfoServer.Game.Inventory
                 return true;
             }
 
+            // 先放快捷栏可见区，满了再放普通背包扩展区。
             var targetSlot = _db.FindEmptySlot(connection, transaction, characterId, InventoryListType.Main,
                 SqliteInventoryStore.QuickSlotStart, SqliteInventoryStore.QuickSlotEnd);
             if (targetSlot < 0)
@@ -109,15 +109,19 @@ namespace DfoServer.Game.Inventory
             instanceValue = RentalWeaponRequestCodec.RentalWeaponQualitySeed;
             _db.InsertCharacterItem(
                 connection, transaction, characterId, InventoryListType.Main, (short)targetSlot,
-                itemTemplateId, itemKind, instanceValue, instanceValue,
+                itemTemplateId, itemKind, instanceValue, 0,
                 durability, 0, 0, expireTime, -1, 0, DefaultEquipmentExtraJson);
             assignedSlot = (short)targetSlot;
             return true;
         }
 
-        internal int DeleteExpiredRentalEquipment(SqliteConnection connection, SqliteTransaction transaction, int characterId, int accountId)
+        internal int DeleteExpiredRentalEquipment(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            int characterId,
+            int accountId,
+            uint now)
         {
-            var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
             var removed = 0;
 
             var expiredBagItems = new List<(long itemUid, int slotIndex, int itemTemplateId, int expireTime)>();
@@ -181,7 +185,8 @@ ORDER BY slot;";
                     while (reader.Read())
                     {
                         var itemId = reader.GetInt32(1);
-                        if (!RentalWeaponInventoryMapper.IsValidInventoryTemplate(itemId))
+                        if (!RentalWeaponInventoryMapper.IsValidInventoryTemplate(itemId)
+                            && !ItemMetadataResolver.IsNameTagItem(itemId))
                             continue;
 
                         expiredEquippedItems.Add((
@@ -192,14 +197,58 @@ ORDER BY slot;";
                 }
             }
 
+            var nameTagCleared = false;
             foreach (var item in expiredEquippedItems)
             {
                 DeleteEquippedEntry(connection, transaction, characterId, item.slot);
                 removed++;
-                FileLogger.Log($"[RentalExpire] DELETE equipped char={characterId} slot={item.slot} item=0x{item.itemId:X8} expire={item.expireTime}");
+                if (item.slot == 28 && ItemMetadataResolver.IsNameTagItem(item.itemId))
+                    nameTagCleared = true;
+                FileLogger.Log($"[ExpiredEquipCleanup] DELETE equipped char={characterId} slot={item.slot} item=0x{item.itemId:X8} expire={item.expireTime}");
             }
 
+            if (nameTagCleared)
+                ClearNameTagSubtype1Fields(connection, transaction, characterId);
+
             return removed;
+        }
+
+        private static void ClearNameTagSubtype1Fields(SqliteConnection connection, SqliteTransaction transaction, int characterId)
+        {
+            using (var cmd = connection.CreateCommand())
+            {
+                cmd.Transaction = transaction;
+                cmd.CommandText = @"
+UPDATE character_subtype1_fields
+SET name_tag_item_id = 0, name_tag_expire_time = 0
+WHERE character_id = @cid;";
+                cmd.Parameters.AddWithValue("@cid", characterId);
+                cmd.ExecuteNonQuery();
+            }
+            FileLogger.Log($"[ExpiredEquipCleanup] cleared name_tag subtype1 fields char={characterId}");
+        }
+
+        internal void UpsertNameTagEquippedEntry(SqliteConnection connection, SqliteTransaction transaction, int characterId, int itemTemplateId, int expireTime)
+        {
+            const int nameTagSlot = 28;
+            var entries = LoadEquipEntriesTx(connection, transaction, characterId);
+            entries.RemoveAll(e => e.Slot == nameTagSlot);
+            var fields = new MakeEquipListCodec.DisplayFields
+            {
+                InstanceValue = unchecked((uint)InventoryDbPrimitives.GenerateInstanceValue(itemTemplateId, nameTagSlot)),
+            };
+            var raw = MakeEquipListCodec.BuildEntryFromDisplayFields(nameTagSlot, itemTemplateId, fields);
+            var entry = new MakeEquipListCodec.Entry
+            {
+                Slot = nameTagSlot,
+                ItemId = itemTemplateId,
+                Raw = raw,
+                ExpireTime = expireTime,
+            };
+            var insertAt = entries.FindIndex(e => e.Slot > nameTagSlot);
+            if (insertAt < 0) entries.Add(entry); else entries.Insert(insertAt, entry);
+            SaveEquipEntriesTx(connection, transaction, characterId, entries);
+            FileLogger.Log($"  [NameTag] equipped slot={nameTagSlot} item=0x{itemTemplateId:X8} expire={expireTime}");
         }
 
         // ── equip / unequip (called from SqliteInventoryStore.TryMoveItem) ──
@@ -599,23 +648,23 @@ VALUES (@accountId, @selectionKey, @value32, @itemCount, CURRENT_TIMESTAMP);";
                     // seal from tail[11..]
                     if (tail.Length > 11)
                     {
-                        f.SealCount = tail[11];
-                        f.SealTypes = new byte[3];
-                        f.SealVal1s = new byte[3];
-                        f.SealVal2s = new byte[3];
-                        for (int i = 0; i < f.SealCount && i < 3; i++)
+                        f.MagicSealCount = tail[11];
+                        f.MagicSealTypes = new byte[3];
+                        f.MagicSealVal1s = new byte[3];
+                        f.MagicSealVal2s = new byte[3];
+                        for (int i = 0; i < f.MagicSealCount && i < 3; i++)
                         {
-                            if (12 + i < tail.Length) f.SealTypes[i] = tail[12 + i];
-                            if (15 + i < tail.Length) f.SealVal1s[i] = tail[15 + i];
-                            if (18 + i < tail.Length) f.SealVal2s[i] = tail[18 + i];
+                            if (12 + i < tail.Length) f.MagicSealTypes[i] = tail[12 + i];
+                            if (15 + i < tail.Length) f.MagicSealVal1s[i] = tail[15 + i];
+                            if (18 + i < tail.Length) f.MagicSealVal2s[i] = tail[18 + i];
                         }
-                        if (f.SealCount > 0 && 21 < tail.Length)
+                        if (f.MagicSealCount > 0 && 21 < tail.Length)
                         {
                             int sealTailLen = 2; // genuineUpgrade + check
                             if (21 + 1 < tail.Length && tail[22] != 0xFF)
                                 sealTailLen += 4;
-                            f.SealTail = new byte[Math.Min(sealTailLen, tail.Length - 21)];
-                            Buffer.BlockCopy(tail, 21, f.SealTail, 0, f.SealTail.Length);
+                            f.MagicSealTail = new byte[Math.Min(sealTailLen, tail.Length - 21)];
+                            Buffer.BlockCopy(tail, 21, f.MagicSealTail, 0, f.MagicSealTail.Length);
                         }
                     }
                     // forging from tail[27]
@@ -691,19 +740,19 @@ VALUES (@accountId, @selectionKey, @value32, @itemCount, CURRENT_TIMESTAMP);";
                     Buffer.BlockCopy(f.Emblem, 0, tail, 0, Math.Min(f.Emblem.Length, 9));
                 BitConverter.GetBytes(f.Rune).CopyTo(tail, 9); // 84B offset56 → TailData2F[9]
                 tail[27] = f.Forging;                           // 84B genuineUpgrade offset74 → TailData2F[27]
-                if (f.SealCount > 0 && f.SealTypes != null)
+                if (f.MagicSealCount > 0 && f.MagicSealTypes != null)
                 {
-                    tail[11] = f.SealCount;
-                    for (int si = 0; si < f.SealCount && si < 3; si++)
+                    tail[11] = f.MagicSealCount;
+                    for (int si = 0; si < f.MagicSealCount && si < 3; si++)
                     {
-                        tail[12 + si] = f.SealTypes[si];  // 84B offset 59,60,61
-                        tail[15 + si] = f.SealVal1s[si];  // 84B offset 62,63,64
-                        tail[18 + si] = f.SealVal2s[si];  // 84B offset 65,66,67
+                        tail[12 + si] = f.MagicSealTypes[si];  // 84B offset 59,60,61
+                        tail[15 + si] = f.MagicSealVal1s[si];  // 84B offset 62,63,64
+                        tail[18 + si] = f.MagicSealVal2s[si];  // 84B offset 65,66,67
                     }
                     // seal tail → TailData2F[21+] (84B offset 68+)
-                    if (f.SealTail != null)
-                        for (int si = 0; si < f.SealTail.Length && 21 + si < tail.Length; si++)
-                            tail[21 + si] = f.SealTail[si];
+                    if (f.MagicSealTail != null)
+                        for (int si = 0; si < f.MagicSealTail.Length && 21 + si < tail.Length; si++)
+                            tail[21 + si] = f.MagicSealTail[si];
                 }
                 string jewelJson = (f.JewelSocket != null && f.JewelSocket.Length > 0)
                     ? ",\"jewelSocket\":\"" + BitConverter.ToString(f.JewelSocket).Replace("-", "") + "\""
@@ -724,20 +773,6 @@ VALUES (@accountId, @selectionKey, @value32, @itemCount, CURRENT_TIMESTAMP);";
         {
             var durabilityOption = unchecked((byte)(fields.Durability & 0xFF));
             return durabilityOption != 0 ? durabilityOption : fields.Reinforce;
-        }
-
-        private static bool IsRentalRecord(int itemTemplateId, int expireTime, string seriesKey)
-        {
-            if (expireTime <= 0 || !RentalWeaponInventoryMapper.IsValidInventoryTemplate(itemTemplateId))
-                return false;
-
-            if (!string.Equals(
-                    RentalWeaponInventoryMapper.GetSeriesKey(itemTemplateId),
-                    seriesKey,
-                    StringComparison.Ordinal))
-                return false;
-
-            return true;
         }
 
         private static bool IsPetCreatureEquipSlotMove(
@@ -776,16 +811,16 @@ VALUES (@accountId, @selectionKey, @value32, @itemCount, CURRENT_TIMESTAMP);";
             return entryRaw != null && entryRaw.Length >= 28 ? BitConverter.ToInt32(entryRaw, 24) : 0;
         }
 
-        private MakeEquipListCodec.Entry FindEquippedRentalBySeriesKey(
+        private MakeEquipListCodec.Entry FindEquippedRentalByInventoryTemplate(
             SqliteConnection connection,
             SqliteTransaction transaction,
             int characterId,
-            string seriesKey)
+            int itemTemplateId)
         {
             var entries = LoadEquipEntriesTx(connection, transaction, characterId);
             foreach (var entry in entries)
             {
-                if (!IsRentalRecord(entry.ItemId, entry.ExpireTime, seriesKey))
+                if (entry.ItemId != itemTemplateId || entry.ExpireTime <= 0)
                     continue;
 
                 return entry;
@@ -829,12 +864,12 @@ WHERE character_id = @cid AND slot = @slot;";
             }
         }
 
-        private SqliteInventoryStore.ItemRecord FindRentalBySeriesKey(
+        private SqliteInventoryStore.ItemRecord FindRentalByInventoryTemplate(
             SqliteConnection connection,
             SqliteTransaction transaction,
             int characterId,
             InventoryListType listType,
-            string seriesKey,
+            int itemTemplateId,
             int slotStart,
             int slotEnd)
         {
@@ -858,7 +893,7 @@ ORDER BY slot_index;";
                     {
                         var templateId = reader.GetInt32(2);
                         var expireTimeVal = reader.GetInt32(5);
-                        if (!IsRentalRecord(templateId, expireTimeVal, seriesKey))
+                        if (templateId != itemTemplateId || expireTimeVal <= 0)
                             continue;
 
                         return new SqliteInventoryStore.ItemRecord
@@ -893,7 +928,7 @@ UPDATE character_items
 SET item_template_id = @itemTemplateId,
     expire_time = @expireTime,
     stack_count = @wireValue,
-    instance_value = @wireValue,
+    instance_value = 0,
     item_kind = 'special',
     durability = @durability,
     marker_16 = -1,

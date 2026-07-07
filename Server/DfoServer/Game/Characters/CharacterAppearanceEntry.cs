@@ -9,22 +9,23 @@ namespace DfoServer.Game.Characters
     
     public sealed class CharacterAppearanceEntry
     {
-        public CharacterAppearanceEntry(byte slot, int itemId, int expansionLen, byte[] expansionData, byte state, int clearAvatar, uint enchantValue, byte flag20)
+        public CharacterAppearanceEntry(byte slot, int displayItemId, int expansionLen, byte[] expansionData, byte state, int linkItemId, uint enchantValue, byte flag20)
         {
             Slot = slot;
-            ItemId = itemId;
+            DisplayItemId = displayItemId;
             ExpansionLen = expansionLen;
             ExpansionData = expansionData ?? new byte[4];
-            State = state;
-            ClearAvatar = clearAvatar;
+            State = state; // 属性状态: invenitem.Attr * 2 + (invenitem.AmplifyType != 0)
+            LinkItemId = linkItemId;
             EnchantValue = enchantValue;
-            Flag20 = flag20;
+            Flag20 = flag20; // 锻造等级: invenitem.EnchantUpgradeCount
         }
 
         public byte Slot { get; set; }
 
         
-        public int ItemId { get; set; }
+        // NOTI2外观列表中的 itemId 是当前槽位的显示模板ID。
+        public int DisplayItemId { get; set; }
 
         
         public int ExpansionLen { get; set; } = 4;
@@ -36,7 +37,8 @@ namespace DfoServer.Game.Characters
         public byte State { get; set; }
 
         
-        public int ClearAvatar { get; set; }
+        // NOTI2外观列表中的关联物品ID：slot 9 是克隆装扮，替换称号动画走 subtype0 tail 首字段。
+        public int LinkItemId { get; set; }
 
         
         public uint EnchantValue { get; set; }
@@ -53,10 +55,10 @@ namespace DfoServer.Game.Characters
             var expData = new byte[4];
             Buffer.BlockCopy(buffer, offset + 9, expData, 0, 4);
             var state = buffer[offset + 13];
-            var clearAvatar = BitConverter.ToInt32(buffer, offset + 14);
+            var linkItemId = BitConverter.ToInt32(buffer, offset + 14);
             var enchantValue = BitConverter.ToUInt32(buffer, offset + 18);
             var flag20 = buffer[offset + 22];
-            return new CharacterAppearanceEntry(slot, itemId, expLen, expData, state, clearAvatar, enchantValue, flag20);
+            return new CharacterAppearanceEntry(slot, itemId, expLen, expData, state, linkItemId, enchantValue, flag20);
         }
     }
 }

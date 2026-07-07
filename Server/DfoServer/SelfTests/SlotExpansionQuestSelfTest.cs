@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.IO;
 using System.Text;
 using DfoServer.Game.Characters;
@@ -37,16 +37,15 @@ namespace DfoServer.SelfTests
                 Job = 0,
                 GrowType = 0,
                 Level = 65,
-                Gold = 1000000,
-                Coin = 0,
             });
 
             var assetService = new SqliteAssetService(dbPath, schemaPath);
             var connStr = SqliteDatabaseBootstrap.BuildConnectionString(dbPath);
+            var questService = new QuestService(connStr, assetService);
 
             var failures = 0;
 
-            var supportAck = QuestService.HandleFinishQuest(connStr, CharacterId, BuildFinishBody(SupportSlotQuestId), assetService);
+            var supportAck = questService.HandleFinishQuest(CharacterId, BuildFinishBody(SupportSlotQuestId));
             Check("support quest success", IsSuccessAck(supportAck), ref failures);
             Check("support quest chainType is slot expansion",
                 TryReadChain(supportAck, out var supportChainType, out var supportSlotId)
@@ -55,7 +54,7 @@ namespace DfoServer.SelfTests
                 ref failures);
             Check("support slot flag persisted", LoadExEquipSlotStat(dbPath) == 0x01, ref failures);
 
-            var magicAck = QuestService.HandleFinishQuest(connStr, CharacterId, BuildFinishBody(MagicStoneQuestId), assetService);
+            var magicAck = questService.HandleFinishQuest(CharacterId, BuildFinishBody(MagicStoneQuestId));
             Check("magic stone quest success", IsSuccessAck(magicAck), ref failures);
             Check("magic stone quest chainType is slot expansion",
                 TryReadChain(magicAck, out var magicChainType, out var magicSlotId)
@@ -75,26 +74,16 @@ namespace DfoServer.SelfTests
             return body;
         }
 
-        private static bool IsSuccessAck(byte[] ack)
+        private static bool IsSuccessAck(QuestFinishResult result)
         {
-            return ack != null && ack.Length > 0 && ack[0] == 0x01;
+            return result != null && result.Success;
         }
 
-        private static bool TryReadChain(byte[] ack, out int chainType, out int rewardValue)
+        private static bool TryReadChain(QuestFinishResult result, out int chainType, out int rewardValue)
         {
-            chainType = -1;
-            rewardValue = -1;
-            if (ack == null || ack.Length < 14)
-                return false;
-
-            var consumedCount = ack[12];
-            var chainTypeOffset = 13 + consumedCount * 7;
-            if (ack.Length < chainTypeOffset + 2)
-                return false;
-
-            chainType = ack[chainTypeOffset];
-            rewardValue = ack[chainTypeOffset + 1];
-            return true;
+            chainType = result != null ? result.ChainType : -1;
+            rewardValue = result != null ? result.GrowNumber : -1;
+            return result != null && result.Success;
         }
 
         private static void SeedAccount(string dbPath)

@@ -1,5 +1,4 @@
 using DfoServer.Game.SelectCharacter;
-using System;
 
 namespace DfoServer.Network.Builders
 {
@@ -9,12 +8,8 @@ namespace DfoServer.Network.Builders
 
         public bool TryBuild(SelectCharacterDataSnapshot snapshot, int occurrenceIndex, out byte[] body)
         {
-            var init = snapshot.InitializationSnapshot;
+            // All mailbox seed values are 0; 6B = loadedCount(1)+mode(1)+notLoaded(2)+unknown(2)
             body = new byte[6];
-            body[0] = init.LoadedMailCount;
-            body[1] = init.MailboxMode;
-            Array.Copy(BitConverter.GetBytes(init.NotLoadedMailCount), 0, body, 2, 2);
-            Array.Copy(BitConverter.GetBytes(init.MailboxUnknownCountC), 0, body, 4, 2);
             return true;
         }
     }

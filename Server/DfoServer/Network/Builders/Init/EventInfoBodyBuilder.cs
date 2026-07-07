@@ -21,7 +21,7 @@ namespace DfoServer.Network.Builders
                 if (data != null)
                     Buffer.BlockCopy(data, 0, body, off + 2, Math.Min(data.Length, 12));
             }
-            body[body.Length - 1] = snapshot.InitializationSnapshot.EventInfoTailByte;
+            body[body.Length - 1] = 0; // event_info_tail_byte: seed=0
             return true;
         }
     }

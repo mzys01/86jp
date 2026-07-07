@@ -1,5 +1,6 @@
 using DfoServer.Game.Appearance;
 using DfoServer.Game.Characters;
+using DfoServer.Game.Names;
 using DfoServer.Game.SelectCharacter;
 using DfoServer.GameWorld;
 using DfoServer.Network.Builders;
@@ -32,6 +33,10 @@ namespace DfoServer.Network.Handlers
         {
             try
             {
+                // 换角色前丢弃上一个角色的副本局: PlayerContext 实例跨角色复用, 不丢会把
+                // 上个角色的副本状态带给下个角色。
+                Dungeon.DungeonRunLifecycle.EndRunOnTeardown(session, "select_character");
+
                 int slot = 0;
                 if (body != null && body.Length >= 2)
                 {
@@ -115,9 +120,21 @@ namespace DfoServer.Network.Handlers
 
             var ownerCharId = session.Player.CharacterId > 0 ? session.Player.CharacterId : _selectCharacterDataSource.GetSeedCharacterId();
             var ownerAcctId = session.Account?.AccountId ?? 1;
+            var adventureBody = BuildCharacterListBody(ownerAcctId);
+            var routingByte = _getUserInfoTemplate != null ? _getUserInfoTemplate.Pkt0RoutingByte7 : (byte)0;
 
             foreach (var packet in SelectCharacterPacketBuilder.BuildPacketStream(_selectCharacterDataSource, ownerCharId, ownerAcctId))
                 await session.SendPacketAsync(packet);
+
+            var cloneTitle = AppearanceService.LoadCloneTitleItemId(ownerCharId);
+            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
+                0x01,
+                0x0239,
+                AppearanceService.BuildCloneTitleAckBody(cloneTitle, suppressMessage: 1)));
+            FileLogger.Log($"[{ProtocolName}] SELECT_CHARACTER clone title restore: char={ownerCharId} cloneTitle=0x{cloneTitle:X8}");
+
+            // 切角色可能跳过 GET_USERINFO，主选角流后补发账号 subtype2。
+            await session.SendPacketAsync(BuildPacketWithRouting(0x00, 0x0002, adventureBody, routingByte));
         }
 
         public async Task Handle_ENUM_CMDPACKET_GET_USERINFO(EnhancedClientSession session, GamePacketHeader header, byte[] body)
@@ -129,9 +146,6 @@ namespace DfoServer.Network.Handlers
                 byte routingByte = _getUserInfoTemplate != null ? _getUserInfoTemplate.Pkt0RoutingByte7 : (byte)0;
                 await session.SendPacketAsync(BuildPacketWithRouting(0x00, 0x0002, rosterBody, routingByte));
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0286, new byte[] { 0x00, 0x04 }));
-                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x01BA,
-                    new byte[] { 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }));
-                FileLogger.Log($"[{ProtocolName}] GET_USERINFO: 动态 roster+646+442 (account={accountId})");
             }
             catch (Exception ex)
             {
@@ -226,7 +240,18 @@ namespace DfoServer.Network.Handlers
                 return;
             }
 
-            var name = Encoding.UTF8.GetString(body, 4, nameLen);
+            var nameRaw = new byte[nameLen];
+            Buffer.BlockCopy(body, 4, nameRaw, 0, nameLen);
+            if (!NameInputValidator.TryValidateRawName(nameRaw, minBytes: 2, maxBytes: 30, out var name, out var failure))
+            {
+                FileLogger.Log($"[{ProtocolName}] CHECK_NAME: invalid name reason={failure}");
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
+                    0x01,
+                    0x02B5,
+                    CommonPacketBodyBuilder.BuildCmdError(NameInputValidator.InvalidNameErrorCode)));
+                return;
+            }
+
             var existing = _characterRepository.GetByName(name);
             if (existing != null)
             {
@@ -262,7 +287,15 @@ namespace DfoServer.Network.Handlers
 
             var nameRaw = new byte[nameLen];
             Buffer.BlockCopy(body, 5, nameRaw, 0, nameLen);
-            var nameStr = Encoding.UTF8.GetString(nameRaw);
+            if (!NameInputValidator.TryValidateRawName(nameRaw, minBytes: 2, maxBytes: 18, out var nameStr, out var nameFailure))
+            {
+                FileLogger.Log($"[{ProtocolName}] CREATE_CHARACTER: invalid name reason={nameFailure}");
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
+                    0x01,
+                    0x0005,
+                    CommonPacketBodyBuilder.BuildCmdError(NameInputValidator.InvalidNameErrorCode)));
+                return;
+            }
 
             var accountId = session.Account?.AccountId ?? 1;
 
@@ -290,8 +323,6 @@ namespace DfoServer.Network.Handlers
                     Job = job,
                     GrowType = 0,
                     Level = 1,
-                    Gold = 0,
-                    Coin = 0,
                     TownId = 1,
                     AreaId = 0,
                     PosX = 474,
@@ -387,47 +418,7 @@ namespace DfoServer.Network.Handlers
         private byte[] BuildCharacterListBody(int accountId)
         {
             var characters = _characterRepository.ListByAccount(accountId);
-            var writer = new GamePacketWriter();
-
-            var t = _getUserInfoTemplate;
-            var slotLimit = CharacterSlotPolicy.ResolveSlotLimit(t?.GateOrCount1, t?.GateOrCount2);
-            writer.WriteByte(2);                                                      // userInfoType = 2
-            writer.WriteUInt16(slotLimit);                                             // CharacSlotLimit
-            writer.WriteUInt16(t != null ? t.GateOrCount2 : slotLimit);               // SlotEffectCount
-            writer.WriteByte(t != null ? t.FlagOrManage : (byte)0);                   // ManageLevel
-            writer.WriteInt32(t != null ? t.KeyOrPoint : 0);                          // ManagePoint
-            writer.WriteUInt16(t != null ? t.Unknown16 : (ushort)0);                  // unknownA
-            writer.WriteInt32(t != null ? t.Unknown32 : 0);                           // unknownB
-            writer.WriteUInt16((ushort)characters.Count);                              // entryCount
-
-            for (int i = 0; i < characters.Count; i++)
-            {
-                var ch = characters[i];
-
-                writer.WriteUInt16((ushort)i);
-                writer.WriteDstr(ch.Name);
-                writer.WriteByte(0x00);                 // reserved3
-                writer.WriteByte(0x00);                 // reserved4
-                writer.WriteByte(ch.Job);               // job
-                writer.WriteByte(ch.GrowType);          // growType
-                writer.WriteByte(ch.Level);             // level
-                writer.WriteZeroBytes(10);              // reserved5 (10 bytes)
-
-                var appearances = Game.Appearance.AppearanceService.LoadAppearanceFromEquipEntries(ch.CharacterId);
-                writer.WriteByte((byte)appearances.Length);
-                foreach (var a in appearances)
-                    UserInfoSubtype0Builder.WriteAppearanceEntry(writer, a);
-
-                // entry trailer (32 bytes, from 2.md)
-                writer.WriteZeroBytes(24);              // reservedTail0~6
-                writer.WriteByte(0x03);                 // fixedTailValue0
-                writer.WriteByte(0x00);                 // reservedTail5
-                writer.WriteByte(0x00);                 // reservedTail6
-                writer.WriteByte(0x04);                 // fixedTailValue1
-                writer.WriteZeroBytes(4);               // reservedTail7
-            }
-
-            return writer.ToArray();
+            return AccountCharacterListBodyBuilder.Build(characters, _getUserInfoTemplate, out _);
         }
     }
 }

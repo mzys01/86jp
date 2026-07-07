@@ -50,7 +50,7 @@ namespace DfoServer.GameWorld
             return rule;
         }
 
-        public static byte PickManualHellPartyMode(Random rng)
+        public static byte PickManualHellPartyMode()
         {
             var rules = DifficultyRules.Value;
             rules.TryGetValue('A', out var veryHard);
@@ -60,10 +60,10 @@ namespace DfoServer.GameWorld
             var veryHardWeight = Math.Max(0, veryHard?.Probability ?? 0);
             var hardWeight = Math.Max(0, hard?.Probability ?? 0);
             var total = veryHardWeight + hardWeight;
-            if (total <= 0 || rng == null)
+            if (total <= 0)
                 return 1;
 
-            var roll = rng.Next(total);
+            var roll = Infrastructure.ServerRandom.Next(total);
             return roll < veryHardWeight ? (byte)1 : (byte)2;
         }
 

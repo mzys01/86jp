@@ -3,6 +3,13 @@ using System.Collections.Generic;
 
 namespace DfoServer.Game.Inventory
 {
+    // 装备实例的品质常量。服务端生成装备统一写这个种子:
+    // 999999998 = 最上级(真机实证); 0 会导致修理后装备消失, 禁用。
+    public static class ItemQuality
+    {
+        public const uint TopQualitySeed = 999999998u;
+    }
+
     public sealed class InventoryMoveRequest
     {
         public InventoryListType SourceListType { get; set; }
@@ -35,6 +42,41 @@ namespace DfoServer.Game.Inventory
         public bool Mutated { get; set; }
 
         public bool AckError { get; set; }
+
+        public short AffectedEquipmentSlot { get; set; } = -1;
+
+        public Subtype0TailMoveMutation Subtype0TailMutation { get; set; }
+
+        public bool PetCreatureStateChanged { get; set; }
+
+        public bool PetItemStateChanged { get; set; }
+
+        public bool PetItemFullRefresh { get; set; }
+
+        public List<short> PetCreatureRefreshSlots { get; } = new List<short>();
+
+        public List<short> EquipmentRefreshSlots { get; } = new List<short>();
+    }
+
+    public sealed class Subtype0TailMoveMutation
+    {
+        public bool ForgingChanged { get; set; }
+
+        public byte Forging { get; set; }
+
+        public bool NameTagChanged { get; set; }
+
+        public uint NameTagItemId { get; set; }
+
+        public uint NameTagExpireTime { get; set; }
+
+        public bool EquippedCreatureChanged { get; set; }
+
+        public uint EquippedCreatureItemId { get; set; }
+
+        public byte[] EquippedCreatureNameBytes { get; set; } = Array.Empty<byte>();
+
+        public byte EquippedCreatureAliveState { get; set; }
     }
 
     internal enum EquipOutcome
@@ -94,6 +136,69 @@ namespace DfoServer.Game.Inventory
         public int PetSatietyAfter { get; set; }
 
         public bool PetSatietyChanged { get; set; }
+
+        public bool NameTagEquipped { get; set; }
+    }
+
+    public enum PersonalCargoUpgradeTicketStatus
+    {
+        NotApplicable,
+        Upgraded,
+        MissingItem,
+        Maxed,
+        Locked,
+    }
+
+    public sealed class PersonalCargoUpgradeTicketResult
+    {
+        public PersonalCargoUpgradeTicketStatus Status { get; set; }
+
+        public InventoryListType ListType { get; set; }
+
+        public short SlotIndex { get; set; }
+
+        public int ItemTemplateId { get; set; }
+
+        public ushort PreviousListParam16 { get; set; }
+
+        public ushort NewListParam16 { get; set; }
+
+        public InventoryMutationResult ConsumedItem { get; set; }
+
+        public bool Handled => Status != PersonalCargoUpgradeTicketStatus.NotApplicable;
+
+        public bool Success => Status == PersonalCargoUpgradeTicketStatus.Upgraded;
+    }
+
+    public enum AccountCargoUpgradeToolStatus
+    {
+        NotApplicable,
+        Upgraded,
+        MissingItem,
+        Maxed,
+        NotOpened,
+        Locked,
+    }
+
+    public sealed class AccountCargoUpgradeToolResult
+    {
+        public AccountCargoUpgradeToolStatus Status { get; set; }
+
+        public InventoryListType ListType { get; set; }
+
+        public short SlotIndex { get; set; }
+
+        public int ItemTemplateId { get; set; }
+
+        public int PreviousSelectionKey { get; set; }
+
+        public int NewSelectionKey { get; set; }
+
+        public InventoryMutationResult ConsumedItem { get; set; }
+
+        public bool Handled => Status != AccountCargoUpgradeToolStatus.NotApplicable;
+
+        public bool Success => Status == AccountCargoUpgradeToolStatus.Upgraded;
     }
 
     public sealed class PremiumContractUseResult
@@ -118,6 +223,39 @@ namespace DfoServer.Game.Inventory
         public int HatchedItemTemplateId { get; set; }
 
         public int PetSerialOrHandle { get; set; }
+    }
+
+    public sealed class PetCreatureRenameRequest
+    {
+        public InventoryListType SourceListType { get; set; } = InventoryListType.Pet;
+
+        public short SourceSlotIndex { get; set; }
+
+        public byte[] NameBytes { get; set; } = Array.Empty<byte>();
+    }
+
+    public sealed class PetCreatureRenameResult
+    {
+        public InventoryListType SourceListType { get; set; } = InventoryListType.Pet;
+
+        public short SourceSlotIndex { get; set; }
+
+        public int PetItemTemplateId { get; set; }
+
+        public int CreatureSerial { get; set; }
+
+        public byte[] NameBytes { get; set; } = Array.Empty<byte>();
+
+        public bool SourceItemConsumed { get; set; }
+
+        public int SourceRemainingCount { get; set; }
+    }
+
+    public sealed class RepairEquipmentResult
+    {
+        public short SlotIndex { get; set; }
+        public int UpdatedGold { get; set; }
+        public int Cost { get; set; }
     }
 
     public sealed class BoosterRewardResult

@@ -16,14 +16,17 @@ namespace DfoServer.Game.Inventory
     {
         // 商城购买入口: 开启事务, 透传 paymentMode 与 attributeValue 到 InventoryShopStore。
         // 事务在方法内开启, 成功则 Commit, 失败自动回滚(Dispose 不 Commit)。
-        public bool TryBuyCeraShopItem(int productId, int buyCount, int paymentMode, byte attributeValue, out InventoryMutationResult result)
+        public bool TryBuyCeraShopItem(int characterId, int accountId, int productId, int buyCount, int paymentMode, byte attributeValue, out InventoryMutationResult result)
         {
-            using (var connection = _context.OpenConnection())
-            using (var transaction = connection.BeginTransaction())
+            using (var connection = new SqliteConnection(ConnectionString))
             {
-                var ok = _shopStore.TryBuyCeraShopItem(connection, transaction, _context.CharacterId, _context.AccountId, productId, buyCount, paymentMode, attributeValue, out result);
-                if (ok) transaction.Commit();
-                return ok;
+                connection.Open();
+                using (var transaction = connection.BeginTransaction())
+                {
+                    var ok = _shopStore.TryBuyCeraShopItem(connection, transaction, characterId, accountId, productId, buyCount, paymentMode, attributeValue, out result);
+                    if (ok) transaction.Commit();
+                    return ok;
+                }
             }
         }
 

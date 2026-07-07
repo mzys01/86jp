@@ -1,10 +1,12 @@
 using DfoServer.Game.Characters;
 using DfoServer.Game.Mercenary;
+using DfoServer.GameWorld;
 using DfoServer.Infrastructure;
 using Microsoft.Data.Sqlite;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.RegularExpressions;
 
 namespace DfoServer.Network.Builders
 {
@@ -185,7 +187,7 @@ namespace DfoServer.Network.Builders
                 raw = PatchDisplayContextOnly(raw, primary);
                 PatchResolverGrowNibble(raw, primary);
                 raw = PatchMainApplyOnly(raw, primary);
-                PatchSupportEquipmentEntries(raw, primary.SupportCharacterId, "dungeon");
+                raw = PatchSupportEquipmentEntries(raw, primary.SupportCharacterId, "dungeon");
                 PatchTagRecordCharacterId(raw, activeCharacterId);
 
                 var writer = new GamePacketWriter();
@@ -241,6 +243,7 @@ namespace DfoServer.Network.Builders
             PatchResolverGrowNibble(patched, state);
             PatchDisplayJobContext(patched, state);
             PatchMainApplySelectedSkill(patched, table, state.SkillId);
+            PatchMainApplyRequiredSkillEntry(patched, table, state);
             PatchMainApplySkillEntry(patched, table, state, patchEntryKey: false);
             return patched;
         }
@@ -258,6 +261,7 @@ namespace DfoServer.Network.Builders
             }
 
             PatchMainApplySelectedSkill(patched, table, state.SkillId);
+            PatchMainApplyRequiredSkillEntry(patched, table, state);
             PatchMainApplySkillEntry(patched, table, state, patchEntryKey: false);
             return patched;
         }
@@ -348,7 +352,7 @@ namespace DfoServer.Network.Builders
 
             raw = PatchTagRecordCharacterName(raw, supportName);
             raw = PatchSelectedSkillIntoTagRecord(raw, state);
-            PatchSupportEquipmentEntries(raw, state.SupportCharacterId, "owner");
+            raw = PatchSupportEquipmentEntries(raw, state.SupportCharacterId, "owner");
             PatchTagRecordCharacterId(raw, ownerCharacterId);
 
             records.Add(raw);
@@ -494,19 +498,65 @@ namespace DfoServer.Network.Builders
             rawRecord[table.SelectedOffset + 1] = (byte)((selectedSkill >> 8) & 0xFF);
         }
 
+        private static void PatchMainApplyRequiredSkillEntry(byte[] rawRecord, MainSkillTable table, MercenarySupportState state)
+        {
+            if (state == null || state.SupportCharacterId <= 0 || state.SkillId == 0)
+                return;
+
+            var support = LoadCharacterSummary(state.SupportCharacterId);
+            if (support == null)
+                return;
+
+            var skill = StrikerSkillDataProvider.FindBySkill(
+                support.Job,
+                support.GrowType,
+                state.SkillId,
+                state.StrikerSkillId);
+            if (skill == null || skill.RequiredSkillIndex <= 0 || skill.RequiredSkillIndex == state.SkillId)
+                return;
+
+            var requiredSkillId = (ushort)Math.Min(ushort.MaxValue, skill.RequiredSkillIndex);
+            var requiredEntryKey = (byte)Math.Max(0, Math.Min(byte.MaxValue, skill.RequiredSkillIndex));
+            PatchMainApplySkillEntry(
+                rawRecord,
+                table,
+                requiredSkillId,
+                requiredEntryKey,
+                StrikerSupportSkillLevelSource.ResolveBaseLevel(state.SupportCharacterId, requiredSkillId),
+                patchEntryKey: false);
+        }
+
         private static void PatchMainApplySkillEntry(byte[] rawRecord, MainSkillTable table, MercenarySupportState state, bool patchEntryKey)
         {
+            if (state == null)
+                return;
+
+            PatchMainApplySkillEntry(
+                rawRecord,
+                table,
+                state.SkillId,
+                (byte)Math.Max(0, Math.Min(byte.MaxValue, (int)state.StrikerSkillId)),
+                ResolveBaseSkillLevel(state),
+                patchEntryKey);
+        }
+
+        private static void PatchMainApplySkillEntry(
+            byte[] rawRecord,
+            MainSkillTable table,
+            ushort skillId,
+            byte entryKey,
+            byte levelOrFlag,
+            bool patchEntryKey)
+        {
             var count = rawRecord[table.CountOffset];
-            var levelOrFlag = ResolveBaseSkillLevel(state);
-            var entryKey = (byte)Math.Max(0, Math.Min(byte.MaxValue, (int)state.StrikerSkillId));
-            if (count == 0 || table.EntriesOffset + 3 >= rawRecord.Length)
+            if (skillId == 0 || count == 0 || table.EntriesOffset + 3 >= rawRecord.Length)
                 return;
 
             for (var i = 0; i < count; i++)
             {
                 var entry = table.EntriesOffset + i * 4;
-                var skillId = rawRecord[entry + 1] | (rawRecord[entry + 2] << 8);
-                if (skillId != state.SkillId)
+                var existingSkillId = rawRecord[entry + 1] | (rawRecord[entry + 2] << 8);
+                if (existingSkillId != skillId)
                     continue;
 
                 if (patchEntryKey)
@@ -523,8 +573,8 @@ namespace DfoServer.Network.Builders
                     return;
 
             rawRecord[table.EndOffset] = entryKey;
-            rawRecord[table.EndOffset + 1] = (byte)(state.SkillId & 0xFF);
-            rawRecord[table.EndOffset + 2] = (byte)((state.SkillId >> 8) & 0xFF);
+            rawRecord[table.EndOffset + 1] = (byte)(skillId & 0xFF);
+            rawRecord[table.EndOffset + 2] = (byte)((skillId >> 8) & 0xFF);
             rawRecord[table.EndOffset + 3] = levelOrFlag;
             rawRecord[table.CountOffset] = (byte)(count + 1);
             table.EndOffset += 4;
@@ -537,27 +587,26 @@ namespace DfoServer.Network.Builders
 
             return StrikerSupportSkillLevelSource.ResolveBaseLevel(
                 state.SupportCharacterId,
-                state.SkillId,
-                state.StrikerSkillId);
+                state.SkillId);
         }
 
-        private static void PatchSupportEquipmentEntries(byte[] rawRecord, int supportCharacterId, string context)
+        private static byte[] PatchSupportEquipmentEntries(byte[] rawRecord, int supportCharacterId, string context)
         {
             if (rawRecord == null || rawRecord.Length < 1100 || supportCharacterId <= 0)
-                return;
+                return rawRecord;
 
             var equipBlockOffset = FindDungeonEquipmentBlockOffset(rawRecord);
             if (equipBlockOffset < 0)
             {
                 FileLogger.Log($"[GameProtocol] STRIKER {context} equipment sync skipped cid={supportCharacterId}: equip block not found");
-                return;
+                return rawRecord;
             }
 
             var equipped = LoadCurrentEquippedEntries(supportCharacterId, 0, 25);
-            if (equipped.Count == 0)
-                return;
-
             var entryOffsets = FindDungeonEquipmentEntryOffsets(rawRecord, equipBlockOffset, 25);
+
+            PatchMissingAvatarSlotsWithDefaultItems(rawRecord, supportCharacterId, entryOffsets, equipped);
+
             foreach (var pair in equipped)
             {
                 var slot = pair.Key;
@@ -571,20 +620,175 @@ namespace DfoServer.Network.Builders
                     continue;
                 if (rawEntry.Length != entry.Length)
                 {
-                    if (TryCompactAndPatchDungeonEquipmentEntry(rawRecord, entry, rawEntry))
-                    {
-                    }
-                    else if (TryPatchDungeonEquipmentFixedPrefix(rawRecord, entry, rawEntry))
-                    {
-                    }
-                    else if (TryPatchDungeonEquipmentItemIdOnly(rawRecord, entry, rawEntry))
-                    {
-                    }
+                    PatchMismatchedLengthDungeonEquipmentEntry(rawRecord, entry, rawEntry);
                     continue;
                 }
 
                 Buffer.BlockCopy(rawEntry, 0, rawRecord, entry.Offset, entry.Length);
             }
+
+            rawRecord = RemoveMissingTemplateEquipmentEntries(rawRecord, equipBlockOffset, entryOffsets, equipped, supportCharacterId, context);
+            return rawRecord;
+        }
+
+        private static byte[] RemoveMissingTemplateEquipmentEntries(
+            byte[] rawRecord,
+            int equipBlockOffset,
+            Dictionary<byte, EquipmentEntrySlice> entryOffsets,
+            Dictionary<byte, byte[]> equipped,
+            int supportCharacterId,
+            string context)
+        {
+            if (rawRecord == null || entryOffsets == null || equipped == null)
+                return rawRecord;
+
+            var countOffset = equipBlockOffset - 1;
+            if (countOffset < 0 || countOffset >= rawRecord.Length || rawRecord[countOffset] == 0)
+                return rawRecord;
+
+            // 如果slot0-8缺失则从职业默认形象中获取
+            var removals = entryOffsets
+                .Where(pair => pair.Key >= 9 && pair.Key <= 25 && !equipped.ContainsKey(pair.Key))
+                .OrderByDescending(pair => pair.Value.Offset)
+                .ToList();
+            if (removals.Count == 0)
+                return rawRecord;
+
+            var patched = rawRecord;
+            var removedSlots = new List<byte>();
+            foreach (var pair in removals)
+            {
+                var slot = pair.Key;
+                var entry = pair.Value;
+                if (entry.Offset < 0 || entry.Length <= 0 || entry.Offset + entry.Length > patched.Length)
+                    continue;
+
+                if (patched[entry.Offset] != slot || patched[countOffset] == 0)
+                    continue;
+
+                var next = new byte[patched.Length];
+                Buffer.BlockCopy(patched, 0, next, 0, entry.Offset);
+                Buffer.BlockCopy(patched, entry.Offset + entry.Length, next, entry.Offset, patched.Length - entry.Offset - entry.Length);
+                next[countOffset] = (byte)(patched[countOffset] - 1);
+                patched = next;
+                removedSlots.Add(slot);
+            }
+
+            if (removedSlots.Count > 0)
+                FileLogger.Log($"[GameProtocol] STRIKER {context} equipment sync removed missing template slots cid={supportCharacterId}: slots=[{string.Join(",", removedSlots.OrderBy(x => x))}] len={rawRecord.Length} count {rawRecord[countOffset]}->{patched[countOffset]}");
+
+            return patched;
+        }
+
+        private static void PatchMissingAvatarSlotsWithDefaultItems(
+            byte[] rawRecord,
+            int supportCharacterId,
+            Dictionary<byte, EquipmentEntrySlice> entryOffsets,
+            Dictionary<byte, byte[]> equipped)
+        {
+            if (rawRecord == null || entryOffsets == null || equipped == null || supportCharacterId <= 0)
+                return;
+
+            var support = LoadCharacterSummary(supportCharacterId);
+            var defaults = ResolveDefaultAvatarItemIds(support?.Job ?? -1, support?.GrowType ?? -1);
+            if (defaults == null || defaults.Length == 0)
+                return;
+
+            for (var slot = 0; slot <= 8 && slot < defaults.Length; slot++)
+            {
+                var slotByte = (byte)slot;
+                if (equipped.ContainsKey(slotByte))
+                    continue;
+
+                var itemId = defaults[slot];
+
+                if (itemId <= 0)
+                    continue;
+
+                if (!entryOffsets.TryGetValue(slotByte, out var entry))
+                    continue;
+
+                PatchDungeonEquipmentItemId(rawRecord, entry, slotByte, itemId);
+            }
+        }
+
+        private static bool PatchDungeonEquipmentItemId(byte[] rawRecord, EquipmentEntrySlice entry, byte slot, int itemId)
+        {
+            if (rawRecord == null || entry.Offset < 0 || entry.Offset + 5 > rawRecord.Length)
+                return false;
+
+            if (rawRecord[entry.Offset] != slot)
+                return false;
+
+            var bytes = BitConverter.GetBytes(itemId);
+            Buffer.BlockCopy(bytes, 0, rawRecord, entry.Offset + 1, 4);
+            return true;
+        }
+
+        private static int[] ResolveDefaultAvatarItemIds(int job, int growType)
+        {
+            if (job < 0)
+                return null;
+
+            try
+            {
+                var text = PvfArchiveAccessor.ReadText("character/chn_1stawaken_defaultavatarinfo.chr");
+                if (string.IsNullOrWhiteSpace(text))
+                    return null;
+
+                var tokens = Regex.Matches(text, @"-?\d+").Cast<Match>().Select(m => int.Parse(m.Value)).ToList();
+                var normalizedGrow = StrikerSkillDataProvider.NormalizeGrowType(growType);
+                int[] fallback = null;
+
+                for (var start = 0; start < 13; start++)
+                {
+                    for (var i = start; i + 12 < tokens.Count; i += 13)
+                    {
+                        var rowJob = tokens[i];
+                        var rowGrow = tokens[i + 1];
+                        if (rowJob != job)
+                            continue;
+
+                        var values = new int[11];
+                        for (var slot = 0; slot < values.Length; slot++)
+                            values[slot] = tokens[i + 2 + slot];
+
+                        var hasDefaultItems = values.Any(v => v > 0);
+                        if (rowGrow == normalizedGrow && hasDefaultItems)
+                            return values;
+
+                        if (fallback == null && hasDefaultItems)
+                            fallback = values;
+                    }
+                }
+
+                return fallback;
+            }
+            catch (Exception ex)
+            {
+                FileLogger.Log($"[GameProtocol] STRIKER default avatar lookup failed job={job} grow={growType}: {ex.Message}");
+                return null;
+            }
+        }
+
+        internal static int[] ResolveDefaultAvatarItemIdsForTest(int job, int growType)
+        {
+            return ResolveDefaultAvatarItemIds(job, growType);
+        }
+
+        internal static byte[] PatchMissingTemplateEquipmentEntriesForTest(byte[] rawRecord, params byte[] equippedSlots)
+        {
+            var equipBlockOffset = FindDungeonEquipmentBlockOffset(rawRecord);
+            var entryOffsets = FindDungeonEquipmentEntryOffsets(rawRecord, equipBlockOffset, 25);
+            var equipped = (equippedSlots ?? Array.Empty<byte>()).Distinct().ToDictionary(slot => slot, _ => Array.Empty<byte>());
+            return RemoveMissingTemplateEquipmentEntries(rawRecord, equipBlockOffset, entryOffsets, equipped, 0, "selftest");
+        }
+
+        private static bool PatchMismatchedLengthDungeonEquipmentEntry(byte[] rawRecord, EquipmentEntrySlice entry, byte[] rawEntry)
+        {
+            return TryCompactAndPatchDungeonEquipmentEntry(rawRecord, entry, rawEntry) ||
+                TryPatchDungeonEquipmentFixedPrefix(rawRecord, entry, rawEntry) ||
+                TryPatchDungeonEquipmentItemIdOnly(rawRecord, entry, rawEntry);
         }
 
         private static bool TryCompactAndPatchDungeonEquipmentEntry(byte[] rawRecord, EquipmentEntrySlice entry, byte[] rawEntry)

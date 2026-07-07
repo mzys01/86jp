@@ -1,12 +1,11 @@
 using DfoServer.Game.CharacterData;
-using DfoServer.Game.Characters;
 using DfoServer.Infrastructure;
 using System;
 using System.Collections.Generic;
 
 namespace DfoServer.Game.Mercenary
 {
-    // 支援兵协议优先使用支援角色已学习等级；未记录时才按 PVF 需求等级兜底。
+    // 支援兵协议优先使用支援角色真实已学习等级；未学习或未记录时按协议保底为 1。
     internal static class StrikerSupportSkillLevelSource
     {
         public static Dictionary<ushort, byte> LoadLearnedLevels(int characterId)
@@ -39,21 +38,12 @@ namespace DfoServer.Game.Mercenary
             return result;
         }
 
-        public static byte ResolveBaseLevel(int characterId, ushort skillId, ushort strikerSkillId)
+        public static byte ResolveBaseLevel(int characterId, ushort skillId)
         {
             if (characterId <= 0 || skillId == 0)
                 return 0;
 
-            var learned = LoadLearnedLevels(characterId);
-            if (learned.TryGetValue(skillId, out var level) && level > 0)
-                return level;
-
-            var support = LoadCharacterSummary(characterId);
-            if (support == null)
-                return 0;
-
-            var skill = StrikerSkillDataProvider.FindBySkill(support.Job, support.GrowType, skillId, strikerSkillId);
-            return ClampLevel(skill?.RequiredLevel ?? 1);
+            return ResolveLearnedLevel(LoadLearnedLevels(characterId), skillId);
         }
 
         public static byte ResolveBaseLevel(
@@ -63,47 +53,19 @@ namespace DfoServer.Game.Mercenary
             if (skill == null)
                 return 0;
 
+            return ResolveLearnedLevel(learnedLevels, (ushort)skill.SkillIndex);
+        }
+
+        private static byte ResolveLearnedLevel(IReadOnlyDictionary<ushort, byte> learnedLevels, ushort skillId)
+        {
             if (learnedLevels != null
-                && learnedLevels.TryGetValue((ushort)skill.SkillIndex, out var learnedLevel)
+                && learnedLevels.TryGetValue(skillId, out var learnedLevel)
                 && learnedLevel > 0)
             {
                 return learnedLevel;
             }
 
-            return ClampLevel(skill.RequiredLevel > 0 ? skill.RequiredLevel : 1);
-        }
-
-        private static byte ClampLevel(int level)
-        {
-            return (byte)Math.Max(1, Math.Min(byte.MaxValue, level));
-        }
-
-        private static CharacterSummary LoadCharacterSummary(int characterId)
-        {
-            try
-            {
-                var repo = new SqliteCharacterRepository(ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
-                var character = repo.GetById(characterId);
-                if (character == null)
-                    return null;
-
-                return new CharacterSummary
-                {
-                    Job = character.Job,
-                    GrowType = character.GrowType,
-                };
-            }
-            catch (Exception ex)
-            {
-                FileLogger.Log($"[StrikerSupport] load character summary failed cid={characterId}: {ex.Message}");
-                return null;
-            }
-        }
-
-        private sealed class CharacterSummary
-        {
-            public int Job { get; set; }
-            public int GrowType { get; set; }
+            return 1;
         }
     }
 }

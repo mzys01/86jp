@@ -19,11 +19,13 @@ namespace DfoServer.Network.Handlers
         private const ushort TagCharacterInfoNotiType = 0x019F;
 
         private readonly ICharacterRepository _characterRepository;
+        private readonly GetUserInfoTemplate _getUserInfoTemplate;
         public string ProtocolName => "GameProtocol";
 
-        public MercenaryHandler(ICharacterRepository characterRepository)
+        public MercenaryHandler(ICharacterRepository characterRepository, GetUserInfoTemplate getUserInfoTemplate = null)
         {
             _characterRepository = characterRepository ?? throw new ArgumentNullException(nameof(characterRepository));
+            _getUserInfoTemplate = getUserInfoTemplate;
         }
 
         public async Task HandleUserInfoSubtypeRequest(EnhancedClientSession session, GamePacketHeader header, byte[] body)
@@ -35,8 +37,15 @@ namespace DfoServer.Network.Handlers
 
             var accountId = session.Account?.AccountId ?? 1;
             var activeCharacterId = session.Player?.CharacterId ?? 0;
+            if (activeCharacterId <= 0)
+            {
+                FileLogger.Log($"[{ProtocolName}] MERCENARY/STRIKER subtype5 ignored before character select");
+                return;
+            }
+
             var roster = ListAccountCharacters(accountId);
 
+            await SendAdventureGroupUserInfoAsync(session, roster);
             await SendCandidateUserInfoAsync(session, roster, activeCharacterId);
         }
 
@@ -193,10 +202,11 @@ namespace DfoServer.Network.Handlers
 
             foreach (var skill in StrikerSkillDataProvider.GetAvailableSkills(ch.Job, ch.GrowType, ch.Level))
             {
+                var level = StrikerSupportSkillLevelSource.ResolveBaseLevel(learnedLevels, skill);
                 skills.Add(new StrikerCandidateSkillInfo
                 {
                     Skill = skill,
-                    Level = StrikerSupportSkillLevelSource.ResolveBaseLevel(learnedLevels, skill),
+                    Level = level,
                 });
             }
 
@@ -252,8 +262,7 @@ namespace DfoServer.Network.Handlers
             writer.WriteUInt16(state.SkillId);
             var level = StrikerSupportSkillLevelSource.ResolveBaseLevel(
                 state.SupportCharacterId,
-                state.SkillId,
-                state.StrikerSkillId);
+                state.SkillId);
             writer.WriteUInt16(level);
             writer.WriteUInt16(state.StrikerSkillId);
             writer.WriteByte(0x01);
@@ -269,6 +278,18 @@ namespace DfoServer.Network.Handlers
             return writer.ToArray();
         }
 
+        private async Task SendAdventureGroupUserInfoAsync(
+            EnhancedClientSession session,
+            IReadOnlyList<CharacterRecord> roster)
+        {
+            var body = AccountCharacterListBodyBuilder.Build(roster, _getUserInfoTemplate, out _);
+            var packet = GamePacketEnvelopeBuilder.Build(0x00, UserInfoNotiType, body);
+            if (_getUserInfoTemplate != null && packet.Length > 7)
+                packet[7] = _getUserInfoTemplate.Pkt0RoutingByte7;
+
+            await session.SendPacketAsync(packet);
+        }
+
         private async Task SendCandidateUserInfoAsync(
             EnhancedClientSession session,
             IReadOnlyList<CharacterRecord> roster,
@@ -280,7 +301,7 @@ namespace DfoServer.Network.Handlers
             var subtype0Repository = new SqliteSubtype0FieldsRepository(ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
             foreach (var character in roster)
             {
-                if (character == null || character.CharacterId == activeCharacterId || character.Level < MinimumSupportLevel)
+                if (character == null || character.CharacterId == activeCharacterId)
                     continue;
 
                 try

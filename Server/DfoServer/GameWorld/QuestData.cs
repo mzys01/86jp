@@ -28,6 +28,7 @@ namespace DfoServer.GameWorld
         private static readonly Lazy<QuestIndex> Index = new Lazy<QuestIndex>(BuildQuestIndex);
         private static readonly Lazy<QuestParameterTable> Parameters = new Lazy<QuestParameterTable>(LoadParameters);
         private static readonly Lazy<Dictionary<int, HashSet<int>>> TrainingQuestNpcs = new Lazy<Dictionary<int, HashSet<int>>>(LoadTrainingQuestNpcs);
+        private static readonly Lazy<Dictionary<int, int>> QuestionAnswerCounts = new Lazy<Dictionary<int, int>>(BuildQuestionAnswerCounts);
         private static readonly Dictionary<int, QuestFile> _qstCache = new Dictionary<int, QuestFile>();
         private static readonly object _cacheLock = new object();
 
@@ -52,7 +53,12 @@ namespace DfoServer.GameWorld
                 lock (_cacheLock) { _qstCache[questId] = qst; }
                 return qst;
             }
-            catch { return null; }
+            catch (Exception ex)
+            {
+                // 解析失败的任务会从可接列表和奖励结算里凭空消失, 是最难排查的一类问题 -- 必须大声。
+                FileLogger.Log($"[QuestData] ERROR: quest {questId} parse failed, quest will be MISSING: path={path}: {ex.Message}");
+                return null;
+            }
         }
 
         private static QuestParameterTable LoadParameters()
@@ -116,6 +122,34 @@ namespace DfoServer.GameWorld
             return result;
         }
 
+        private static Dictionary<int, int> BuildQuestionAnswerCounts()
+        {
+            var result = new Dictionary<int, int>();
+            foreach (var questId in Index.Value.OrderedIds)
+            {
+                var qst = GetQuestFile(questId);
+                if (qst == null)
+                    continue;
+
+                var preReqAns = ParseIntList(qst.PreRequiredQuestAnswer);
+                for (int i = 0; i + 1 < preReqAns.Count; i += 2)
+                {
+                    int questionQuestId = preReqAns[i];
+                    int answerIndex = preReqAns[i + 1];
+                    if (questionQuestId <= 0 || answerIndex < 0)
+                        continue;
+
+                    int nextCount = answerIndex + 1;
+                    int currentCount;
+                    if (!result.TryGetValue(questionQuestId, out currentCount) || nextCount > currentCount)
+                        result[questionQuestId] = nextCount;
+                }
+            }
+
+            FileLogger.Log($"[QuestData] QuestionAnswerCounts: {result.Count} question quests with answer-dependent successors");
+            return result;
+        }
+
         internal static bool IsThereDailyTrainingQuestList(int level, int npcIndex)
         {
             if (level <= 0 || level > 70) return false;
@@ -159,6 +193,13 @@ namespace DfoServer.GameWorld
             return grade == "[daily]" || grade == "[normaly repeat]" || grade == "[special daily]";
         }
 
+        public static bool IsTitleRewardQuest(int questId)
+        {
+            var qst = GetQuestFile(questId);
+            if (qst == null) return false;
+            return NormalizeQuestTag(qst.RewardType) == "title";
+        }
+
         public static bool CanGiveup(int questId)
         {
             var qst = GetQuestFile(questId);
@@ -171,6 +212,39 @@ namespace DfoServer.GameWorld
             if (qst == null) return new List<int>();
             var values = ParseIntList(qst.PreRequiredQuest);
             return values;
+        }
+
+        internal static bool IsQuestionQuest(int questId)
+        {
+            return IsQuestionQuest(GetQuestFile(questId));
+        }
+
+        internal static int GetQuestionAnswerCount(int questId)
+        {
+            int count;
+            return QuestionAnswerCounts.Value.TryGetValue(questId, out count) ? count : 0;
+        }
+
+        internal static int GetRequiredQuestAnswerFlagValue(int answerIndex)
+        {
+            return answerIndex >= 0 ? answerIndex + 1 : 0;
+        }
+
+        internal static bool DoesClearedFlagMatchRequiredQuestAnswer(
+            Dictionary<int, int> clearedFlags,
+            int requiredQuestId,
+            int requiredAnswerIndex)
+        {
+            if (requiredQuestId <= 0)
+                return true;
+
+            int requiredFlag = GetRequiredQuestAnswerFlagValue(requiredAnswerIndex);
+            if (requiredFlag <= 0 || clearedFlags == null)
+                return false;
+
+            int flagValue;
+            return clearedFlags.TryGetValue(requiredQuestId, out flagValue)
+                && flagValue == requiredFlag;
         }
 
         public static List<ushort> ComputeAcceptableQuests(int characterLevel, int characterJob, int growType, HashSet<int> clearedQuestIds, Dictionary<int, int> clearedFlags)
@@ -263,9 +337,7 @@ namespace DfoServer.GameWorld
                 {
                     int reqQid = preReqAns[pi];
                     int reqAnswer = preReqAns[pi + 1];
-                    if (reqQid <= 0) continue;
-                    int flagVal;
-                    if (!clearedFlags.TryGetValue(reqQid, out flagVal) || flagVal <= reqAnswer)
+                    if (!DoesClearedFlagMatchRequiredQuestAnswer(clearedFlags, reqQid, reqAnswer))
                     { preAnsOk = false; break; }
                 }
                 if (!preAnsOk) continue;
@@ -400,6 +472,22 @@ namespace DfoServer.GameWorld
             return qst != null ? ComputeInitTrigger(qst) : 1;
         }
 
+        internal static bool IsQuestClearQuest(int questId)
+        {
+            return IsQuestClearQuest(GetQuestFile(questId));
+        }
+
+        internal static List<int> GetQuestClearRequiredQuestIds(int questId)
+        {
+            var qst = GetQuestFile(questId);
+            if (!IsQuestClearQuest(qst))
+                return new List<int>();
+
+            var values = ParseIntList(qst.IntData);
+            values.RemoveAll(id => id <= 0);
+            return values;
+        }
+
         internal static bool IsClearMapQuest(int questId)
         {
             return IsClearMapQuest(GetQuestFile(questId));
@@ -434,6 +522,17 @@ namespace DfoServer.GameWorld
         private static bool IsClearMapQuest(QuestFile qst)
         {
             return qst != null && NormalizeQuestTag(qst.Type) == "clear map";
+        }
+
+        private static bool IsQuestClearQuest(QuestFile qst)
+        {
+            var tag = NormalizeQuestTag(qst?.Type);
+            return tag == "quest clear" || tag == "clear quest";
+        }
+
+        private static bool IsQuestionQuest(QuestFile qst)
+        {
+            return NormalizeQuestTag(qst?.Type) == "question";
         }
 
         private static string NormalizeQuestTag(string value)
@@ -534,10 +633,14 @@ namespace DfoServer.GameWorld
         {
             var qst = GetQuestFile(questId);
             if (qst == null) return new List<QuestRewardItem>();
-            int typeCode = MapTypeString(qst.Type);
-            if (typeCode != 0 && typeCode != 1) return new List<QuestRewardItem>();
+            if (IsQuestClearQuest(qst)) return new List<QuestRewardItem>();
+
             if (IsSeekAndMeetNpcQuest(qst))
                 return ParseSeekAndMeetNpcItems(qst.IntData);
+
+            if (NormalizeQuestTag(qst.Type) != "seeking")
+                return new List<QuestRewardItem>();
+
             var items = ParseItemPairs(qst.IntData);
             items.RemoveAll(item => item.ItemId <= 0 || item.Count <= 0);
             return items;
@@ -603,8 +706,9 @@ namespace DfoServer.GameWorld
 
                 return new QuestReward { Exp = exp, Gold = gold, ChainType = chainType, GrowNumber = growNumber, Items = items, ConsumeItems = consumeItems };
             }
-            catch
+            catch (Exception ex)
             {
+                FileLogger.Log($"[QuestData] ERROR: reward calc failed, returning EMPTY reward: quest={questId}: {ex.Message}");
                 return empty;
             }
         }
@@ -666,21 +770,34 @@ namespace DfoServer.GameWorld
         private static uint ComputeInitTrigger(QuestFile qst)
         {
             int typeCode = MapTypeString(qst.Type);
-            string typeStr = (qst.Type ?? "").Trim().ToLowerInvariant();
+            string typeTag = NormalizeQuestTag(qst.Type);
 
             if (IsSeekAndMeetNpcQuest(qst))
                 return ComputeSeekAndMeetNpcInitTrigger(qst.IntData);
 
-            if (typeCode == 2 || typeCode == 6)
-                return ComputeTriggerFromIntData(qst.IntData, typeCode);
+            if (IsQuestClearQuest(qst))
+            {
+                var requiredQuestIds = ParseIntList(qst.IntData);
+                requiredQuestIds.RemoveAll(id => id <= 0);
+                return requiredQuestIds.Count > 0 ? (uint)requiredQuestIds.Count : 1;
+            }
+
+            if (typeTag == "condition under clear" || typeTag == "clear map")
+                return ComputeTriggerFromIntData(qst.IntData, 4);
+
+            if (typeTag == "condition under clear2")
+                return ComputeTriggerFromIntData(qst.IntData, 5);
 
             if (typeCode == 25)
                 return PackTrigger(1, 1, 0);
 
             if (typeCode == 1)
             {
-                if (typeStr == "[hunt monster]")
-                    return ComputeTriggerFromIntData(qst.IntData, 1);
+                if (typeTag == "hunt monster")
+                    return ComputeTriggerFromIntData(qst.IntData, 4);
+
+                if (typeTag == "hunt enemy")
+                    return ComputeTriggerFromIntData(qst.IntData, 5);
 
                 if (qst.SubType == 6)
                 {
@@ -740,13 +857,12 @@ namespace DfoServer.GameWorld
             return result;
         }
 
-        private static uint ComputeTriggerFromIntData(string intData, int typeCode)
+        private static uint ComputeTriggerFromIntData(string intData, int stride)
         {
             var values = ParseIntList(intData);
-            if (values.Count == 0)
+            if (values.Count == 0 || stride <= 0)
                 return 1;
 
-            int stride = (typeCode == 6) ? 5 : 4;
             int countOffset = stride - 1;
 
             var channels = new List<int>();
@@ -802,6 +918,7 @@ namespace DfoServer.GameWorld
                 case "[get item]": return 1;
                 case "[get score]": return 1;
                 case "[clear quest]": return 1;
+                case "[quest clear]": return 1;
                 case "[custom quest]": return 1;
                 case "[send chatting]": return 1;
                 case "[check life]": return 1;

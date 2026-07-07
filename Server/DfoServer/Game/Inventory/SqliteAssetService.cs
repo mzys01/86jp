@@ -11,13 +11,13 @@ namespace DfoServer.Game.Inventory
         private readonly string _connectionString;
         private readonly SqliteInventoryStore _store;
 
-        public SqliteAssetService(string databasePath, string schemaFilePath)
+        public SqliteAssetService(string databasePath, string schemaFilePath, SqliteInventoryStore store = null)
         {
             if (databasePath == null) throw new ArgumentNullException(nameof(databasePath));
             if (schemaFilePath == null) throw new ArgumentNullException(nameof(schemaFilePath));
 
             _connectionString = SqliteDatabaseBootstrap.BuildConnectionString(databasePath);
-            _store = new SqliteInventoryStore(databasePath, schemaFilePath);
+            _store = store ?? new SqliteInventoryStore(databasePath, schemaFilePath);
         }
 
         public DbScope OpenScope(int characterId, int accountId)
@@ -38,13 +38,10 @@ namespace DfoServer.Game.Inventory
                     return true;
 
                 case AssetStorage.CharacterItem:
-                    using (_store.BeginScope(scope.CharacterId, scope.AccountId))
-                    {
-                        return _store.TryPickupItemCore(
+                    return _store.TryPickupItemCore(
                         scope.Connection, scope.Transaction,
                         scope.CharacterId, scope.AccountId,
                         itemTemplateId, count, out assignedSlot);
-                    }
 
                 default:
                     return false;
@@ -99,54 +96,29 @@ namespace DfoServer.Game.Inventory
             return CurrencyService.LoadWallet(scope.Connection, scope.Transaction, scope.CharacterId);
         }
 
-        public void AddGold(DbScope scope, int delta)
+        public void GrantGold(DbScope scope, int amount)
         {
-            var wallet = CurrencyService.LoadWallet(scope.Connection, scope.Transaction, scope.CharacterId);
-            var newGold = wallet.Gold + delta;
-            if (newGold < 0)
-                newGold = 0;
-            CurrencyService.UpdateGold(scope.Connection, scope.Transaction, scope.CharacterId, newGold);
+            CurrencyService.GrantGold(scope.Connection, scope.Transaction, scope.CharacterId, amount);
         }
 
-        public void AddCera(DbScope scope, int delta)
+        public bool TrySpendGold(DbScope scope, int amount)
         {
-            var wallet = CurrencyService.LoadWallet(scope.Connection, scope.Transaction, scope.CharacterId);
-            var newValue = wallet.Cera + delta;
-            if (newValue < 0) newValue = 0;
-            CurrencyService.UpdateCera(scope.Connection, scope.Transaction, scope.CharacterId, newValue);
+            return CurrencyService.TrySpendGold(scope.Connection, scope.Transaction, scope.CharacterId, amount);
         }
 
-        public void AddTokenCera(DbScope scope, int delta)
+        public void GrantLuckyStar(DbScope scope, int amount)
         {
-            var wallet = CurrencyService.LoadWallet(scope.Connection, scope.Transaction, scope.CharacterId);
-            var newValue = wallet.TokenCera + delta;
-            if (newValue < 0) newValue = 0;
-            CurrencyService.UpdateTokenCera(scope.Connection, scope.Transaction, scope.CharacterId, newValue);
+            CurrencyService.GrantLuckyStar(scope.Connection, scope.Transaction, scope.AccountId, amount);
         }
 
-        public void AddHappyTokenCera(DbScope scope, int delta)
+        public bool TrySpendLuckyStar(DbScope scope, int amount)
         {
-            var wallet = CurrencyService.LoadWallet(scope.Connection, scope.Transaction, scope.CharacterId);
-            var newValue = wallet.HappyTokenCera + delta;
-            if (newValue < 0) newValue = 0;
-            CurrencyService.UpdateHappyTokenCera(scope.Connection, scope.Transaction, scope.CharacterId, newValue);
-        }
-
-        public void AddLuckyStar(DbScope scope, int delta)
-        {
-            var wallet = CurrencyService.LoadWallet(scope.Connection, scope.Transaction, scope.CharacterId);
-            var newValue = wallet.LuckyStar + delta;
-            if (newValue < 0) newValue = 0;
-            if (newValue > 999) newValue = 999;
-            CurrencyService.UpdateLuckyStar(scope.Connection, scope.Transaction, scope.AccountId, (ushort)newValue);
+            return CurrencyService.TrySpendLuckyStar(scope.Connection, scope.Transaction, scope.AccountId, amount);
         }
 
         public CharacterItemListSnapshot LoadSnapshot(DbScope scope)
         {
-            // LoadCharacterItemListSnapshot uses its own connection internally (read-only, no deadlock risk).
-            // Phase 4 will optimize this to share the scope's connection.
-            using (_store.BeginScope(scope.CharacterId, scope.AccountId))
-                return _store.LoadCharacterItemListSnapshot();
+            return _store.LoadCharacterItemListSnapshot(scope.CharacterId, scope.AccountId);
         }
     }
 }

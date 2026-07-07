@@ -1,4 +1,5 @@
 using DfoServer.Game.Inventory;
+using DfoServer.Game.SelectCharacter;
 using DfoServer.Network.Handlers.Dungeon;
 using System.Threading.Tasks;
 
@@ -15,9 +16,19 @@ namespace DfoServer.Network.Handlers
         private readonly DungeonSettlementHandler _settlement;
         private readonly DungeonTutorialHandler _tutorial;
 
-        public DungeonHandler(IAssetService assetService)
+        public DungeonHandler(
+            IAssetService assetService,
+            Game.ReviveCoin.ReviveCoinService reviveCoinService,
+            Game.Characters.SqliteCharacterRepository characterRepository,
+            SqliteSelectCharacterDataSource selectCharacterDataSource,
+            IRentalTimeProvider rentalTimeProvider)
         {
-            _services = new DungeonSharedServices(assetService);
+            _services = new DungeonSharedServices(
+                assetService,
+                reviveCoinService,
+                characterRepository,
+                selectCharacterDataSource,
+                rentalTimeProvider);
             _settlement = new DungeonSettlementHandler(_services);
             _map = new DungeonMapHandler(_services);
             _entry = new DungeonEntryHandler(_services, _map);
@@ -25,8 +36,8 @@ namespace DfoServer.Network.Handlers
             _tutorial = new DungeonTutorialHandler(_services, _settlement);
         }
 
-        public static void ResetDungeonState(EnhancedClientSession session)
-            => DungeonSharedServices.ResetDungeonState(session);
+        public static Task ResetDungeonStateAsync(EnhancedClientSession session)
+            => Dungeon.DungeonRunLifecycle.EndRunToTownAsync(session);
 
         public Task Handle_ENUM_CMDPACKET_ENTER_SELECT_DUNGEON(EnhancedClientSession session, GamePacketHeader header, byte[] body)
             => _entry.HandleEnterSelectDungeon(session, header, body);
@@ -55,9 +66,6 @@ namespace DfoServer.Network.Handlers
         public Task Handle_ENUM_CMDPACKET_GET_ITEM(EnhancedClientSession session, GamePacketHeader header, byte[] body)
             => _combat.HandleGetItem(session, header, body);
 
-        public Task Handle_ENUM_CMDPACKET_RECOVER_STAMINA(EnhancedClientSession session, GamePacketHeader header, byte[] body)
-            => _services.HandleRecoverStaminaAsync(session, body);
-
         public Task Handle_ENUM_CMDPACKET_SELECT_CARD(EnhancedClientSession session, GamePacketHeader header, byte[] body)
             => _settlement.HandleSelectCard(session, header, body);
 
@@ -79,10 +87,10 @@ namespace DfoServer.Network.Handlers
         public Task Handle_ENUM_CMDPACKET_TUTORIAL_LEVEL_UP(EnhancedClientSession session, GamePacketHeader header, byte[] body)
             => _tutorial.HandleTutorialLevelUp(session, header, body);
 
-        public Task Handle_PREMIUM_SERVICE(EnhancedClientSession session, GamePacketHeader header, byte[] body)
-            => DungeonSharedServices.HandlePremiumServiceQueryAsync(session, body);
-
         public Task Handle_BACK_2_VILLAGE(EnhancedClientSession session, GamePacketHeader header, byte[] body)
             => _tutorial.HandleBack2Village(session, header, body);
+
+        public Task Handle_ENUM_CMDPACKET_DEATH_TOWER_STAGE_CMD(EnhancedClientSession session, GamePacketHeader header, byte[] body)
+            => _services.DeathTower.HandleStageCommand(session, header, body);
     }
 }

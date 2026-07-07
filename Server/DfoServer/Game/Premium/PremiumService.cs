@@ -76,19 +76,20 @@ namespace DfoServer.Game.Premium
                 }
                 if (cid <= 0) return false;
 
-                var wallet = CurrencyService.LoadWallet(conn, null, cid);
-                if (wallet.Cera < ceraPrice)
-                {
-                    FileLogger.Log($"[PremiumService] Devil slot {slotIndex} rejected: cera {wallet.Cera} < {ceraPrice}");
-                    return false;
-                }
-                updatedCera = wallet.Cera - ceraPrice;
-                tokenCera = wallet.TokenCera;
-                happyTokenCera = wallet.HappyTokenCera;
-
+                // 读余额、条件扣减、写到期时间放同一事务; 旧版事务外读+绝对值覆写会与
+                // CeraShop 购物车里其他商品的扣费交错, 产生点券丢失更新。
                 using (var tx = conn.BeginTransaction())
                 {
-                    CurrencyService.UpdateCera(conn, tx, cid, updatedCera);
+                    var wallet = CurrencyService.LoadWallet(conn, tx, cid);
+                    if (!CurrencyService.TrySpendCera(conn, tx, cid, ceraPrice))
+                    {
+                        FileLogger.Log($"[PremiumService] Devil slot {slotIndex} rejected: cera {wallet.Cera} < {ceraPrice}");
+                        return false;
+                    }
+                    updatedCera = wallet.Cera - ceraPrice;
+                    tokenCera = wallet.TokenCera;
+                    happyTokenCera = wallet.HappyTokenCera;
+
                     UpsertPremiumExpire(conn, tx, accountId, premiumType, now, duration);
                     tx.Commit();
                 }
@@ -150,6 +151,32 @@ namespace DfoServer.Game.Premium
             data[SeriaLuckThresholdOffset] = (byte)(value >= InventoryDbPrimitives.SeriaLuckValueMax ? 0 : 1);
         }
 
+        // 账号是否有生效中的"自动修理"契约 — 自行解析连接串(供 handler 直接调用)。
+        public static bool HasActiveAutoRepairForAccount(int accountId)
+        {
+            var connStr = Infrastructure.SqliteDatabaseBootstrap.Initialize(
+                Infrastructure.ServerPaths.DatabasePath, Infrastructure.ServerPaths.SchemaFilePath);
+            return HasActiveAutoRepair(connStr, accountId);
+        }
+
+        // 账号是否有生效中的"自动修理"契约(魔王契约 slot 6, premium_type=586)。
+        // 生效时装备修理免费。
+        public static bool HasActiveAutoRepair(string connStr, int accountId)
+        {
+            using (var conn = new SqliteConnection(connStr))
+            {
+                conn.Open();
+                using (var cmd = conn.CreateCommand())
+                {
+                    cmd.CommandText = "SELECT 1 FROM account_premiums WHERE account_id=@aid AND premium_type=@type AND end_time>@now LIMIT 1;";
+                    cmd.Parameters.AddWithValue("@aid", accountId);
+                    cmd.Parameters.AddWithValue("@type", DevilContractCatalog.AutoRepairPremiumType);
+                    cmd.Parameters.AddWithValue("@now", DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+                    return cmd.ExecuteScalar() != null;
+                }
+            }
+        }
+
         public static long LoadDevilContractMaxExpire(string connStr, int accountId)
         {
             long maxExpire = 0;
@@ -169,6 +196,39 @@ namespace DfoServer.Game.Premium
                 }
             }
             return maxExpire;
+        }
+
+        public static bool HasActivePremium(string connStr, int accountId, params int[] premiumTypes)
+        {
+            if (accountId <= 0 || premiumTypes == null || premiumTypes.Length == 0)
+                return false;
+
+            var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            using (var conn = new SqliteConnection(connStr))
+            {
+                conn.Open();
+                using (var cmd = conn.CreateCommand())
+                {
+                    var typeParams = new string[premiumTypes.Length];
+                    for (var i = 0; i < premiumTypes.Length; i++)
+                    {
+                        var name = "@type" + i;
+                        typeParams[i] = name;
+                        cmd.Parameters.AddWithValue(name, premiumTypes[i]);
+                    }
+
+                    cmd.CommandText = $@"
+SELECT 1
+FROM account_premiums
+WHERE account_id=@aid
+  AND end_time>@now
+  AND premium_type IN ({string.Join(",", typeParams)})
+LIMIT 1;";
+                    cmd.Parameters.AddWithValue("@aid", accountId);
+                    cmd.Parameters.AddWithValue("@now", now);
+                    return cmd.ExecuteScalar() != null;
+                }
+            }
         }
 
         private static long UpsertPremiumExpire(string connStr, int accountId, int premiumType, long now, long duration)

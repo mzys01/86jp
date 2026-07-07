@@ -20,6 +20,20 @@ namespace DfoServer.Network.Builders
     
     public static class UserInfoSubtype0Builder
     {
+        public static byte[] BuildNotificationBody(CharacterRecord record)
+        {
+            if (record == null)
+                throw new ArgumentNullException(nameof(record));
+
+            var writer = new GamePacketWriter();
+            writer.WriteByte(0);
+            writer.WriteUInt16(1);
+            writer.WriteUInt16((ushort)record.CharacterId);
+            writer.WriteDstr(record.Name);
+            writer.WriteBytes(BuildRemainingBytes(record));
+            return writer.ToArray();
+        }
+
         
         
         
@@ -57,23 +71,24 @@ namespace DfoServer.Network.Builders
         {
             var t = record.Subtype0Tail ?? new UserInfoMinimumTailSnapshot();
 
-            writer.WriteUInt32(t.NameTagItemId);            
-            writer.WriteByte(t.CreatureField1);             
+            writer.WriteUInt32(t.CloneTitleItemId);
+            writer.WriteByte(t.Forging); // 锻造
             writer.WriteByte(t.CreatureField2);             
             writer.WriteByte(t.CreatureField3);             
             writer.WriteByte(t.CreatureField4);             
-            var cb = t.CreatureBuffer != null && t.CreatureBuffer.Length == 8
-                ? t.CreatureBuffer : new byte[8];
-            writer.WriteBytes(cb);                          
+            writer.WriteUInt32(t.NameTagItemId); // 名称装饰卡ID
+            writer.WriteUInt32(t.NameTagExpireTime); // 名称装饰卡剩余期限
             writer.WriteByte(t.Stamina);                    
             writer.WriteUInt32(t.FatiguePenalty);           
             writer.WriteByte(t.IsEventCharacter);           
-            writer.WriteUInt32(t.PcRoomId);                 
-            writer.WriteByte(t.IsPrivateStore);             
+            writer.WriteUInt32(t.EquippedCreatureItemId); // 宠物ID
+            writer.WriteDstr(t.EquippedCreatureNameBytes); // 宠物名称
+            writer.WriteByte(t.EquippedCreatureAliveState); // 宠物存活状态
             writer.WriteByte(t.IsPremiumPcRoom);            
             writer.WriteByte(t.ServerGroupId);              
             writer.WriteUInt32(t.BlackCount);               
-            writer.WriteByte(t.GuildLevel);                 
+            writer.WriteByte(t.GuildLevel);
+            writer.WriteDstr(t.GuildNameBytes); // 工会名称
             writer.WriteUInt32(t.ChaosPoint);               
             writer.WriteByte(1);                            
             writer.WriteByte(t.DisguiseKind);               
@@ -143,12 +158,12 @@ namespace DfoServer.Network.Builders
         internal static void WriteAppearanceEntry(GamePacketWriter writer, CharacterAppearanceEntry e)
         {
             writer.WriteByte(e.Slot);
-            writer.WriteInt32(e.ItemId);
+            writer.WriteInt32(e.DisplayItemId);
             writer.WriteInt32(e.ExpansionLen);
             writer.WriteBytes(e.ExpansionData != null && e.ExpansionData.Length == 4
                 ? e.ExpansionData : new byte[4]);
             writer.WriteByte(e.State);
-            writer.WriteInt32(e.ClearAvatar);
+            writer.WriteInt32(e.LinkItemId);
             writer.WriteUInt32(e.EnchantValue);
             writer.WriteByte(e.Flag20);
         }

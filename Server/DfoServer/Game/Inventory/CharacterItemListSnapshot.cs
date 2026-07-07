@@ -38,6 +38,8 @@ namespace DfoServer.Game.Inventory
         public byte[] TailData2F { get; set; } = new byte[37];
 
         public byte[] JewelSocket { get; set; } = new byte[30];
+
+        public byte EquipmentLockId { get; set; }
     }
 
     public sealed class AvatarInventoryItem

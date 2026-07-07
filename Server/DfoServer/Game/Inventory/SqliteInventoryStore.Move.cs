@@ -14,7 +14,7 @@ namespace DfoServer.Game.Inventory
 {
     public sealed partial class SqliteInventoryStore
     {
-        public bool TryMoveItem(InventoryMoveRequest request, out InventoryMoveResult result)
+        public bool TryMoveItem(int characterId, int accountId, InventoryMoveRequest request, out InventoryMoveResult result)
         {
             result = null;
 
@@ -37,36 +37,50 @@ namespace DfoServer.Game.Inventory
                 return true;
             }
 
-            using (var connection = _context.OpenConnection())
+            using (var connection = OpenConnection())
             using (var transaction = connection.BeginTransaction())
             {
                 bool srcIsCargo = request.SourceListType == InventoryListType.AccountCargo;
                 bool dstIsCargo = request.DestinationListType == InventoryListType.AccountCargo;
 
                 var source = srcIsCargo
-                    ? _db.LoadAccountCargoItemRecord(connection, transaction, _context.AccountId, request.SourceSlotIndex)
-                    : _db.LoadItemRecord(connection, transaction, _context.CharacterId, dbSrcList, request.SourceSlotIndex);
+                    ? _db.LoadAccountCargoItemRecord(connection, transaction, accountId, request.SourceSlotIndex)
+                    : _db.LoadItemRecord(connection, transaction, characterId, dbSrcList, request.SourceSlotIndex);
                 var destination = dstIsCargo
-                    ? _db.LoadAccountCargoItemRecord(connection, transaction, _context.AccountId, request.DestinationSlotIndex)
-                    : _db.LoadItemRecord(connection, transaction, _context.CharacterId, dbDstList, request.DestinationSlotIndex);
+                    ? _db.LoadAccountCargoItemRecord(connection, transaction, accountId, request.DestinationSlotIndex)
+                    : _db.LoadItemRecord(connection, transaction, characterId, dbDstList, request.DestinationSlotIndex);
 
                 FileLogger.Log($"  [MoveItem] source={(source != null ? $"uid={source.ItemUid} kind={source.ItemKind} tmpl=0x{source.ItemTemplateId:X8}" : "null")}, destination={(destination != null ? $"uid={destination.ItemUid} kind={destination.ItemKind} tmpl=0x{destination.ItemTemplateId:X8}" : "null")}");
 
+                if (request.SourceListType == InventoryListType.Pet && source != null)
+                    source = NormalizePetInventoryEquipmentSourceFallback(connection, transaction, characterId, source);
+
+                if (TryHandlePetCreatureEquipMove(connection, transaction, characterId, request, source, destination, out result))
+                {
+                    if (result != null && result.Mutated)
+                        transaction.Commit();
+                    return true;
+                }
+
                 if (request.DestinationListType == InventoryListType.Equipment)
                 {
-                    var outcome = _equipStore.HandleEquipSlotMove(connection, transaction, _context.CharacterId, _context.AccountId, request, source, dbSrcList);
+                    var outcome = _equipStore.HandleEquipSlotMove(connection, transaction, characterId, accountId, request, source, dbSrcList);
                     bool changed = outcome == EquipOutcome.Equipped || outcome == EquipOutcome.Unequipped;
                     if (changed)
                         transaction.Commit();
                     result = CreateMoveResult(request, request.MoveCount, mutated: changed);
+                    if (changed)
+                        AttachEquipmentMoveState(connection, null, characterId, result, request.DestinationSlotIndex, outcome, source);
                     result.AckError = outcome == EquipOutcome.ReverseError;
                     return true;
                 }
                 if (request.SourceListType == InventoryListType.Equipment)
                 {
-                    bool ok = _equipStore.HandleUnequipFromSlot(connection, transaction, _context.CharacterId, _context.AccountId, request.SourceSlotIndex);
+                    bool ok = _equipStore.HandleUnequipFromSlot(connection, transaction, characterId, accountId, request.SourceSlotIndex);
                     if (ok) transaction.Commit();
                     result = CreateMoveResult(request, request.MoveCount, mutated: ok);
+                    if (ok)
+                        AttachEquipmentMoveState(connection, null, characterId, result, request.SourceSlotIndex, EquipOutcome.Unequipped, null);
                     return true;
                 }
 
@@ -75,8 +89,8 @@ namespace DfoServer.Game.Inventory
                     if (destination != null)
                     {
                         FileLogger.Log($"  [MoveItem] MOVE(empty-src): dst uid={destination.ItemUid} tmpl=0x{destination.ItemTemplateId:X8} -> ({dbSrcList},{request.SourceSlotIndex})");
-                        MoveRecordTo(connection, transaction, destination, dbSrcList, request.SourceSlotIndex);
-                        _auditLogger.WriteAuditLog(connection, transaction, _context.CharacterId, "move_itemspace", destination, dbSrcList, request.SourceSlotIndex, request.MoveCount);
+                        MoveRecordTo(characterId, accountId, connection, transaction, destination, dbSrcList, request.SourceSlotIndex);
+                        _auditLogger.WriteAuditLog(connection, transaction, characterId, "move_itemspace", destination, dbSrcList, request.SourceSlotIndex, request.MoveCount);
                         transaction.Commit();
                         result = CreateMoveResult(request, request.MoveCount);
                         return true;
@@ -92,7 +106,7 @@ namespace DfoServer.Game.Inventory
                     return false;
                 }
                 var moveCount = NormalizeMoveCount(source, request.MoveCount);
-                destination = ResolveDestinationStackTarget(connection, transaction, source, destination, dbSrcList, dbDstList, moveCount);
+                destination = ResolveDestinationStackTarget(characterId, accountId, connection, transaction, source, destination, dbSrcList, dbDstList, moveCount);
 
                 if (CanStack(source, destination, moveCount) && moveCount > 0)
                 {
@@ -101,12 +115,12 @@ namespace DfoServer.Game.Inventory
                     if (moveCount == source.StackCount)
                     {
                         DeleteRecord(connection, transaction, source);
-                        DeleteSortItemLock(connection, transaction, dbSrcList, request.SourceSlotIndex);
+                        DeleteSortItemLock(characterId, connection, transaction, dbSrcList, request.SourceSlotIndex);
                     }
                     else
                         UpdateRecordStackCount(connection, transaction, source, source.StackCount - moveCount);
 
-                    _auditLogger.WriteAuditLog(connection, transaction, _context.CharacterId, "move_itemspace", source, dbDstList, request.DestinationSlotIndex, moveCount);
+                    _auditLogger.WriteAuditLog(connection, transaction, characterId, "move_itemspace", source, dbDstList, request.DestinationSlotIndex, moveCount);
                     transaction.Commit();
                     result = CreateMoveResult(request, request.MoveCount);
                     result.DestinationListType = destination.ListType;
@@ -117,8 +131,8 @@ namespace DfoServer.Game.Inventory
                 if (IsStackableRecord(source) && moveCount > 0 && moveCount < source.StackCount && destination == null)
                 {
                     UpdateRecordStackCount(connection, transaction, source, source.StackCount - moveCount);
-                    InsertSplitRecord(connection, transaction, source, dbDstList, request.DestinationSlotIndex, moveCount);
-                    _auditLogger.WriteAuditLog(connection, transaction, _context.CharacterId, "move_itemspace", source, dbDstList, request.DestinationSlotIndex, moveCount);
+                    InsertSplitRecord(characterId, accountId, connection, transaction, source, dbDstList, request.DestinationSlotIndex, moveCount);
+                    _auditLogger.WriteAuditLog(connection, transaction, characterId, "move_itemspace", source, dbDstList, request.DestinationSlotIndex, moveCount);
                     transaction.Commit();
                     result = CreateMoveResult(request, request.MoveCount);
                     return true;
@@ -127,8 +141,8 @@ namespace DfoServer.Game.Inventory
                 if (destination == null)
                 {
                     FileLogger.Log($"  [MoveItem] MOVE: src uid={source.ItemUid} kind={source.ItemKind} tmpl=0x{source.ItemTemplateId:X8} -> ({dbDstList},{request.DestinationSlotIndex})");
-                    MoveRecordTo(connection, transaction, source, dbDstList, request.DestinationSlotIndex);
-                    _auditLogger.WriteAuditLog(connection, transaction, _context.CharacterId, "move_itemspace", source, dbDstList, request.DestinationSlotIndex, moveCount);
+                    MoveRecordTo(characterId, accountId, connection, transaction, source, dbDstList, request.DestinationSlotIndex);
+                    _auditLogger.WriteAuditLog(connection, transaction, characterId, "move_itemspace", source, dbDstList, request.DestinationSlotIndex, moveCount);
                     transaction.Commit();
                     result = CreateMoveResult(request, request.MoveCount);
                     return true;
@@ -142,21 +156,21 @@ namespace DfoServer.Game.Inventory
 
                 FileLogger.Log($"  [MoveItem] SWAP: src uid={source.ItemUid} kind={source.ItemKind} tmpl=0x{source.ItemTemplateId:X8} <-> dst uid={destination.ItemUid} kind={destination.ItemKind} tmpl=0x{destination.ItemTemplateId:X8}");
                 _db.SwapItems(connection, transaction, source, destination);
-                SwapSortItemLocks(connection, transaction, source.ListType, source.SlotIndex, destination.ListType, destination.SlotIndex);
-                _auditLogger.WriteAuditLog(connection, transaction, _context.CharacterId, "move_itemspace", source, dbDstList, request.DestinationSlotIndex, moveCount);
+                SwapSortItemLocks(characterId, connection, transaction, source.ListType, source.SlotIndex, destination.ListType, destination.SlotIndex);
+                _auditLogger.WriteAuditLog(connection, transaction, characterId, "move_itemspace", source, dbDstList, request.DestinationSlotIndex, moveCount);
                 transaction.Commit();
                 result = CreateMoveResult(request, request.MoveCount);
                 return true;
             }
         }
 
-        public bool TrySortItems(int characterId, InventoryListType listType, byte category)
+        public bool TrySortItems(int characterId, int accountId, InventoryListType listType, byte category)
         {
             if (!IsSupportedSortListType(listType))
                 return false;
 
             if (listType == InventoryListType.AccountCargo)
-                return TrySortAccountCargoItems();
+                return TrySortAccountCargoItems(accountId);
 
             var segmentMap = GetSortSegmentMap(listType);
             if (!segmentMap.TryGetValue(category, out var range))
@@ -164,10 +178,10 @@ namespace DfoServer.Game.Inventory
 
             var (start, end) = range;
 
-            using (var connection = _context.OpenConnection())
+            using (var connection = OpenConnection())
             using (var transaction = connection.BeginTransaction())
             {
-                var lockedSlots = LoadSortItemLockSlots(connection, transaction, listType, start, end);
+                var lockedSlots = LoadSortItemLockSlots(characterId, connection, transaction, listType, start, end);
                 using (var cmd = connection.CreateCommand())
                 {
                     cmd.Transaction = transaction;
@@ -229,9 +243,9 @@ namespace DfoServer.Game.Inventory
             }
         }
 
-        private bool TrySortAccountCargoItems()
+        private bool TrySortAccountCargoItems(int accountId)
         {
-            using (var connection = _context.OpenConnection())
+            using (var connection = OpenConnection())
             using (var transaction = connection.BeginTransaction())
             {
                 var items = new List<long>();
@@ -240,7 +254,7 @@ namespace DfoServer.Game.Inventory
                     cmd.Transaction = transaction;
                     cmd.CommandText = @"SELECT item_uid FROM account_cargo_items
                         WHERE account_id = @aid ORDER BY item_kind ASC, item_template_id ASC";
-                    cmd.Parameters.AddWithValue("@aid", _context.AccountId);
+                    cmd.Parameters.AddWithValue("@aid", accountId);
                     using (var reader = cmd.ExecuteReader())
                     {
                         while (reader.Read())
@@ -278,66 +292,66 @@ namespace DfoServer.Game.Inventory
             }
         }
 
-        public bool TryToggleSortItemLock(InventoryListType listType, short slotIndex, out SortItemLockEntry entry)
+        public bool TryToggleSortItemLock(int characterId, InventoryListType listType, short slotIndex, out SortItemLockEntry entry)
         {
             entry = null;
             if (!IsSupportedSortListType(listType))
                 return false;
 
             var dbListType = MapToDbListType(listType);
-            using (var connection = _context.OpenConnection())
+            using (var connection = OpenConnection())
             using (var transaction = connection.BeginTransaction())
             {
-                var item = _db.LoadItemRecord(connection, transaction, _context.CharacterId, dbListType, slotIndex);
+                var item = _db.LoadItemRecord(connection, transaction, characterId, dbListType, slotIndex);
                 if (item == null)
                     return false;
                 if (!CanApplySortItemLock(dbListType, slotIndex))
                 {
-                    DeleteSortItemLock(connection, transaction, dbListType, slotIndex);
+                    DeleteSortItemLock(characterId, connection, transaction, dbListType, slotIndex);
                     transaction.Commit();
                     return false;
                 }
-                if (LoadSortItemLock(connection, transaction, dbListType, slotIndex).HasValue)
+                if (LoadSortItemLock(characterId, connection, transaction, dbListType, slotIndex).HasValue)
                 {
-                    DeleteSortItemLock(connection, transaction, dbListType, slotIndex);
+                    DeleteSortItemLock(characterId, connection, transaction, dbListType, slotIndex);
                     transaction.Commit();
                     entry = new SortItemLockEntry { ListType = dbListType, SlotIndex = slotIndex, State = 0 };
                     return true;
                 }
 
-                UpsertSortItemLock(connection, transaction, dbListType, slotIndex, 1);
+                UpsertSortItemLock(characterId, connection, transaction, dbListType, slotIndex, 1);
                 transaction.Commit();
                 entry = new SortItemLockEntry { ListType = dbListType, SlotIndex = slotIndex, State = 1 };
                 return true;
             }
         }
 
-        public bool TryUnlockSortItemLock(InventoryListType listType, short slotIndex)
+        public bool TryUnlockSortItemLock(int characterId, InventoryListType listType, short slotIndex)
         {
             if (!IsSupportedSortListType(listType))
                 return false;
 
             var dbListType = MapToDbListType(listType);
-            using (var connection = _context.OpenConnection())
+            using (var connection = OpenConnection())
             using (var transaction = connection.BeginTransaction())
             {
-                var item = _db.LoadItemRecord(connection, transaction, _context.CharacterId, dbListType, slotIndex);
+                var item = _db.LoadItemRecord(connection, transaction, characterId, dbListType, slotIndex);
                 if (item != null && !CanApplySortItemLock(dbListType, slotIndex))
                 {
-                    DeleteSortItemLock(connection, transaction, dbListType, slotIndex);
+                    DeleteSortItemLock(characterId, connection, transaction, dbListType, slotIndex);
                     transaction.Commit();
                     return false;
                 }
 
-                DeleteSortItemLock(connection, transaction, dbListType, slotIndex);
+                DeleteSortItemLock(characterId, connection, transaction, dbListType, slotIndex);
                 transaction.Commit();
                 return true;
             }
         }
 
-        public IReadOnlyList<SortItemLockEntry> LoadSortItemLocks()
+        public IReadOnlyList<SortItemLockEntry> LoadSortItemLocks(int characterId)
         {
-            using (var connection = _context.OpenConnection())
+            using (var connection = OpenConnection())
             {
                 var entries = new List<SortItemLockEntry>();
                 using (var cmd = connection.CreateCommand())
@@ -347,7 +361,7 @@ SELECT list_type, slot_index, state
 FROM character_sort_item_locks
 WHERE character_id = @cid
 ORDER BY sort_order;";
-                    cmd.Parameters.AddWithValue("@cid", _context.CharacterId);
+                    cmd.Parameters.AddWithValue("@cid", characterId);
                     using (var reader = cmd.ExecuteReader())
                     {
                         while (reader.Read())
@@ -370,10 +384,10 @@ ORDER BY sort_order;";
             }
         }
 
-        public IReadOnlyList<SortItemLockEntry> LoadSortItemLocks(InventoryListType listType)
+        public IReadOnlyList<SortItemLockEntry> LoadSortItemLocks(int characterId, InventoryListType listType)
         {
             var dbListType = MapToDbListType(listType);
-            using (var connection = _context.OpenConnection())
+            using (var connection = OpenConnection())
             {
                 var entries = new List<SortItemLockEntry>();
                 using (var cmd = connection.CreateCommand())
@@ -383,7 +397,7 @@ SELECT list_type, slot_index, state
 FROM character_sort_item_locks
 WHERE character_id = @cid AND list_type = @lt
 ORDER BY sort_order;";
-                    cmd.Parameters.AddWithValue("@cid", _context.CharacterId);
+                    cmd.Parameters.AddWithValue("@cid", characterId);
                     cmd.Parameters.AddWithValue("@lt", (int)dbListType);
                     using (var reader = cmd.ExecuteReader())
                     {
@@ -407,36 +421,38 @@ ORDER BY sort_order;";
             }
         }
 
-        public CommonInventoryItem LoadCommonItemForRefresh(InventoryListType listType, short slotIndex)
+        public CommonInventoryItem LoadCommonItemForRefresh(int characterId, int accountId, InventoryListType listType, short slotIndex)
         {
             var dbListType = MapToDbListType(listType);
-            using (var connection = _context.OpenConnection())
+            using (var connection = OpenConnection())
             using (var transaction = connection.BeginTransaction())
             {
                 if (dbListType == InventoryListType.AccountCargo)
-                    return ApplySeriaLuckValueToCommonItem(connection, transaction,
-                        _db.LoadAccountCargoCommonItem(connection, transaction, _context.AccountId, slotIndex));
+                    return _db.LoadAccountCargoCommonItem(connection, transaction, accountId, slotIndex);
 
-                return ApplySeriaLuckValueToCommonItem(connection, transaction,
-                    _db.LoadCommonItem(connection, transaction, _context.CharacterId, dbListType, slotIndex));
+                return ApplySeriaLuckValueToCommonItem(
+                    connection,
+                    transaction,
+                    accountId,
+                    _db.LoadCommonItem(connection, transaction, characterId, dbListType, slotIndex));
             }
         }
 
-        public AvatarInventoryItem LoadAvatarItemForRefresh(short slotIndex)
+        public AvatarInventoryItem LoadAvatarItemForRefresh(int characterId, short slotIndex)
         {
-            using (var connection = _context.OpenConnection())
+            using (var connection = OpenConnection())
             using (var transaction = connection.BeginTransaction())
-                return _db.LoadAvatarItem(connection, transaction, _context.CharacterId, slotIndex);
+                return _db.LoadAvatarItem(connection, transaction, characterId, slotIndex);
         }
 
-        public PetInventoryItem LoadPetItemForRefresh(short slotIndex)
+        public PetInventoryItem LoadPetItemForRefresh(int characterId, short slotIndex)
         {
-            using (var connection = _context.OpenConnection())
+            using (var connection = OpenConnection())
             using (var transaction = connection.BeginTransaction())
-                return _db.LoadPetItem(connection, transaction, _context.CharacterId, slotIndex);
+                return _db.LoadPetItem(connection, transaction, characterId, slotIndex);
         }
 
-        private void UpsertSortItemLock(SqliteConnection connection, SqliteTransaction transaction, InventoryListType listType, short slotIndex, byte state)
+        private void UpsertSortItemLock(int characterId, SqliteConnection connection, SqliteTransaction transaction, InventoryListType listType, short slotIndex, byte state)
         {
             using (var cmd = connection.CreateCommand())
             {
@@ -446,7 +462,7 @@ INSERT INTO character_sort_item_locks (character_id, sort_order, list_type, slot
 VALUES (@cid, COALESCE((SELECT MAX(sort_order) + 1 FROM character_sort_item_locks WHERE character_id = @cid), 0), @lt, @slot, @state)
 ON CONFLICT(character_id, list_type, slot_index)
 DO UPDATE SET state = excluded.state;";
-                cmd.Parameters.AddWithValue("@cid", _context.CharacterId);
+                cmd.Parameters.AddWithValue("@cid", characterId);
                 cmd.Parameters.AddWithValue("@lt", (int)listType);
                 cmd.Parameters.AddWithValue("@slot", (int)slotIndex);
                 cmd.Parameters.AddWithValue("@state", (int)state);
@@ -454,7 +470,7 @@ DO UPDATE SET state = excluded.state;";
             }
         }
 
-        private void DeleteSortItemLock(SqliteConnection connection, SqliteTransaction transaction, InventoryListType listType, short slotIndex)
+        private void DeleteSortItemLock(int characterId, SqliteConnection connection, SqliteTransaction transaction, InventoryListType listType, short slotIndex)
         {
             using (var cmd = connection.CreateCommand())
             {
@@ -462,17 +478,17 @@ DO UPDATE SET state = excluded.state;";
                 cmd.CommandText = @"
 DELETE FROM character_sort_item_locks
 WHERE character_id = @cid AND list_type = @lt AND slot_index = @slot;";
-                cmd.Parameters.AddWithValue("@cid", _context.CharacterId);
+                cmd.Parameters.AddWithValue("@cid", characterId);
                 cmd.Parameters.AddWithValue("@lt", (int)listType);
                 cmd.Parameters.AddWithValue("@slot", (int)slotIndex);
                 cmd.ExecuteNonQuery();
             }
         }
 
-        private void MoveSortItemLock(SqliteConnection connection, SqliteTransaction transaction, InventoryListType fromListType, short fromSlotIndex, InventoryListType toListType, short toSlotIndex)
+        private void MoveSortItemLock(int characterId, SqliteConnection connection, SqliteTransaction transaction, InventoryListType fromListType, short fromSlotIndex, InventoryListType toListType, short toSlotIndex)
         {
-            if (LoadSortItemLock(connection, transaction, toListType, toSlotIndex).HasValue)
-                DeleteSortItemLock(connection, transaction, toListType, toSlotIndex);
+            if (LoadSortItemLock(characterId, connection, transaction, toListType, toSlotIndex).HasValue)
+                DeleteSortItemLock(characterId, connection, transaction, toListType, toSlotIndex);
 
             using (var cmd = connection.CreateCommand())
             {
@@ -481,7 +497,7 @@ WHERE character_id = @cid AND list_type = @lt AND slot_index = @slot;";
 UPDATE character_sort_item_locks
 SET list_type = @toLt, slot_index = @toSlot
 WHERE character_id = @cid AND list_type = @fromLt AND slot_index = @fromSlot;";
-                cmd.Parameters.AddWithValue("@cid", _context.CharacterId);
+                cmd.Parameters.AddWithValue("@cid", characterId);
                 cmd.Parameters.AddWithValue("@fromLt", (int)fromListType);
                 cmd.Parameters.AddWithValue("@fromSlot", (int)fromSlotIndex);
                 cmd.Parameters.AddWithValue("@toLt", (int)toListType);
@@ -490,20 +506,20 @@ WHERE character_id = @cid AND list_type = @fromLt AND slot_index = @fromSlot;";
             }
         }
 
-        private void SwapSortItemLocks(SqliteConnection connection, SqliteTransaction transaction, InventoryListType firstListType, short firstSlotIndex, InventoryListType secondListType, short secondSlotIndex)
+        private void SwapSortItemLocks(int characterId, SqliteConnection connection, SqliteTransaction transaction, InventoryListType firstListType, short firstSlotIndex, InventoryListType secondListType, short secondSlotIndex)
         {
-            var first = LoadSortItemLock(connection, transaction, firstListType, firstSlotIndex);
-            var second = LoadSortItemLock(connection, transaction, secondListType, secondSlotIndex);
-            DeleteSortItemLock(connection, transaction, firstListType, firstSlotIndex);
-            DeleteSortItemLock(connection, transaction, secondListType, secondSlotIndex);
+            var first = LoadSortItemLock(characterId, connection, transaction, firstListType, firstSlotIndex);
+            var second = LoadSortItemLock(characterId, connection, transaction, secondListType, secondSlotIndex);
+            DeleteSortItemLock(characterId, connection, transaction, firstListType, firstSlotIndex);
+            DeleteSortItemLock(characterId, connection, transaction, secondListType, secondSlotIndex);
 
             if (first.HasValue)
-                UpsertSortItemLock(connection, transaction, secondListType, secondSlotIndex, first.Value);
+                UpsertSortItemLock(characterId, connection, transaction, secondListType, secondSlotIndex, first.Value);
             if (second.HasValue)
-                UpsertSortItemLock(connection, transaction, firstListType, firstSlotIndex, second.Value);
+                UpsertSortItemLock(characterId, connection, transaction, firstListType, firstSlotIndex, second.Value);
         }
 
-        private byte? LoadSortItemLock(SqliteConnection connection, SqliteTransaction transaction, InventoryListType listType, short slotIndex)
+        private byte? LoadSortItemLock(int characterId, SqliteConnection connection, SqliteTransaction transaction, InventoryListType listType, short slotIndex)
         {
             using (var cmd = connection.CreateCommand())
             {
@@ -513,7 +529,7 @@ SELECT state
 FROM character_sort_item_locks
 WHERE character_id = @cid AND list_type = @lt AND slot_index = @slot
 LIMIT 1;";
-                cmd.Parameters.AddWithValue("@cid", _context.CharacterId);
+                cmd.Parameters.AddWithValue("@cid", characterId);
                 cmd.Parameters.AddWithValue("@lt", (int)listType);
                 cmd.Parameters.AddWithValue("@slot", (int)slotIndex);
                 var value = cmd.ExecuteScalar();
@@ -523,7 +539,7 @@ LIMIT 1;";
             }
         }
 
-        private HashSet<short> LoadSortItemLockSlots(SqliteConnection connection, SqliteTransaction transaction, InventoryListType listType, short start, short end)
+        private HashSet<short> LoadSortItemLockSlots(int characterId, SqliteConnection connection, SqliteTransaction transaction, InventoryListType listType, short start, short end)
         {
             var slots = new HashSet<short>();
             using (var cmd = connection.CreateCommand())
@@ -534,7 +550,7 @@ SELECT slot_index
 FROM character_sort_item_locks
 WHERE character_id = @cid AND list_type = @lt
   AND slot_index >= @start AND slot_index <= @end;";
-                cmd.Parameters.AddWithValue("@cid", _context.CharacterId);
+                cmd.Parameters.AddWithValue("@cid", characterId);
                 cmd.Parameters.AddWithValue("@lt", (int)listType);
                 cmd.Parameters.AddWithValue("@start", (int)start);
                 cmd.Parameters.AddWithValue("@end", (int)end);
@@ -567,6 +583,7 @@ WHERE character_id = @cid AND list_type = @lt
         }
 
         private ItemRecord ResolveDestinationStackTarget(
+            int characterId, int accountId,
             SqliteConnection connection,
             SqliteTransaction transaction,
             ItemRecord source,
@@ -588,7 +605,7 @@ WHERE character_id = @cid AND list_type = @lt
                 stackTarget = _db.FindAccountCargoStackableItemByTemplateIdAndExpireTime(
                     connection,
                     transaction,
-                    _context.AccountId,
+                    accountId,
                     source.ItemTemplateId,
                     source.ExpireTime,
                     stackLimit,
@@ -599,7 +616,7 @@ WHERE character_id = @cid AND list_type = @lt
                 stackTarget = _db.FindStackableItemByTemplateIdAndExpireTime(
                     connection,
                     transaction,
-                    _context.CharacterId,
+                    characterId,
                     dbDstList,
                     source.ItemTemplateId,
                     source.ExpireTime,
@@ -626,36 +643,36 @@ WHERE character_id = @cid AND list_type = @lt
                 _db.DeleteItem(connection, transaction, item.ItemUid);
         }
 
-        private void InsertSplitRecord(SqliteConnection connection, SqliteTransaction transaction, ItemRecord source, InventoryListType destinationListType, short destinationSlotIndex, int moveCount)
+        private void InsertSplitRecord(int characterId, int accountId, SqliteConnection connection, SqliteTransaction transaction, ItemRecord source, InventoryListType destinationListType, short destinationSlotIndex, int moveCount)
         {
             if (destinationListType == InventoryListType.AccountCargo)
             {
-                _db.InsertAccountCargoItemRecord(connection, transaction, _context.AccountId, source, destinationSlotIndex, moveCount);
+                _db.InsertAccountCargoItemRecord(connection, transaction, accountId, source, destinationSlotIndex, moveCount);
                 return;
             }
 
-            _db.InsertSplitItem(connection, transaction, _context.CharacterId, source, destinationListType, destinationSlotIndex, moveCount);
+            _db.InsertSplitItem(connection, transaction, characterId, source, destinationListType, destinationSlotIndex, moveCount);
         }
 
-        private void MoveRecordTo(SqliteConnection connection, SqliteTransaction transaction, ItemRecord item, InventoryListType destinationListType, short destinationSlotIndex)
+        private void MoveRecordTo(int characterId, int accountId, SqliteConnection connection, SqliteTransaction transaction, ItemRecord item, InventoryListType destinationListType, short destinationSlotIndex)
         {
             if (IsAccountCargoRecord(item))
             {
                 if (destinationListType == InventoryListType.AccountCargo)
                     _db.UpdateAccountCargoItemSlot(connection, transaction, item.ItemUid, destinationSlotIndex);
                 else
-                    _db.MoveItemFromAccountCargo(connection, transaction, _context.CharacterId, item, destinationListType, destinationSlotIndex);
+                    _db.MoveItemFromAccountCargo(connection, transaction, characterId, item, destinationListType, destinationSlotIndex);
                 return;
             }
 
             if (destinationListType == InventoryListType.AccountCargo)
             {
-                _db.MoveItemToAccountCargo(connection, transaction, _context.AccountId, item, destinationSlotIndex);
+                _db.MoveItemToAccountCargo(connection, transaction, accountId, item, destinationSlotIndex);
                 return;
             }
 
             _db.UpdateItemPosition(connection, transaction, item.ItemUid, destinationListType, destinationSlotIndex);
-            MoveSortItemLock(connection, transaction, item.ListType, item.SlotIndex, destinationListType, destinationSlotIndex);
+            MoveSortItemLock(characterId, connection, transaction, item.ListType, item.SlotIndex, destinationListType, destinationSlotIndex);
         }
 
         /// <summary>
@@ -706,6 +723,125 @@ WHERE character_id = @cid AND list_type = @lt
                 DestinationSlotIndex = request.DestinationSlotIndex,
                 Mutated = mutated,
             };
+        }
+
+        private static void AttachEquipmentMoveState(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            int characterId,
+            InventoryMoveResult result,
+            short equipmentSlot,
+            EquipOutcome outcome,
+            ItemRecord equippedSource)
+        {
+            result.AffectedEquipmentSlot = equipmentSlot;
+
+            var mutation = BuildSubtype0TailMutation(
+                connection,
+                transaction,
+                characterId,
+                equipmentSlot,
+                outcome,
+                equippedSource);
+            if (mutation != null)
+                result.Subtype0TailMutation = mutation;
+        }
+
+        private static Subtype0TailMoveMutation BuildSubtype0TailMutation(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            int characterId,
+            short equipmentSlot,
+            EquipOutcome outcome,
+            ItemRecord equippedSource)
+        {
+            bool equipped = outcome == EquipOutcome.Equipped && equippedSource != null;
+
+            if (equipmentSlot == 11)
+            {
+                return new Subtype0TailMoveMutation
+                {
+                    ForgingChanged = true,
+                    Forging = equipped ? ResolveForging(equippedSource) : (byte)0,
+                };
+            }
+
+            if (equipmentSlot == 24)
+            {
+                if (!equipped || equippedSource.PetSerialOrHandle <= 0)
+                {
+                    return new Subtype0TailMoveMutation
+                    {
+                        EquippedCreatureChanged = true,
+                        EquippedCreatureNameBytes = Array.Empty<byte>(),
+                    };
+                }
+
+                return new Subtype0TailMoveMutation
+                {
+                    EquippedCreatureChanged = true,
+                    EquippedCreatureItemId = (uint)equippedSource.ItemTemplateId,
+                    EquippedCreatureNameBytes = LoadCreatureNameBytes(connection, transaction, characterId, equippedSource.PetSerialOrHandle),
+                    EquippedCreatureAliveState = 1,
+                };
+            }
+
+            if (equipmentSlot == 28)
+            {
+                return new Subtype0TailMoveMutation
+                {
+                    NameTagChanged = true,
+                    NameTagItemId = equipped ? (uint)equippedSource.ItemTemplateId : 0u,
+                    NameTagExpireTime = equipped && equippedSource.ExpireTime > 0 ? (uint)equippedSource.ExpireTime : 0u,
+                };
+            }
+
+            return null;
+        }
+
+        private static byte ResolveForging(ItemRecord item)
+        {
+            if (item == null)
+                return 0;
+
+            try
+            {
+                var tail = InventoryItemCodec.ReadHexValue(item.ExtraJson, "tailData2F", 37);
+                return tail.Length > 27 ? tail[27] : (byte)0;
+            }
+            catch
+            {
+                return 0;
+            }
+        }
+
+        private static byte[] LoadCreatureNameBytes(SqliteConnection connection, SqliteTransaction transaction, int characterId, int creatureKey)
+        {
+            if (creatureKey <= 0)
+                return Array.Empty<byte>();
+
+            try
+            {
+                using (var command = connection.CreateCommand())
+                {
+                    command.Transaction = transaction;
+                    command.CommandText = @"
+SELECT creature_text
+FROM character_creatures
+WHERE character_id = @characterId
+  AND creature_key = @creatureKey
+LIMIT 1;";
+                    command.Parameters.AddWithValue("@characterId", characterId);
+                    command.Parameters.AddWithValue("@creatureKey", creatureKey);
+
+                    var value = command.ExecuteScalar();
+                    return value is byte[] bytes ? bytes : Array.Empty<byte>();
+                }
+            }
+            catch
+            {
+                return Array.Empty<byte>();
+            }
         }
 
         private static bool IsSupportedMoveListType(InventoryListType listType)

@@ -1,4 +1,5 @@
 using System;
+using DfoServer.Game.CharacterData;
 using DfoServer.Game.Settings;
 using DfoServer.Infrastructure;
 
@@ -7,10 +8,12 @@ namespace DfoServer.Network.Handlers
     public sealed class SettingsHandler
     {
         private readonly AccountSettingsRepository _repo;
+        private readonly ICharacterStateRepository _characterStateRepository;
 
         public SettingsHandler()
         {
             _repo = new AccountSettingsRepository(ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
+            _characterStateRepository = new SqliteCharacterStateRepository(ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
         }
 
         public void Handle_SAVE_GAME_OPTION_1(EnhancedClientSession session, GamePacketHeader header, byte[] body)
@@ -22,9 +25,9 @@ namespace DfoServer.Network.Handlers
             var blob = new byte[len];
             Buffer.BlockCopy(body, 4, blob, 0, len);
 
-            int aid = session.Account?.AccountId ?? 1;
-            _repo.SaveMainOption(aid, blob);
-            FileLogger.Log($"[GameProtocol] SAVE_GAME_OPTION_1: account={aid} len={len}");
+            var accountId = session.Account?.AccountId ?? 1;
+            _repo.SaveMainOption(accountId, blob);
+            FileLogger.Log($"[GameProtocol] SAVE_GAME_OPTION_1: account={accountId} len={len}");
         }
 
         public void Handle_SAVE_GAME_OPTION_2(EnhancedClientSession session, GamePacketHeader header, byte[] body)
@@ -36,9 +39,17 @@ namespace DfoServer.Network.Handlers
             var blob = new byte[len];
             Buffer.BlockCopy(body, 4, blob, 0, len);
 
-            int aid = session.Account?.AccountId ?? 1;
-            _repo.SaveHotkeySlots(aid, blob);
-            FileLogger.Log($"[GameProtocol] SAVE_GAME_OPTION_2: account={aid} len={len}");
+            var (characterId, accountId) = SessionOwnerResolver.Resolve(session);
+            if (characterId > 0)
+            {
+                _characterStateRepository.SaveHotkeyConfig(characterId, blob);
+                _repo.SaveHotkeySlots(accountId, AccountSettings.ExtractAccountScopedHotkeySlots(blob));
+                FileLogger.Log($"[GameProtocol] SAVE_GAME_OPTION_2: character={characterId} account={accountId} len={len}");
+                return;
+            }
+
+            _repo.SaveHotkeySlots(accountId, AccountSettings.ExtractAccountScopedHotkeySlots(blob));
+            FileLogger.Log($"[GameProtocol] SAVE_GAME_OPTION_2: account={accountId} len={len}");
         }
 
         public void Handle_SAVE_QUICKCHAT(EnhancedClientSession session, GamePacketHeader header, byte[] body)

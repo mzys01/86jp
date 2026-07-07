@@ -229,8 +229,12 @@ namespace DfoServer.Game.Inventory
             }
 
             var updatedGold = wallet.Gold - context.Cost.Gold;
-            if (context.Cost.Gold > 0)
-                _db.UpdateWallet(connection, transaction, characterId, updatedGold, wallet.Coin);
+            if (context.Cost.Gold > 0 && !CurrencyService.TrySpendGold(connection, transaction, characterId, context.Cost.Gold))
+            {
+                LogUpgradeReject($"扣除金币失败 需要金币={context.Cost.Gold}", ItemUpgradeResult.ErrorInsufficientGold, command, context, row, material);
+                result = ItemUpgradeResult.Error(command, ItemUpgradeResult.ErrorInsufficientGold);
+                return false;
+            }
 
             CommonInventoryItem targetUpdate;
             if (destroyed)

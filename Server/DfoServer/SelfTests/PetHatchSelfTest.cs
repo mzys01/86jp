@@ -37,17 +37,14 @@ namespace DfoServer.SelfTests
             var store = new SqliteInventoryStore(dbPath, ServerPaths.SchemaFilePath);
             SeedPetEgg(dbPath);
 
-            using (store.BeginScope(CharacterId, AccountId))
-            {
-                Check("hatching pet egg succeeds",
-                    store.TryHatchCreatureEgg(InventoryListType.Pet, EggSlot, BoboEggItemId, out var result)
-                    && result != null
-                    && result.SlotIndex == EggSlot
-                    && result.EggItemTemplateId == BoboEggItemId
-                    && result.HatchedItemTemplateId == BoboPetItemId
-                    && result.PetSerialOrHandle == PetSerial,
-                    ref failures);
-            }
+            Check("hatching pet egg succeeds",
+                store.TryHatchCreatureEgg(CharacterId, InventoryListType.Pet, EggSlot, BoboEggItemId, out var result)
+                && result != null
+                && result.SlotIndex == EggSlot
+                && result.EggItemTemplateId == BoboEggItemId
+                && result.HatchedItemTemplateId == BoboPetItemId
+                && result.PetSerialOrHandle == PetSerial,
+                ref failures);
 
             using (var connection = new SqliteConnection(SqliteDatabaseBootstrap.BuildConnectionString(dbPath)))
             {
@@ -61,9 +58,8 @@ namespace DfoServer.SelfTests
                 Check("hatched pet creature-list row starts at level 1", creatureRow.FieldAfterValue == 1, ref failures);
             }
 
-            using (store.BeginScope(CharacterId, AccountId))
             {
-                var snapshot = store.LoadCharacterItemListSnapshot();
+                var snapshot = store.LoadCharacterItemListSnapshot(CharacterId, AccountId);
                 var petItem = snapshot.PetItems.FirstOrDefault(x => x.SlotIndex == EggSlot);
                 Check("pet item-list update serializes hatched pet",
                     petItem != null

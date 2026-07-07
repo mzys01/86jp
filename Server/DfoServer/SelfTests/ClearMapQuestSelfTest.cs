@@ -23,7 +23,20 @@ namespace DfoServer.SelfTests
             if (File.Exists(dbPath))
                 File.Delete(dbPath);
 
-            var connStr = SqliteDatabaseBootstrap.BuildConnectionString(dbPath);
+            // character_active_quests 已收编进 schema(不再懒建表): 必须走 Initialize 建库并满足 FK
+            var connStr = SqliteDatabaseBootstrap.Initialize(dbPath, ServerPaths.SchemaFilePath);
+            using (var conn = new Microsoft.Data.Sqlite.SqliteConnection(connStr))
+            {
+                conn.Open();
+                using (var cmd = conn.CreateCommand())
+                {
+                    cmd.CommandText = @"
+INSERT OR IGNORE INTO accounts (account_id, m_id, password_hash) VALUES (189001, 'clear-map-quest-selftest', '');
+INSERT OR IGNORE INTO characters (character_id, account_id, name) VALUES (189001, 189001, 'clear-map-quest-selftest');";
+                    cmd.ExecuteNonQuery();
+                }
+            }
+
             QuestService.SaveActiveQuests(connStr, CharacterId, new List<ActiveQuest>
             {
                 new ActiveQuest { Slot = 0, QuestId = DungeonQuestId, TriggerValue = 1 },
