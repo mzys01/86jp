@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Text.RegularExpressions;
+using PvfLib;
 
 namespace DfoServer.Game.Dungeon
 {
@@ -19,6 +20,9 @@ namespace DfoServer.Game.Dungeon
         private static float[,] _monsterTypeBonuses;
         private static Dictionary<long, List<(int Id, int Weight)>> _equipPool;
         private static Dictionary<long, List<int>> _stackablePool;
+        private static Dictionary<long, List<int>> _monsterCardPoolByGradeRarity;
+        private static Dictionary<int, List<int>> _monsterCardPoolByRarity;
+        private static List<int> _monsterCardPool;
 
         private static readonly object _lock = new object();
         private static bool _loaded;
@@ -34,6 +38,7 @@ namespace DfoServer.Game.Dungeon
                     LoadDropInfo();
                     LoadEquipmentPool();
                     LoadStackablePool();
+                    LoadMonsterCardPool();
                 }
                 catch (Exception ex)
                 {
@@ -112,6 +117,34 @@ namespace DfoServer.Game.Dungeon
 
             if (candidates.Count == 0) return -1;
             return candidates[lcg.Next(candidates.Count)];
+        }
+
+        public static int ChooseMonsterCard(DnfLcg lcg, int monsterLevel, int rarity)
+        {
+            EnsureLoaded();
+            if (_monsterCardPool == null || _monsterCardPool.Count == 0) return -1;
+
+            if (_gradeRanges != null
+                && _monsterCardPoolByGradeRarity != null
+                && monsterLevel >= 1
+                && monsterLevel <= _gradeRanges.Length)
+            {
+                var range = _gradeRanges[monsterLevel - 1];
+                var levelCandidates = CollectFromPool(_monsterCardPoolByGradeRarity, monsterLevel, range, rarity);
+
+                if (levelCandidates.Count == 0 && rarity > 0)
+                    levelCandidates = CollectFromPool(_monsterCardPoolByGradeRarity, monsterLevel, range, 0);
+
+                if (levelCandidates.Count > 0)
+                    return levelCandidates[lcg.Next(levelCandidates.Count)];
+            }
+
+            if (_monsterCardPoolByRarity != null
+                && _monsterCardPoolByRarity.TryGetValue(rarity, out var candidates)
+                && candidates.Count > 0)
+                return candidates[lcg.Next(candidates.Count)];
+
+            return _monsterCardPool[lcg.Next(_monsterCardPool.Count)];
         }
 
         private static List<int> CollectFromPool(Dictionary<long, List<int>> pool,
@@ -390,7 +423,7 @@ namespace DfoServer.Game.Dungeon
             foreach (Match entry in entries)
             {
                 if (!int.TryParse(entry.Groups[1].Value, out var itemId)) continue;
-                var path = entry.Groups[2].Value;
+                var path = entry.Groups[2].Value.Replace('\\', '/');
 
                 if (itemId <= 2) { skipped++; continue; }
                 if (path.StartsWith("cash/", StringComparison.OrdinalIgnoreCase) ||
@@ -398,7 +431,8 @@ namespace DfoServer.Game.Dungeon
                     path.StartsWith("recipe/", StringComparison.OrdinalIgnoreCase) ||
                     path.StartsWith("temp/", StringComparison.OrdinalIgnoreCase) ||
                     path.StartsWith("event/", StringComparison.OrdinalIgnoreCase) ||
-                    path.StartsWith("emblem/", StringComparison.OrdinalIgnoreCase))
+                    path.StartsWith("emblem/", StringComparison.OrdinalIgnoreCase) ||
+                    path.StartsWith("monsterCard/", StringComparison.OrdinalIgnoreCase))
                 { skipped++; continue; }
 
                 string stkText;
@@ -428,6 +462,74 @@ namespace DfoServer.Game.Dungeon
             }
 
             FileLogger.Log($"[MonsterDropConfig] Stackable pool: {added} items, {skipped} skipped, {errors} errors, {_stackablePool.Count} buckets");
+        }
+
+        private static void LoadMonsterCardPool()
+        {
+            _monsterCardPool = new List<int>();
+            _monsterCardPoolByGradeRarity = new Dictionary<long, List<int>>();
+            _monsterCardPoolByRarity = new Dictionary<int, List<int>>();
+
+            string lstText;
+            try { lstText = GameWorld.PvfArchiveAccessor.ReadText("stackable/stackable.lst"); }
+            catch
+            {
+                FileLogger.Log("[MonsterDropConfig] stackable.lst not found for monster card pool");
+                return;
+            }
+
+            var entries = Regex.Matches(lstText, @"(\d+)\s+`([^`]+)`");
+            int added = 0, skipped = 0, errors = 0;
+
+            foreach (Match entry in entries)
+            {
+                if (!int.TryParse(entry.Groups[1].Value, out var itemId)) continue;
+
+                var path = entry.Groups[2].Value.Replace('\\', '/');
+                if (itemId <= 2 || !path.StartsWith("monsterCard/", StringComparison.OrdinalIgnoreCase))
+                {
+                    skipped++;
+                    continue;
+                }
+
+                string stkText;
+                try { stkText = GameWorld.PvfArchiveAccessor.ReadText("stackable/" + path); }
+                catch { errors++; continue; }
+
+                StackableItemFile stk;
+                try { stk = StackableItemFile.Parse(stkText); }
+                catch { errors++; continue; }
+
+                if (stk.EnchantTable == null || stk.EnchantTable.Count == 0)
+                {
+                    skipped++;
+                    continue;
+                }
+
+                int rarity = Math.Max(0, stk.Rarity);
+                _monsterCardPool.Add(itemId);
+
+                if (stk.Grade > 0)
+                {
+                    long gradeKey = (long)stk.Grade * 10 + rarity;
+                    if (!_monsterCardPoolByGradeRarity.TryGetValue(gradeKey, out var gradePool))
+                    {
+                        gradePool = new List<int>();
+                        _monsterCardPoolByGradeRarity[gradeKey] = gradePool;
+                    }
+                    gradePool.Add(itemId);
+                }
+
+                if (!_monsterCardPoolByRarity.TryGetValue(rarity, out var rarityPool))
+                {
+                    rarityPool = new List<int>();
+                    _monsterCardPoolByRarity[rarity] = rarityPool;
+                }
+                rarityPool.Add(itemId);
+                added++;
+            }
+
+            FileLogger.Log($"[MonsterDropConfig] Monster card pool: {added} items, {skipped} skipped, {errors} errors, {_monsterCardPoolByRarity.Count} rarity buckets");
         }
     }
 }
