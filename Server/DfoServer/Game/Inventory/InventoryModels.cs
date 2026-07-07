@@ -136,6 +136,8 @@ namespace DfoServer.Game.Inventory
         public int PetSatietyAfter { get; set; }
 
         public bool PetSatietyChanged { get; set; }
+
+        public bool NameTagEquipped { get; set; }
     }
 
     public enum PersonalCargoUpgradeTicketStatus

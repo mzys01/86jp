@@ -605,6 +605,9 @@ namespace DfoServer.Game.Inventory
             var isCreature = isPetEquipment && SqliteInventoryStore.IsCreatureItem(itemTemplateId);
             var isPetArtifactEquipment = isPetEquipment && !isCreature;
             var isPetConsumable = !isAvatar && ItemMetadataResolver.IsPetConsumableItem(metadata);
+            var isNameTag = !isAvatar && !isPetEquipment && !isPetConsumable
+                && string.Equals(itemKind, "equipment", StringComparison.Ordinal)
+                && ItemMetadataResolver.IsNameTagItem(itemTemplateId);
             var stackListType = isPetConsumable ? InventoryListType.Pet : InventoryListType.Main;
             var avatarDurationDays = 0;
             // 发货数量 = 份数 × 每份数量(cerashop count); 价格 = 每份价 × 份数 (avatar 恒为 1)
@@ -935,6 +938,38 @@ namespace DfoServer.Game.Inventory
                 return false;
             }
 
+            if (isNameTag)
+            {
+                var durationDays = product.DurationDays > 0 ? product.DurationDays : Math.Max(1, product.Count);
+                var unixNow = (long)(DateTime.UtcNow - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalSeconds;
+                var nameTagExpireTime = (int)Math.Min(int.MaxValue, unixNow + (long)durationDays * 86400L);
+                if (!TryApplyCeraShopPayment(connection, transaction, characterId, plan))
+                    return false;
+                DeductCouponIfNeeded(connection, transaction, couponItemUid, couponNewStackCount);
+                _auditLogger.WriteBuyAuditLog(connection, transaction, characterId, itemTemplateId, 28, totalGoldCost, totalCeraCost);
+                UpsertNameTagEquippedEntry(connection, transaction, characterId, itemTemplateId, nameTagExpireTime);
+                UpdateNameTagSubtype1Fields(connection, transaction, characterId, (uint)itemTemplateId, (uint)nameTagExpireTime);
+                result = new InventoryMutationResult
+                {
+                    ListType = InventoryListType.Main,
+                    SlotIndex = 0,
+                    ItemTemplateId = itemTemplateId,
+                    RemainingStackCount = 0,
+                    UpdatedGold = plan.NewGold,
+                    UpdatedSp = wallet.Sp,
+                    UpdatedCoin = plan.NewCera,
+                    UpdatedTokenCera = plan.NewTokenCera,
+                    UpdatedHappyTokenCera = plan.NewHappyTokenCera,
+                    GoldSpent = goldSpent,
+                    RequestedCount = 1,
+                    AppliedCount = 1,
+                    ConsumedOnPurchase = true,
+                    NameTagEquipped = true,
+                };
+                FileLogger.Log($"  [CeraShopBuy] name tag equipped: item=0x{itemTemplateId:X8} expire={nameTagExpireTime} duration={durationDays}d");
+                return true;
+            }
+
             int slotStart;
             int slotEnd;
             var insertListType = InventoryListType.Main;
@@ -1109,6 +1144,56 @@ namespace DfoServer.Game.Inventory
                 slotIndex = materialItem.SlotIndex;
             }
             return true;
+        }
+
+        private static void UpsertNameTagEquippedEntry(SqliteConnection connection, SqliteTransaction transaction, int characterId, int itemTemplateId, int expireTime)
+        {
+            const int nameTagSlot = 28;
+            using (var cmd = connection.CreateCommand())
+            {
+                cmd.Transaction = transaction;
+                cmd.CommandText = @"
+DELETE FROM character_equipped_entries
+WHERE character_id = @cid AND slot = @slot;";
+                cmd.Parameters.AddWithValue("@cid", characterId);
+                cmd.Parameters.AddWithValue("@slot", nameTagSlot);
+                cmd.ExecuteNonQuery();
+            }
+
+            var instanceValue = unchecked((uint)InventoryDbPrimitives.GenerateInstanceValue(itemTemplateId, nameTagSlot));
+            var fields = new MakeEquipListCodec.DisplayFields { InstanceValue = instanceValue };
+            var raw = MakeEquipListCodec.BuildEntryFromDisplayFields(nameTagSlot, itemTemplateId, fields);
+
+            using (var cmd = connection.CreateCommand())
+            {
+                cmd.Transaction = transaction;
+                cmd.CommandText = @"
+INSERT INTO character_equipped_entries(character_id, slot, item_id, raw_entry, expire_time)
+VALUES(@cid, @slot, @itemId, @raw, @expire);";
+                cmd.Parameters.AddWithValue("@cid", characterId);
+                cmd.Parameters.AddWithValue("@slot", nameTagSlot);
+                cmd.Parameters.AddWithValue("@itemId", itemTemplateId);
+                cmd.Parameters.AddWithValue("@raw", raw);
+                cmd.Parameters.AddWithValue("@expire", expireTime);
+                cmd.ExecuteNonQuery();
+            }
+            FileLogger.Log($"  [NameTag] equipped slot={nameTagSlot} item=0x{itemTemplateId:X8} expire={expireTime}");
+        }
+
+        private static void UpdateNameTagSubtype1Fields(SqliteConnection connection, SqliteTransaction transaction, int characterId, uint itemId, uint expireTime)
+        {
+            using (var cmd = connection.CreateCommand())
+            {
+                cmd.Transaction = transaction;
+                cmd.CommandText = @"
+UPDATE character_subtype1_fields
+SET name_tag_item_id = @itemId, name_tag_expire_time = @expire
+WHERE character_id = @cid;";
+                cmd.Parameters.AddWithValue("@cid", characterId);
+                cmd.Parameters.AddWithValue("@itemId", (long)itemId);
+                cmd.Parameters.AddWithValue("@expire", (long)expireTime);
+                cmd.ExecuteNonQuery();
+            }
         }
     }
 }

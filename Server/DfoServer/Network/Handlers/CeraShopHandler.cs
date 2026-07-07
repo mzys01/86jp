@@ -14,13 +14,15 @@ namespace DfoServer.Network.Handlers
         // 购买/刷新走共享 store; 门面仅保留 premium 刷新用的全量选角快照 Load
         private readonly Game.Inventory.IInventoryStore _inventoryStore;
         private readonly SqliteSelectCharacterDataSource _sqliteSelectCharacterDataSource;
+        private readonly InventoryRefreshSender _refresh;
 
         public string ProtocolName => "GameProtocol";
 
-        public CeraShopHandler(Game.Inventory.IInventoryStore inventoryStore, SqliteSelectCharacterDataSource sqliteSelectCharacterDataSource)
+        public CeraShopHandler(Game.Inventory.IInventoryStore inventoryStore, SqliteSelectCharacterDataSource sqliteSelectCharacterDataSource, InventoryRefreshSender refresh)
         {
             _inventoryStore = inventoryStore ?? throw new ArgumentNullException(nameof(inventoryStore));
             _sqliteSelectCharacterDataSource = sqliteSelectCharacterDataSource ?? throw new ArgumentNullException(nameof(sqliteSelectCharacterDataSource));
+            _refresh = refresh;
         }
 
         public async Task HandleCeraShopPurchase(EnhancedClientSession session, GamePacketHeader header, byte[] body)
@@ -185,6 +187,13 @@ namespace DfoServer.Network.Handlers
                     await SendPetItemListUpdate(session, cid, aid, petSlots);
                     FileLogger.Log($"[{ProtocolName}] CERA_SHOP_BUY: pet ITEM_LIST update sent count={petSlots.Count}");
                 }
+            }
+
+            if (_refresh != null && results.Exists(r => r.NameTagEquipped))
+            {
+                _refresh.ReloadSubtype0Tail(session);
+                await _refresh.SendNoti2AppearanceUpdate(session);
+                FileLogger.Log($"[{ProtocolName}] CERA_SHOP_BUY: name tag appearance refresh sent");
             }
 
             foreach (var pn in premiumNotifications)

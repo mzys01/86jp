@@ -20,6 +20,8 @@ namespace DfoServer.Game.Shop
         public int CoinPrice { get; set; }
 
         public string Section { get; set; }
+
+        public int DurationDays { get; set; }
     }
 
     public static class CeraShopProductCatalog
@@ -122,6 +124,10 @@ namespace DfoServer.Game.Shop
                 if (stride == 9 && (!TryParseInt(tokens[i + 3], out goldPrice) || goldPrice < 0))
                     goldPrice = 0;
 
+                var durationDays = 0;
+                if (string.Equals(section, "visual", StringComparison.OrdinalIgnoreCase))
+                    TryParseInt(tokens[i + 3], out durationDays);
+
                 entries[productId] = new CeraShopProductEntry
                 {
                     ProductId = productId,
@@ -130,6 +136,7 @@ namespace DfoServer.Game.Shop
                     GoldPrice = goldPrice,
                     CoinPrice = coinPrice,
                     Section = section,
+                    DurationDays = Math.Max(0, durationDays),
                 };
             }
         }

@@ -185,7 +185,8 @@ ORDER BY slot;";
                     while (reader.Read())
                     {
                         var itemId = reader.GetInt32(1);
-                        if (!RentalWeaponInventoryMapper.IsValidInventoryTemplate(itemId))
+                        if (!RentalWeaponInventoryMapper.IsValidInventoryTemplate(itemId)
+                            && !ItemMetadataResolver.IsNameTagItem(itemId))
                             continue;
 
                         expiredEquippedItems.Add((
@@ -196,14 +197,58 @@ ORDER BY slot;";
                 }
             }
 
+            var nameTagCleared = false;
             foreach (var item in expiredEquippedItems)
             {
                 DeleteEquippedEntry(connection, transaction, characterId, item.slot);
                 removed++;
-                FileLogger.Log($"[RentalExpire] DELETE equipped char={characterId} slot={item.slot} item=0x{item.itemId:X8} expire={item.expireTime}");
+                if (item.slot == 28 && ItemMetadataResolver.IsNameTagItem(item.itemId))
+                    nameTagCleared = true;
+                FileLogger.Log($"[ExpiredEquipCleanup] DELETE equipped char={characterId} slot={item.slot} item=0x{item.itemId:X8} expire={item.expireTime}");
             }
 
+            if (nameTagCleared)
+                ClearNameTagSubtype1Fields(connection, transaction, characterId);
+
             return removed;
+        }
+
+        private static void ClearNameTagSubtype1Fields(SqliteConnection connection, SqliteTransaction transaction, int characterId)
+        {
+            using (var cmd = connection.CreateCommand())
+            {
+                cmd.Transaction = transaction;
+                cmd.CommandText = @"
+UPDATE character_subtype1_fields
+SET name_tag_item_id = 0, name_tag_expire_time = 0
+WHERE character_id = @cid;";
+                cmd.Parameters.AddWithValue("@cid", characterId);
+                cmd.ExecuteNonQuery();
+            }
+            FileLogger.Log($"[ExpiredEquipCleanup] cleared name_tag subtype1 fields char={characterId}");
+        }
+
+        internal void UpsertNameTagEquippedEntry(SqliteConnection connection, SqliteTransaction transaction, int characterId, int itemTemplateId, int expireTime)
+        {
+            const int nameTagSlot = 28;
+            var entries = LoadEquipEntriesTx(connection, transaction, characterId);
+            entries.RemoveAll(e => e.Slot == nameTagSlot);
+            var fields = new MakeEquipListCodec.DisplayFields
+            {
+                InstanceValue = unchecked((uint)InventoryDbPrimitives.GenerateInstanceValue(itemTemplateId, nameTagSlot)),
+            };
+            var raw = MakeEquipListCodec.BuildEntryFromDisplayFields(nameTagSlot, itemTemplateId, fields);
+            var entry = new MakeEquipListCodec.Entry
+            {
+                Slot = nameTagSlot,
+                ItemId = itemTemplateId,
+                Raw = raw,
+                ExpireTime = expireTime,
+            };
+            var insertAt = entries.FindIndex(e => e.Slot > nameTagSlot);
+            if (insertAt < 0) entries.Add(entry); else entries.Insert(insertAt, entry);
+            SaveEquipEntriesTx(connection, transaction, characterId, entries);
+            FileLogger.Log($"  [NameTag] equipped slot={nameTagSlot} item=0x{itemTemplateId:X8} expire={expireTime}");
         }
 
         // ── equip / unequip (called from SqliteInventoryStore.TryMoveItem) ──

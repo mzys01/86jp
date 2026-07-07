@@ -582,6 +582,14 @@ namespace DfoServer.Game.Inventory
             return string.Equals(equipment.ItemCategory, "clear avatar", StringComparison.OrdinalIgnoreCase);
         }
 
+        public static bool IsNameTagItem(int itemTemplateId)
+        {
+            var meta = Resolve(itemTemplateId);
+            return meta != null
+                && string.Equals(meta.ItemKind, "equipment", StringComparison.Ordinal)
+                && string.Equals(meta.EquipmentType, "[name tag]", StringComparison.OrdinalIgnoreCase);
+        }
+
         public static bool IsPetInventoryEquipment(int itemTemplateId)
         {
             return CreatureExtraResolver.IsPetInventoryEquipment(itemTemplateId);
