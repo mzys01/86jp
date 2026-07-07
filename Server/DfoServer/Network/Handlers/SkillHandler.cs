@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using DfoServer.Game.Characters;
+using DfoServer.Game.Inventory;
 using DfoServer.Game.SelectCharacter;
 using DfoServer.Network.Builders;
 
@@ -10,10 +11,14 @@ namespace DfoServer.Network.Handlers
     public class SkillHandler
     {
         private readonly ICharacterRepository _characterRepository;
+        private readonly IInventoryStore _inventoryStore;
+        private readonly InventoryRefreshSender _refresh;
 
-        public SkillHandler(ICharacterRepository characterRepository)
+        public SkillHandler(ICharacterRepository characterRepository, IInventoryStore inventoryStore, InventoryRefreshSender refresh)
         {
             _characterRepository = characterRepository;
+            _inventoryStore = inventoryStore;
+            _refresh = refresh;
         }
 
         public async Task Handle_CHANGE_SKILL_COMMAND(EnhancedClientSession session, GamePacketHeader header, byte[] body)
@@ -153,10 +158,15 @@ namespace DfoServer.Network.Handlers
                     var charRepo = new Game.Characters.SqliteCharacterRepository(
                         Infrastructure.ServerPaths.DatabasePath, Infrastructure.ServerPaths.SchemaFilePath);
                     var rec = charRepo.GetById(cid);
-                    var result = Game.Skills.BuySkillService.Execute(repo, cid, job, skillTree, entries,
+                    var result = Game.Skills.BuySkillService.ExecuteWithRefundConsumable(_inventoryStore, repo, cid, session.Account?.AccountId ?? 1, job, skillTree, entries,
                         rec?.BonusSp ?? 0, rec?.Level ?? (byte)1, rec?.BonusTp ?? 0);
                     var ack = BuySkillAckBuilder.Build(result);
                     await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x001D, ack));
+                    if (result != null && result.Success && result.ConsumedForgetRiverWater && result.ConsumedForgetRiverWaterItem != null)
+                    {
+                        await _refresh.SendUpdateItemList(session, result.ConsumedForgetRiverWaterItem.ListType, result.ConsumedForgetRiverWaterItem.SlotIndex);
+                        FileLogger.Log($"[SkillHandler] BUY_SKILL refund consumed forget-river water slot={result.ConsumedForgetRiverWaterSlot} remaining={result.ConsumedForgetRiverWaterItem.RemainingStackCount}");
+                    }
                 }
                 catch (Exception ex) { FileLogger.Log($"[SkillHandler] BUY_SKILL failed: {ex}"); }
             }
@@ -165,23 +175,10 @@ namespace DfoServer.Network.Handlers
         public async Task Handle_SKILL_INIT(EnhancedClientSession session, GamePacketHeader header, byte[] body)
         {
             int cid = session.Player != null ? session.Player.CharacterId : 0;
-            byte level = session.Player != null ? session.Player.Level : (byte)1;
             if (cid <= 0) return;
 
             try
             {
-                var repo = new Game.CharacterData.SqliteCharacterProgressRepository(
-                    Infrastructure.ServerPaths.DatabasePath, Infrastructure.ServerPaths.SchemaFilePath);
-                var charRepo = new Game.Characters.SqliteCharacterRepository(
-                    Infrastructure.ServerPaths.DatabasePath, Infrastructure.ServerPaths.SchemaFilePath);
-                var rec = charRepo.GetById(cid);
-                var reset = Game.Skills.SkillStateService.ResetToInitial(
-                    repo,
-                    cid,
-                    rec?.Job ?? (byte)(session.Player != null ? session.Player.Job : 0),
-                    rec?.Level ?? level,
-                    rec?.BonusSp ?? 0,
-                    rec?.BonusTp ?? 0);
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, header.type, new byte[] { 0x01, 0x00 }));
 
                 var dataSource = new SqliteSelectCharacterDataSource(
@@ -191,7 +188,8 @@ namespace DfoServer.Network.Handlers
                 var skillBody = new SkillInfoBodyBuilder();
                 if (skillBody.TryBuild(snapshot, 0, out var skillBytes))
                     await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0013, skillBytes));
-                FileLogger.Log($"[SkillHandler] SKILL_INIT reset char={cid} remainSP={reset.Points.RemainingSp}");
+
+                FileLogger.Log($"[SkillHandler] SKILL_INIT refresh char={cid}");
             }
             catch (Exception ex) { FileLogger.Log($"[SkillHandler] SKILL_INIT failed: {ex}"); }
         }

@@ -102,6 +102,21 @@ namespace DfoServer.Game.CharacterData
             }
         }
 
+        public void SaveSkillProgress(
+            SqliteConnection conn,
+            SqliteTransaction tx,
+            int characterId,
+            SkillInfoSnapshot snapshot,
+            Skills.SkillPointState state)
+        {
+            if (snapshot == null || state == null) return;
+            if (conn == null) throw new ArgumentNullException(nameof(conn));
+            if (tx == null) throw new ArgumentNullException(nameof(tx));
+
+            SaveSkillsCore(conn, tx, characterId, snapshot);
+            SaveSkillPointStateCore(conn, tx, characterId, state);
+        }
+
         private static void SaveSkillsCore(
             SqliteConnection conn,
             SqliteTransaction tx,

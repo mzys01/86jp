@@ -1,5 +1,4 @@
 using DfoServer.Game.Inventory;
-using DfoServer.Game.SelectCharacter;
 using DfoServer.Network.Builders;
 using DfoServer.Network.Parsers.Inventory;
 using System;

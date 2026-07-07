@@ -82,9 +82,9 @@ namespace DfoServer.Network
                 sqliteSelectCharacterDataSource,
                 rentalTimeProvider);
             _staminaHandler = new StaminaHandler(_assetService);
-            _skillHandler = new SkillHandler(characterRepository);
             _settingsHandler = new SettingsHandler();
             _ceraShopHandler = new CeraShopHandler(inventoryStore, sqliteSelectCharacterDataSource, _inventoryRefreshSender);
+            _skillHandler = new SkillHandler(characterRepository, inventoryStore, _inventoryRefreshSender);
             _luckyStarHandler = new LuckyStarHandler(_assetService, sqliteSelectCharacterDataSource, rentalTimeProvider);
             _rentalHandler = new RentalHandler(_assetService, inventoryStore, sqliteSelectCharacterDataSource, rentalTimeProvider);
             _mailboxHandler = new MailboxHandler();
