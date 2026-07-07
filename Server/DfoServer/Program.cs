@@ -37,6 +37,7 @@ namespace DfoServer
             ("--selftest-daily-reset", SelfTests.DailyResetSelfTest.Run),
             ("--selftest-revive-coin", SelfTests.ReviveCoinSelfTest.Run),
             ("--selftest-clock", SelfTests.ClockSelfTest.Run),
+            ("--selftest-rental-info", SelfTests.RentalInfoSelfTest.Run),
         };
 
         // 顺序跑全部自测, 输出汇总表; 任一失败(或抛异常)退出码为 1。

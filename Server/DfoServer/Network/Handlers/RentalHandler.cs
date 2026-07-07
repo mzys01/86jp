@@ -7,23 +7,26 @@ using System.Threading.Tasks;
 
 namespace DfoServer.Network.Handlers
 {
-    /// 租赁商店：租武器（0x0372）。
+    /// 租赁商店：租赁武器（0x0372）。
     public sealed class RentalHandler
     {
         private const ushort NotiRental = 0x0357;
 
         private readonly IAssetService _assetService;
         private readonly IInventoryStore _inventoryStore;
-        private readonly SqliteSelectCharacterDataSource _dataSource;   // 仅 init body 读写(0x0357 面板)
+        private readonly IRentalTimeProvider _rentalTimeProvider;
+        private readonly SqliteSelectCharacterDataSource _dataSource;
 
         public RentalHandler(
             IAssetService assetService,
             IInventoryStore inventoryStore,
-            SqliteSelectCharacterDataSource dataSource)
+            SqliteSelectCharacterDataSource dataSource,
+            IRentalTimeProvider rentalTimeProvider = null)
         {
             _assetService = assetService ?? throw new ArgumentNullException(nameof(assetService));
             _inventoryStore = inventoryStore ?? throw new ArgumentNullException(nameof(inventoryStore));
             _dataSource = dataSource;
+            _rentalTimeProvider = rentalTimeProvider ?? SystemRentalTimeProvider.Instance;
         }
 
         public async Task HandleRentWeapon(EnhancedClientSession session, GamePacketHeader header, byte[] body)
@@ -35,10 +38,10 @@ namespace DfoServer.Network.Handlers
             if (!RentalWeaponRequestCodec.TryParse(body, out var weaponId, out var parsedInventoryId, out var starCost, out var priceTier))
             {
                 var tail = body == null || body.Length == 0
-                    ? ""
+                    ? string.Empty
                     : BitConverter.ToString(body, Math.Max(0, body.Length - 8));
                 var head = body == null || body.Length == 0
-                    ? ""
+                    ? string.Empty
                     : BitConverter.ToString(body, 0, Math.Min(13, body.Length));
                 var detail = RentalWeaponRequestCodec.DescribeParseFailure(body);
                 FileLogger.Log($"[Rental] REJECT 0x0372 char={characterId} parse failed bodyLen={body?.Length ?? 0} head={head} tail={tail} detail={detail}");
@@ -47,17 +50,16 @@ namespace DfoServer.Network.Handlers
             }
 
             var inventoryTemplateId = (int)parsedInventoryId;
-
             var rental = LoadRentalInfo(characterId);
             var expireTime = (int)ResolveRentalExpireTime();
-            ResetRentalItemExpire(rental, weaponId, (uint)expireTime);
+            rental.UpsertItem(weaponId, (uint)inventoryTemplateId, (uint)expireTime);
 
             short invSlot = -1;
             int instanceValue = 0;
             var pickupSucceeded = false;
             ushort luckyStar = 0;
 
-            // 余额检查与扣减在同一事务内(条件扣减), 不足额直接失败, 不再有跨scope的检查/扣减竞态
+            // 扣幸运星、发放装备、保存 0x0357 内部存储必须同事务提交；发放失败则整体回滚。
             using (var scope = _assetService.OpenScope(characterId, accountId))
             {
                 var currentLuckyStar = _assetService.LoadWallet(scope).LuckyStar;
@@ -77,7 +79,6 @@ namespace DfoServer.Network.Handlers
                     luckyStar = (ushort)Math.Max(0, currentLuckyStar - starCost);
                     scope.Commit();
                 }
-                // pickup 失败: 不提交, 星币扣减随事务回滚
             }
 
             if (!pickupSucceeded)
@@ -130,7 +131,7 @@ namespace DfoServer.Network.Handlers
         private async Task SyncRentalPanelNoti(EnhancedClientSession session, ushort luckyStar, RentalInfoSnapshot rental)
         {
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, NotiRental,
-                RentalInfoBodyBuilder.BuildWireBody(luckyStar, rental)));
+                RentalInfoBodyBuilder.BuildWireBody(luckyStar, rental, _rentalTimeProvider.UtcNowUnixSeconds())));
         }
 
         private RentalInfoSnapshot LoadRentalInfo(int characterId)
@@ -145,24 +146,9 @@ namespace DfoServer.Network.Handlers
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0372, new byte[] { 0x00, 0x04 }));
         }
 
-        private static uint ResolveRentalExpireTime()
+        private uint ResolveRentalExpireTime()
         {
-            var now = (uint)DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-            return now + (uint)RentalWeaponRequestCodec.RentalDurationSeconds;
-        }
-
-        private static void ResetRentalItemExpire(RentalInfoSnapshot rental, uint weaponId, uint expireTime)
-        {
-            for (var i = 0; i < rental.Items.Count; i++)
-            {
-                if (rental.Items[i].ItemId == weaponId)
-                {
-                    rental.Items[i].ExpireTime = expireTime;
-                    return;
-                }
-            }
-
-            rental.Items.Add(new RentalItemSnapshot { ItemId = weaponId, ExpireTime = expireTime });
+            return _rentalTimeProvider.UtcNowUnixSeconds() + (uint)RentalWeaponRequestCodec.RentalDurationSeconds;
         }
     }
 }

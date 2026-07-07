@@ -1,4 +1,3 @@
-using DfoServer.Infrastructure;
 using System;
 using System.Collections.Generic;
 using System.Globalization;
@@ -72,9 +71,9 @@ namespace DfoServer.Game.Inventory
             if (!RentalWeaponInventoryMapper.IsValidInventoryTemplate(itemTemplateId))
                 return false;
 
-            var seriesKey = RentalWeaponInventoryMapper.GetSeriesKey(itemTemplateId);
-
-            var equipped = FindEquippedRentalBySeriesKey(connection, transaction, characterId, seriesKey);
+            // 续租只刷新同一背包模板，避免同商店条目ID的不同武器互相覆盖。
+            var equipped = FindEquippedRentalByInventoryTemplate(
+                connection, transaction, characterId, itemTemplateId);
             if (equipped != null)
             {
                 instanceValue = RentalWeaponRequestCodec.RentalWeaponQualitySeed;
@@ -83,8 +82,8 @@ namespace DfoServer.Game.Inventory
                 return true;
             }
 
-            var existing = FindRentalBySeriesKey(
-                connection, transaction, characterId, InventoryListType.Main, seriesKey,
+            var existing = FindRentalByInventoryTemplate(
+                connection, transaction, characterId, InventoryListType.Main, itemTemplateId,
                 SqliteInventoryStore.QuickSlotStart, SqliteInventoryStore.RentalBagSlotEnd);
 
             if (existing != null
@@ -98,6 +97,7 @@ namespace DfoServer.Game.Inventory
                 return true;
             }
 
+            // 先放快捷栏可见区，满了再放普通背包扩展区。
             var targetSlot = _db.FindEmptySlot(connection, transaction, characterId, InventoryListType.Main,
                 SqliteInventoryStore.QuickSlotStart, SqliteInventoryStore.QuickSlotEnd);
             if (targetSlot < 0)
@@ -109,15 +109,19 @@ namespace DfoServer.Game.Inventory
             instanceValue = RentalWeaponRequestCodec.RentalWeaponQualitySeed;
             _db.InsertCharacterItem(
                 connection, transaction, characterId, InventoryListType.Main, (short)targetSlot,
-                itemTemplateId, itemKind, instanceValue, instanceValue,
+                itemTemplateId, itemKind, instanceValue, 0,
                 durability, 0, 0, expireTime, -1, 0, DefaultEquipmentExtraJson);
             assignedSlot = (short)targetSlot;
             return true;
         }
 
-        internal int DeleteExpiredRentalEquipment(SqliteConnection connection, SqliteTransaction transaction, int characterId, int accountId)
+        internal int DeleteExpiredRentalEquipment(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            int characterId,
+            int accountId,
+            uint now)
         {
-            var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
             var removed = 0;
 
             var expiredBagItems = new List<(long itemUid, int slotIndex, int itemTemplateId, int expireTime)>();
@@ -726,20 +730,6 @@ VALUES (@accountId, @selectionKey, @value32, @itemCount, CURRENT_TIMESTAMP);";
             return durabilityOption != 0 ? durabilityOption : fields.Reinforce;
         }
 
-        private static bool IsRentalRecord(int itemTemplateId, int expireTime, string seriesKey)
-        {
-            if (expireTime <= 0 || !RentalWeaponInventoryMapper.IsValidInventoryTemplate(itemTemplateId))
-                return false;
-
-            if (!string.Equals(
-                    RentalWeaponInventoryMapper.GetSeriesKey(itemTemplateId),
-                    seriesKey,
-                    StringComparison.Ordinal))
-                return false;
-
-            return true;
-        }
-
         private static bool IsPetCreatureEquipSlotMove(
             InventoryMoveRequest request,
             SqliteInventoryStore.ItemRecord source,
@@ -776,16 +766,16 @@ VALUES (@accountId, @selectionKey, @value32, @itemCount, CURRENT_TIMESTAMP);";
             return entryRaw != null && entryRaw.Length >= 28 ? BitConverter.ToInt32(entryRaw, 24) : 0;
         }
 
-        private MakeEquipListCodec.Entry FindEquippedRentalBySeriesKey(
+        private MakeEquipListCodec.Entry FindEquippedRentalByInventoryTemplate(
             SqliteConnection connection,
             SqliteTransaction transaction,
             int characterId,
-            string seriesKey)
+            int itemTemplateId)
         {
             var entries = LoadEquipEntriesTx(connection, transaction, characterId);
             foreach (var entry in entries)
             {
-                if (!IsRentalRecord(entry.ItemId, entry.ExpireTime, seriesKey))
+                if (entry.ItemId != itemTemplateId || entry.ExpireTime <= 0)
                     continue;
 
                 return entry;
@@ -829,12 +819,12 @@ WHERE character_id = @cid AND slot = @slot;";
             }
         }
 
-        private SqliteInventoryStore.ItemRecord FindRentalBySeriesKey(
+        private SqliteInventoryStore.ItemRecord FindRentalByInventoryTemplate(
             SqliteConnection connection,
             SqliteTransaction transaction,
             int characterId,
             InventoryListType listType,
-            string seriesKey,
+            int itemTemplateId,
             int slotStart,
             int slotEnd)
         {
@@ -858,7 +848,7 @@ ORDER BY slot_index;";
                     {
                         var templateId = reader.GetInt32(2);
                         var expireTimeVal = reader.GetInt32(5);
-                        if (!IsRentalRecord(templateId, expireTimeVal, seriesKey))
+                        if (templateId != itemTemplateId || expireTimeVal <= 0)
                             continue;
 
                         return new SqliteInventoryStore.ItemRecord
@@ -893,7 +883,7 @@ UPDATE character_items
 SET item_template_id = @itemTemplateId,
     expire_time = @expireTime,
     stack_count = @wireValue,
-    instance_value = @wireValue,
+    instance_value = 0,
     item_kind = 'special',
     durability = @durability,
     marker_16 = -1,

@@ -47,9 +47,11 @@ namespace DfoServer.Network
 
             var characterRepository = new SqliteCharacterRepository(databasePath, schemaFilePath);
             var accountRepository = new SqliteAccountRepository(databasePath, schemaFilePath);
+            // 租赁全链路共用同一时间源，保持绝对 Unix 到期时间模型。
+            var rentalTimeProvider = SystemRentalTimeProvider.Instance;
 
             // 全程序共享一个 SqliteInventoryStore(无状态, 只持连接串): 旧版门面与 AssetService 各自 new 一个
-            var inventoryStore = new Game.Inventory.SqliteInventoryStore(databasePath, schemaFilePath);
+            var inventoryStore = new Game.Inventory.SqliteInventoryStore(databasePath, schemaFilePath, rentalTimeProvider);
             _assetService = new SqliteAssetService(databasePath, schemaFilePath, inventoryStore);
 
             var sqliteSelectCharacterDataSource = new SqliteSelectCharacterDataSource(
@@ -57,7 +59,8 @@ namespace DfoServer.Network
                 schemaFilePath,
                 characterRepository,
                 _assetService,
-                inventoryStore);
+                inventoryStore,
+                rentalTimeProvider);
 
             var userInfoBlobRepository = new Game.CharacterData.SqliteUserInfoBlobRepository(databasePath, schemaFilePath);
             var getUserInfoTemplate = userInfoBlobRepository.LoadGetUserInfoTemplate();
@@ -77,8 +80,8 @@ namespace DfoServer.Network
             _skillHandler = new SkillHandler(characterRepository);
             _settingsHandler = new SettingsHandler();
             _ceraShopHandler = new CeraShopHandler(inventoryStore, sqliteSelectCharacterDataSource);
-            _luckyStarHandler = new LuckyStarHandler(_assetService, sqliteSelectCharacterDataSource);
-            _rentalHandler = new RentalHandler(_assetService, inventoryStore, sqliteSelectCharacterDataSource);
+            _luckyStarHandler = new LuckyStarHandler(_assetService, sqliteSelectCharacterDataSource, rentalTimeProvider);
+            _rentalHandler = new RentalHandler(_assetService, inventoryStore, sqliteSelectCharacterDataSource, rentalTimeProvider);
             _mailboxHandler = new MailboxHandler();
             var collectBoxProgressRepository = new Game.Inventory.CollectBoxProgressRepository(databasePath, schemaFilePath);
             _collectionBoxHandler = new CollectionBoxHandler(inventoryStore, collectBoxProgressRepository);

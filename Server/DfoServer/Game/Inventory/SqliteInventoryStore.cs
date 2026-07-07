@@ -1,5 +1,5 @@
 using DfoServer.Game.Currency;
-using DfoServer.Infrastructure;
+using DfoServer.Game.SelectCharacter;
 using DfoServer.Game.ExpertJob;
 using DfoServer.Game.ItemUpgrade;
 using System;
@@ -30,8 +30,9 @@ namespace DfoServer.Game.Inventory
         private readonly InventoryPackageStore _packageStore;
         private readonly InventoryShopStore _shopStore;
         internal readonly InventoryEquipmentStore _equipStore;
+        private readonly IRentalTimeProvider _rentalTimeProvider;
 
-        public SqliteInventoryStore(string databasePath, string schemaFilePath)
+        public SqliteInventoryStore(string databasePath, string schemaFilePath, IRentalTimeProvider rentalTimeProvider = null)
         {
             if (databasePath == null) throw new ArgumentNullException(nameof(databasePath));
             if (schemaFilePath == null) throw new ArgumentNullException(nameof(schemaFilePath));
@@ -40,7 +41,8 @@ namespace DfoServer.Game.Inventory
             if (!string.IsNullOrWhiteSpace(directory))
                 Directory.CreateDirectory(directory);
 
-            _connectionString = SqliteDatabaseBootstrap.Initialize(databasePath, schemaFilePath);
+            _connectionString = Infrastructure.SqliteDatabaseBootstrap.Initialize(databasePath, schemaFilePath);
+            _rentalTimeProvider = rentalTimeProvider ?? SystemRentalTimeProvider.Instance;
             _auditLogger = new InventoryAuditLogger();
             _db = new InventoryDbPrimitives();
             _enchantStore = new InventoryEnchantStore(_db, _auditLogger);
@@ -132,6 +134,7 @@ VALUES (
             using (var connection = new SqliteConnection(_connectionString))
             {
                 connection.Open();
+                NormalizeRentalInventoryRows(connection, characterId, _rentalTimeProvider.UtcNowUnixSeconds());
                 var snapshot = new CharacterItemListSnapshot();
                 var listParams = _equipStore.LoadContainerState(connection, null, characterId, accountId);
                 snapshot.MainListParam16 = GetListParam(listParams, InventoryListType.Main);
@@ -220,9 +223,196 @@ ORDER BY slot_index;";
                 connection.Open();
                 using (var transaction = connection.BeginTransaction())
                 {
-                    var count = _equipStore.DeleteExpiredRentalEquipment(connection, transaction, characterId, accountId);
+                    var count = _equipStore.DeleteExpiredRentalEquipment(
+                        connection,
+                        transaction,
+                        characterId,
+                        accountId,
+                        _rentalTimeProvider.UtcNowUnixSeconds());
                     if (count > 0) transaction.Commit();
                     return count;
+                }
+            }
+        }
+
+        public RentalInfoSnapshot RebuildRentalInfoFromInventory(
+            int characterId,
+            int accountId,
+            RentalInfoSnapshot storedRentalInfo)
+        {
+            // 登录时以背包/装备栏为权威状态重建租赁栏，避免旧 0x0357 内部存储漏项。
+            var rebuilt = new RentalInfoSnapshot();
+            if (storedRentalInfo != null)
+                rebuilt.RentalId = storedRentalInfo.RentalId;
+
+            if (characterId <= 0)
+                return rebuilt;
+
+            var now = _rentalTimeProvider.UtcNowUnixSeconds();
+            var shopIdByInventoryId = BuildRentalShopIndex(storedRentalInfo);
+            var shopIdByExpireTime = BuildRentalShopExpireIndex(storedRentalInfo);
+            using (var connection = new SqliteConnection(_connectionString))
+            {
+                connection.Open();
+                NormalizeRentalInventoryRows(connection, characterId, now);
+                using (var cmd = connection.CreateCommand())
+                {
+                    cmd.CommandText = @"
+SELECT item_template_id, expire_time, slot_index
+FROM character_items
+WHERE character_id = @characterId
+  AND list_type = @listType
+  AND expire_time > @now
+ORDER BY slot_index;";
+                    cmd.Parameters.AddWithValue("@characterId", characterId);
+                    cmd.Parameters.AddWithValue("@listType", (int)InventoryListType.Main);
+                    cmd.Parameters.AddWithValue("@now", now);
+                    using (var reader = cmd.ExecuteReader())
+                    {
+                        while (reader.Read())
+                        {
+                            var inventoryTemplateId = reader.GetInt32(0);
+                            var expireTime = reader.GetInt32(1);
+                            if (!TryResolveRentalShopId(shopIdByInventoryId, shopIdByExpireTime, inventoryTemplateId, expireTime, out var shopId))
+                                continue;
+
+                            rebuilt.UpsertItem(shopId, unchecked((uint)inventoryTemplateId), unchecked((uint)expireTime));
+                        }
+                    }
+                }
+
+                using (var cmd = connection.CreateCommand())
+                {
+                    cmd.CommandText = @"
+SELECT item_id, expire_time, slot
+FROM character_equipped_entries
+WHERE character_id = @characterId
+  AND expire_time > @now
+ORDER BY slot;";
+                    cmd.Parameters.AddWithValue("@characterId", characterId);
+                    cmd.Parameters.AddWithValue("@now", now);
+                    using (var reader = cmd.ExecuteReader())
+                    {
+                        while (reader.Read())
+                        {
+                            var inventoryTemplateId = reader.GetInt32(0);
+                            var expireTime = reader.GetInt32(1);
+                            if (!TryResolveRentalShopId(shopIdByInventoryId, shopIdByExpireTime, inventoryTemplateId, expireTime, out var shopId))
+                                continue;
+
+                            rebuilt.UpsertItem(shopId, unchecked((uint)inventoryTemplateId), unchecked((uint)expireTime));
+                        }
+                    }
+                }
+            }
+
+            return rebuilt;
+        }
+
+        private static Dictionary<uint, uint> BuildRentalShopIndex(RentalInfoSnapshot storedRentalInfo)
+        {
+            var map = new Dictionary<uint, uint>();
+            if (storedRentalInfo == null)
+                return map;
+
+            foreach (var item in storedRentalInfo.Items)
+            {
+                if (item == null || item.ItemId == 0 || item.InventoryTemplateId == 0)
+                    continue;
+
+                map[item.InventoryTemplateId] = item.ItemId;
+            }
+
+            return map;
+        }
+
+        private static Dictionary<uint, uint> BuildRentalShopExpireIndex(RentalInfoSnapshot storedRentalInfo)
+        {
+            var map = new Dictionary<uint, uint>();
+            if (storedRentalInfo == null)
+                return map;
+
+            foreach (var item in storedRentalInfo.Items)
+            {
+                if (item == null || item.ItemId == 0 || item.ExpireTime == 0)
+                    continue;
+
+                map[item.ExpireTime] = item.ItemId;
+            }
+
+            return map;
+        }
+
+        private static bool TryResolveRentalShopId(
+            Dictionary<uint, uint> shopIdByInventoryId,
+            Dictionary<uint, uint> shopIdByExpireTime,
+            int inventoryTemplateId,
+            int expireTime,
+            out uint shopId)
+        {
+            shopId = 0;
+            if (!RentalWeaponInventoryMapper.IsValidInventoryTemplate(inventoryTemplateId))
+                return false;
+
+            var inventoryId = unchecked((uint)inventoryTemplateId);
+            if (shopIdByInventoryId.TryGetValue(inventoryId, out shopId) && shopId != 0)
+                return true;
+
+            var expireKey = unchecked((uint)expireTime);
+            if (shopIdByExpireTime.TryGetValue(expireKey, out shopId) && shopId != 0)
+                return true;
+
+            shopId = inventoryId;
+            return true;
+        }
+
+        private static void NormalizeRentalInventoryRows(SqliteConnection connection, int characterId, uint now)
+        {
+            // 历史数据可能把租赁装备写成普通装备或 instance_value 非零；读取前统一成客户端可显示形态。
+            using (var cmd = connection.CreateCommand())
+            {
+                cmd.CommandText = @"
+SELECT item_uid, item_template_id
+FROM character_items
+WHERE character_id = @characterId
+  AND list_type = @listType
+  AND expire_time > @now;";
+                cmd.Parameters.AddWithValue("@characterId", characterId);
+                cmd.Parameters.AddWithValue("@listType", (int)InventoryListType.Main);
+                cmd.Parameters.AddWithValue("@now", now);
+                var rows = new List<(long itemUid, int itemTemplateId)>();
+                using (var reader = cmd.ExecuteReader())
+                {
+                    while (reader.Read())
+                    {
+                        var itemTemplateId = reader.GetInt32(1);
+                        if (!RentalWeaponInventoryMapper.IsValidInventoryTemplate(itemTemplateId))
+                            continue;
+
+                        rows.Add((reader.GetInt64(0), itemTemplateId));
+                    }
+                }
+
+                foreach (var row in rows)
+                {
+                    using (var update = connection.CreateCommand())
+                    {
+                        update.CommandText = @"
+UPDATE character_items
+SET item_kind = 'special',
+    stack_count = @qualitySeed,
+    instance_value = 0,
+    durability = @durability,
+    marker_16 = -1,
+    extra_json = CASE WHEN extra_json IS NULL OR extra_json = '{}' THEN @extraJson ELSE extra_json END,
+    updated_at = CURRENT_TIMESTAMP
+WHERE item_uid = @itemUid;";
+                        update.Parameters.AddWithValue("@qualitySeed", RentalWeaponRequestCodec.RentalWeaponQualitySeed);
+                        update.Parameters.AddWithValue("@durability", RentalWeaponRequestCodec.RentalWeaponDurability);
+                        update.Parameters.AddWithValue("@extraJson", "{\"extData0\":0,\"prefixData0E\":\"0000000000000000\",\"middleData1A\":\"0000000000000000000000000000000000\",\"tailData2F\":\"00000000000000000000000000000000000000000000000000000000000000000000000000\"}");
+                        update.Parameters.AddWithValue("@itemUid", row.itemUid);
+                        update.ExecuteNonQuery();
+                    }
                 }
             }
         }
