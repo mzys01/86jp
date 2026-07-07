@@ -30,13 +30,21 @@ namespace DfoServer.Game.SelectCharacter
         private readonly string _connectionString;
         private readonly string _databasePath;
         private readonly string _schemaFilePath;
+        private readonly IRentalTimeProvider _rentalTimeProvider;
 
-        public SqliteSelectCharacterDataSource(string databasePath, string schemaFilePath, ICharacterRepository characterRepository, IAssetService assetService = null, IInventoryStore inventoryStore = null)
+        public SqliteSelectCharacterDataSource(
+            string databasePath,
+            string schemaFilePath,
+            ICharacterRepository characterRepository,
+            IAssetService assetService = null,
+            IInventoryStore inventoryStore = null,
+            IRentalTimeProvider rentalTimeProvider = null)
         {
             _databasePath = databasePath;
             _schemaFilePath = schemaFilePath;
             _connectionString = Infrastructure.SqliteDatabaseBootstrap.Initialize(databasePath, schemaFilePath);
-            _inventoryStore = inventoryStore ?? new SqliteInventoryStore(databasePath, schemaFilePath);
+            _rentalTimeProvider = rentalTimeProvider ?? SystemRentalTimeProvider.Instance;
+            _inventoryStore = inventoryStore ?? new SqliteInventoryStore(databasePath, schemaFilePath, _rentalTimeProvider);
             _assetService = assetService;
             _initDataRepository = new SqliteCharacterProgressRepository(databasePath, schemaFilePath);
             _userInfoBlobRepository = new SqliteUserInfoBlobRepository(databasePath, schemaFilePath);
@@ -128,6 +136,13 @@ namespace DfoServer.Game.SelectCharacter
 
             
             LoadInitFieldsFromPacketTemplates(characterId, initSnapshot);
+            // 0x0357 是可变状态，加载模板后立即用当前背包/装备租赁重建。
+            var rebuiltRentalInfo = _inventoryStore.RebuildRentalInfoFromInventory(
+                characterId,
+                accountId,
+                initSnapshot.RentalInfo);
+            initSnapshot.RentalInfo.ReplaceItems(rebuiltRentalInfo.Items);
+            SaveRentalInfo(characterId, initSnapshot.RentalInfo);
 
             if (_assetService != null)
             {
@@ -431,6 +446,22 @@ ON CONFLICT(character_id) DO UPDATE SET manage_level=excluded.manage_level;";
             }
         }
 
+        private void SaveRentalInfo(int characterId, RentalInfoSnapshot rental)
+        {
+            if (characterId <= 0 || rental == null)
+                return;
+
+            using (var connection = new SqliteConnection(_connectionString))
+            {
+                connection.Open();
+                using (var transaction = connection.BeginTransaction())
+                {
+                    SaveRentalInfo(connection, transaction, characterId, rental);
+                    transaction.Commit();
+                }
+            }
+        }
+
         private void LoadFieldFromInitBody(int characterId, int notiType, Action<byte[]> parse)
         {
             var body = LoadInitBody(characterId, notiType, 0);
@@ -604,6 +635,7 @@ ON CONFLICT(character_id) DO UPDATE SET manage_level=excluded.manage_level;";
             LoadFieldFromInitBody(characterId, 0x0357, body => {
                 if (body == null || body.Length < 8) return;
                 RentalInfoSnapshot.ParseStorageBody(body, snap.RentalInfo);
+                snap.RentalInfo.RemoveExpired(_rentalTimeProvider.UtcNowUnixSeconds());
             });
 
             LoadFieldFromInitBody(characterId, 0x0300, body => {

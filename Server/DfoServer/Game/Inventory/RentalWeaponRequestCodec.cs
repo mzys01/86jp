@@ -8,7 +8,7 @@ namespace DfoServer.Game.Inventory
     {
         public const ushort RentalWeaponDurability = 100;
         public const int RentalDurationSeconds = 86400;
-        /// 租赁武器固定品级 seed（wire @6，与任务/初始装备一致，客户端显示 90%% 以上）。
+        /// 租赁武器固定品级种子（协议偏移 6，与任务/初始装备一致，客户端显示 90%% 以上）。
         public const int RentalWeaponQualitySeed = (int)ItemQuality.TopQualitySeed;
 
         private const int ShopOffset = 0;
@@ -87,6 +87,7 @@ namespace DfoServer.Game.Inventory
 
         private static int ResolveStarCost(uint inventoryTemplateId, byte starCostHalf, byte priceTier)
         {
+            // 真实请求通常带半价字段；缺失时按 PVF 星价和旧价格档位兜底。
             if (starCostHalf > 0)
                 return starCostHalf * 2;
 

@@ -3,6 +3,7 @@ using System;
 
 namespace DfoServer.Game.Inventory
 {
+    /// 租赁商店目录包字段。当前只维护幸运星数量和购买回包所需字段。
     public static class RentalCatalogCodec
     {
         public const int BlobSize = 134;
@@ -44,6 +45,7 @@ namespace DfoServer.Game.Inventory
 
         public static byte[] BuildPurchaseAck(byte[] accountCatalog, ushort buyCount, ushort totalLuckyStar)
         {
+            // 购买幸运星后回发账号目录副本，保留客户端已有布局，只覆盖显示字段。
             var catalog = NormalizeCatalog(accountCatalog);
             ApplyDisplayFields(catalog, totalLuckyStar);
             if (catalog.Length >= TailQtyOffset + 2)

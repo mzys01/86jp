@@ -1,25 +1,28 @@
 using DfoServer.Game.Inventory;
 using DfoServer.Game.SelectCharacter;
-using DfoServer.Infrastructure;
 using DfoServer.Network.Builders;
-
 using System;
 using System.Threading.Tasks;
 
 namespace DfoServer.Network.Handlers
 {
-    /// 租赁商店幸运星：购买（0x0373）。
+    /// 租赁商店：购买幸运星（0x0373）。
     public sealed class LuckyStarHandler
     {
         private const ushort NotiRental = 0x0357;
 
         private readonly IAssetService _assetService;
         private readonly SqliteSelectCharacterDataSource _dataSource;
+        private readonly IRentalTimeProvider _rentalTimeProvider;
 
-        public LuckyStarHandler(IAssetService assetService, SqliteSelectCharacterDataSource dataSource)
+        public LuckyStarHandler(
+            IAssetService assetService,
+            SqliteSelectCharacterDataSource dataSource,
+            IRentalTimeProvider rentalTimeProvider = null)
         {
             _assetService = assetService;
             _dataSource = dataSource;
+            _rentalTimeProvider = rentalTimeProvider ?? SystemRentalTimeProvider.Instance;
         }
 
         public async Task HandleShopPurchasePacket(EnhancedClientSession session, GamePacketHeader header, byte[] body)
@@ -50,6 +53,7 @@ namespace DfoServer.Network.Handlers
             var newLuckyStar = (ushort)0;
             int newGold;
 
+            // 金币扣减和幸运星增加必须同事务提交，避免只扣金币或只加星。
             using (var scope = _assetService.OpenScope(characterId, accountId))
             {
                 var wallet = _assetService.LoadWallet(scope);
@@ -74,6 +78,7 @@ namespace DfoServer.Network.Handlers
                     await Send0373Error(session);
                     return;
                 }
+
                 _assetService.GrantLuckyStar(scope, buyCount);
                 scope.Commit();
             }
@@ -93,7 +98,7 @@ namespace DfoServer.Network.Handlers
         private async Task SyncRentalPanelNoti(EnhancedClientSession session, ushort luckyStar, RentalInfoSnapshot rental)
         {
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, NotiRental,
-                RentalInfoBodyBuilder.BuildWireBody(luckyStar, rental)));
+                RentalInfoBodyBuilder.BuildWireBody(luckyStar, rental, _rentalTimeProvider.UtcNowUnixSeconds())));
         }
 
         private RentalInfoSnapshot LoadRentalInfo(int characterId)

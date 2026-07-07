@@ -1,5 +1,6 @@
 using DfoServer.Game.ExpertJob;
 using DfoServer.Game.ItemUpgrade;
+using DfoServer.Game.SelectCharacter;
 using Microsoft.Data.Sqlite;
 using System;
 using System.Collections.Generic;
@@ -17,6 +18,11 @@ namespace DfoServer.Game.Inventory
         CharacterItemListSnapshot LoadCharacterItemListSnapshot(int characterId, int accountId);
 
         int DeleteExpiredRentalEquipment(int characterId, int accountId);
+
+        RentalInfoSnapshot RebuildRentalInfoFromInventory(
+            int characterId,
+            int accountId,
+            RentalInfoSnapshot storedRentalInfo);
 
         bool TryDeleteItem(int characterId, int accountId, InventoryListType listType, short slotIndex, short deleteCount, out InventoryMutationResult result);
 

@@ -1,17 +1,15 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
 using DfoServer.GameWorld;
 using PvfLib;
 
 namespace DfoServer.Game.Inventory
 {
-    /// 校验并解析 chn_rental 背包 ID；发放等级以客户端 0x0372 包内模板 ID 为准。
+    /// 校验 chn_rental 背包模板，并读取租赁星价。
     public static class RentalWeaponInventoryMapper
     {
         private sealed class RentalWeaponIdentity
         {
-            public string SeriesKey { get; set; }
             public int StarPrice { get; set; }
         }
 
@@ -24,14 +22,6 @@ namespace DfoServer.Game.Inventory
                 return false;
 
             return IdentityById.Value.ContainsKey(itemTemplateId);
-        }
-
-        public static string GetSeriesKey(int inventoryTemplateId)
-        {
-            if (IdentityById.Value.TryGetValue(inventoryTemplateId, out var identity))
-                return identity.SeriesKey;
-
-            return "unknown|" + inventoryTemplateId;
         }
 
         public static int GetStarPrice(int inventoryTemplateId)
@@ -52,41 +42,16 @@ namespace DfoServer.Game.Inventory
                 if (entry.FilePath.IndexOf("chn_rental_", StringComparison.OrdinalIgnoreCase) < 0)
                     continue;
 
-                var weaponFolder = GetWeaponFolder(entry.FilePath);
-                if (weaponFolder == null)
-                    continue;
-
                 var equipment = EquipmentFile.Parse(
-                    PvfArchiveAccessor.ReadText(Path.Combine("equipment", entry.FilePath)));
-                var name = (equipment.Name ?? string.Empty).Trim();
-                if (name.Length == 0)
-                    continue;
+                    PvfArchiveAccessor.ReadText(System.IO.Path.Combine("equipment", entry.FilePath)));
 
                 byId[entry.Id] = new RentalWeaponIdentity
                 {
-                    SeriesKey = weaponFolder + "|" + name,
                     StarPrice = equipment.Price,
                 };
             }
 
             return byId;
-        }
-
-        private static string GetWeaponFolder(string filePath)
-        {
-            if (string.IsNullOrWhiteSpace(filePath))
-                return null;
-
-            var normalized = filePath.Replace('\\', '/');
-            var weaponIndex = normalized.IndexOf("/weapon/", StringComparison.OrdinalIgnoreCase);
-            if (weaponIndex < 0)
-                return null;
-
-            var slashAfterType = normalized.IndexOf('/', weaponIndex + "/weapon/".Length);
-            if (slashAfterType < 0)
-                return null;
-
-            return normalized.Substring(0, slashAfterType + 1);
         }
     }
 }
