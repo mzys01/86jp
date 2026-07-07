@@ -89,7 +89,7 @@ namespace DfoServer.Game.Inventory
             public ushort Durability;   
             public uint Enchant;        
             public byte EnchantUpgradeCount;
-            public byte AmplifyType;    
+            public byte AmplifyType;     // 低4位=增幅方向(1力量2智力3体力4精神), bit7=异界气息污染(0x80); 污染与增幅互斥, 净化前不可增幅
             public ushort AmplifyValue; 
             public ushort Rune;         
             public byte Forging;        
