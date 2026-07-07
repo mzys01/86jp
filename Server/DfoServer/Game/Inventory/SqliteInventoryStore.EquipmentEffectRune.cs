@@ -312,12 +312,14 @@ namespace DfoServer.Game.Inventory
                 return targetRefresh != null;
             }
 
-            if (target.CommonItem == null || target.ItemUid <= 0)
+            if (target.ItemUid <= 0)
                 return false;
 
-            target.CommonItem.TailData2F = NormalizeBytes(target.CommonItem.TailData2F, 37);
-            BitConverter.GetBytes(effectId).CopyTo(target.CommonItem.TailData2F, 9);
-            _db.UpdateCommonExtraJson(connection, transaction, target.ItemUid, target.CommonItem);
+            var extra = ItemExtraView.Parse(target.ExtraJson);
+            var builder = ItemExtraViewBuilder.FromView(extra);
+            builder.Equipment.Rune = effectId;
+            var updated = builder.Build();
+            _db.UpdateItemExtraJson(connection, transaction, target.ItemUid, updated.Serialize());
             targetRefresh = _db.LoadCommonItem(connection, transaction, characterId, target.ListType, target.SlotIndex);
             return targetRefresh != null;
         }
@@ -442,6 +444,8 @@ namespace DfoServer.Game.Inventory
 
             public CommonInventoryItem CommonItem { get; set; }
 
+            public string ExtraJson { get; set; }
+
             public MakeEquipListCodec.Entry EquippedEntry { get; set; }
 
             public static EquipmentEffectTarget FromCharacterItem(ItemRecord record, CommonInventoryItem common)
@@ -455,6 +459,7 @@ namespace DfoServer.Game.Inventory
                     SealFlag = record.SealFlag,
                     EquipmentLockId = record.EquipmentLockId,
                     CommonItem = common,
+                    ExtraJson = record.ExtraJson,
                 };
             }
 
