@@ -187,6 +187,62 @@ namespace DfoServer.SelfTests
                     }) == 2,
                 ref failures);
 
+            var duplicateEquipmentRewards = new[]
+            {
+                new BoosterRewardResult
+                {
+                    ListType = InventoryListType.Main,
+                    SlotIndex = RewardSlot,
+                    ItemTemplateId = SampleRewardItemId,
+                    GrantedCount = 1,
+                },
+                new BoosterRewardResult
+                {
+                    ListType = InventoryListType.Main,
+                    SlotIndex = (short)(RewardSlot + 1),
+                    ItemTemplateId = SampleRewardItemId,
+                    GrantedCount = 1,
+                },
+            };
+            Check("duplicate equipment lottery notice is suppressed",
+                InventoryHandler.ShouldSuppressLotteryItemNotice(duplicateEquipmentRewards[0], duplicateEquipmentRewards),
+                ref failures);
+            var duplicateRefreshRewards = InventoryHandler.ResolveLotteryMainRefreshRewards(duplicateEquipmentRewards);
+            Check("duplicate equipment refresh keeps both slots",
+                duplicateRefreshRewards.Count == 2
+                && duplicateRefreshRewards[0].SlotIndex == RewardSlot
+                && duplicateRefreshRewards[1].SlotIndex == RewardSlot + 1,
+                ref failures);
+            Check("double reward uses isolated double result flow",
+                InventoryHandler.ShouldUseLotteryDoubleRewardResultFlow(true, duplicateEquipmentRewards),
+                ref failures);
+            Check("regular multi reward keeps native single result",
+                !InventoryHandler.ShouldUseLotteryDoubleRewardResultFlow(false, duplicateEquipmentRewards),
+                ref failures);
+            var doubleExtraRefreshRewards = InventoryHandler.ResolveLotteryDoubleRewardExtraRefreshRewards(duplicateEquipmentRewards);
+            Check("double reward refresh delays only extra slots",
+                doubleExtraRefreshRewards.Count == 1
+                && doubleExtraRefreshRewards[0].SlotIndex == RewardSlot + 1,
+                ref failures);
+            var distinctEquipmentRewards = new[]
+            {
+                duplicateEquipmentRewards[0],
+                new BoosterRewardResult
+                {
+                    ListType = InventoryListType.Main,
+                    SlotIndex = (short)(RewardSlot + 1),
+                    ItemTemplateId = SampleRewardItemId + 1,
+                    GrantedCount = 1,
+                },
+            };
+            Check("distinct equipment lottery notice is preserved",
+                !InventoryHandler.ShouldSuppressLotteryItemNotice(distinctEquipmentRewards[0], distinctEquipmentRewards),
+                ref failures);
+            var distinctRefreshRewards = InventoryHandler.ResolveLotteryMainRefreshRewards(distinctEquipmentRewards);
+            Check("distinct equipment refresh skips display slot",
+                distinctRefreshRewards.Count == 1 && distinctRefreshRewards[0].SlotIndex == RewardSlot + 1,
+                ref failures);
+
             var notice = LotteryItemNoticeBuilder.Build(0x03EA, SampleRewardItemId, 7);
             Check("lottery notice length", notice.Length == 9, ref failures);
             Check("lottery notice kind", notice[0] == 2 && notice[1] == 1, ref failures);
