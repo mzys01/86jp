@@ -91,32 +91,29 @@ namespace DfoServer.Network.Handlers
 
             if (!result.PetCreatureStateChanged
                 && !result.PetItemStateChanged
-                && ShouldSendSubtype0AppearanceUpdate(session, result))
+                && ShouldSendSubtype0AppearanceUpdate(result))
+            {
+                // 先重载宠物字段再发 subtype0: 宠物ID不变时客户端只做原地更新,
+                // 不会重建宠物或重置技能冷却, 因此副本内也可以安全发送。
+                _refresh.ReloadSubtype0Tail(session);
                 await _refresh.SendNoti2AppearanceUpdate(session);
+            }
         }
 
-        private static bool ShouldSendSubtype0AppearanceUpdate(EnhancedClientSession session, InventoryMoveResult result)
+        private static bool ShouldSendSubtype0AppearanceUpdate(InventoryMoveResult result)
         {
             return result != null
                 && result.Mutated
-                && ShouldSendTownAvatarSubtype0Refresh(session, result.AffectedEquipmentSlot);
+                && IsAppearanceEquipmentSlot(result.AffectedEquipmentSlot);
         }
 
-        private static bool ShouldSendTownAvatarSubtype0Refresh(EnhancedClientSession session, short equipmentSlot)
+        private static bool IsAppearanceEquipmentSlot(short slot)
         {
-            return session?.Player?.CurrentRun == null
-                && IsAvatarEquipmentSlot(equipmentSlot);
-        }
-
-        private static bool IsAvatarEquipmentSlot(short slot)
-        {
-            return slot >= (short)EquipmentType.HatAvatar
-                && slot <= (short)EquipmentType.WeaponAvatar;
-        }
-
-        private static bool ShouldSuppressSelfUserInfoRefresh(EnhancedClientSession session)
-        {
-            return session?.Player != null;
+            // 客户端收到移动应答后不会自行更新外观, 这些槽位变动必须跟发 subtype0:
+            // 装扮0-10、武器11、称号12、宠物24、名称装饰卡28。
+            return (slot >= (short)EquipmentType.HatAvatar && slot <= (short)EquipmentType.TitleName)
+                || slot == (short)EquipmentType.Creature
+                || slot == (short)EquipmentType.NameTag;
         }
 
         private static void ApplySubtype0TailMutation(EnhancedClientSession session, Subtype0TailMoveMutation mutation)
