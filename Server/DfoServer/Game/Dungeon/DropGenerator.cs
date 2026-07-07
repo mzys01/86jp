@@ -114,6 +114,22 @@ namespace DfoServer.Game.Dungeon
                 }
             }
 
+            if (type4Rate > _lcg.Next(DropDenominator))
+            {
+                int rarity = MonsterDropConfig.RollRarity(_lcg);
+                int itemId = MonsterDropConfig.ChooseMonsterCard(_lcg, monsterLevel, rarity);
+                if (itemId > 0)
+                {
+                    slotCounter++;
+                    drops.Add(new DropInfo
+                    {
+                        SceneSlot = slotCounter,
+                        TemplateId = (uint)itemId,
+                        StackCount = 1
+                    });
+                }
+            }
+
             
             if (dropPool != null && dropPool.Count > 0
                 && MobItemDropRate > _lcg.Next(DropDenominator))
