@@ -8,6 +8,13 @@ namespace DfoServer.Game.Premium
 {
     public static class PremiumService
     {
+        internal const int PremiumServiceDataLength = 74;
+        internal const int SeriaLuckRecordOffset = 6 + 7 * 9;
+        internal const int SeriaLuckThresholdOffset = SeriaLuckRecordOffset + 4;
+        private const int PremiumRecordSize = 9;
+        private const int PremiumRecordBaseOffset = 6;
+        private const int SeriaLuckActiveSentinel = int.MaxValue;
+
         public static (int premiumType, long remaining)? TryActivateContract(int accountId, int itemTemplateId)
         {
             var connStr = Infrastructure.SqliteDatabaseBootstrap.Initialize(
@@ -103,7 +110,7 @@ namespace DfoServer.Game.Premium
 
         public static byte[] BuildPremiumServiceData(string connStr, int accountId)
         {
-            var data = new byte[74];
+            var data = new byte[PremiumServiceDataLength];
             using (var conn = new SqliteConnection(connStr))
             {
                 conn.Open();
@@ -120,13 +127,27 @@ namespace DfoServer.Game.Premium
                             var slot = DevilContractCatalog.PremiumTypeToSlot(reader.GetInt32(0));
                             if (slot < 0 || slot >= 8) continue;
                             var expire = reader.GetInt64(1);
-                            var off = 6 + slot * 9;
+                            var off = PremiumRecordBaseOffset + slot * PremiumRecordSize;
                             Buffer.BlockCopy(BitConverter.GetBytes((int)Math.Min(expire, int.MaxValue)), 0, data, off, 4);
                         }
                     }
                 }
+
+                ApplySeriaLuckRecord(data, new InventoryDbPrimitives().LoadSeriaLuckValue(conn, null, accountId));
             }
             return data;
+        }
+
+        private static void ApplySeriaLuckRecord(byte[] data, int seriaLuckValue)
+        {
+            if (data == null || data.Length <= SeriaLuckThresholdOffset)
+                return;
+
+            var value = InventoryDbPrimitives.NormalizeSeriaLuckValue(seriaLuckValue);
+            if (value > 0)
+                Buffer.BlockCopy(BitConverter.GetBytes(SeriaLuckActiveSentinel), 0, data, SeriaLuckRecordOffset, 4);
+
+            data[SeriaLuckThresholdOffset] = (byte)(value >= InventoryDbPrimitives.SeriaLuckValueMax ? 0 : 1);
         }
 
         public static long LoadDevilContractMaxExpire(string connStr, int accountId)

@@ -521,6 +521,16 @@ namespace DfoServer.Network.Handlers
 
             var (cid, aid) = ResolveOwner(session);
 
+            if (ShouldSendPremiumServiceRefreshAfterOpen(result))
+            {
+                var premiumServiceBody = BuildPremiumServiceRefreshBody(_sqliteSelectCharacterDataSource, cid, aid);
+                if (premiumServiceBody != null)
+                {
+                    await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0312, premiumServiceBody));
+                    FileLogger.Log($"[{ProtocolName}] OPEN_MAGIC_BOX premium service refresh sent char={cid} account={aid}{FormatBoosterOpenState(result)}");
+                }
+            }
+
             if (result.SourceRemainingStackCount <= 0)
                 await SendConsumedSourceItemUpdate(session, result.SourceSlotIndex, result.SourceItemTemplateId);
 
@@ -545,6 +555,11 @@ namespace DfoServer.Network.Handlers
         internal static bool ShouldSendBoosterGageRefreshAfterOpen(BoosterUseResult result)
         {
             return false;
+        }
+
+        internal static bool ShouldSendPremiumServiceRefreshAfterOpen(BoosterUseResult result)
+        {
+            return result != null && result.IsSeriaLuckValueSource;
         }
 
         private static string FormatPacketHead(byte[] body, int maxBytes)

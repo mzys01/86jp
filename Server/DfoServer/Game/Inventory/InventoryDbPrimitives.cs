@@ -11,7 +11,7 @@ namespace DfoServer.Game.Inventory
 {
     internal sealed class InventoryDbPrimitives
     {
-        internal const int SeriaLuckValueMax = 100;
+        internal const int SeriaLuckValueMax = 8;
 
         internal int LoadSeriaLuckValue(SqliteConnection connection, SqliteTransaction transaction, int accountId)
         {
