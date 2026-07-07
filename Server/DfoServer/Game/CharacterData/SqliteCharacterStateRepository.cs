@@ -393,24 +393,7 @@ VALUES (@cid, (SELECT COALESCE(MAX(sort_order),0)+1 FROM character_dungeon_permi
                         }
                     }
 
-                    using (var cmd = new SqliteCommand("DELETE FROM character_hotkey_slots WHERE character_id = @cid", conn, tx))
-                    {
-                        cmd.Parameters.AddWithValue("@cid", characterId);
-                        cmd.ExecuteNonQuery();
-                    }
-
-                    var slots = snapshot.HotkeyConfigSlots;
-                    for (int i = 0; i < slots.Count; i++)
-                    {
-                        using (var cmd = new SqliteCommand(
-                            "INSERT INTO character_hotkey_slots (character_id, slot_index, hotkey_value) VALUES (@cid, @si, @hv)", conn, tx))
-                        {
-                            cmd.Parameters.AddWithValue("@cid", characterId);
-                            cmd.Parameters.AddWithValue("@si", i);
-                            cmd.Parameters.AddWithValue("@hv", (int)slots[i]);
-                            cmd.ExecuteNonQuery();
-                        }
-                    }
+                    ReplaceHotkeySlots(conn, tx, characterId, snapshot.HotkeyConfigSlots);
 
                     Game.Quests.QuestRepository.ReplaceAllClearedFlags(conn, tx, characterId,
                         snapshot.CharacInvisibleFalgs.ConvertAll(
@@ -495,6 +478,59 @@ ON CONFLICT(character_id) DO UPDATE SET character_option_blob = @body", conn))
                 {
                     cmd.Parameters.AddWithValue("@cid", characterId);
                     cmd.Parameters.AddWithValue("@body", copy);
+                    cmd.ExecuteNonQuery();
+                }
+            }
+        }
+
+        public void SaveHotkeyConfig(int characterId, byte[] hotkeys)
+        {
+            if (characterId <= 0 || hotkeys == null)
+                return;
+
+            using (var conn = new SqliteConnection(_connectionString))
+            {
+                conn.Open();
+                using (var tx = conn.BeginTransaction())
+                {
+                    ReplaceHotkeySlots(conn, tx, characterId, DecodeHotkeySlots(hotkeys));
+                    tx.Commit();
+                }
+            }
+        }
+
+        private static List<ushort> DecodeHotkeySlots(byte[] hotkeys)
+        {
+            var slots = new List<ushort>();
+            if (hotkeys == null)
+                return slots;
+
+            for (var offset = 0; offset + 1 < hotkeys.Length; offset += 2)
+                slots.Add(BitConverter.ToUInt16(hotkeys, offset));
+            return slots;
+        }
+
+        private static void ReplaceHotkeySlots(
+            SqliteConnection conn,
+            SqliteTransaction tx,
+            int characterId,
+            IReadOnlyList<ushort> slots)
+        {
+            using (var cmd = new SqliteCommand("DELETE FROM character_hotkey_slots WHERE character_id = @cid", conn, tx))
+            {
+                cmd.Parameters.AddWithValue("@cid", characterId);
+                cmd.ExecuteNonQuery();
+            }
+
+            slots = slots ?? Array.Empty<ushort>();
+            for (var i = 0; i < slots.Count; i++)
+            {
+                using (var cmd = new SqliteCommand(
+                    "INSERT INTO character_hotkey_slots (character_id, slot_index, hotkey_value) VALUES (@cid, @si, @hv)", conn, tx))
+                {
+                    cmd.Parameters.AddWithValue("@cid", characterId);
+                    cmd.Parameters.AddWithValue("@si", i);
+                    cmd.Parameters.AddWithValue("@hv", (int)slots[i]);
                     cmd.ExecuteNonQuery();
                 }
             }

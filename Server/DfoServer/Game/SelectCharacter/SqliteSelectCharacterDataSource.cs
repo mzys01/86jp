@@ -163,14 +163,27 @@ namespace DfoServer.Game.SelectCharacter
             }
 
             var acctSettings = _accountSettingsRepository.Load(accountId);
+            var character = _characterRepository?.GetById(characterId);
             initSnapshot.MainGameOptionBlob = acctSettings?.MainGameOption ?? Settings.AccountSettings.DefaultMainGameOption;
             initSnapshot.QuickchatBank0 = acctSettings?.QuickchatBank0;
             initSnapshot.QuickchatBank1 = acctSettings?.QuickchatBank1;
-            initSnapshot.HotkeyConfigSlots.Clear();
-            var hkSlots = acctSettings?.HotkeySlots ?? Settings.AccountSettings.DefaultHotkeySlots;
+            var hkSlots = initSnapshot.HotkeyConfigSlots.Count > 0
+                ? BuildHotkeyBlob(initSnapshot.HotkeyConfigSlots)
+                : Settings.CharacterKeyboardDefaults.BuildHotkeySlots((byte)(character?.Job ?? 0));
+            if (character != null
+                && Settings.CharacterKeyboardDefaults.IsCreatorMage(character.Job)
+                && Settings.CharacterKeyboardDefaults.LooksLikeNormalDefaultHotkeySlots(hkSlots))
+            {
+                hkSlots = Settings.CharacterKeyboardDefaults.BuildHotkeySlots(character.Job);
+                _initFlagsRepository.SaveHotkeyConfig(characterId, hkSlots);
+            }
+            Settings.AccountSettings.ApplyAccountScopedHotkeySlots(hkSlots, acctSettings?.HotkeySlots);
             if (hkSlots != null && hkSlots.Length >= 2)
             {
-                initSnapshot.HotkeyKeyType = acctSettings?.HotkeyKeyType ?? 0;
+                initSnapshot.HotkeyKeyType = character != null && Settings.CharacterKeyboardDefaults.IsCreatorMage(character.Job)
+                    ? (byte)1
+                    : (acctSettings?.HotkeyKeyType ?? 0);
+                initSnapshot.HotkeyConfigSlots.Clear();
                 for (int i = 0; i + 1 < hkSlots.Length; i += 2)
                     initSnapshot.HotkeyConfigSlots.Add(BitConverter.ToUInt16(hkSlots, i));
             }
@@ -305,6 +318,15 @@ namespace DfoServer.Game.SelectCharacter
             initSnapshot.AckTokenCera = wallet.TokenCera;
             initSnapshot.AckHappyTokenCera = wallet.HappyTokenCera;
             initSnapshot.LuckyStar = wallet.LuckyStar;
+        }
+
+        private static byte[] BuildHotkeyBlob(IReadOnlyList<ushort> slots)
+        {
+            var count = slots?.Count ?? 0;
+            var result = new byte[count * 2];
+            for (var i = 0; i < count; i++)
+                Buffer.BlockCopy(BitConverter.GetBytes(slots[i]), 0, result, i * 2, 2);
+            return result;
         }
 
         private void PersistAdventureManageLevel(IReadOnlyList<CharacterRecord> accountCharacters, byte manageLevel)
@@ -509,7 +531,8 @@ ON CONFLICT(character_id) DO UPDATE SET manage_level=excluded.manage_level;";
                 _inventoryStore.SeedNewCharacterEquipment(characterId, accountId, initialEquip);
             }
 
-            
+            _initFlagsRepository.SaveHotkeyConfig(characterId, Settings.CharacterKeyboardDefaults.BuildHotkeySlots(job));
+
             SeedNewCharacterStructuredData(characterId, job);
         }
 
