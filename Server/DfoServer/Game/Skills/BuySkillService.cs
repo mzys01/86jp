@@ -1,4 +1,5 @@
 using DfoServer.Game.CharacterData;
+using DfoServer.Game.Inventory;
 using DfoServer.Game.SelectCharacter;
 using System;
 using System.Collections.Generic;
@@ -30,6 +31,9 @@ namespace DfoServer.Game.Skills
         public ushort RemainTp;
         public readonly List<BuySkillResultEntry> Entries = new List<BuySkillResultEntry>();
         public byte ErrorCode;    
+        public bool ConsumedForgetRiverWater;
+        public short ConsumedForgetRiverWaterSlot = -1;
+        public InventoryMutationResult ConsumedForgetRiverWaterItem;
     }
 
     
@@ -42,6 +46,78 @@ namespace DfoServer.Game.Skills
     public static class BuySkillService
     {
         public static BuySkillResult Execute(SqliteCharacterProgressRepository repo, int cid, int job, int skillTree, IList<BuySkillEntry> entries,
+            int bonusSp = 0, byte level = 1, int bonusTp = 0)
+        {
+            var plan = BuildExecutionPlan(repo, cid, job, skillTree, entries, bonusSp, level, bonusTp);
+            if (plan.Result.Success)
+                repo.SaveSkillProgress(cid, plan.Snapshot, plan.PersistedPointState);
+            return plan.Result;
+        }
+
+        public static BuySkillResult ExecuteWithRefundConsumable(
+            IInventoryStore inventoryStore,
+            SqliteCharacterProgressRepository repo,
+            int cid,
+            int accountId,
+            int job,
+            int skillTree,
+            IList<BuySkillEntry> entries,
+            int bonusSp = 0,
+            byte level = 1,
+            int bonusTp = 0)
+        {
+            var plan = BuildExecutionPlan(repo, cid, job, skillTree, entries, bonusSp, level, bonusTp);
+            if (!plan.Result.Success)
+                return plan.Result;
+
+            if (!plan.HasEffectiveRefund)
+            {
+                repo.SaveSkillProgress(cid, plan.Snapshot, plan.PersistedPointState);
+                return plan.Result;
+            }
+
+            if (inventoryStore == null)
+            {
+                plan.Result.Success = false;
+                plan.Result.ErrorCode = 3;
+                return plan.Result;
+            }
+
+            short consumedSlot;
+            InventoryMutationResult consumedItem;
+            var consumed = inventoryStore.TryRemoveItemByTemplateId(
+                cid,
+                accountId,
+                SkillResetConsumableService.ForgetRiverWaterItemTemplateId,
+                out consumedSlot,
+                out consumedItem,
+                (connection, transaction) =>
+                {
+                    repo.SaveSkillProgress(connection, transaction, cid, plan.Snapshot, plan.PersistedPointState);
+                });
+
+            if (!consumed)
+            {
+                plan.Result.Success = false;
+                plan.Result.ErrorCode = 3;
+                return plan.Result;
+            }
+
+            plan.Result.ConsumedForgetRiverWater = true;
+            plan.Result.ConsumedForgetRiverWaterSlot = consumedSlot;
+            plan.Result.ConsumedForgetRiverWaterItem = consumedItem;
+            return plan.Result;
+        }
+
+        private sealed class BuySkillExecutionPlan
+        {
+            public BuySkillResult Result;
+            public SkillInfoSnapshot Snapshot;
+            public SkillPointState PersistedPointState;
+            public bool HasEffectiveRefund;
+        }
+
+        private static BuySkillExecutionPlan BuildExecutionPlan(SqliteCharacterProgressRepository repo, int cid, int job, int skillTree, IList<BuySkillEntry> entries,
             int bonusSp = 0, byte level = 1, int bonusTp = 0)
         {
             var snapshot = repo.LoadSkills(cid);
@@ -57,6 +133,7 @@ namespace DfoServer.Game.Skills
             int remainTp = points.RemainingTp;
 
             var result = new BuySkillResult { Success = true, SkillTree = (byte)skillTree };
+            var hasEffectiveRefund = false;
 
             
             var occupied = new HashSet<int>();
@@ -92,7 +169,7 @@ namespace DfoServer.Game.Skills
                         {
                             result.Success = false;
                             result.ErrorCode = 1;
-                            return result;
+                            return new BuySkillExecutionPlan { Result = result, Snapshot = snapshot };
                         }
                         slotForEntry = (byte)allocatedSlot;
                     }
@@ -100,13 +177,13 @@ namespace DfoServer.Game.Skills
                     if (sd.IsTpSkill)
                     {
                         int tpCost = sd.TpCostFor(curLevel, newLevel);
-                        if (remainTp < tpCost) { result.Success = false; result.ErrorCode = 2; return result; }
+                        if (remainTp < tpCost) { result.Success = false; result.ErrorCode = 2; return new BuySkillExecutionPlan { Result = result, Snapshot = snapshot }; }
                         remainTp -= tpCost;
                     }
                     else
                     {
                         int cost = sd.SpCostFor(curLevel, newLevel);
-                        if (remainSp < cost) { result.Success = false; result.ErrorCode = 2; return result; }
+                        if (remainSp < cost) { result.Success = false; result.ErrorCode = 2; return new BuySkillExecutionPlan { Result = result, Snapshot = snapshot }; }
                         remainSp -= cost;
                     }
 
@@ -142,6 +219,7 @@ namespace DfoServer.Game.Skills
                     int newLevel = curLevel - levels;
                     if (newLevel < baseLevel) newLevel = baseLevel;
                     if (newLevel >= curLevel) continue;
+                    hasEffectiveRefund = true;
 
                     if (sd.IsTpSkill)
                     {
@@ -177,12 +255,18 @@ namespace DfoServer.Game.Skills
             points.RemainingSp = Math.Max(0, Math.Min(remainSp, points.TotalSp));
             points.RemainingTp = Math.Max(0, Math.Min(remainTp, points.TotalTp));
             page.HeaderValue = ToUInt16(points.RemainingSp);
-            repo.SaveSkillProgress(cid, snapshot, BuildPersistedPointState(
-                snapshot, points, pageIdx, (byte)job, level, bonusSp, bonusTp));
+            var persistedPointState = BuildPersistedPointState(
+                snapshot, points, pageIdx, (byte)job, level, bonusSp, bonusTp);
 
             result.RemainSp = (ushort)points.RemainingSp;
             result.RemainTp = (ushort)points.RemainingTp;
-            return result;
+            return new BuySkillExecutionPlan
+            {
+                Result = result,
+                Snapshot = snapshot,
+                PersistedPointState = persistedPointState,
+                HasEffectiveRefund = hasEffectiveRefund,
+            };
         }
 
         private static SkillPointState ResolvePagePointState(
