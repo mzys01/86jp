@@ -202,7 +202,9 @@ namespace DfoServer.Network
             d[0x0050] = _inventoryHandler.Handle_ENUM_CMDPACKET_UPGRADE_ITEM;      //80
             d[0x00A0] = _inventoryHandler.Handle_OPEN_SELECTABLE_PACKAGE;
             d[0x0110] = _inventoryHandler.Handle_ENUM_CMDPACKET_ENCHANT_BY_BEAD;   //272
+            d[0x0191] = _inventoryHandler.Handle_UNSEAL_RANDOM_OPTION;             //401
             d[0x019C] = _inventoryHandler.Handle_TITLE_BOOK;                       //412
+            d[0x01B6] = _inventoryHandler.Handle_CHANGE_RANDOM_OPTION;             //438
             d[0x019D] = _inventoryHandler.Handle_TITLE_BOOK;                       //413
             d[0x0207] = _inventoryHandler.Handle_OPEN_AVATAR_PACKAGE;
             d[0x0218] = _inventoryHandler.Handle_USE_BOOSTER_ITEM;
