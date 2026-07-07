@@ -13,6 +13,9 @@ namespace DfoServer.Game.Inventory
         AccountCargo = 12,
     }
 
+    // ITEM_LIST/UPDATE_ITEM_LIST 的普通 0x54 entry 协议 DTO。
+    // 业务逻辑不要直接读写 PrefixData0E/MiddleData1A/TailData2F 等协议字段；
+    // 新业务应通过 ItemRecord + ItemExtraView 表达语义，发包前再映射到此 DTO。
     public sealed class CommonInventoryItem
     {
         public short SlotIndex { get; set; }
@@ -42,6 +45,8 @@ namespace DfoServer.Game.Inventory
         public byte EquipmentLockId { get; set; }
     }
 
+    // ITEM_LIST/UPDATE_ITEM_LIST 的时装协议 DTO，只用于初始化和刷新包构造边界。
+    // 业务逻辑不要把 Reserved0/Reserved1/Reserved2 当作业务模型直接操作。
     public sealed class AvatarInventoryItem
     {
         public short SlotIndex { get; set; }
@@ -63,6 +68,8 @@ namespace DfoServer.Game.Inventory
         public byte[] TailData { get; set; } = new byte[7];
     }
 
+    // ITEM_LIST/UPDATE_ITEM_LIST 的宠物协议 DTO，只用于初始化和刷新包构造边界。
+    // 宠物业务状态应从宠物实例/详情模型读取，再在发包前映射到此 DTO。
     public sealed class PetInventoryItem
     {
         public short SlotIndex { get; set; }
@@ -83,6 +90,8 @@ namespace DfoServer.Game.Inventory
         public int Value32 { get; set; }
     }
 
+    // 选角/进图 ITEM_LIST 的协议快照，不是运行时物品业务模型。
+    // handler 不应长期依赖它反查业务状态；需要刷新时应从业务结果或记录重新映射。
     public sealed class CharacterItemListSnapshot
     {
         public ushort MainListParam16 { get; set; }

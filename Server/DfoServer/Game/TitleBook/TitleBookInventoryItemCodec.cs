@@ -9,61 +9,59 @@ namespace DfoServer.Game.TitleBook
         public const int PersistedRecordSize = CommonNetworkSize + 1;
         public const int TitleBookListEntrySize = 22;
 
-        public static TitleBookInventoryItem FromCommon(int category, ushort bookIndex, CommonInventoryItem common)
+        internal static TitleBookInventoryItem FromItemRecord(int category, ushort bookIndex, SqliteInventoryStore.ItemRecord record)
         {
-            if (common == null) throw new ArgumentNullException(nameof(common));
+            if (record == null) throw new ArgumentNullException(nameof(record));
 
-            var prefix = Normalize(common.PrefixData0E, 8);
-            var middle = Normalize(common.MiddleData1A, 17);
+            var extra = ItemExtraView.Parse(record.ExtraJson);
 
             return new TitleBookInventoryItem
             {
                 Category = category,
                 BookIndex = bookIndex,
-                Slot = unchecked((ushort)common.SlotIndex),
-                ItemId = common.ItemTemplateId,
-                Value = common.CountOrInstanceValue,
-                Attr = common.ExtData0,
-                Durability = common.Durability,
-                SealFlag = common.SealFlag,
-                EnchantIndex = BitConverter.ToInt32(prefix, 0),
-                EnchantUpgradeCount = prefix[4],
-                AmplifyType = prefix[5],
-                AmplifyValue = BitConverter.ToUInt16(prefix, 6),
-                Marker16 = common.Marker16,
-                Chronicle = DecodeChronicle(middle),
-                ExpireTime = common.ExpireTime,
-                TailData = Normalize(common.TailData2F, 37),
-                EquipmentLockId = common.EquipmentLockId,
+                Slot = unchecked((ushort)record.SlotIndex),
+                ItemId = record.ItemTemplateId,
+                Value = record.StackCount,
+                Attr = extra.Equipment.ExtData0,
+                Durability = record.Durability,
+                SealFlag = record.SealFlag,
+                EnchantIndex = extra.Equipment.EnchantCardId,
+                EnchantUpgradeCount = extra.Equipment.EnchantUpgradeCount,
+                AmplifyType = extra.Equipment.AmplifyType,
+                AmplifyValue = extra.Equipment.AmplifyValue,
+                Marker16 = record.Marker16,
+                Chronicle = DecodeChronicle(extra.Raw84.MiddleData1A),
+                ExpireTime = record.ExpireTime,
+                TailData = Normalize(extra.Raw84.TailData2F, 37),
+                EquipmentLockId = record.EquipmentLockId,
             };
         }
 
-        public static CommonInventoryItem ToCommon(TitleBookInventoryItem item, short? slotOverride = null)
+        internal static string ToExtraJson(TitleBookInventoryItem item)
         {
             if (item == null) throw new ArgumentNullException(nameof(item));
 
-            var prefix = new byte[8];
-            BitConverter.GetBytes(item.EnchantIndex).CopyTo(prefix, 0);
-            prefix[4] = item.EnchantUpgradeCount;
-            prefix[5] = item.AmplifyType;
-            BitConverter.GetBytes(item.AmplifyValue).CopyTo(prefix, 6);
+            var builder = new ItemExtraViewBuilder();
+            builder.Equipment.ExtData0 = item.Attr;
+            builder.Equipment.EnchantCardId = item.EnchantIndex;
+            builder.Equipment.EnchantUpgradeCount = item.EnchantUpgradeCount;
+            builder.Equipment.AmplifyType = item.AmplifyType;
+            builder.Equipment.AmplifyValue = item.AmplifyValue;
+            builder.Equipment.MiddleData1A = EncodeChronicle(item.Chronicle);
+            builder.Equipment.TailData2F = Normalize(item.TailData, 37);
+            builder.Equipment.JewelSocket = new byte[30];
+            return builder.Build().Serialize();
+        }
 
-            return new CommonInventoryItem
-            {
-                SlotIndex = slotOverride ?? unchecked((short)item.Slot),
-                ItemTemplateId = item.ItemId,
-                CountOrInstanceValue = item.Value,
-                ExtData0 = item.Attr,
-                Durability = item.Durability,
-                SealFlag = item.SealFlag,
-                PrefixData0E = prefix,
-                Marker16 = item.Marker16,
-                MiddleData1A = EncodeChronicle(item.Chronicle),
-                ExpireTime = item.ExpireTime,
-                TailData2F = Normalize(item.TailData, 37),
-                JewelSocket = new byte[30],
-                EquipmentLockId = item.EquipmentLockId,
-            };
+        internal static string InferItemKind(TitleBookInventoryItem item)
+        {
+            if (item == null || item.ItemId <= 0)
+                return "special";
+
+            if (item.ExpireTime != 0)
+                return "special";
+
+            return item.Marker16 == 0 ? "stackable" : "equipment";
         }
 
         public static TitleBookListEntrySnapshot ToListEntry(TitleBookInventoryItem item)
@@ -90,20 +88,22 @@ namespace DfoServer.Game.TitleBook
             if (item == null || item.IsEmpty)
                 return new byte[PersistedRecordSize];
 
-            var common = ToCommon(item);
             var buf = new byte[PersistedRecordSize];
-            WriteInt16(buf, 0, common.SlotIndex);
-            WriteInt32(buf, 2, common.ItemTemplateId);
-            WriteInt32(buf, 6, common.CountOrInstanceValue);
-            buf[10] = common.ExtData0;
-            WriteUInt16(buf, 11, common.Durability);
-            buf[13] = common.SealFlag;
-            Buffer.BlockCopy(Normalize(common.PrefixData0E, 8), 0, buf, 14, 8);
-            WriteInt32(buf, 22, common.Marker16);
-            Buffer.BlockCopy(Normalize(common.MiddleData1A, 17), 0, buf, 26, 17);
-            WriteInt32(buf, 43, common.ExpireTime);
-            Buffer.BlockCopy(Normalize(common.TailData2F, 37), 0, buf, 47, 37);
-            buf[CommonNetworkSize] = common.EquipmentLockId;
+            WriteInt16(buf, 0, unchecked((short)item.Slot));
+            WriteInt32(buf, 2, item.ItemId);
+            WriteInt32(buf, 6, item.Value);
+            buf[10] = item.Attr;
+            WriteUInt16(buf, 11, item.Durability);
+            buf[13] = item.SealFlag;
+            WriteInt32(buf, 14, item.EnchantIndex);
+            buf[18] = item.EnchantUpgradeCount;
+            buf[19] = item.AmplifyType;
+            WriteUInt16(buf, 20, item.AmplifyValue);
+            WriteInt32(buf, 22, item.Marker16);
+            Buffer.BlockCopy(EncodeChronicle(item.Chronicle), 0, buf, 26, 17);
+            WriteInt32(buf, 43, item.ExpireTime);
+            Buffer.BlockCopy(Normalize(item.TailData, 37), 0, buf, 47, 37);
+            buf[CommonNetworkSize] = item.EquipmentLockId;
             return buf;
         }
 
@@ -114,24 +114,26 @@ namespace DfoServer.Game.TitleBook
             if (itemId <= 0)
                 return CreateEmpty(category, bookIndex);
 
-            var common = new CommonInventoryItem
+            return new TitleBookInventoryItem
             {
-                SlotIndex = BitConverter.ToInt16(data, 0),
-                ItemTemplateId = itemId,
-                CountOrInstanceValue = BitConverter.ToInt32(data, 6),
-                ExtData0 = data[10],
+                Category = category,
+                BookIndex = bookIndex,
+                Slot = unchecked((ushort)BitConverter.ToInt16(data, 0)),
+                ItemId = itemId,
+                Value = BitConverter.ToInt32(data, 6),
+                Attr = data[10],
                 Durability = BitConverter.ToUInt16(data, 11),
                 SealFlag = data[13],
-                PrefixData0E = Slice(data, 14, 8),
+                EnchantIndex = BitConverter.ToInt32(data, 14),
+                EnchantUpgradeCount = data[18],
+                AmplifyType = data[19],
+                AmplifyValue = BitConverter.ToUInt16(data, 20),
                 Marker16 = BitConverter.ToInt32(data, 22),
-                MiddleData1A = Slice(data, 26, 17),
+                Chronicle = DecodeChronicle(Slice(data, 26, 17)),
                 ExpireTime = BitConverter.ToInt32(data, 43),
-                TailData2F = Slice(data, 47, 37),
-                JewelSocket = new byte[30],
+                TailData = Slice(data, 47, 37),
                 EquipmentLockId = data[CommonNetworkSize],
             };
-
-            return FromCommon(category, bookIndex, common);
         }
 
         public static TitleBookInventoryItem CreateEmpty(int category, ushort bookIndex)

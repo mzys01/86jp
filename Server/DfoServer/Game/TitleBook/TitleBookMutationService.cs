@@ -42,9 +42,8 @@ namespace DfoServer.Game.TitleBook
                 if (sourceList == InventoryListType.Equipment)
                     return PutEquippedTitle(connection, transaction, characterId, sourceSlot, itemId, category, bookIndex, result);
 
-                var sourceCommon = LoadCommon(connection, transaction, characterId, accountId, sourceList, sourceSlot);
                 var sourceRecord = LoadRecord(connection, transaction, characterId, accountId, sourceList, sourceSlot);
-                if (sourceCommon == null || sourceRecord == null || sourceCommon.ItemTemplateId != itemId)
+                if (sourceRecord == null || sourceRecord.ItemTemplateId != itemId)
                     return result;
 
                 var definition = _staticData.GetSlot(category, bookIndex);
@@ -56,12 +55,11 @@ namespace DfoServer.Game.TitleBook
 
                 if (existing != null && !existing.IsEmpty)
                 {
-                    var back = TitleBookInventoryItemCodec.ToCommon(existing, sourceSlot);
-                    InsertCommon(connection, transaction, characterId, accountId, sourceList, back, forceEquipmentKind: false);
+                    InsertTitleItem(connection, transaction, characterId, accountId, sourceList, sourceSlot, existing);
                     result.ItemLockChanged |= MoveEquipmentLock(connection, transaction, characterId, existing.EquipmentLockId, sourceList, sourceSlot);
                 }
 
-                var titleItem = TitleBookInventoryItemCodec.FromCommon(category, (ushort)bookIndex, sourceCommon);
+                var titleItem = TitleBookInventoryItemCodec.FromItemRecord(category, (ushort)bookIndex, sourceRecord);
                 titleItem.Slot = (ushort)bookIndex;
                 titleItem.BookIndex = (ushort)bookIndex;
                 _titleBookRepository.SaveItem(connection, transaction, characterId, titleItem);
@@ -149,9 +147,7 @@ namespace DfoServer.Game.TitleBook
                 if (LoadRecord(connection, transaction, characterId, accountId, targetList, targetSlot) != null)
                     return result;
 
-                InsertCommon(connection, transaction, characterId, accountId, targetList,
-                    TitleBookInventoryItemCodec.ToCommon(title, targetSlot),
-                    forceEquipmentKind: false);
+                InsertTitleItem(connection, transaction, characterId, accountId, targetList, targetSlot, title);
                 _titleBookRepository.ClearItem(connection, transaction, characterId, category, bookIndex);
                 result.ItemLockChanged |= MoveEquipmentLock(connection, transaction, characterId, title.EquipmentLockId, targetList, targetSlot);
 
@@ -268,17 +264,6 @@ namespace DfoServer.Game.TitleBook
                 && bookIndex < TitleBookStaticDataProvider.CategoryCapacities[category];
         }
 
-        private CommonInventoryItem LoadCommon(SqliteConnection connection, SqliteTransaction transaction, int characterId, int accountId, InventoryListType listType, short slotIndex)
-        {
-            if (listType == InventoryListType.AccountCargo)
-                return _db.LoadAccountCargoCommonItem(connection, transaction, accountId, slotIndex);
-
-            if (listType == InventoryListType.Equipment || listType == InventoryListType.Pet)
-                return null;
-
-            return _db.LoadCommonItem(connection, transaction, characterId, SqliteInventoryStore.MapToDbListType(listType), slotIndex);
-        }
-
         private SqliteInventoryStore.ItemRecord LoadRecord(SqliteConnection connection, SqliteTransaction transaction, int characterId, int accountId, InventoryListType listType, short slotIndex)
         {
             if (listType == InventoryListType.AccountCargo)
@@ -298,41 +283,75 @@ namespace DfoServer.Game.TitleBook
                 _db.DeleteItem(connection, transaction, record.ItemUid);
         }
 
-        private void InsertCommon(
+        private void InsertTitleItem(
             SqliteConnection connection,
             SqliteTransaction transaction,
             int characterId,
             int accountId,
             InventoryListType listType,
-            CommonInventoryItem item,
-            bool forceEquipmentKind)
+            short slotIndex,
+            TitleBookInventoryItem item)
         {
             if (listType == InventoryListType.AccountCargo)
             {
-                _db.InsertAccountCargoItem(connection, transaction, accountId, item);
+                InsertAccountCargoTitleItem(connection, transaction, accountId, slotIndex, item);
                 return;
             }
 
             var dbListType = SqliteInventoryStore.MapToDbListType(listType);
-            var itemKind = forceEquipmentKind ? "equipment" : InventoryItemCodec.InferCommonItemKind(item);
             _db.InsertCharacterItem(
                 connection,
                 transaction,
                 characterId,
                 dbListType,
-                item.SlotIndex,
-                item.ItemTemplateId,
-                itemKind,
-                item.CountOrInstanceValue,
-                item.CountOrInstanceValue,
+                slotIndex,
+                item.ItemId,
+                TitleBookInventoryItemCodec.InferItemKind(item),
+                item.Value,
+                item.Value,
                 item.Durability,
                 item.SealFlag,
                 0,
                 item.ExpireTime,
                 item.Marker16,
                 0,
-                InventoryItemCodec.SerializeCommon(item),
+                TitleBookInventoryItemCodec.ToExtraJson(item),
                 item.EquipmentLockId);
+        }
+
+        private static void InsertAccountCargoTitleItem(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            int accountId,
+            short slotIndex,
+            TitleBookInventoryItem item)
+        {
+            using (var command = connection.CreateCommand())
+            {
+                command.Transaction = transaction;
+                command.CommandText = @"
+INSERT OR REPLACE INTO account_cargo_items (
+    account_id, slot_index, item_template_id, item_kind,
+    stack_count, instance_value, durability, seal_flag, option_value, expire_time, marker_16,
+    extra_json)
+VALUES (
+    @accountId, @slotIndex, @templateId, @itemKind,
+    @stackCount, @instanceValue, @durability, @sealFlag, @optionValue, @expireTime, @marker16,
+    @extraJson);";
+                command.Parameters.AddWithValue("@accountId", accountId);
+                command.Parameters.AddWithValue("@slotIndex", slotIndex);
+                command.Parameters.AddWithValue("@templateId", item.ItemId);
+                command.Parameters.AddWithValue("@itemKind", TitleBookInventoryItemCodec.InferItemKind(item));
+                command.Parameters.AddWithValue("@stackCount", item.Value);
+                command.Parameters.AddWithValue("@instanceValue", item.Value);
+                command.Parameters.AddWithValue("@durability", item.Durability);
+                command.Parameters.AddWithValue("@sealFlag", item.SealFlag);
+                command.Parameters.AddWithValue("@optionValue", 0);
+                command.Parameters.AddWithValue("@expireTime", item.ExpireTime);
+                command.Parameters.AddWithValue("@marker16", item.Marker16);
+                command.Parameters.AddWithValue("@extraJson", TitleBookInventoryItemCodec.ToExtraJson(item));
+                command.ExecuteNonQuery();
+            }
         }
 
         private static EquippedTitleRecord LoadEquippedTitle(SqliteConnection connection, SqliteTransaction transaction, int characterId, short slot)
