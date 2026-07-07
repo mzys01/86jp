@@ -319,6 +319,7 @@ namespace DfoServer.Game.TitleBook
                 item.EquipmentLockId);
         }
 
+        // SQL 与 InventoryDbPrimitives.InsertAccountCargoItem 同表同列，改表结构时两处须同步。
         private static void InsertAccountCargoTitleItem(
             SqliteConnection connection,
             SqliteTransaction transaction,

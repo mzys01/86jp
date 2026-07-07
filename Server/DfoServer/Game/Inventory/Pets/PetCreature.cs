@@ -103,7 +103,7 @@ namespace DfoServer.Game.Inventory
                     PetCreatureEquipSlot,
                     source.ItemTemplateId,
                     petSerial,
-                    petSerial,
+                    source.ExpireTime,
                     source.ExpireTime);
                 CleanupLegacyPetCreatureStorage(
                     connection,
