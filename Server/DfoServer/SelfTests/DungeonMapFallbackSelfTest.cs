@@ -179,6 +179,8 @@ namespace DfoServer.SelfTests
                 mazeIndex == 1 && matchedQuestId == 1848 && matchSource == "related",
                 ref failures);
 
+            CheckSuitableLevelEligibility(ref failures);
+
             try
             {
                 var issue189StartMap = DungeonData.GetDungeonMapMonsterSummaryInformation(
@@ -550,6 +552,27 @@ namespace DfoServer.SelfTests
         {
             Console.WriteLine($"[{(ok ? "OK" : "FAIL")}] {name}");
             if (!ok) failures++;
+        }
+
+        private static void CheckSuitableLevelEligibility(ref int failures)
+        {
+            Check("suitable dungeon range uses minimum and basis level",
+                DungeonData.TryGetSuitableLevelRange(144, out var minLevel, out var maxLevel)
+                && minLevel == 1
+                && maxLevel == 5,
+                ref failures);
+            Check("suitable dungeon rejects level below min",
+                !DungeonData.IsSuitableLevelDungeon(144, 0),
+                ref failures);
+            Check("suitable dungeon accepts min level",
+                DungeonData.IsSuitableLevelDungeon(144, 1),
+                ref failures);
+            Check("suitable dungeon accepts max level",
+                DungeonData.IsSuitableLevelDungeon(144, 5),
+                ref failures);
+            Check("suitable dungeon rejects level above max",
+                !DungeonData.IsSuitableLevelDungeon(144, 6),
+                ref failures);
         }
     }
 }
