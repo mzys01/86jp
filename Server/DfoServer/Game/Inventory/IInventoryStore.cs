@@ -26,8 +26,6 @@ namespace DfoServer.Game.Inventory
 
         bool TryDeleteItem(int characterId, int accountId, InventoryListType listType, short slotIndex, short deleteCount, out InventoryMutationResult result);
 
-        bool TryUsePremiumContractItem(int characterId, int accountId, InventoryListType listType, short slotIndex, int expectedItemTemplateId, out PremiumContractUseResult result);
-
         bool TryOpenAvatarPackage(int characterId, int accountId, AvatarPackageOpenRequest request, out AvatarPackageOpenResult result);
 
         bool TryOpenSelectablePackage(int characterId, int accountId, SelectablePackageOpenRequest request, out SelectablePackageOpenResult result);

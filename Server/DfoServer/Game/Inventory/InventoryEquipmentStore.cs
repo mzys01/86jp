@@ -730,37 +730,22 @@ VALUES (@accountId, @selectionKey, @value32, @itemCount, CURRENT_TIMESTAMP);";
                     return;
                 }
 
-                var prefix = new byte[8];
-                BitConverter.GetBytes(f.Enchant).CopyTo(prefix, 0);
-                prefix[4] = f.EnchantUpgradeCount;
-                prefix[5] = f.AmplifyType;
-                BitConverter.GetBytes(f.AmplifyValue).CopyTo(prefix, 6);
-                var tail = new byte[37];
-                if (f.Emblem != null && f.Emblem.Length > 0)
-                    Buffer.BlockCopy(f.Emblem, 0, tail, 0, Math.Min(f.Emblem.Length, 9));
-                BitConverter.GetBytes(f.Rune).CopyTo(tail, 9); // 84B offset56 → TailData2F[9]
-                tail[27] = f.Forging;                           // 84B genuineUpgrade offset74 → TailData2F[27]
-                if (f.MagicSealCount > 0 && f.MagicSealTypes != null)
-                {
-                    tail[11] = f.MagicSealCount;
-                    for (int si = 0; si < f.MagicSealCount && si < 3; si++)
-                    {
-                        tail[12 + si] = f.MagicSealTypes[si];  // 84B offset 59,60,61
-                        tail[15 + si] = f.MagicSealVal1s[si];  // 84B offset 62,63,64
-                        tail[18 + si] = f.MagicSealVal2s[si];  // 84B offset 65,66,67
-                    }
-                    // seal tail → TailData2F[21+] (84B offset 68+)
-                    if (f.MagicSealTail != null)
-                        for (int si = 0; si < f.MagicSealTail.Length && 21 + si < tail.Length; si++)
-                            tail[21 + si] = f.MagicSealTail[si];
-                }
-                string jewelJson = (f.JewelSocket != null && f.JewelSocket.Length > 0)
-                    ? ",\"jewelSocket\":\"" + BitConverter.ToString(f.JewelSocket).Replace("-", "") + "\""
-                    : "";
-                extraJson = "{\"extData0\":" + f.Reinforce
-                    + ",\"prefixData0E\":\"" + BitConverter.ToString(prefix).Replace("-", "")
-                    + "\",\"tailData2F\":\"" + BitConverter.ToString(tail).Replace("-", "") + "\""
-                    + jewelJson + "}";
+                var extraBuilder = new ItemExtraViewBuilder();
+                extraBuilder.Equipment.ExtData0 = f.Reinforce;
+                extraBuilder.Equipment.EnchantCardId = unchecked((int)f.Enchant);
+                extraBuilder.Equipment.EnchantUpgradeCount = f.EnchantUpgradeCount;
+                extraBuilder.Equipment.AmplifyType = f.AmplifyType;
+                extraBuilder.Equipment.AmplifyValue = f.AmplifyValue;
+                extraBuilder.Equipment.EmblemData = f.Emblem;
+                extraBuilder.Equipment.Rune = f.Rune;
+                extraBuilder.Equipment.SealCount = f.MagicSealCount;
+                extraBuilder.Equipment.SealTypes = f.MagicSealTypes;
+                extraBuilder.Equipment.SealVal1s = f.MagicSealVal1s;
+                extraBuilder.Equipment.SealVal2s = f.MagicSealVal2s;
+                extraBuilder.Equipment.SealTail = f.MagicSealTail;
+                extraBuilder.Equipment.Forging = f.Forging;
+                extraBuilder.Equipment.JewelSocket = f.JewelSocket;
+                extraJson = extraBuilder.Build().Serialize();
             }
             byte ov = (byte)(listType == InventoryListType.Avatar ? dur : 0);
             _db.InsertCharacterItem(connection, transaction, characterId, listType, slot, itemId, "equipment",

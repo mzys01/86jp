@@ -60,19 +60,11 @@ namespace DfoServer.Game.Inventory
                 return false;
             }
 
-            var targetCommon = _db.LoadCommonItem(connection, transaction, characterId, InventoryListType.Main, command.TargetSlotIndex);
-            if (targetCommon == null)
-            {
-                result = EnchantByBeadResult.Error(command, EnchantByBeadResult.ErrorInvalidTarget);
-                return false;
-            }
-
-            targetCommon.PrefixData0E = NormalizeBytes(targetCommon.PrefixData0E, 8);
-
-            // 装备 common entry 的 +0x0E 前 4 字节承载附魔卡片 index，后 1 字节承载 86 卡片升级次数。
-            BitConverter.GetBytes(enchantCardItemId).CopyTo(targetCommon.PrefixData0E, 0);
-            targetCommon.PrefixData0E[4] = enchantUpgradeCount;
-            _db.UpdateCommonExtraJson(connection, transaction, target.ItemUid, targetCommon);
+            var targetExtra = ItemExtraView.Parse(target.ExtraJson);
+            var updatedTargetExtra = BuildEnchantTargetExtraView(targetExtra, enchantCardItemId, enchantUpgradeCount);
+            target.ExtraJson = updatedTargetExtra.Serialize();
+            _db.UpdateItemExtraJson(connection, transaction, target.ItemUid, target.ExtraJson);
+            var targetCommon = InventoryProtocolMapper.ToCommonItem(target, updatedTargetExtra);
 
             var remainingBeadCount = bead.StackCount - 1;
             CommonInventoryItem beadCommon;
@@ -106,19 +98,18 @@ namespace DfoServer.Game.Inventory
             };
         }
 
-        private static byte[] NormalizeBytes(byte[] source, int expectedLength)
-        {
-            var buffer = new byte[expectedLength];
-            if (source != null && source.Length > 0)
-                Array.Copy(source, 0, buffer, 0, Math.Min(source.Length, expectedLength));
-            return buffer;
-        }
-
         private static byte ReadEnchantUpgradeCount(string extraJson)
         {
             // 86 附魔卡片升级次数跟随宝珠动态数据保存，写入装备时落到 common entry +0x12。
-            var prefix = InventoryItemCodec.ReadHexValue(extraJson ?? string.Empty, "prefixData0E", 8);
-            return prefix.Length >= 5 ? prefix[4] : (byte)0;
+            return ItemExtraView.Parse(extraJson).Equipment.EnchantUpgradeCount;
+        }
+
+        private static ItemExtraView BuildEnchantTargetExtraView(ItemExtraView targetExtra, int enchantCardItemId, byte enchantUpgradeCount)
+        {
+            var builder = ItemExtraViewBuilder.FromView(targetExtra);
+            builder.Equipment.EnchantCardId = enchantCardItemId;
+            builder.Equipment.EnchantUpgradeCount = enchantUpgradeCount;
+            return builder.Build();
         }
     }
 }

@@ -48,12 +48,8 @@ namespace DfoServer.Game.Inventory
                 return false;
             }
 
-            var targetCommon = _db.LoadCommonItem(connection, transaction, characterId, InventoryListType.Main, command.TargetSlotIndex);
-            if (targetCommon == null || !TryReadTargetItem(targetCommon, out var targetItem))
-            {
-                result = ItemUpgradeResult.Error(command, ItemUpgradeResult.ErrorInvalidTarget);
-                return false;
-            }
+            var targetExtra = ItemExtraView.Parse(target.ExtraJson);
+            var targetItem = BuildUpgradeTargetItem(target, targetExtra);
 
             var targetMetadata = ItemMetadataResolver.Resolve(target.ItemTemplateId);
             if (targetMetadata == null
@@ -77,13 +73,13 @@ namespace DfoServer.Game.Inventory
                 return false;
             }
 
-            if (targetMetadata.Durability > 0 && targetCommon.Durability != targetMetadata.Durability)
+            if (targetMetadata.Durability > 0 && target.Durability != targetMetadata.Durability)
             {
                 result = ItemUpgradeResult.Error(command, ItemUpgradeResult.ErrorDurability);
                 return false;
             }
 
-            if (targetMetadata.Durability == 0 && targetCommon.Durability != 0)
+            if (targetMetadata.Durability == 0 && target.Durability != 0)
             {
                 result = ItemUpgradeResult.Error(command, ItemUpgradeResult.ErrorDurability);
                 return false;
@@ -137,9 +133,9 @@ namespace DfoServer.Game.Inventory
                 result = ItemUpgradeResult.Error(command, errorCode);
                 return false;
             }
-            LogUpgradeContext(command, context, row, targetMetadata, targetCommon, material, materialStackable);
+            LogUpgradeContext(command, context, row, targetMetadata, target, material, materialStackable);
 
-            if (!ValidateRestrictions(context, targetCommon, out errorCode))
+            if (!ValidateRestrictions(context, target.SealFlag, out errorCode))
             {
                 LogUpgradeReject("装备未通过部位/品级/封装/等级限制检查", errorCode, command, context, row, material);
                 result = ItemUpgradeResult.Error(command, errorCode);
@@ -245,9 +241,10 @@ namespace DfoServer.Game.Inventory
             }
             else
             {
-                targetCommon.ExtData0 = newLevel;
-                _db.UpdateCommonExtraJson(connection, transaction, target.ItemUid, targetCommon);
-                targetUpdate = targetCommon;
+                var updatedExtra = BuildUpgradeExtraView(targetExtra, newLevel);
+                target.ExtraJson = updatedExtra.Serialize();
+                _db.UpdateItemExtraJson(connection, transaction, target.ItemUid, target.ExtraJson);
+                targetUpdate = InventoryProtocolMapper.ToCommonItem(target, updatedExtra);
             }
 
             CommonInventoryItem destroyRewardCommon = null;
@@ -320,7 +317,7 @@ namespace DfoServer.Game.Inventory
             ItemUpgradeContext context,
             UpgradeTableRow row,
             ItemMetadata targetMetadata,
-            CommonInventoryItem targetCommon,
+            SqliteInventoryStore.ItemRecord target,
             SqliteInventoryStore.ItemRecord material,
             StackableItemFile materialStackable)
         {
@@ -329,7 +326,7 @@ namespace DfoServer.Game.Inventory
 
             FileLogger.Log("[ItemUpgrade] ---- 强化/增幅请求 ----");
             FileLogger.Log($"[ItemUpgrade] 操作类型={FormatMode(context.Mode)}，操作场景={FormatScene(context.Scene)}");
-            FileLogger.Log($"[ItemUpgrade] 目标装备名称={ResolveEquipmentName(context.TargetItemTemplateId, command?.TargetItemName)}，slot={context.TargetSlotIndex}，当前强化值={context.CurrentUpgradeLevel}，是否最大耐久={FormatBool(IsFullDurability(targetCommon, targetMetadata))}，品级rarity={context.EquipmentRarity}，使用等级={context.EquipmentLevel}，部位={FormatEquipmentType(context.EquipmentType)}");
+            FileLogger.Log($"[ItemUpgrade] 目标装备名称={ResolveEquipmentName(context.TargetItemTemplateId, command?.TargetItemName)}，slot={context.TargetSlotIndex}，当前强化值={context.CurrentUpgradeLevel}，是否最大耐久={FormatBool(IsFullDurability(target, targetMetadata))}，品级rarity={context.EquipmentRarity}，使用等级={context.EquipmentLevel}，部位={FormatEquipmentType(context.EquipmentType)}");
             FileLogger.Log($"[ItemUpgrade] 请求消耗品名称={ResolveRequestMaterialName(context, materialStackable)}，slot={ResolveCostMaterialSlot(context.Cost, material, command?.MaterialSlotIndex ?? -1)}");
             FileLogger.Log($"[ItemUpgrade] 限制: 部位限制={FormatSlotRestriction(context.Restriction?.SlotRestriction ?? 0)} 品级rarity限制={FormatIntList(context.Restriction?.RarityRestrictions)} 封装限制={FormatSealRestriction(context.Restriction?.SealRestriction ?? 0)} 装备等级范围={FormatLevelRange(context.Restriction)}");
             FileLogger.Log($"[ItemUpgrade] 费用消耗：金币={context.Cost?.Gold ?? 0}，消耗材料名称={ResolveCostMaterialName(context.Cost)}，数量={context.Cost?.MaterialCount ?? 0}，slot={ResolveCostMaterialSlot(context.Cost, material, command?.MaterialSlotIndex ?? -1)}");
@@ -441,14 +438,14 @@ namespace DfoServer.Game.Inventory
             return "构建UpgradeContext失败";
         }
 
-        private static bool IsFullDurability(CommonInventoryItem targetCommon, ItemMetadata targetMetadata)
+        private static bool IsFullDurability(SqliteInventoryStore.ItemRecord target, ItemMetadata targetMetadata)
         {
-            if (targetCommon == null || targetMetadata == null)
+            if (target == null || targetMetadata == null)
                 return false;
 
             return targetMetadata.Durability > 0
-                ? targetCommon.Durability == targetMetadata.Durability
-                : targetCommon.Durability == 0;
+                ? target.Durability == targetMetadata.Durability
+                : target.Durability == 0;
         }
 
         private static string FormatPenalty(
@@ -854,7 +851,7 @@ namespace DfoServer.Game.Inventory
             return true;
         }
 
-        private static bool ValidateRestrictions(ItemUpgradeContext context, CommonInventoryItem targetCommon, out byte errorCode)
+        private static bool ValidateRestrictions(ItemUpgradeContext context, byte targetSealFlag, out byte errorCode)
         {
             errorCode = ItemUpgradeResult.ErrorRestriction;
             var restriction = context.Restriction ?? new ItemUpgradeRestriction();
@@ -868,7 +865,7 @@ namespace DfoServer.Game.Inventory
             if (!restriction.AllowsItemLevel(context.EquipmentLevel))
                 return false;
 
-            if (restriction.SealRestriction == 1 && targetCommon.SealFlag == 0)
+            if (restriction.SealRestriction == 1 && targetSealFlag == 0)
                 return false;
 
             return true;
@@ -1080,34 +1077,27 @@ namespace DfoServer.Game.Inventory
             return oldLevel;
         }
 
-        private static bool TryReadTargetItem(CommonInventoryItem common, out InvenItem item)
+        private static InvenItem BuildUpgradeTargetItem(SqliteInventoryStore.ItemRecord record, ItemExtraView extra)
         {
-            item = null;
-            if (common == null)
-                return false;
-
-            item = new InvenItem
+            return new InvenItem
             {
-                Slot = (byte)Math.Max(0, Math.Min(255, (int)common.SlotIndex)),
-                ItemId = common.ItemTemplateId,
-                Value = unchecked((uint)common.CountOrInstanceValue),
-                Attr = common.ExtData0,
-                Durability = common.Durability,
-                ClearAvatar = common.PrefixData0E != null && common.PrefixData0E.Length >= 4
-                    ? BitConverter.ToUInt32(common.PrefixData0E, 0)
-                    : 0,
+                Slot = (byte)Math.Max(0, Math.Min(255, (int)record.SlotIndex)),
+                ItemId = record.ItemTemplateId,
+                Value = unchecked((uint)record.StackCount),
+                Attr = extra.Equipment.Upgrade,
+                Durability = record.Durability,
                 EnchantIndex = 0,
-                EnchantUpgradeCount = common.PrefixData0E != null && common.PrefixData0E.Length >= 5
-                    ? common.PrefixData0E[4]
-                    : (byte)0,
-                AmplifyType = common.PrefixData0E != null && common.PrefixData0E.Length >= 6
-                    ? common.PrefixData0E[5]
-                    : (byte)0,
-                AmplifyValue = common.PrefixData0E != null && common.PrefixData0E.Length >= 8
-                    ? BitConverter.ToUInt16(common.PrefixData0E, 6)
-                    : (ushort)0,
+                EnchantUpgradeCount = extra.Equipment.EnchantUpgradeCount,
+                AmplifyType = extra.Equipment.AmplifyType,
+                AmplifyValue = extra.Equipment.AmplifyValue,
             };
-            return true;
+        }
+
+        private static ItemExtraView BuildUpgradeExtraView(ItemExtraView original, byte newLevel)
+        {
+            var builder = ItemExtraViewBuilder.FromView(original);
+            builder.Equipment.Upgrade = newLevel;
+            return builder.Build();
         }
 
         private static PvfLib.StackableItemFile LoadMaterialStackable(SqliteInventoryStore.ItemRecord material)

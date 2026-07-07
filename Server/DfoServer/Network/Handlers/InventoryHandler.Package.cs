@@ -1,5 +1,4 @@
 using DfoServer.Game.Inventory;
-using DfoServer.Game.Premium;
 using DfoServer.Game.SelectCharacter;
 using DfoServer.Network.Builders;
 using DfoServer.Network.Parsers.Inventory;
@@ -40,27 +39,7 @@ namespace DfoServer.Network.Handlers
                 return;
             }
 
-            var premiumConsumed = _inventoryStore.TryUsePremiumContractItem(
-                cid,
-                aid,
-                listType,
-                slotIndex,
-                itemCode,
-                out var premiumUseResult);
-            var premiumUseAttempted = premiumUseResult?.IsPremiumContract == true;
-            var premiumRequestItem = itemCode > 0 && PremiumCatalog.Load().TryGetValue(itemCode, out _, out _);
-
-            InventoryMutationResult result;
-            bool consumed;
-            if (premiumUseAttempted || premiumRequestItem)
-            {
-                consumed = premiumConsumed;
-                result = premiumUseResult?.Mutation;
-            }
-            else
-            {
-                consumed = _inventoryStore.TryDeleteItem(cid, aid, listType, slotIndex, 1, out result);
-            }
+            var consumed = _inventoryStore.TryDeleteItem(cid, aid, listType, slotIndex, 1, out var result);
             var responsePlan = BuildUseStackableResponsePlan(consumed, result, listType, slotIndex, instanceValue, itemCode);
             if (!consumed)
             {
@@ -75,27 +54,10 @@ namespace DfoServer.Network.Handlers
             if (responsePlan.ItemListUpdateBody != null)
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000E, responsePlan.ItemListUpdateBody));
 
-            var premiumNoticeBody = BuildPremiumContractNotificationBody(premiumUseResult);
-            if (premiumNoticeBody != null)
-            {
-                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0042, premiumNoticeBody));
-                FileLogger.Log($"[{ProtocolName}] USE_STACKABLE: premium notify type={premiumUseResult.PremiumType} remaining={premiumUseResult.PremiumRemaining}");
-
-                var premiumServiceBody = BuildPremiumServiceRefreshBody(_sqliteSelectCharacterDataSource, cid, aid);
-                if (premiumServiceBody != null)
-                {
-                    await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0312, premiumServiceBody));
-                    FileLogger.Log($"[{ProtocolName}] USE_STACKABLE: premium service refresh sent char={cid} account={aid}");
-                }
-
-                if (premiumUseResult.Mutation != null)
-                    await _refresh.SendUpdateItemList(session, premiumUseResult.Mutation.ListType, premiumUseResult.Mutation.SlotIndex);
-            }
-
-            var petSatietyLog = result != null && result.PetSatietyChanged
+            var petSatietyLog = result.PetSatietyChanged
                 ? $" petSatiety key={result.PetCreatureKey} {result.PetSatietyBefore}->{result.PetSatietyAfter}"
                 : string.Empty;
-            FileLogger.Log($"[{ProtocolName}] USE_STACKABLE: consumed 1x item 0x{itemCode:X8} from slot {slotIndex}, remaining={result?.RemainingStackCount ?? 0}{petSatietyLog}");
+            FileLogger.Log($"[{ProtocolName}] USE_STACKABLE: consumed 1x item 0x{itemCode:X8} from slot {slotIndex}, remaining={result.RemainingStackCount}{petSatietyLog}");
         }
 
         private async Task SendPersonalCargoUpgradeTicketResponse(
@@ -154,43 +116,6 @@ namespace DfoServer.Network.Handlers
                 CommonPacketBodyBuilder.BuildSuccessAck()));
             await _refresh.SendItemListRefresh(session, InventoryListType.AccountCargo);
             FileLogger.Log($"[{ProtocolName}] USE_STACKABLE account-cargo-upgrade: item=0x{result.ItemTemplateId:X8} slot={slotIndex} accountCargo={result.PreviousSelectionKey}->{result.NewSelectionKey} remaining={result.ConsumedItem?.RemainingStackCount ?? 0}");
-        }
-
-        internal static byte[] BuildPremiumContractNotificationBody(PremiumContractUseResult result)
-        {
-            if (result == null || !result.IsPremiumContract || result.PremiumType <= 0 || result.PremiumRemaining <= 0)
-                return null;
-
-            return BuildPremiumContractNotificationBody(result.PremiumType, result.PremiumRemaining);
-        }
-
-        internal static byte[] BuildPremiumContractNotificationBody(int premiumType, long premiumRemaining)
-        {
-            if (premiumType <= 0 || premiumRemaining <= 0)
-                return null;
-
-            var writer = new GamePacketWriter();
-            writer.WriteUInt16(2);
-            writer.WriteByte((byte)premiumType);
-            writer.WriteBytes(BitConverter.GetBytes(premiumRemaining));
-            return writer.ToArray();
-        }
-
-        internal static byte[] BuildPremiumServiceRefreshBody(SqliteSelectCharacterDataSource dataSource, int characterId, int accountId)
-        {
-            if (dataSource == null || characterId <= 0 || accountId <= 0)
-                return null;
-
-            var snapshot = dataSource.Load(characterId, accountId);
-            var initSnap = snapshot?.InitializationSnapshot;
-            if (initSnap?.PremiumServiceData == null)
-                return null;
-
-            var writer = new GamePacketWriter();
-            writer.WriteByte(1);
-            writer.WriteUInt16(initSnap.PremiumServiceType);
-            writer.WriteBytes(initSnap.PremiumServiceData);
-            return writer.ToArray();
         }
 
         internal static UseStackableResponsePlan BuildUseStackableResponsePlan(
@@ -545,16 +470,6 @@ namespace DfoServer.Network.Handlers
 
             var (cid, aid) = ResolveOwner(session);
 
-            if (ShouldSendPremiumServiceRefreshAfterOpen(result))
-            {
-                var premiumServiceBody = BuildPremiumServiceRefreshBody(_sqliteSelectCharacterDataSource, cid, aid);
-                if (premiumServiceBody != null)
-                {
-                    await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0312, premiumServiceBody));
-                    FileLogger.Log($"[{ProtocolName}] OPEN_MAGIC_BOX premium service refresh sent char={cid} account={aid}{FormatBoosterOpenState(result)}");
-                }
-            }
-
             if (result.SourceRemainingStackCount <= 0)
                 await SendConsumedSourceItemUpdate(session, result.SourceSlotIndex, result.SourceItemTemplateId);
 
@@ -572,16 +487,6 @@ namespace DfoServer.Network.Handlers
         }
 
         internal static bool ShouldUseNativeMagicBoxBatchAck(BoosterUseResult result)
-        {
-            return result != null && result.IsSeriaLuckValueSource;
-        }
-
-        internal static bool ShouldSendBoosterGageRefreshAfterOpen(BoosterUseResult result)
-        {
-            return false;
-        }
-
-        internal static bool ShouldSendPremiumServiceRefreshAfterOpen(BoosterUseResult result)
         {
             return result != null && result.IsSeriaLuckValueSource;
         }

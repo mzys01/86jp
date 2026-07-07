@@ -2,7 +2,6 @@ using DfoServer.Game.Currency;
 using DfoServer.Game.SelectCharacter;
 using DfoServer.Game.ExpertJob;
 using DfoServer.Game.ItemUpgrade;
-using DfoServer.Game.Premium;
 using System;
 using System.Collections.Generic;
 using System.Globalization;
@@ -590,87 +589,6 @@ WHERE item_uid = @itemUid;";
                 PetSatietyBefore = satietyMutation.Before,
                 PetSatietyAfter = satietyMutation.After,
                 PetSatietyChanged = satietyMutation.Changed,
-            };
-            return true;
-        }
-
-        public bool TryUsePremiumContractItem(int characterId, int accountId, InventoryListType listType, short slotIndex, int expectedItemTemplateId, out PremiumContractUseResult result)
-        {
-            result = null;
-            if (listType != InventoryListType.Main)
-                return false;
-
-            using (var connection = new SqliteConnection(_connectionString))
-            {
-                connection.Open();
-                using (var transaction = connection.BeginTransaction())
-                {
-                    var item = _db.LoadItemRecord(connection, transaction, characterId, InventoryListType.Main, slotIndex);
-                    return TryUsePremiumContractItemRecord(connection, transaction, characterId, accountId, item, expectedItemTemplateId, out result);
-                }
-            }
-        }
-
-        private bool TryUsePremiumContractItemRecord(
-            SqliteConnection connection,
-            SqliteTransaction transaction,
-            int characterId,
-            int accountId,
-            ItemRecord item,
-            int expectedItemTemplateId,
-            out PremiumContractUseResult result)
-        {
-            result = null;
-            if (item == null)
-                return false;
-
-            if (!PremiumCatalog.Load().TryGetValue(item.ItemTemplateId, out var premiumType, out _))
-                return false;
-
-            result = new PremiumContractUseResult { IsPremiumContract = true };
-
-            if (expectedItemTemplateId > 0 && item.ItemTemplateId != expectedItemTemplateId)
-                return false;
-
-            if (!IsStackCountedRecord(item) || item.StackCount <= 0)
-                return false;
-
-            if (IsEquipmentItemLocked(connection, transaction, characterId, item))
-            {
-                FileLogger.Log($"  [UsePremiumContract] REJECT: locked item slot={item.SlotIndex} item=0x{item.ItemTemplateId:X8}");
-                return false;
-            }
-
-            var activated = PremiumService.TryActivateContract(connection, transaction, accountId, item.ItemTemplateId, 1);
-            if (activated == null)
-                return false;
-
-            const short appliedCount = 1;
-            var remainingCount = Math.Max(0, item.StackCount - appliedCount);
-            if (remainingCount > 0)
-                _db.UpdateStackCount(connection, transaction, item.ItemUid, remainingCount);
-            else
-                _db.DeleteItem(connection, transaction, item.ItemUid);
-
-            _auditLogger.WriteDeleteAuditLog(connection, transaction, characterId, item, appliedCount);
-            var wallet = _db.LoadWallet(connection, transaction, characterId);
-            transaction.Commit();
-
-            result.PremiumType = premiumType;
-            result.PremiumRemaining = activated.Value.remaining;
-            result.Mutation = new InventoryMutationResult
-            {
-                ListType = InventoryListType.Main,
-                SlotIndex = item.SlotIndex,
-                ItemTemplateId = item.ItemTemplateId,
-                RemainingStackCount = remainingCount,
-                InstanceValue = remainingCount,
-                Durability = item.Durability,
-                UpdatedGold = wallet.Gold,
-                UpdatedSp = wallet.Sp,
-                UpdatedCoin = wallet.Cera,
-                RequestedCount = appliedCount,
-                AppliedCount = appliedCount,
             };
             return true;
         }

@@ -1912,4 +1912,3 @@ WHERE character_id = @cid;";
         }
     }
 }
-

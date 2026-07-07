@@ -201,17 +201,6 @@ namespace DfoServer.Game.Inventory
         public bool Success => Status == AccountCargoUpgradeToolStatus.Upgraded;
     }
 
-    public sealed class PremiumContractUseResult
-    {
-        public bool IsPremiumContract { get; set; }
-
-        public int PremiumType { get; set; }
-
-        public long PremiumRemaining { get; set; }
-
-        public InventoryMutationResult Mutation { get; set; }
-    }
-
     public sealed class CreatureHatchResult
     {
         public InventoryListType ListType { get; set; }

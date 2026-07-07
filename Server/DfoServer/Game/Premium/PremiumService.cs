@@ -8,42 +8,21 @@ namespace DfoServer.Game.Premium
 {
     public static class PremiumService
     {
-        internal const int PremiumServiceDataLength = 74;
-        internal const int SeriaLuckRecordOffset = 6 + 7 * 9;
-        internal const int SeriaLuckThresholdOffset = SeriaLuckRecordOffset + 4;
-        private const int PremiumRecordSize = 9;
-        private const int PremiumRecordBaseOffset = 6;
-        private const int SeriaLuckActiveSentinel = int.MaxValue;
-
         public static (int premiumType, long remaining)? TryActivateContract(int accountId, int itemTemplateId)
-        {
-            var connStr = Infrastructure.SqliteDatabaseBootstrap.Initialize(
-                Infrastructure.ServerPaths.DatabasePath, Infrastructure.ServerPaths.SchemaFilePath);
-            using (var conn = new SqliteConnection(connStr))
-            {
-                conn.Open();
-                return TryActivateContract(conn, null, accountId, itemTemplateId, 1);
-            }
-        }
-
-        internal static (int premiumType, long remaining)? TryActivateContract(
-            SqliteConnection conn,
-            SqliteTransaction tx,
-            int accountId,
-            int itemTemplateId,
-            int itemCount)
         {
             if (!PremiumCatalog.Load().TryGetValue(itemTemplateId, out var premiumType, out var durationDays))
                 return null;
-            if (conn == null || accountId <= 0 || premiumType <= 0 || durationDays <= 0)
+            if (premiumType <= 0 || durationDays <= 0)
                 return null;
 
             var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-            var count = Math.Max(1, itemCount);
-            var duration = (long)durationDays * 86400L * count;
-            var newExpire = UpsertPremiumExpire(conn, tx, accountId, premiumType, now, duration);
+            var duration = (long)durationDays * 86400;
+            var connStr = Infrastructure.SqliteDatabaseBootstrap.Initialize(
+                Infrastructure.ServerPaths.DatabasePath, Infrastructure.ServerPaths.SchemaFilePath);
+
+            var newExpire = UpsertPremiumExpire(connStr, accountId, premiumType, now, duration);
             var remaining = newExpire - now;
-            FileLogger.Log($"[PremiumService] Contract activated: account={accountId} type={premiumType} days={durationDays} count={count} remaining={remaining} item=0x{itemTemplateId:X8}");
+            FileLogger.Log($"[PremiumService] Contract activated: account={accountId} type={premiumType} days={durationDays} remaining={remaining} item=0x{itemTemplateId:X8}");
             return (premiumType, remaining);
         }
 
@@ -111,7 +90,7 @@ namespace DfoServer.Game.Premium
 
         public static byte[] BuildPremiumServiceData(string connStr, int accountId)
         {
-            var data = new byte[PremiumServiceDataLength];
+            var data = new byte[74];
             using (var conn = new SqliteConnection(connStr))
             {
                 conn.Open();
@@ -128,27 +107,13 @@ namespace DfoServer.Game.Premium
                             var slot = DevilContractCatalog.PremiumTypeToSlot(reader.GetInt32(0));
                             if (slot < 0 || slot >= 8) continue;
                             var expire = reader.GetInt64(1);
-                            var off = PremiumRecordBaseOffset + slot * PremiumRecordSize;
+                            var off = 6 + slot * 9;
                             Buffer.BlockCopy(BitConverter.GetBytes((int)Math.Min(expire, int.MaxValue)), 0, data, off, 4);
                         }
                     }
                 }
-
-                ApplySeriaLuckRecord(data, new InventoryDbPrimitives().LoadSeriaLuckValue(conn, null, accountId));
             }
             return data;
-        }
-
-        private static void ApplySeriaLuckRecord(byte[] data, int seriaLuckValue)
-        {
-            if (data == null || data.Length <= SeriaLuckThresholdOffset)
-                return;
-
-            var value = InventoryDbPrimitives.NormalizeSeriaLuckValue(seriaLuckValue);
-            if (value > 0)
-                Buffer.BlockCopy(BitConverter.GetBytes(SeriaLuckActiveSentinel), 0, data, SeriaLuckRecordOffset, 4);
-
-            data[SeriaLuckThresholdOffset] = (byte)(value >= InventoryDbPrimitives.SeriaLuckValueMax ? 0 : 1);
         }
 
         // 账号是否有生效中的"自动修理"契约 — 自行解析连接串(供 handler 直接调用)。

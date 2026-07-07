@@ -1,5 +1,4 @@
 using DfoServer.Game.Inventory;
-using DfoServer.Game.Premium;
 using DfoServer.Infrastructure;
 using DfoServer.Network.Builders;
 using DfoServer.Network.Builders.CeraShop;
@@ -29,7 +28,6 @@ namespace DfoServer.SelfTests
         private const short MagicHammerSlot = 173;
         private const short RelocatedSeriaLuckSlot = 112;
         private const short LegacyNoExpireTimedRewardSlot = 119;
-        private const short ContractTestSlot = 118;
         // These are PVF sample IDs used only to exercise generic package paths.
         // Production logic resolves package/reward data from PVF, not from these constants.
         private const int SampleTitleSelectablePackageId = 10007993;
@@ -50,9 +48,6 @@ namespace DfoServer.SelfTests
         private const int SeriaLuckValueAfterTenThenSingle = 3;
         private const int MagicBoxBatchRewardRowSize = 31;
         private const int MagicBoxSingleRewardRowSize = 31;
-        private const int PremiumServiceBodyLength = 77;
-        private const int SeriaLuckPremiumRecordOffset = 6 + 7 * 9;
-        private const int SeriaLuckPremiumThresholdOffset = SeriaLuckPremiumRecordOffset + 4;
         private const short QuickConsumableSlot = 3;
         private const int QuickConsumableInitialCount = 7;
         private const int SampleSelectedTitleRewardId = 400330051;
@@ -602,24 +597,6 @@ namespace DfoServer.SelfTests
                             seriaLuckResult.SeriaLuckDoubleTriggered && seriaLuckResult.DoubleRewards.Count > 0);
                         Check("Seria luck ten-open does not mutate rental lucky_star", LoadLuckyStar(tempDb) == 0);
                         Check("Seria luck ten-open persists Seria luck value", LoadSeriaLuckValue(tempDb) == SeriaLuckValueAfterTenOpenFromZero);
-                        Check("runtime 0x0312 premium service refresh is enabled for Seria luck value source",
-                            InventoryHandler.ShouldSendPremiumServiceRefreshAfterOpen(seriaLuckResult));
-                        Check("0x0312 premium service marks Seria luck record active after ten-open",
-                            CheckSeriaLuckPremiumServiceState(tempDb, active: true, full: false));
-                        var nonFullPremiumRefresh = BuildPremiumServiceRefreshBody(tempDb);
-                        Check("0x0312 premium service refresh body carries non-full Seria luck state",
-                            CheckSeriaLuckPremiumServiceRefresh(nonFullPremiumRefresh, full: false));
-                        Check("runtime 0x019D refresh is disabled for non-full Seria luck value",
-                            !InventoryHandler.ShouldSendBoosterGageRefreshAfterOpen(seriaLuckResult));
-                        var disabledGageBuilder = new BoosterGageBodyBuilder();
-                        Check("0x019D booster gage init builder is disabled until client layout is proven",
-                            !disabledGageBuilder.TryBuild(new DfoServer.Game.SelectCharacter.SelectCharacterDataSnapshot
-                            {
-                                InitializationSnapshot = new DfoServer.Game.SelectCharacter.SelectCharacterInitializationSnapshot
-                                {
-                                    BoosterGage = SeriaLuckBatchCount,
-                                },
-                            }, 0, out var disabledGageBody) && disabledGageBody.Length == 0);
                         Check("0x03F3 Seria luck ten-open keeps native ACK path for reverse-engineered UI work",
                             InventoryHandler.ShouldUseNativeMagicBoxBatchAck(seriaLuckResult));
 
@@ -674,9 +651,6 @@ namespace DfoServer.SelfTests
                             Check("Seria luck single sees previous ten-open value", seriaLuckSingleResult.SeriaLuckValueBefore == SeriaLuckValueAfterTenOpenFromZero);
                             Check("Seria luck single increments value by one", seriaLuckSingleResult.SeriaLuckValueAfter == SeriaLuckValueAfterTenThenSingle);
                             Check("Seria luck single persists Seria luck value", LoadSeriaLuckValue(tempDb) == SeriaLuckValueAfterTenThenSingle);
-                            Check("runtime 0x019D refresh is disabled for non-full single-open value",
-                                !InventoryHandler.ShouldSendBoosterGageRefreshAfterOpen(seriaLuckSingleResult));
-
                             seriaLuckSingleResult.MagicBoxClientType = seriaLuckSingleRequest.RawListType;
                             var seriaLuckSingleAck = MagicBoxOpenAckBuilder.BuildSingle(seriaLuckSingleResult);
                             var singleListCount = seriaLuckSingleAck.Length >= 9 ? BitConverter.ToUInt16(seriaLuckSingleAck, 7) : 0;
@@ -699,11 +673,6 @@ namespace DfoServer.SelfTests
                         }
 
                         SetSeriaLuckValue(tempDb, SeriaLuckValueMax);
-                        Check("0x0312 premium service marks Seria luck record full before double open",
-                            CheckSeriaLuckPremiumServiceState(tempDb, active: true, full: true));
-                        var fullPremiumRefresh = BuildPremiumServiceRefreshBody(tempDb);
-                        Check("0x0312 premium service refresh body carries full Seria luck state",
-                            CheckSeriaLuckPremiumServiceRefresh(fullPremiumRefresh, full: true));
                         BoosterUseResult seriaLuckDoubleResult = null;
                         Check("open full-value Seria luck single succeeds",
                             store.TryUseBoosterItem(CharacterId, AccountId, new BoosterUseRequest
@@ -730,15 +699,6 @@ namespace DfoServer.SelfTests
                                 CheckMagicBoxRewardRows(fullValueAck, 7, seriaLuckDoubleResult.Rewards, MagicBoxSingleRewardRowSize));
                             Check("0x00D0 full-value Seria luck ACK displays actual doubled grants",
                                 fullValueListCount == seriaLuckDoubleResult.Rewards.Count);
-                            Check("runtime 0x019D refresh is skipped after full-value double reset",
-                                !InventoryHandler.ShouldSendBoosterGageRefreshAfterOpen(seriaLuckDoubleResult));
-                            Check("runtime 0x019D refresh is disabled even for newly full Seria luck value until layout is proven",
-                                !InventoryHandler.ShouldSendBoosterGageRefreshAfterOpen(new BoosterUseResult
-                                {
-                                    IsSeriaLuckValueSource = true,
-                                    SeriaLuckValueAfter = SeriaLuckValueMax,
-                                    SeriaLuckValueMax = SeriaLuckValueMax,
-                                }));
                         }
 
                         {
@@ -1148,41 +1108,6 @@ WHERE account_id=@accountId;";
                     return Convert.ToInt32(command.ExecuteScalar());
                 }
             }
-        }
-
-        private static bool CheckSeriaLuckPremiumServiceState(string databasePath, bool active, bool full)
-        {
-            var data = PremiumService.BuildPremiumServiceData(SqliteDatabaseBootstrap.BuildConnectionString(databasePath), AccountId);
-            if (data == null || data.Length <= SeriaLuckPremiumThresholdOffset)
-                return false;
-
-            var recordActive = BitConverter.ToInt32(data, SeriaLuckPremiumRecordOffset) != 0;
-            var threshold = data[SeriaLuckPremiumThresholdOffset];
-            return recordActive == active && threshold == (full ? 0 : 1);
-        }
-
-        private static byte[] BuildPremiumServiceRefreshBody(string databasePath)
-        {
-            var charRepo = new DfoServer.Game.Characters.SqliteCharacterRepository(databasePath, ServerPaths.SchemaFilePath);
-            var dataSource = new DfoServer.Game.SelectCharacter.SqliteSelectCharacterDataSource(
-                databasePath,
-                ServerPaths.SchemaFilePath,
-                charRepo);
-            return InventoryHandler.BuildPremiumServiceRefreshBody(dataSource, CharacterId, AccountId);
-        }
-
-        private static bool CheckSeriaLuckPremiumServiceRefresh(byte[] body, bool full)
-        {
-            if (body == null || body.Length != PremiumServiceBodyLength)
-                return false;
-
-            if (body[0] != 1 || BitConverter.ToUInt16(body, 1) != 1)
-                return false;
-
-            var payloadOffset = 3;
-            var recordActive = BitConverter.ToInt32(body, payloadOffset + SeriaLuckPremiumRecordOffset) != 0;
-            var threshold = body[payloadOffset + SeriaLuckPremiumThresholdOffset];
-            return recordActive && threshold == (full ? 0 : 1);
         }
 
         private static bool CheckMagicBoxPackageRows(byte[] body, int listOffset, IReadOnlyList<PackageGrantedItem> expectedRows, int rowSize)

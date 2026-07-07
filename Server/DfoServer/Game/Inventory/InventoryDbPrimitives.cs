@@ -687,6 +687,11 @@ WHERE item_uid = @itemUid;";
 
         internal void UpdateCommonExtraJson(SqliteConnection connection, SqliteTransaction transaction, long itemUid, CommonInventoryItem item)
         {
+            UpdateItemExtraJson(connection, transaction, itemUid, InventoryItemCodec.SerializeCommon(item));
+        }
+
+        internal void UpdateItemExtraJson(SqliteConnection connection, SqliteTransaction transaction, long itemUid, string extraJson)
+        {
             using (var command = connection.CreateCommand())
             {
                 command.Transaction = transaction;
@@ -695,7 +700,7 @@ UPDATE character_items
 SET extra_json = @extraJson,
     updated_at = CURRENT_TIMESTAMP
 WHERE item_uid = @itemUid;";
-                command.Parameters.AddWithValue("@extraJson", InventoryItemCodec.SerializeCommon(item));
+                command.Parameters.AddWithValue("@extraJson", string.IsNullOrWhiteSpace(extraJson) ? "{}" : extraJson);
                 command.Parameters.AddWithValue("@itemUid", itemUid);
                 command.ExecuteNonQuery();
             }
