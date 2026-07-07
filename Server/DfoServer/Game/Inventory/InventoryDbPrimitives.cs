@@ -954,6 +954,7 @@ WHERE character_id = @characterId AND list_type = @listType;";
                 extraJson = InventoryItemCodec.SerializeAvatar(avatarItem);
             }
 
+            var sealFlag = metadata.IsSealed ? (byte)1 : (byte)0;
             InsertCharacterItem(
                 connection,
                 transaction,
@@ -965,7 +966,7 @@ WHERE character_id = @characterId AND list_type = @listType;";
                 storedStackCount,
                 instanceValue,
                 durability,
-                0,
+                sealFlag,
                 optionValue,
                 expireTime,
                 marker16,

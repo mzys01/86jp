@@ -41,6 +41,8 @@ namespace DfoServer.Game.Inventory
 
         public IReadOnlyList<string> ImpossibleContents { get; set; } = Array.Empty<string>();
 
+        public bool IsSealed => string.Equals(AttachType?.Trim('[', ']', ' '), "sealing", StringComparison.OrdinalIgnoreCase);
+
         public bool IsStackable => string.Equals(ItemKind, "stackable", StringComparison.Ordinal);
 
         public bool IsMaterialExchange => NeedMaterialId > 0 && NeedMaterialCount > 0;

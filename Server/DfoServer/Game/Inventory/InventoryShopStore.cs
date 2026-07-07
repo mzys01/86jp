@@ -331,9 +331,10 @@ namespace DfoServer.Game.Inventory
                         FileLogger.Log($"  [BuyItem] REJECT: no empty slot for material exchange item {itemTemplateId}");
                         return false;
                     }
+                    var matSealFlag = metadata.IsSealed ? (byte)1 : (byte)0;
                     _db.InsertCharacterItem(connection, transaction, characterId, targetListType, (short)emptySlot,
                         itemTemplateId, targetItemKind, isCreature || isPetArtifactEquipment ? 0 : buyCount, isPetEquipment ? 0 : buyCount,
-                        targetListType == InventoryListType.Pet ? (ushort)0 : metadata.Durability, 0, 0, 0, 0,
+                        targetListType == InventoryListType.Pet ? (ushort)0 : metadata.Durability, matSealFlag, 0, 0, 0,
                         isPetConsumable ? buyCount : isCreature ? _db.NextPetSerialOrHandle(connection, transaction, characterId) : 0,
                         "{}");
                     matTargetSlot = (short)emptySlot;
@@ -453,6 +454,7 @@ namespace DfoServer.Game.Inventory
             var buyInstanceValue = metadata.IsStackable ? effectiveCount : qualitySeed;
             var buyDurability = targetListType == InventoryListType.Pet ? (ushort)0 : metadata.Durability;
             var buyPetSerial = isPetConsumable ? effectiveCount : isCreature ? _db.NextPetSerialOrHandle(connection, transaction, characterId) : 0;
+            var buySealFlag = metadata.IsSealed ? (byte)1 : (byte)0;
             _db.InsertCharacterItem(
                 connection,
                 transaction,
@@ -464,7 +466,7 @@ namespace DfoServer.Game.Inventory
                 buyStackCount,
                 buyInstanceValue,
                 buyDurability,
-                0,
+                buySealFlag,
                 0,
                 targetListType == InventoryListType.Pet ? 0 : metadata.IsStackable ? 0 : -1,
                 0,
@@ -1051,6 +1053,7 @@ namespace DfoServer.Game.Inventory
             }
             else
             {
+                var ceraSealFlag = metadata.IsSealed ? (byte)1 : (byte)0;
                 _db.InsertCharacterItem(
                     connection,
                     transaction,
@@ -1062,7 +1065,7 @@ namespace DfoServer.Game.Inventory
                     isPetEquipment ? 0 : effectiveCount,
                     instanceValue,
                     durability,
-                    0,
+                    ceraSealFlag,
                     0,
                     expireTime,
                     0,

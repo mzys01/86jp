@@ -48,16 +48,16 @@ namespace DfoServer.Network.Builders
         }
 
         public static byte[] BuildRawEquipEntry(short slotIndex, uint itemId,
-            uint qualitySeed = Game.Inventory.ItemQuality.TopQualitySeed, ushort durability = 32)
+            uint qualitySeed = Game.Inventory.ItemQuality.TopQualitySeed, ushort durability = 32,
+            byte sealFlag = 0)
         {
             var buf = new byte[84];
-            BitConverter.GetBytes(slotIndex).CopyTo(buf, 0);    // [0:2]  slot
-            BitConverter.GetBytes(itemId).CopyTo(buf, 2);        // [2:6]  itemId
-            BitConverter.GetBytes(qualitySeed).CopyTo(buf, 6);   // [6:10] quality seed
-            // buf[10] = 0 enhance level
-            BitConverter.GetBytes(durability).CopyTo(buf, 11);   // [11:13] durability
-            // buf[13] = 0 isSealed
-            BitConverter.GetBytes(0xFFFFFFFF).CopyTo(buf, 22);   // [22:26] equipment marker
+            BitConverter.GetBytes(slotIndex).CopyTo(buf, 0);
+            BitConverter.GetBytes(itemId).CopyTo(buf, 2);
+            BitConverter.GetBytes(qualitySeed).CopyTo(buf, 6);
+            BitConverter.GetBytes(durability).CopyTo(buf, 11);
+            buf[13] = sealFlag;
+            BitConverter.GetBytes(0xFFFFFFFF).CopyTo(buf, 22);
             return buf;
         }
 

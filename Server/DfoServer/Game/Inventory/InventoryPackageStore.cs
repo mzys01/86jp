@@ -663,6 +663,7 @@ namespace DfoServer.Game.Inventory
                     return false;
 
                 var instanceValue = InventoryDbPrimitives.GenerateInstanceValue(reward.ItemTemplateId, targetSlot);
+                var pkgSealFlag = metadata.IsSealed ? (byte)1 : (byte)0;
                 _db.InsertCharacterItem(
                     connection,
                     transaction,
@@ -674,7 +675,7 @@ namespace DfoServer.Game.Inventory
                     instanceValue,
                     instanceValue,
                     metadata.Durability,
-                    0,
+                    pkgSealFlag,
                     0,
                     reward.ExpireTime,
                     -1,

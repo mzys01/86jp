@@ -164,10 +164,11 @@ namespace DfoServer.Game.Inventory
             var qualitySeed = InventoryDbPrimitives.GenerateInstanceValue(itemTemplateId, targetSlot);
             var dbStackCount = metadata.IsStackable ? stackCount : qualitySeed;
             var dbInstanceValue = metadata.IsStackable ? stackCount : qualitySeed;
+            var sealFlag = metadata.IsSealed ? (byte)1 : (byte)0;
             _db.InsertCharacterItem(
                 connection, transaction, characterId, InventoryListType.Main, (short)targetSlot,
                 itemTemplateId, metadata.ItemKind, dbStackCount, dbInstanceValue,
-                metadata.Durability, 0, 0, 0, metadata.IsStackable ? 0 : -1, 0, "{}");
+                metadata.Durability, sealFlag, 0, 0, metadata.IsStackable ? 0 : -1, 0, "{}");
             assignedSlot = (short)targetSlot;
             return true;
         }

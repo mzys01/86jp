@@ -580,8 +580,9 @@ namespace DfoServer.Network.Handlers.Dungeon
             if (!_svc.TryPickupItemToInventory(session.Player.CharacterId, accountId, card.ItemId, card.StackCount, out slot))
                 return;
 
+            var sealFlag = card.IsEquipment && ItemMetadataResolver.Resolve(card.ItemId).IsSealed ? (byte)1 : (byte)0;
             entries.Add(card.IsEquipment
-                ? ItemListUpdateBuilder.BuildRawEquipEntry(slot, (uint)card.ItemId, durability: card.Durability)
+                ? ItemListUpdateBuilder.BuildRawEquipEntry(slot, (uint)card.ItemId, durability: card.Durability, sealFlag: sealFlag)
                 : ItemListUpdateBuilder.BuildRawItemEntry(slot, (uint)card.ItemId, (uint)card.StackCount));
         }
 
