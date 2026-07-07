@@ -161,6 +161,49 @@ namespace DfoServer.GameWorld
             }
         }
 
+        public static bool IsSuitableLevelDungeon(int dungeonId, int characterLevel)
+        {
+            return characterLevel > 0
+                && TryGetSuitableLevelRange(dungeonId, out var minLevel, out var maxLevel)
+                && characterLevel >= minLevel
+                && characterLevel <= maxLevel;
+        }
+
+        public static bool TryGetSuitableLevelRange(int dungeonId, out int minLevel, out int maxLevel)
+        {
+            minLevel = 0;
+            maxLevel = 0;
+
+            try
+            {
+                var file = GetDungeonFile(dungeonId);
+                // 适合等级使用 PVF 最小进入等级到基础等级的闭区间。
+                minLevel = file.MinimumRequiredLevel;
+                maxLevel = file.BasisLevel;
+
+                if (minLevel <= 0 && maxLevel <= 0)
+                    return false;
+                if (minLevel <= 0)
+                    minLevel = maxLevel;
+                if (maxLevel <= 0)
+                    maxLevel = minLevel;
+                if (minLevel > maxLevel)
+                {
+                    var tmp = minLevel;
+                    minLevel = maxLevel;
+                    maxLevel = tmp;
+                }
+
+                return minLevel > 0 && maxLevel > 0;
+            }
+            catch
+            {
+                minLevel = 0;
+                maxLevel = 0;
+                return false;
+            }
+        }
+
         public static int GetMaxDifficultyCount(int dungeonId)
         {
             try
