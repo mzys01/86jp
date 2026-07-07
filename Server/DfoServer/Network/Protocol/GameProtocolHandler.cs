@@ -75,7 +75,12 @@ namespace DfoServer.Network
             _townHandler = new TownHandler(characterRepository, inventoryStore);
             var dailyResetService = new Game.DailyReset.DailyResetService(databasePath, schemaFilePath);
             var reviveCoinService = new Game.ReviveCoin.ReviveCoinService(inventoryStore, _assetService, dailyResetService);
-            _dungeonHandler = new DungeonHandler(_assetService, reviveCoinService, characterRepository);
+            _dungeonHandler = new DungeonHandler(
+                _assetService,
+                reviveCoinService,
+                characterRepository,
+                sqliteSelectCharacterDataSource,
+                rentalTimeProvider);
             _staminaHandler = new StaminaHandler(_assetService);
             _skillHandler = new SkillHandler(characterRepository);
             _settingsHandler = new SettingsHandler();

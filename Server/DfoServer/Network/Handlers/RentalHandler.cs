@@ -10,8 +10,6 @@ namespace DfoServer.Network.Handlers
     /// 租赁商店：租赁武器（0x0372）。
     public sealed class RentalHandler
     {
-        private const ushort NotiRental = 0x0357;
-
         private readonly IAssetService _assetService;
         private readonly IInventoryStore _inventoryStore;
         private readonly IRentalTimeProvider _rentalTimeProvider;
@@ -96,7 +94,7 @@ namespace DfoServer.Network.Handlers
             FileLogger.Log($"[Rental] RENT_WEAPON: char={characterId} weapon=0x{weaponId:X8} inv=0x{parsedInventoryId:X8} cost={starCost} priceTier={priceTier} starsLeft={luckyStar} expire={expireTime}");
 
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0372, CommonPacketBodyBuilder.BuildSuccessAck()));
-            await SyncRentalPanelNoti(session, luckyStar, rental);
+            await RentalInfoPanelNotifier.SyncAsync(session, _dataSource, characterId, luckyStar, _rentalTimeProvider);
 
             if (invSlot >= 0)
             {
@@ -128,16 +126,10 @@ namespace DfoServer.Network.Handlers
             }
         }
 
-        private async Task SyncRentalPanelNoti(EnhancedClientSession session, ushort luckyStar, RentalInfoSnapshot rental)
-        {
-            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, NotiRental,
-                RentalInfoBodyBuilder.BuildWireBody(luckyStar, rental, _rentalTimeProvider.UtcNowUnixSeconds())));
-        }
-
         private RentalInfoSnapshot LoadRentalInfo(int characterId)
         {
             var rental = new RentalInfoSnapshot();
-            RentalInfoSnapshot.ParseStorageBody(_dataSource.LoadCharacterInitBody(characterId, NotiRental), rental);
+            RentalInfoSnapshot.ParseStorageBody(_dataSource.LoadCharacterInitBody(characterId, RentalInfoPanelNotifier.NotiRental), rental);
             return rental;
         }
 

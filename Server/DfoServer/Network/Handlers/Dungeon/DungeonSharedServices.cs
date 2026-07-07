@@ -21,6 +21,8 @@ namespace DfoServer.Network.Handlers.Dungeon
         internal const string ProtocolLogName = "GameProtocol";
 
         private readonly IAssetService _assetService;
+        private readonly SqliteSelectCharacterDataSource _selectCharacterDataSource;
+        private readonly IRentalTimeProvider _rentalTimeProvider;
 
         internal Game.ReviveCoin.ReviveCoinService ReviveCoin { get; }
         internal Game.DeathTower.DeathTowerHandler DeathTower { get; }
@@ -36,11 +38,15 @@ namespace DfoServer.Network.Handlers.Dungeon
         internal DungeonSharedServices(
             IAssetService assetService,
             Game.ReviveCoin.ReviveCoinService reviveCoin,
-            SqliteCharacterRepository characterRepository)
+            SqliteCharacterRepository characterRepository,
+            SqliteSelectCharacterDataSource selectCharacterDataSource,
+            IRentalTimeProvider rentalTimeProvider)
         {
             _assetService = assetService ?? throw new ArgumentNullException(nameof(assetService));
             ReviveCoin = reviveCoin ?? throw new ArgumentNullException(nameof(reviveCoin));
             CharacterRepository = characterRepository ?? throw new ArgumentNullException(nameof(characterRepository));
+            _selectCharacterDataSource = selectCharacterDataSource ?? throw new ArgumentNullException(nameof(selectCharacterDataSource));
+            _rentalTimeProvider = rentalTimeProvider ?? SystemRentalTimeProvider.Instance;
             DeathTower = new Game.DeathTower.DeathTowerHandler();
             QuestDrops = new Game.Quests.QuestDropService(assetService);
             Subtype1Repository = new SqliteSubtype1Repository(ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
@@ -114,6 +120,60 @@ namespace DfoServer.Network.Handlers.Dungeon
             => progress.ApcCount > 0
                 && progress.KilledNormalCount >= progress.NormalCount
                 && progress.BlockingRemainingCount == 0;
+
+        internal async Task GrantSuitableDungeonLuckyStar(EnhancedClientSession session, int clearLevel)
+        {
+            var run = session?.Player?.CurrentRun;
+            if (run == null || !DungeonData.IsSuitableLevelDungeon(run.DungeonId, clearLevel))
+                return;
+
+            var characterId = session.Player.CharacterId;
+            var accountId = session.Account?.AccountId ?? 0;
+            if (characterId <= 0 || accountId <= 0)
+                return;
+
+            ushort luckyStar;
+
+            try
+            {
+                using (var scope = _assetService.OpenScope(characterId, accountId))
+                {
+                    var wallet = _assetService.LoadWallet(scope);
+                    // 幸运星按账号保存，达到租赁商店上限后不再发放。
+                    if (wallet.LuckyStar >= RentalCatalogCodec.MaxLuckyStar)
+                    {
+                        FileLogger.Log($"[DungeonHandler] SUITABLE_LUCKY_STAR skipped: cap reached char={characterId} dungeon={run.DungeonId} level={clearLevel}");
+                        return;
+                    }
+
+                    _assetService.GrantLuckyStar(scope, 1);
+                    luckyStar = (ushort)Math.Min(RentalCatalogCodec.MaxLuckyStar, wallet.LuckyStar + 1);
+                    scope.Commit();
+                }
+            }
+            catch (Exception ex)
+            {
+                FileLogger.Log($"[DungeonHandler] SUITABLE_LUCKY_STAR ERROR: char={characterId} dungeon={run.DungeonId} level={clearLevel} {ex.Message}");
+                return;
+            }
+
+            FileLogger.Log($"[DungeonHandler] SUITABLE_LUCKY_STAR grant: char={characterId} dungeon={run.DungeonId} level={clearLevel} stars={luckyStar}");
+            try
+            {
+                await LuckyStarClientNotifier.NotifyRewardAsync(
+                    session,
+                    _selectCharacterDataSource,
+                    characterId,
+                    1,
+                    luckyStar,
+                    _rentalTimeProvider);
+            }
+            catch (Exception ex)
+            {
+                // 发放已经提交，通知失败不能打断副本结算。
+                FileLogger.Log($"[DungeonHandler] SUITABLE_LUCKY_STAR sync ERROR: char={characterId} dungeon={run.DungeonId} stars={luckyStar} {ex.Message}");
+            }
+        }
 
         internal readonly struct DungeonRoomProgress
         {

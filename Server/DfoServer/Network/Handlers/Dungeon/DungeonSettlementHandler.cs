@@ -101,6 +101,9 @@ namespace DfoServer.Network.Handlers.Dungeon
                     freeCardGold: freeGold.GoldAmount,
                     freeCardItemId: freeItem.ItemId, freeCardItemCount: freeItem.StackCount)));
 
+            // 符合判断使用结算前等级，奖励通知放在结算三包之后。
+            await _svc.GrantSuitableDungeonLuckyStar(session, prevLevel);
+
             FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] CLEAR_EXP: dungeon={run.DungeonId} diff={run.Difficulty} clientRank={clearRank.ClientRankPoint} rankPoint={clearRank.RankPoint} rankGrade={clearRank.RankGrade} rankBonusIndex={clearRank.RankBonusIndex} base={clearExp.Base} scoreBonus={clearExp.ScoreBonus} growthContract={clearExp.GrowthContractBonus} blackDiamond={clearExp.BlackDiamondBonus} adventureGroup={clearExp.AdventureGroupBonus} bonus={clearExp.Bonus} total={clearExp.Total} monsterTotalExp={monsterTotalExp} monsterGrowthContract={monsterGrowthContractBonus} bossTotalExp={bossTotalExp} championTotalExp={championTotalExp} superChampionTotalExp={superChampionTotalExp} namedMonsterTotalExp={namedMonsterTotalExp} charExp={session.Player.Exp}");
 
             if (leveledUp)

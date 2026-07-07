@@ -9,8 +9,6 @@ namespace DfoServer.Network.Handlers
     /// 租赁商店：购买幸运星（0x0373）。
     public sealed class LuckyStarHandler
     {
-        private const ushort NotiRental = 0x0357;
-
         private readonly IAssetService _assetService;
         private readonly SqliteSelectCharacterDataSource _dataSource;
         private readonly IRentalTimeProvider _rentalTimeProvider;
@@ -85,46 +83,22 @@ namespace DfoServer.Network.Handlers
 
             FileLogger.Log($"[LuckyStar] BUY: char={characterId} count={buyCount} gold=-{totalGoldCost} -> {newGold} stars={newLuckyStar}");
 
-            var accountCatalog = _dataSource.LoadAccountMainOption(accountId);
-            var purchaseAck = RentalCatalogCodec.BuildPurchaseAck(accountCatalog, (ushort)buyCount, newLuckyStar);
-
-            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x00C5, purchaseAck));
-            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0373, Build0373SuccessAck(buyCount, newLuckyStar, purchaseRequestBody)));
-            await SyncRentalPanelNoti(session, newLuckyStar, LoadRentalInfo(characterId));
+            await LuckyStarClientNotifier.SyncPurchaseAsync(
+                session,
+                _dataSource,
+                characterId,
+                accountId,
+                (ushort)buyCount,
+                newLuckyStar,
+                _rentalTimeProvider,
+                purchaseRequestBody);
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000E,
                 ItemListUpdateBuilder.BuildGoldUpdate(newGold)));
-        }
-
-        private async Task SyncRentalPanelNoti(EnhancedClientSession session, ushort luckyStar, RentalInfoSnapshot rental)
-        {
-            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, NotiRental,
-                RentalInfoBodyBuilder.BuildWireBody(luckyStar, rental, _rentalTimeProvider.UtcNowUnixSeconds())));
-        }
-
-        private RentalInfoSnapshot LoadRentalInfo(int characterId)
-        {
-            var rental = new RentalInfoSnapshot();
-            RentalInfoSnapshot.ParseStorageBody(_dataSource.LoadCharacterInitBody(characterId, NotiRental), rental);
-            return rental;
         }
 
         private static async Task Send0373Error(EnhancedClientSession session)
         {
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0373, new byte[] { 0x00, 0x04 }));
-        }
-
-        private static byte[] Build0373SuccessAck(int buyCount, ushort totalLuckyStar, byte[] purchaseRequestBody)
-        {
-            var requestLength = Math.Max(purchaseRequestBody?.Length ?? 0, RentalCatalogCodec.ShopPacketQtyOffset + 4);
-            var body = new byte[1 + requestLength];
-            body[0] = 0x01;
-
-            if (purchaseRequestBody != null && purchaseRequestBody.Length > 0)
-                Buffer.BlockCopy(purchaseRequestBody, 0, body, 1, purchaseRequestBody.Length);
-
-            Buffer.BlockCopy(BitConverter.GetBytes((int)totalLuckyStar), 0, body, 1 + 12, 4);
-            Buffer.BlockCopy(BitConverter.GetBytes(buyCount), 0, body, 1 + RentalCatalogCodec.ShopPacketQtyOffset, 4);
-            return body;
         }
     }
 }
