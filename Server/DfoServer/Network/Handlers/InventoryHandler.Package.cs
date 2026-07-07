@@ -38,6 +38,21 @@ namespace DfoServer.Network.Handlers
                 return;
             }
 
+            var runeRequest = new EquipmentEffectRuneUseRequest
+            {
+                SourceListType = listType,
+                SourceSlotIndex = slotIndex,
+                SourceInstanceValue = instanceValue,
+                ExpectedSourceItemTemplateId = itemCode,
+                RawBody = body,
+            };
+            if (_inventoryStore.TryUseEquipmentEffectRune(cid, aid, runeRequest, out var runeResult)
+                && runeResult.Handled)
+            {
+                await SendEquipmentEffectRuneResponse(session, listType, slotIndex, instanceValue, itemCode, runeResult);
+                return;
+            }
+
             var consumed = _inventoryStore.TryDeleteItem(cid, aid, listType, slotIndex, 1, out var result);
             var responsePlan = BuildUseStackableResponsePlan(consumed, result, listType, slotIndex, instanceValue, itemCode);
             if (!consumed)
@@ -57,6 +72,76 @@ namespace DfoServer.Network.Handlers
                 ? $" petSatiety key={result.PetCreatureKey} {result.PetSatietyBefore}->{result.PetSatietyAfter}"
                 : string.Empty;
             FileLogger.Log($"[{ProtocolName}] USE_STACKABLE: consumed 1x item 0x{itemCode:X8} from slot {slotIndex}, remaining={result.RemainingStackCount}{petSatietyLog}");
+        }
+
+        public async Task Handle_ADD_EQUIPMENT_EFFECT(EnhancedClientSession session, GamePacketHeader header, byte[] body)
+        {
+            FileLogger.Log($"[{ProtocolName}] ADD_EQUIPMENT_EFFECT 0x0342 raw({body?.Length ?? 0}B): {(body != null ? BitConverter.ToString(body) : "null")}");
+
+            if (!EquipmentEffectRuneUseRequest.TryParseAddEquipmentEffectBody(body, out var request))
+            {
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0342, new byte[] { 0x00 }));
+                return;
+            }
+
+            var (cid, aid) = ResolveOwner(session);
+            if (!_inventoryStore.TryUseEquipmentEffectRune(cid, aid, request, out var result)
+                || result == null
+                || !result.Handled)
+            {
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0342, new byte[] { 0x00, 0x04 }));
+                FileLogger.Log($"[{ProtocolName}] ADD_EQUIPMENT_EFFECT: unhandled sourceSlot={request.SourceSlotIndex} target={request.TargetListType}:{request.TargetSlotIndex}");
+                return;
+            }
+
+            await SendEquipmentEffectRuneResponse(
+                session,
+                request.SourceListType,
+                request.SourceSlotIndex,
+                request.SourceInstanceValue,
+                result.SourceItemTemplateId,
+                result,
+                0x0342,
+                result.Success ? BuildAddEquipmentEffectAck(body) : new byte[] { 0x00, 0x04 });
+        }
+
+        private async Task SendEquipmentEffectRuneResponse(
+            EnhancedClientSession session,
+            InventoryListType listType,
+            short slotIndex,
+            int instanceValue,
+            int itemCode,
+            EquipmentEffectRuneUseResult result,
+            ushort responseType = 0x002C,
+            byte[] ackOverride = null)
+        {
+            var responseItemCode = itemCode != 0 ? itemCode : result.SourceItemTemplateId;
+            var responseInstanceValue = instanceValue != 0 ? instanceValue : result.SourceInstanceValue;
+            var ackBody = ackOverride ?? (result.Success
+                ? UseStackableAckBuilder.BuildSuccess(slotIndex, (byte)listType, responseInstanceValue, responseItemCode)
+                : UseStackableAckBuilder.BuildError((byte)listType, responseItemCode, responseInstanceValue));
+
+            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, responseType, ackBody));
+
+            if (!result.Success)
+            {
+                FileLogger.Log($"[{ProtocolName}] USE_STACKABLE equipment-effect: failed status={result.Status} item=0x{result.SourceItemTemplateId:X8} listType={listType} slot={slotIndex}");
+                return;
+            }
+
+            await _refresh.SendUpdateItemList(session, result.SourceListType, result.SourceSlotIndex);
+            await _refresh.SendUpdateItemList(session, result.TargetListType, result.TargetSlotIndex);
+
+            FileLogger.Log($"[{ProtocolName}] USE_STACKABLE equipment-effect: rune=0x{result.SourceItemTemplateId:X8} effect={result.AppliedEffectId} target=0x{result.TargetItemTemplateId:X8}@{result.TargetListType}:{result.TargetSlotIndex} remaining={result.SourceRemainingStackCount}");
+        }
+
+        private static byte[] BuildAddEquipmentEffectAck(byte[] requestBody)
+        {
+            var writer = new GamePacketWriter();
+            writer.WriteByte(0x01);
+            if (requestBody != null && requestBody.Length > 0)
+                writer.WriteBytes(requestBody);
+            return writer.ToArray();
         }
 
         private async Task SendPersonalCargoUpgradeTicketResponse(

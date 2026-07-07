@@ -78,6 +78,8 @@ namespace DfoServer.Game.Inventory
             int expectedItemTemplateId,
             out PersonalCargoUpgradeTicketResult result);
 
+        bool TryUseEquipmentEffectRune(int characterId, int accountId, EquipmentEffectRuneUseRequest request, out EquipmentEffectRuneUseResult result);
+
         bool TryUseAccountCargoUpgradeTool(
             int characterId,
             int accountId,

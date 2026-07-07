@@ -14,6 +14,7 @@ namespace DfoServer
             ("--selftest-avatar-package", SelfTests.AvatarPackageSelfTest.Run),
             ("--selftest-cerashop", SelfTests.CeraShopSelfTest.Run),
             ("--selftest-selectable-package", SelfTests.SelectablePackageSelfTest.Run),
+            ("--selftest-equipment-effect-rune", SelfTests.EquipmentEffectRuneSelfTest.Run),
             ("--selftest-pet-consumable", SelfTests.PetConsumableSelfTest.Run),
             ("--selftest-inventory-extra-view", SelfTests.InventoryExtraViewSelfTest.Run),
             ("--selftest-titlebook-item-codec", SelfTests.TitleBookInventoryItemCodecSelfTest.Run),
