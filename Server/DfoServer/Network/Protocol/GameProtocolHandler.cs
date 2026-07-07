@@ -7,6 +7,7 @@ using DfoServer.Infrastructure;
 using DfoServer.GameWorld;
 using DfoServer.Network.Builders;
 using DfoServer.Network.Handlers;
+using DfoServer.Network.Handlers.Pets;
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
@@ -30,6 +31,7 @@ namespace DfoServer.Network
         private readonly CollectionBoxHandler _collectionBoxHandler;
         private readonly ShopCoinEventHandler _shopCoinEventHandler;
         private readonly InventoryRefreshSender _inventoryRefreshSender;
+        private readonly PetCreatureHandler _petCreatureHandler;
         private readonly MercenaryHandler _mercenaryHandler;
         private readonly ICharacterRepository _characterRepository;
         private readonly SqliteSelectCharacterDataSource _selectCharacterDataSource;
@@ -66,6 +68,7 @@ namespace DfoServer.Network
             _characterSelectHandler = new CharacterSelectHandler(sqliteSelectCharacterDataSource, characterRepository, getUserInfoTemplate);
             _inventoryRefreshSender = new InventoryRefreshSender(inventoryStore, sqliteSelectCharacterDataSource, characterRepository);
             _inventoryHandler = new InventoryHandler(inventoryStore, sqliteSelectCharacterDataSource, characterRepository, _inventoryRefreshSender, broadcastGamePacket);
+            _petCreatureHandler = new PetCreatureHandler(inventoryStore, sqliteSelectCharacterDataSource, _inventoryRefreshSender);
             _townHandler = new TownHandler(characterRepository, inventoryStore);
             var dailyResetService = new Game.DailyReset.DailyResetService(databasePath, schemaFilePath);
             var reviveCoinService = new Game.ReviveCoin.ReviveCoinService(inventoryStore, _assetService, dailyResetService);
@@ -86,6 +89,7 @@ namespace DfoServer.Network
             RegisterLoginHandlers(_cmdDispatch);
             RegisterCharacterHandlers(_cmdDispatch);
             RegisterInventoryHandlers(_cmdDispatch);
+            RegisterPetHandlers(_cmdDispatch);
             RegisterSortItemLockHandlers(_cmdDispatch);
             RegisterEquipmentItemLockHandlers(_cmdDispatch);
             RegisterEquipmentSocketHandlers(_cmdDispatch);
@@ -193,10 +197,7 @@ namespace DfoServer.Network
             d[0x002C] = _inventoryHandler.Handle_ENUM_CMDPACKET_USE_STACKABLE;
             d[0x00D0] = _inventoryHandler.Handle_OPEN_MAGIC_BOX_SINGLE;
             d[0x0050] = _inventoryHandler.Handle_ENUM_CMDPACKET_UPGRADE_ITEM;      //80
-            d[0x0066] = _inventoryHandler.Handle_HATCH_CREATURE_EGG;                //102
             d[0x00A0] = _inventoryHandler.Handle_OPEN_SELECTABLE_PACKAGE;
-            d[0x00AD] = _inventoryHandler.Handle_HATCH_CREATURE_EGG;                //173
-            d[0x00AE] = _inventoryHandler.Handle_REQUEST_HATCHED_CREATURE;          //174
             d[0x0110] = _inventoryHandler.Handle_ENUM_CMDPACKET_ENCHANT_BY_BEAD;   //272
             d[0x019C] = _inventoryHandler.Handle_TITLE_BOOK;                       //412
             d[0x019D] = _inventoryHandler.Handle_TITLE_BOOK;                       //413
@@ -211,6 +212,21 @@ namespace DfoServer.Network
             d[0x0133] = _inventoryHandler.Handle_DEPOSIT_MONEY;                    //307 金库存金币
             d[0x0134] = _inventoryHandler.Handle_WITHDRAW_MONEY;                   //308 金库取金币
             d[0x0198] = _inventoryHandler.Handle_UPGRADE_CARGO;                    //408 扩容个人仓库
+        }
+
+        private void RegisterPetHandlers(Dictionary<ushort, Func<EnhancedClientSession, GamePacketHeader, byte[], Task>> d)
+        {
+            d[0x002C] = async (s, h, b) =>
+            {
+                if (await _petCreatureHandler.TryHandleUseStackable(s, h, b))
+                    return;
+
+                await _inventoryHandler.Handle_ENUM_CMDPACKET_USE_STACKABLE(s, h, b);
+            };
+            d[0x0064] = _petCreatureHandler.HandleRenameCreature;
+            d[0x0066] = _petCreatureHandler.HandleHatchCreatureEgg;
+            d[0x00AD] = _petCreatureHandler.HandleHatchCreatureEgg;
+            d[0x00AE] = _petCreatureHandler.HandleRequestHatchedCreature;
         }
 
         private void RegisterSortItemLockHandlers(Dictionary<ushort, Func<EnhancedClientSession, GamePacketHeader, byte[], Task>> d)
