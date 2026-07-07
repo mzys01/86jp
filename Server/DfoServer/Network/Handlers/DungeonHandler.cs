@@ -1,4 +1,5 @@
 using DfoServer.Game.Inventory;
+using DfoServer.Game.SelectCharacter;
 using DfoServer.Network.Handlers.Dungeon;
 using System.Threading.Tasks;
 
@@ -18,9 +19,16 @@ namespace DfoServer.Network.Handlers
         public DungeonHandler(
             IAssetService assetService,
             Game.ReviveCoin.ReviveCoinService reviveCoinService,
-            Game.Characters.SqliteCharacterRepository characterRepository)
+            Game.Characters.SqliteCharacterRepository characterRepository,
+            SqliteSelectCharacterDataSource selectCharacterDataSource,
+            IRentalTimeProvider rentalTimeProvider)
         {
-            _services = new DungeonSharedServices(assetService, reviveCoinService, characterRepository);
+            _services = new DungeonSharedServices(
+                assetService,
+                reviveCoinService,
+                characterRepository,
+                selectCharacterDataSource,
+                rentalTimeProvider);
             _settlement = new DungeonSettlementHandler(_services);
             _map = new DungeonMapHandler(_services);
             _entry = new DungeonEntryHandler(_services, _map);
