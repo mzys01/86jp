@@ -21,6 +21,7 @@ namespace DfoServer.Network.Handlers
         private readonly InventoryRefreshSender _refresh;
         private readonly ExperienceItemNotificationService _experienceItemNotifications;
         private readonly DailyResetService _dailyResetService;
+        private readonly LotteryOpenPlanner _lotteryOpenPlanner;
         private readonly Func<byte[], Task> _broadcastGamePacket;
 
         public string ProtocolName => "GameProtocol";
@@ -44,6 +45,7 @@ namespace DfoServer.Network.Handlers
             _experienceItemNotifications = experienceItemNotifications
                 ?? throw new ArgumentNullException(nameof(experienceItemNotifications));
             _dailyResetService = dailyResetService ?? throw new ArgumentNullException(nameof(dailyResetService));
+            _lotteryOpenPlanner = new LotteryOpenPlanner(_dailyResetService);
             _broadcastGamePacket = broadcastGamePacket;
         }
 

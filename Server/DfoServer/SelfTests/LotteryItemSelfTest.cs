@@ -45,13 +45,27 @@ namespace DfoServer.SelfTests
                 && phase1.SlotIndex == DoubleLotterySlot, ref failures);
             Check("reject short body", !LotteryItemUseRequest.TryParse(new byte[] { 0x01, 0x00, 0x6A }, out _), ref failures);
             Check("direct phase1 uses double while active and under cap",
-                InventoryHandler.ShouldUseLotteryDoubleRewardForDirectOpen(true, true, PremiumService.LotteryDoubleRewardDailyLimit - 1),
+                LotteryOpenPlanner.ResolveDirectFastOpen(true, true, PremiumService.LotteryDoubleRewardDailyLimit - 1).UseDoubleReward,
                 ref failures);
             Check("direct phase1 falls back after double cap",
-                !InventoryHandler.ShouldUseLotteryDoubleRewardForDirectOpen(true, true, PremiumService.LotteryDoubleRewardDailyLimit),
+                LotteryOpenPlanner.ResolveDirectFastOpen(true, true, PremiumService.LotteryDoubleRewardDailyLimit).ShouldSendRegularPhaseStart,
                 ref failures);
             Check("pending phase1 never consumes double count",
-                !InventoryHandler.ShouldUseLotteryDoubleRewardForDirectOpen(false, true, 0),
+                !LotteryOpenPlanner.ResolveDirectFastOpen(false, true, 0).UseDoubleReward,
+                ref failures);
+            var doubleOpenPlan = LotteryOpenPlanner.ResolveDirectFastOpen(true, true, 0);
+            var doubleOpenRequest = doubleOpenPlan.CreateBoosterUseRequest(DoubleLotterySlot);
+            Check("double open plan creates multiplier request",
+                doubleOpenRequest.SlotIndex == DoubleLotterySlot
+                && doubleOpenRequest.RewardMultiplier == 2
+                && doubleOpenRequest.ConsumeLotteryDoubleRewardUse,
+                ref failures);
+            var regularOpenPlan = LotteryOpenPlanner.ResolveDirectFastOpen(true, false, 0);
+            var regularOpenRequest = regularOpenPlan.CreateBoosterUseRequest(DoubleLotterySlot);
+            Check("regular fallback plan keeps normal reward request",
+                regularOpenPlan.ShouldSendRegularPhaseStart
+                && regularOpenRequest.RewardMultiplier == 1
+                && !regularOpenRequest.ConsumeLotteryDoubleRewardUse,
                 ref failures);
 
             var phaseStart = LotteryItemAckBuilder.BuildPhaseStart(LotterySlot, SampleBoosterItemId);

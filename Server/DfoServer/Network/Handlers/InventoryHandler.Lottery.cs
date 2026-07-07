@@ -54,8 +54,9 @@ namespace DfoServer.Network.Handlers
 
             var hadPending = TryTakePendingLotteryOpen(session.SessionId, request.SlotIndex, out _);
             var isDirectFastOpen = request.Phase == 1 && !hadPending;
-            var useDoubleReward = isDirectFastOpen && CanUseLotteryDoubleReward(session);
-            if (isDirectFastOpen && !useDoubleReward)
+            var (cid, aid) = ResolveOwner(session);
+            var openPlan = _lotteryOpenPlanner.Resolve(cid, aid, isDirectFastOpen);
+            if (openPlan.ShouldSendRegularPhaseStart)
             {
                 if (!TryLoadLotterySourceItem(session, request.SlotIndex, out var sourceItemTemplateId, out var sourceStackCount)
                     || !CanOpenLotteryItem(session, request.SlotIndex, sourceItemTemplateId))
@@ -66,18 +67,18 @@ namespace DfoServer.Network.Handlers
                 }
 
                 SetPendingLotteryOpen(session.SessionId, request.SlotIndex);
-                var (cid, aid) = ResolveOwner(session);
-                await SendPremiumServiceRefresh(session, cid, aid);
+                if (openPlan.RefreshPremiumBeforePhaseStart)
+                    await SendPremiumServiceRefresh(session, cid, aid);
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x001B,
                     LotteryItemAckBuilder.BuildPhaseStartWithoutPreview()));
-                FileLogger.Log($"[{ProtocolName}] USE_LOTTERY_ITEM: direct phase1 fallback to phase0 slot={request.SlotIndex} item=0x{sourceItemTemplateId:X8} count={sourceStackCount} ackPreview=0");
+                FileLogger.Log($"[{ProtocolName}] USE_LOTTERY_ITEM: direct phase1 fallback to phase0 slot={request.SlotIndex} item=0x{sourceItemTemplateId:X8} count={sourceStackCount} used={openPlan.UsedCount} activeDouble={openPlan.HasActiveDoubleReward} ackPreview=0");
                 return;
             }
 
-            if (!await TryOpenLotteryItem(session, request.SlotIndex, useDoubleReward, refreshPremiumAfterOpen: isDirectFastOpen))
+            if (!await TryOpenLotteryItem(session, request.SlotIndex, openPlan))
             {
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x001B, LotteryItemAckBuilder.BuildError()));
-                FileLogger.Log($"[{ProtocolName}] USE_LOTTERY_ITEM: open failed phase={request.Phase} slot={request.SlotIndex} double={useDoubleReward}");
+                FileLogger.Log($"[{ProtocolName}] USE_LOTTERY_ITEM: open failed phase={request.Phase} slot={request.SlotIndex} mode={openPlan.Mode}");
             }
         }
 
@@ -98,7 +99,7 @@ namespace DfoServer.Network.Handlers
             }
 
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x00D9, OverflowInfoAckBuilder.Build(body)));
-            if (!await TryOpenLotteryItem(session, pending.SlotIndex, useDoubleReward: false))
+            if (!await TryOpenLotteryItem(session, pending.SlotIndex, LotteryOpenPlan.ConfirmedRegular()))
             {
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x001B, LotteryItemAckBuilder.BuildError()));
                 FileLogger.Log($"[{ProtocolName}] OVERFLOW_INFO: pending lottery open failed slot={pending.SlotIndex}");
@@ -106,28 +107,24 @@ namespace DfoServer.Network.Handlers
             }
         }
 
-        private async Task<bool> TryOpenLotteryItem(EnhancedClientSession session, short slotIndex, bool useDoubleReward, bool refreshPremiumAfterOpen = false)
+        private async Task<bool> TryOpenLotteryItem(EnhancedClientSession session, short slotIndex, LotteryOpenPlan openPlan)
         {
+            openPlan = openPlan ?? LotteryOpenPlan.ConfirmedRegular();
             var (cid, aid) = ResolveOwner(session);
             if (!_sqliteSelectCharacterDataSource.TryUseBoosterItem(
                     cid,
                     aid,
-                    new BoosterUseRequest
-                    {
-                        SlotIndex = slotIndex,
-                        RewardMultiplier = useDoubleReward ? 2 : 1,
-                        ConsumeLotteryDoubleRewardUse = useDoubleReward,
-                    },
+                    openPlan.CreateBoosterUseRequest(slotIndex),
                     out var result))
             {
                 return false;
             }
 
             await SendLotteryItemOpenResult(session, cid, aid, result);
-            if (useDoubleReward || refreshPremiumAfterOpen)
+            if (openPlan.RefreshPremiumAfterOpen)
                 await SendPremiumServiceRefresh(session, cid, aid);
 
-            FileLogger.Log($"[{ProtocolName}] USE_LOTTERY_ITEM: source=0x{result.SourceItemTemplateId:X8} slot={result.SourceSlotIndex} remaining={result.SourceRemainingStackCount} gold={result.ConsumedGold}->{result.UpdatedGold} double={useDoubleReward} rewards={string.Join(",", result.Rewards.Select(r => $"{r.ListType}:0x{r.ItemTemplateId:X8}x{r.GrantedCount}@{r.SlotIndex}"))}");
+            FileLogger.Log($"[{ProtocolName}] USE_LOTTERY_ITEM: source=0x{result.SourceItemTemplateId:X8} slot={result.SourceSlotIndex} remaining={result.SourceRemainingStackCount} gold={result.ConsumedGold}->{result.UpdatedGold} mode={openPlan.Mode} double={openPlan.UseDoubleReward} rewards={string.Join(",", result.Rewards.Select(r => $"{r.ListType}:0x{r.ItemTemplateId:X8}x{r.GrantedCount}@{r.SlotIndex}"))}");
             return true;
         }
 
@@ -305,29 +302,6 @@ namespace DfoServer.Network.Handlers
             {
                 FileLogger.Log($"[{ProtocolName}] USE_LOTTERY_ITEM: notice broadcast failed: {ex.Message}");
             }
-        }
-
-        private bool CanUseLotteryDoubleReward(EnhancedClientSession session)
-        {
-            var (cid, aid) = ResolveOwner(session);
-            if (cid <= 0 || aid <= 0)
-                return false;
-
-            var usedCount = PremiumService.GetLotteryDoubleRewardUsedCount(_dailyResetService, cid);
-            if (usedCount >= PremiumService.LotteryDoubleRewardDailyLimit)
-                return false;
-
-            var connStr = SqliteDatabaseBootstrap.Initialize(ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
-            var premiumType = DevilContractCatalog.SlotToPremiumType(PremiumService.LotteryDoubleRewardServiceIndex);
-            var hasActivePremium = PremiumService.HasActivePremium(connStr, aid, premiumType);
-            return ShouldUseLotteryDoubleRewardForDirectOpen(true, hasActivePremium, usedCount);
-        }
-
-        internal static bool ShouldUseLotteryDoubleRewardForDirectOpen(bool isDirectFastOpen, bool hasActivePremium, int usedCount)
-        {
-            return isDirectFastOpen
-                && hasActivePremium
-                && usedCount < PremiumService.LotteryDoubleRewardDailyLimit;
         }
 
         private bool CanOpenLotteryItem(EnhancedClientSession session, short slotIndex, int sourceItemTemplateId)
