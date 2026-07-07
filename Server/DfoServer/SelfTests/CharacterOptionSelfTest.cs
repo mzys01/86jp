@@ -1,10 +1,13 @@
 using System;
 using System.IO;
 using DfoServer.Game.CharacterData;
+using DfoServer.Game.Settings;
 using DfoServer.Game.SelectCharacter;
+using DfoServer.GameWorld;
 using DfoServer.Infrastructure;
 using DfoServer.Network.Builders;
 using Microsoft.Data.Sqlite;
+using System.Text.RegularExpressions;
 
 namespace DfoServer.SelfTests
 {
@@ -65,6 +68,49 @@ namespace DfoServer.SelfTests
                 var built = builder.TryBuild(snapshot, 0, out var builtBody);
                 Check("0x0187 builder succeeds", built);
                 Check("0x0187 builder returns exact saved body", ByteEquals(builtBody, optionBody));
+
+                var mainOption = CopyBytes(AccountSettings.DefaultMainGameOption);
+                mainOption[36] = 0x05;
+                var accountSettingsRepo = new AccountSettingsRepository(tempDb, ServerPaths.SchemaFilePath);
+                accountSettingsRepo.SaveMainOption(AccountId, mainOption);
+                var snapshotWithMainOption = dataSource.Load(CharacterId, AccountId);
+                Check("main game option uses account settings", ByteEquals(snapshotWithMainOption.InitializationSnapshot.MainGameOptionBlob, mainOption));
+
+                var characterHotkeys = BuildHotkeyBlob(0x0002, 0x1234, 0x5678, 0x0099);
+                stateRepo.SaveHotkeyConfig(CharacterId, characterHotkeys);
+                var snapshotWithHotkeys = dataSource.Load(CharacterId, AccountId);
+                Check("hotkeys load from character_hotkey_slots",
+                    snapshotWithHotkeys.InitializationSnapshot.HotkeyConfigSlots.Count >= 4
+                    && snapshotWithHotkeys.InitializationSnapshot.HotkeyConfigSlots[1] == 0x1234
+                    && snapshotWithHotkeys.InitializationSnapshot.HotkeyConfigSlots[2] == 0x5678);
+
+                var loginPackets = AccountSettingsPacketBuilder.BuildLoginAccountSettings(null);
+                Check("login sends account-scoped hotkey prefix for rapid-fire",
+                    loginPackets.Count == 2
+                    && BitConverter.ToUInt16(loginPackets[1], 1) == 0x01C7
+                    && ReadLoginHotkeyPayloadLength(loginPackets[1]) == AccountSettings.AccountScopedHotkeySlotCount * 2);
+                Check("login hotkey prefix keeps rapid-fire enabled",
+                    ReadLoginHotkeyPrefix(loginPackets[1]) == 0x0002);
+                Check("rapid-fire default remains enabled",
+                    snapshotWithHotkeys.InitializationSnapshot.HotkeyConfigSlots.Count > 0
+                    && snapshotWithHotkeys.InitializationSnapshot.HotkeyConfigSlots[0] == 0x0002);
+
+                var creatorDefaults = CharacterKeyboardDefaults.BuildHotkeySlots(10);
+                Check("creator default hotkey body has creator slot count",
+                    creatorDefaults.Length == 168);
+                Check("creator default hotkeys differ from normal defaults",
+                    !CharacterKeyboardDefaults.LooksLikeNormalDefaultHotkeySlots(creatorDefaults));
+                Check("creator default hotkeys include WASD and Space virtual keys",
+                    ContainsHotkeyValue(creatorDefaults, 0x0057)
+                    && ContainsHotkeyValue(creatorDefaults, 0x0041)
+                    && ContainsHotkeyValue(creatorDefaults, 0x0053)
+                    && ContainsHotkeyValue(creatorDefaults, 0x0044)
+                    && ContainsHotkeyValue(creatorDefaults, 0x0020));
+
+                Check("creator grow type 0 is creator name in PVF",
+                    CreatorGrowTypeNameAt(0) == "缔造者");
+                Check("creator grow type 1 is not creator name in PVF",
+                    CreatorGrowTypeNameAt(1) == "元素师");
             }
             finally
             {
@@ -110,6 +156,61 @@ namespace DfoServer.SelfTests
             }
 
             return body;
+        }
+
+        private static byte[] BuildHotkeyBlob(params ushort[] values)
+        {
+            var body = new byte[values.Length * 2];
+            for (var i = 0; i < values.Length; i++)
+                Buffer.BlockCopy(BitConverter.GetBytes(values[i]), 0, body, i * 2, 2);
+            return body;
+        }
+
+        private static bool ContainsHotkeyValue(byte[] hotkeys, ushort value)
+        {
+            for (var i = 0; i + 1 < hotkeys.Length; i += 2)
+            {
+                if (BitConverter.ToUInt16(hotkeys, i) == value)
+                    return true;
+            }
+            return false;
+        }
+
+        private static int ReadLoginHotkeyPayloadLength(byte[] packet)
+        {
+            return packet != null && packet.Length >= 20
+                ? BitConverter.ToInt32(packet, 16)
+                : -1;
+        }
+
+        private static ushort ReadLoginHotkeyPrefix(byte[] packet)
+        {
+            return packet != null && packet.Length >= 22
+                ? BitConverter.ToUInt16(packet, 20)
+                : (ushort)0;
+        }
+
+        private static string CreatorGrowTypeNameAt(int growType)
+        {
+            var text = PvfArchiveAccessor.ReadText("character/Mage/CreatorMage.chr");
+            var match = Regex.Match(
+                text,
+                @"\[growtype name\]\s*((?:`[^`]+`\s*)+)",
+                RegexOptions.IgnoreCase);
+            if (!match.Success)
+                return null;
+
+            var names = Regex.Matches(match.Groups[1].Value, @"`([^`]+)`");
+            return growType >= 0 && growType < names.Count
+                ? names[growType].Groups[1].Value
+                : null;
+        }
+
+        private static byte[] CopyBytes(byte[] source)
+        {
+            var copy = new byte[source.Length];
+            Buffer.BlockCopy(source, 0, copy, 0, source.Length);
+            return copy;
         }
 
         private static void SeedCharacter(string databasePath)

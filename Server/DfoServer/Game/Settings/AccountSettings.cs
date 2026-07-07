@@ -8,6 +8,34 @@ namespace DfoServer.Game.Settings
         public byte HotkeyKeyType { get; set; }
         public byte[] HotkeySlots { get; set; }
 
+        public const int AccountScopedHotkeySlotCount = 1;
+
+        public static byte[] ExtractAccountScopedHotkeySlots(byte[] hotkeys)
+        {
+            if (hotkeys == null)
+                return null;
+
+            var length = System.Math.Min(AccountScopedHotkeySlotCount * 2, hotkeys.Length);
+            var result = new byte[length];
+            if (length > 0)
+                System.Buffer.BlockCopy(hotkeys, 0, result, 0, length);
+            return result;
+        }
+
+        public static void ApplyAccountScopedHotkeySlots(byte[] target, byte[] accountHotkeys)
+        {
+            if (target == null)
+                return;
+
+            var source = ExtractAccountScopedHotkeySlots(accountHotkeys ?? DefaultHotkeySlots);
+            if (source == null)
+                return;
+
+            var length = System.Math.Min(source.Length, target.Length);
+            if (length > 0)
+                System.Buffer.BlockCopy(source, 0, target, 0, length);
+        }
+
         public static readonly byte[] DefaultMainGameOption = {
             0x01,0x00,0x01,0x00,0x01,0x00,0x03,0x00,0x46,0x00,0x19,0x00,0x00,0x00,0x00,0x00,
             0x00,0x00,0x00,0x00,0x00,0x00,0x01,0x00,0x01,0x00,0x01,0x00,0x01,0x00,0x00,0x00,

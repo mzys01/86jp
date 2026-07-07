@@ -11,6 +11,8 @@ namespace DfoServer.Game.CharacterData
 
         void SaveCharacterOption(int characterId, byte[] body);
 
+        void SaveHotkeyConfig(int characterId, byte[] hotkeys);
+
         bool HasFlags(int characterId);
 
         void SeedFromSnapshot(int characterId, SelectCharacterInitializationSnapshot snapshot);
