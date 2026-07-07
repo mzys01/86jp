@@ -217,6 +217,7 @@ namespace DfoServer.Network
             d[0x03F3] = _inventoryHandler.Handle_OPEN_MAGIC_BOX;
             d[0x0063] = _inventoryHandler.Handle_COMPOUND_AVATAR;                  //99 合并装扮(时装合成)
             d[0x03EA] = _inventoryHandler.Handle_COMPOUND_AVATAR_SET;              //1002 8件高级装扮100%合成稀有装扮(克隆装扮合成器)
+            d[0x0342] = _inventoryHandler.Handle_ADD_EQUIPMENT_EFFECT;             //834 武器特效符文添加
             d[0x0131] = _inventoryHandler.Handle_CREATE_ACCOUNT_CARGO;               //305 开通金库
             d[0x0132] = _inventoryHandler.Handle_UPGRADE_ACCOUNT_CARGO;             //306 扩容金库
             d[0x0133] = _inventoryHandler.Handle_DEPOSIT_MONEY;                    //307 金库存金币
