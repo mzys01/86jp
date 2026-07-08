@@ -296,6 +296,22 @@ namespace DfoServer.Game.Inventory
         public int ConsumedMaterialRemainingStackCount { get; set; }
 
         public List<BoosterRewardResult> Rewards { get; } = new List<BoosterRewardResult>();
+
+        public List<PackageGrantedItem> DisplayRewards { get; } = new List<PackageGrantedItem>();
+
+        public List<PackageGrantedItem> DoubleRewards { get; } = new List<PackageGrantedItem>();
+
+        public bool IsSeriaLuckValueSource { get; set; }
+
+        public int SeriaLuckValueBefore { get; set; }
+
+        public int SeriaLuckValueAfter { get; set; }
+
+        public int SeriaLuckValueMax { get; set; }
+
+        public bool SeriaLuckDoubleTriggered { get; set; }
+
+        public byte MagicBoxClientType { get; set; }
     }
 
     public sealed class EquipmentSocketMutationResult

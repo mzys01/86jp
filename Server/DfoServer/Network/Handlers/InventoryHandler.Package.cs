@@ -367,8 +367,9 @@ namespace DfoServer.Network.Handlers
                 return;
             }
 
+            result.MagicBoxClientType = request.RawListType;
             await SendBoosterUseResult(session, header.type, result);
-            FileLogger.Log($"[{ProtocolName}] OPEN_MAGIC_BOX: source=0x{result.SourceItemTemplateId:X8} slot={result.SourceSlotIndex} requested={request.RequestedCount} applied={result.ConsumedSourceCount} remaining={result.SourceRemainingStackCount} material=0x{result.ConsumedMaterialItemTemplateId:X8}x{result.ConsumedMaterialCount}@{result.ConsumedMaterialSlotIndex} materialRemaining={result.ConsumedMaterialRemainingStackCount} rewards={string.Join(",", result.Rewards.Select(r => $"{r.ListType}:0x{r.ItemTemplateId:X8}x{r.GrantedCount}@{r.SlotIndex}"))} elapsed={elapsed.ElapsedMilliseconds}ms");
+            FileLogger.Log($"[{ProtocolName}] OPEN_MAGIC_BOX: source=0x{result.SourceItemTemplateId:X8} slot={result.SourceSlotIndex} requested={request.RequestedCount} applied={result.ConsumedSourceCount} remaining={result.SourceRemainingStackCount} material=0x{result.ConsumedMaterialItemTemplateId:X8}x{result.ConsumedMaterialCount}@{result.ConsumedMaterialSlotIndex} materialRemaining={result.ConsumedMaterialRemainingStackCount}{FormatBoosterOpenState(result)} rewards={string.Join(",", result.Rewards.Select(r => $"{r.ListType}:0x{r.ItemTemplateId:X8}x{r.GrantedCount}@{r.SlotIndex}"))} elapsed={elapsed.ElapsedMilliseconds}ms");
         }
 
         public async Task Handle_OPEN_MAGIC_BOX_SINGLE(EnhancedClientSession session, GamePacketHeader header, byte[] body)
@@ -410,8 +411,9 @@ namespace DfoServer.Network.Handlers
                 return;
             }
 
+            result.MagicBoxClientType = request.RawListType;
             await SendBoosterUseResult(session, header.type, result);
-            FileLogger.Log($"[{ProtocolName}] OPEN_MAGIC_BOX_SINGLE: source=0x{result.SourceItemTemplateId:X8} slot={result.SourceSlotIndex} requested={request.RequestedCount} applied={result.ConsumedSourceCount} remaining={result.SourceRemainingStackCount} material=0x{result.ConsumedMaterialItemTemplateId:X8}x{result.ConsumedMaterialCount}@{result.ConsumedMaterialSlotIndex} materialRemaining={result.ConsumedMaterialRemainingStackCount} rewards={string.Join(",", result.Rewards.Select(r => $"{r.ListType}:0x{r.ItemTemplateId:X8}x{r.GrantedCount}@{r.SlotIndex}"))} elapsed={elapsed.ElapsedMilliseconds}ms");
+            FileLogger.Log($"[{ProtocolName}] OPEN_MAGIC_BOX_SINGLE: source=0x{result.SourceItemTemplateId:X8} slot={result.SourceSlotIndex} requested={request.RequestedCount} applied={result.ConsumedSourceCount} remaining={result.SourceRemainingStackCount} material=0x{result.ConsumedMaterialItemTemplateId:X8}x{result.ConsumedMaterialCount}@{result.ConsumedMaterialSlotIndex} materialRemaining={result.ConsumedMaterialRemainingStackCount}{FormatBoosterOpenState(result)} rewards={string.Join(",", result.Rewards.Select(r => $"{r.ListType}:0x{r.ItemTemplateId:X8}x{r.GrantedCount}@{r.SlotIndex}"))} elapsed={elapsed.ElapsedMilliseconds}ms");
         }
 
         private async Task<bool> TryHandleBoosterOpen(EnhancedClientSession session, GamePacketHeader header, byte[] body)
@@ -499,7 +501,10 @@ namespace DfoServer.Network.Handlers
 
         private async Task SendBoosterUseResult(EnhancedClientSession session, ushort responseType, BoosterUseResult result)
         {
-            var grantedItems = ToPackageGrantedItems(result);
+            var useNativeMagicBoxBatchAck = responseType == 0x03F3 && ShouldUseNativeMagicBoxBatchAck(result);
+            var grantedItems = responseType == 0x03F3 && !useNativeMagicBoxBatchAck
+                ? ToPackageGrantedItems(result)
+                : ToBoosterPopupGrantedItems(result);
 
             if (responseType == 0x00A0)
             {
@@ -516,13 +521,26 @@ namespace DfoServer.Network.Handlers
                         SelectablePackageAckBuilder.BuildSuccess(result.SourceSlotIndex, grantedItems)));
                 }
             }
-            else if (!ShouldSendSourceAckForBoosterResponse(responseType))
+            else if (responseType == 0x03F3)
             {
-                if (grantedItems.Count > 0)
+                if (useNativeMagicBoxBatchAck)
                 {
+                    var ackBody = MagicBoxOpenAckBuilder.BuildBatch(result);
+                    FileLogger.Log($"[{ProtocolName}] OPEN_MAGIC_BOX ACK: type=0x03F3 bodyLen={ackBody.Length} head={FormatPacketHead(ackBody, 24)}{FormatBoosterOpenState(result)} {FormatBoosterRows(result, false)}");
+                    await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x03F3, ackBody));
+                }
+                else if (grantedItems.Count > 0)
+                {
+                    FileLogger.Log($"[{ProtocolName}] OPEN_MAGIC_BOX legacy popup: type=0x03F3 rows={grantedItems.Count}{FormatBoosterOpenState(result)}");
                     await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x00A0,
                         SelectablePackageAckBuilder.BuildSuccess(result.SourceSlotIndex, grantedItems)));
                 }
+            }
+            else if (responseType == 0x00D0)
+            {
+                var ackBody = MagicBoxOpenAckBuilder.BuildSingle(result);
+                FileLogger.Log($"[{ProtocolName}] OPEN_MAGIC_BOX ACK: type=0x00D0 bodyLen={ackBody.Length} head={FormatPacketHead(ackBody, 24)}{FormatBoosterOpenState(result)} {FormatBoosterRows(result, true)}");
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x00D0, ackBody));
             }
             else
             {
@@ -535,6 +553,7 @@ namespace DfoServer.Network.Handlers
             }
 
             var (cid, aid) = ResolveOwner(session);
+
             if (result.SourceRemainingStackCount <= 0)
                 await SendConsumedSourceItemUpdate(session, result.SourceSlotIndex, result.SourceItemTemplateId);
 
@@ -549,6 +568,48 @@ namespace DfoServer.Network.Handlers
         internal static bool ShouldSendSourceAckForBoosterResponse(ushort responseType)
         {
             return responseType != 0x00D0 && responseType != 0x03F3;
+        }
+
+        internal static bool ShouldUseNativeMagicBoxBatchAck(BoosterUseResult result)
+        {
+            return result != null && result.IsSeriaLuckValueSource;
+        }
+
+        internal static bool ShouldSendObtainedItemsPopupForBoosterResponse(ushort responseType)
+        {
+            return responseType != 0x00D0 && responseType != 0x03F3;
+        }
+
+        internal static bool ShouldSendObtainedItemsPopupForBoosterResponse(ushort responseType, BoosterUseResult result)
+        {
+            if (responseType == 0x00D0)
+                return false;
+
+            if (responseType == 0x03F3)
+                return !ShouldUseNativeMagicBoxBatchAck(result);
+
+            return true;
+        }
+
+        private static string FormatPacketHead(byte[] body, int maxBytes)
+        {
+            if (body == null || body.Length == 0)
+                return string.Empty;
+
+            var count = Math.Min(body.Length, Math.Max(0, maxBytes));
+            return BitConverter.ToString(body, 0, count);
+        }
+
+        private static string FormatBoosterOpenState(BoosterUseResult result)
+        {
+            if (result == null)
+                return string.Empty;
+
+            var state = $" clientType=0x{result.MagicBoxClientType:X2} displayRows={result.DisplayRewards.Count} doubleRows={result.DoubleRewards.Count}";
+            if (!result.IsSeriaLuckValueSource)
+                return state;
+
+            return state + $" seriaLuck={result.SeriaLuckValueBefore}->{result.SeriaLuckValueAfter}/{result.SeriaLuckValueMax} doubleTriggered={result.SeriaLuckDoubleTriggered}";
         }
 
         private async Task SendConsumedSourceItemUpdate(EnhancedClientSession session, short sourceSlotIndex, int sourceItemTemplateId)
@@ -693,6 +754,55 @@ namespace DfoServer.Network.Handlers
                 ItemTemplateId = -1,
                 CountOrInstanceValue = 0,
             };
+        }
+
+        private static string FormatBoosterRows(BoosterUseResult result, bool singleAckRows)
+        {
+            if (result == null)
+                return string.Empty;
+
+            if (singleAckRows)
+                return $"ack={FormatBoosterRewardRows(result.Rewards, 16)} display={FormatPackageRows(result.DisplayRewards, 16)} double={FormatPackageRows(result.DoubleRewards, 16)}";
+
+            return $"ack={FormatPackageRows(result.DisplayRewards, 16)} double={FormatPackageRows(result.DoubleRewards, 16)}";
+        }
+
+        private static string FormatPackageRows(IReadOnlyList<PackageGrantedItem> rows, int maxRows)
+        {
+            if (rows == null || rows.Count == 0)
+                return "none";
+
+            var limit = Math.Min(rows.Count, Math.Max(0, maxRows));
+            var parts = new List<string>();
+            for (var i = 0; i < limit; i++)
+            {
+                var row = rows[i];
+                parts.Add($"{row.ListType}:0x{row.ItemTemplateId:X8}x{row.DisplayCount}@{row.SlotIndex}");
+            }
+
+            if (rows.Count > limit)
+                parts.Add($"...+{rows.Count - limit}");
+
+            return string.Join(",", parts);
+        }
+
+        private static string FormatBoosterRewardRows(IReadOnlyList<BoosterRewardResult> rows, int maxRows)
+        {
+            if (rows == null || rows.Count == 0)
+                return "none";
+
+            var limit = Math.Min(rows.Count, Math.Max(0, maxRows));
+            var parts = new List<string>();
+            for (var i = 0; i < limit; i++)
+            {
+                var row = rows[i];
+                parts.Add($"{row.ListType}:0x{row.ItemTemplateId:X8}x{row.GrantedCount}@{row.SlotIndex}");
+            }
+
+            if (rows.Count > limit)
+                parts.Add($"...+{rows.Count - limit}");
+
+            return string.Join(",", parts);
         }
 
         private static IReadOnlyList<int> ParseBoosterSelectionItemIds(byte[] body)

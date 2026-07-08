@@ -136,6 +136,11 @@ CREATE TABLE IF NOT EXISTS character_daily_counters (
     PRIMARY KEY (character_id, counter_key),
     FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
 );")),
+
+            (16, "accounts 赛丽亚幸运值列", conn => SqliteSchemaMigrator.EnsureColumns(conn, "accounts", new[]
+            {
+                ("seria_luck_value", "INTEGER NOT NULL DEFAULT 0"),
+            })),
         };
 
         private static void ExecuteBatch(SqliteConnection connection, string sql)

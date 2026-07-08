@@ -1,3 +1,4 @@
+using DfoServer.Game.Accounts;
 using DfoServer.Infrastructure;
 using System;
 using System.Collections.Generic;
@@ -12,7 +13,6 @@ namespace DfoServer.Game.Inventory
         private const int MagicHammerBoxItemTemplateId = 10007368;
         private const int MagicHammerBundleMinItemTemplateId = 10007472;
         private const int MagicHammerBundleMaxItemTemplateId = 10007477;
-
         private readonly InventoryDbPrimitives _db;
         private readonly InventoryAuditLogger _auditLogger;
 
@@ -365,6 +365,13 @@ namespace DfoServer.Game.Inventory
                 return false;
             }
 
+            var isSeriaLuckValueSource = source.ItemTemplateId == SeriaLuckItemConstants.ItemTemplateId;
+            var seriaLuckValueBefore = isSeriaLuckValueSource
+                ? SqliteAccountRepository.LoadSeriaLuckValue(connection, transaction, accountId)
+                : 0;
+            var seriaLuckValue = seriaLuckValueBefore;
+            var displayRewardEntries = new List<PvfLib.BoosterRewardEntry>();
+            var doubleRewardEntries = new List<PvfLib.BoosterRewardEntry>();
             var rewardsToGrant = new List<PvfLib.BoosterRewardEntry>();
             for (var useIndex = 0; useIndex < requestedCount; useIndex++)
             {
@@ -377,7 +384,26 @@ namespace DfoServer.Game.Inventory
                     return false;
                 }
 
-                rewardsToGrant.AddRange(rewards);
+                var validRewards = NormalizeRewardEntries(rewards);
+                if (validRewards.Count == 0)
+                {
+                    FileLogger.Log($"  [Booster] REJECT: item=0x{source.ItemTemplateId:X8} resolved only invalid rewards");
+                    return false;
+                }
+
+                AddRewardEntries(displayRewardEntries, validRewards);
+                rewardsToGrant.AddRange(validRewards);
+                if (!isSeriaLuckValueSource)
+                    continue;
+
+                if (seriaLuckValue >= SqliteAccountRepository.SeriaLuckValueMax)
+                {
+                    AddRewardEntries(doubleRewardEntries, validRewards);
+                    AddRewardEntries(rewardsToGrant, validRewards);
+                    seriaLuckValue = 0;
+                }
+
+                seriaLuckValue = Math.Min(SqliteAccountRepository.SeriaLuckValueMax, seriaLuckValue + 1);
             }
 
             if (!TryConsumeStackableCount(connection, transaction, source, requestedCount))
@@ -396,7 +422,14 @@ namespace DfoServer.Game.Inventory
                 ConsumedMaterialCount = material == null ? 0 : totalMaterialCount,
                 ConsumedMaterialSlotIndex = material?.SlotIndex ?? 0,
                 ConsumedMaterialRemainingStackCount = material == null ? 0 : Math.Max(0, material.StackCount - totalMaterialCount),
+                IsSeriaLuckValueSource = isSeriaLuckValueSource,
+                SeriaLuckValueBefore = seriaLuckValueBefore,
+                SeriaLuckValueAfter = isSeriaLuckValueSource ? seriaLuckValue : 0,
+                SeriaLuckValueMax = SqliteAccountRepository.SeriaLuckValueMax,
+                SeriaLuckDoubleTriggered = doubleRewardEntries.Count > 0,
             };
+            AddDisplayRewards(useResult.DisplayRewards, displayRewardEntries);
+            AddDisplayRewards(useResult.DoubleRewards, doubleRewardEntries);
 
             foreach (var reward in AggregateRewards(rewardsToGrant))
             {
@@ -405,6 +438,9 @@ namespace DfoServer.Game.Inventory
 
                 useResult.Rewards.Add(rewardResult);
             }
+
+            if (isSeriaLuckValueSource)
+                SqliteAccountRepository.UpdateSeriaLuckValue(connection, transaction, accountId, seriaLuckValue);
 
             _auditLogger.WriteDeleteAuditLog(connection, transaction, characterId, source, requestedCount);
             if (material != null && material.ItemUid != source.ItemUid)
@@ -832,6 +868,73 @@ namespace DfoServer.Game.Inventory
                     Weight = 10000,
                 })
                 .ToList();
+        }
+
+        private static List<PvfLib.BoosterRewardEntry> NormalizeRewardEntries(IEnumerable<PvfLib.BoosterRewardEntry> rewards)
+        {
+            if (rewards == null)
+                return new List<PvfLib.BoosterRewardEntry>();
+
+            return rewards
+                .Where(reward => reward != null && reward.ItemId > 0 && reward.Count > 0)
+                .Select(reward => new PvfLib.BoosterRewardEntry
+                {
+                    ItemId = reward.ItemId,
+                    Count = Math.Max(1, reward.Count),
+                    Weight = reward.Weight,
+                    Group = reward.Group,
+                    DrawCount = reward.DrawCount,
+                })
+                .ToList();
+        }
+
+        private static void AddDisplayRewards(List<PackageGrantedItem> target, IEnumerable<PvfLib.BoosterRewardEntry> rewards)
+        {
+            if (target == null || rewards == null)
+                return;
+
+            foreach (var reward in rewards)
+            {
+                if (reward == null || reward.ItemId <= 0 || reward.Count <= 0)
+                    continue;
+
+                target.Add(new PackageGrantedItem
+                {
+                    ListType = InventoryListType.Main,
+                    SlotIndex = 0,
+                    ItemTemplateId = reward.ItemId,
+                    DisplayCount = Math.Max(1, reward.Count),
+                    Durability = 0,
+                });
+            }
+        }
+
+        private static void AddRewardEntries(List<PvfLib.BoosterRewardEntry> target, IEnumerable<PvfLib.BoosterRewardEntry> rewards)
+        {
+            if (target == null || rewards == null)
+                return;
+
+            foreach (var reward in rewards)
+            {
+                var clone = CloneRewardEntry(reward);
+                if (clone != null && clone.ItemId > 0 && clone.Count > 0)
+                    target.Add(clone);
+            }
+        }
+
+        private static PvfLib.BoosterRewardEntry CloneRewardEntry(PvfLib.BoosterRewardEntry reward)
+        {
+            if (reward == null)
+                return null;
+
+            return new PvfLib.BoosterRewardEntry
+            {
+                ItemId = reward.ItemId,
+                Count = Math.Max(1, reward.Count),
+                Weight = reward.Weight,
+                Group = reward.Group,
+                DrawCount = reward.DrawCount,
+            };
         }
 
         private static bool TryResolvePackageRewards(int sourceItemTemplateId, PvfLib.StackableItemFile stackable, string stackableType, IReadOnlyList<int> selectedItemTemplateIds, out List<PvfLib.BoosterRewardEntry> rewards)

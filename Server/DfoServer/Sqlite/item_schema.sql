@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS accounts (
     token_cera     INTEGER NOT NULL DEFAULT 0,
     happy_token_cera INTEGER NOT NULL DEFAULT 0,
     lucky_star     INTEGER NOT NULL DEFAULT 0,
+    seria_luck_value INTEGER NOT NULL DEFAULT 0,
     cube_black     INTEGER NOT NULL DEFAULT 0,
     cube_white     INTEGER NOT NULL DEFAULT 0,
     cube_red       INTEGER NOT NULL DEFAULT 0,

@@ -11,6 +11,8 @@ namespace DfoServer.Network.Parsers.Inventory
 
         public InventoryListType ListType { get; set; }
 
+        public byte RawListType { get; set; }
+
         public int ItemTemplateId { get; set; }
 
         public short MaterialSlotIndex { get; set; }
@@ -51,6 +53,7 @@ namespace DfoServer.Network.Parsers.Inventory
             {
                 SlotIndex = slotIndex,
                 ListType = listType,
+                RawListType = body[0],
                 ItemTemplateId = itemTemplateId,
                 MaterialSlotIndex = materialSlotIndex,
                 MaterialItemTemplateId = materialItemTemplateId,
@@ -77,6 +80,7 @@ namespace DfoServer.Network.Parsers.Inventory
             {
                 SlotIndex = slotIndex,
                 ListType = listType,
+                RawListType = body[0],
                 ItemTemplateId = 0,
                 MaterialSlotIndex = materialSlotIndex >= 0 ? materialSlotIndex : (short)-1,
                 MaterialItemTemplateId = materialSlotIndex >= 0 ? 0 : -1,
