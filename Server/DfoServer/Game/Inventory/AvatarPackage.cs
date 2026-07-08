@@ -71,6 +71,8 @@ namespace DfoServer.Game.Inventory
         public int AddedPetCount { get; set; }
 
         public List<PackageGrantedItem> GrantedItems { get; } = new List<PackageGrantedItem>();
+
+        public List<(int itemTemplateId, int count)> ActivatedPremiums { get; } = new List<(int itemTemplateId, int count)>();
     }
 
     internal sealed class PackageRewardEntry

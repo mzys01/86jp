@@ -811,6 +811,13 @@ WHERE character_id = @characterId AND list_type = @listType;";
         internal bool TryAddBoosterRewardItems(SqliteConnection connection, SqliteTransaction transaction, int characterId, int accountId, int itemTemplateId, int stackCount, out List<BoosterRewardResult> results)
         {
             results = new List<BoosterRewardResult>();
+
+            if (SpecialRewardRouter.TryRoute(connection, transaction, characterId, accountId, itemTemplateId, stackCount, out var specialOutcome))
+            {
+                results.Add(BoosterRewardResult.FromSpecialOutcome(specialOutcome));
+                return true;
+            }
+
             var metadata = ItemMetadataResolver.Resolve(itemTemplateId);
             if (metadata.ItemKind == "special")
                 return false;

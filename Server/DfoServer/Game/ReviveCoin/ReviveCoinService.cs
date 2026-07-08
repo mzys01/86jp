@@ -20,6 +20,63 @@ namespace DfoServer.Game.ReviveCoin
     {
         public const int ItemId = 1;
         public const short WalletSlot = 1;
+        // PVF: stackable/cash/coin_general.stk, name=復活コイン, type=[waste]
+        public const int ConsumableItemId = 42;
+
+        public static bool IsReviveCoinReward(int itemTemplateId)
+        {
+            return itemTemplateId == ItemId || itemTemplateId == ConsumableItemId;
+        }
+
+        public static int GrantToWallet(Microsoft.Data.Sqlite.SqliteConnection conn, Microsoft.Data.Sqlite.SqliteTransaction tx, int characterId, int count)
+        {
+            var effectiveCount = System.Math.Max(1, count);
+            int current = 0;
+            using (var cmd = conn.CreateCommand())
+            {
+                cmd.Transaction = tx;
+                cmd.CommandText = "SELECT stack_count FROM character_items WHERE character_id=@cid AND list_type=0 AND slot_index=@slot AND item_template_id=@iid";
+                cmd.Parameters.AddWithValue("@cid", characterId);
+                cmd.Parameters.AddWithValue("@slot", (int)WalletSlot);
+                cmd.Parameters.AddWithValue("@iid", ItemId);
+                var val = cmd.ExecuteScalar();
+                if (val != null && val != System.DBNull.Value)
+                    current = System.Convert.ToInt32(val);
+            }
+
+            var newTotal = current + effectiveCount;
+            using (var cmd = conn.CreateCommand())
+            {
+                cmd.Transaction = tx;
+                cmd.CommandText = @"
+UPDATE character_items SET stack_count=@total, instance_value=@total, updated_at=CURRENT_TIMESTAMP
+WHERE character_id=@cid AND list_type=0 AND slot_index=@slot AND item_template_id=@iid";
+                cmd.Parameters.AddWithValue("@total", newTotal);
+                cmd.Parameters.AddWithValue("@cid", characterId);
+                cmd.Parameters.AddWithValue("@slot", (int)WalletSlot);
+                cmd.Parameters.AddWithValue("@iid", ItemId);
+                if (cmd.ExecuteNonQuery() > 0)
+                    return newTotal;
+            }
+
+            using (var cmd = conn.CreateCommand())
+            {
+                cmd.Transaction = tx;
+                cmd.CommandText = @"
+INSERT OR IGNORE INTO character_items (
+    owner_scope, owner_id, character_id, list_type, slot_index, item_template_id, item_kind,
+    stack_count, instance_value, durability, seal_flag, option_value, expire_time, marker_16,
+    pet_serial_or_handle, extra_json)
+VALUES ('character', @cid, @cid, 0, @slot, @iid, 'stackable', @total, @total, 0, 0, 0, 0, 0, 0, '{}')";
+                cmd.Parameters.AddWithValue("@cid", characterId);
+                cmd.Parameters.AddWithValue("@slot", (int)WalletSlot);
+                cmd.Parameters.AddWithValue("@iid", ItemId);
+                cmd.Parameters.AddWithValue("@total", newTotal);
+                cmd.ExecuteNonQuery();
+            }
+
+            return newTotal;
+        }
 
         // 每日领取标记(账本 key, cap=1)
         public const string DailyClaimKey = "revive_coin_daily_claim";

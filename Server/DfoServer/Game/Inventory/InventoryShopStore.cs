@@ -804,7 +804,7 @@ namespace DfoServer.Game.Inventory
                 return true;
             }
 
-            if (Premium.PremiumCatalog.Load().TryGetValue(itemTemplateId, out _, out _))
+            if (Premium.PremiumService.IsContractItem(itemTemplateId))
             {
                 if (!TryApplyCeraShopPayment(connection, transaction, characterId, plan))
                     return false;

@@ -51,6 +51,7 @@ namespace DfoServer.Game.Inventory
             var addedMainItemCount = 0;
             var addedPetCount = 0;
             var grantedItems = new List<PackageGrantedItem>();
+            var activatedPremiums = new List<(int itemTemplateId, int count)>();
 
             if (!_db.ConsumePackageItem(connection, transaction, packageItem))
                 return false;
@@ -100,7 +101,7 @@ namespace DfoServer.Game.Inventory
                     continue;
                 }
 
-                if (!TryInsertPackageReward(connection, transaction, characterId, reward, ref addedMainItemCount, ref addedPetCount, grantedItems, packageItem.SlotIndex))
+                if (!TryInsertPackageReward(connection, transaction, characterId, accountId, reward, ref addedMainItemCount, ref addedPetCount, grantedItems, activatedPremiums, packageItem.SlotIndex))
                 {
                     FileLogger.Log($"  [AvatarPackage] REJECT: cannot insert package reward item=0x{reward.ItemTemplateId:X8} count={reward.Count}");
                     return false;
@@ -119,6 +120,7 @@ namespace DfoServer.Game.Inventory
                 AddedPetCount = addedPetCount,
             };
             result.GrantedItems.AddRange(grantedItems);
+            result.ActivatedPremiums.AddRange(activatedPremiums);
             return true;
         }
 
@@ -151,6 +153,7 @@ namespace DfoServer.Game.Inventory
             var addedAvatarCount = 0;
             var addedPetCount = 0;
             var grantedItems = new List<PackageGrantedItem>();
+            var activatedPremiums = new List<(int itemTemplateId, int count)>();
             PackageRewardEntry rewardForResult = null;
 
             if (!_db.ConsumePackageItem(connection, transaction, packageItem))
@@ -303,7 +306,7 @@ namespace DfoServer.Game.Inventory
                     });
                     addedAvatarCount++;
                 }
-                else if (!TryInsertPackageReward(connection, transaction, characterId, reward, ref addedMainItemCount, ref addedPetCount, grantedItems, packageItem.SlotIndex))
+                else if (!TryInsertPackageReward(connection, transaction, characterId, accountId, reward, ref addedMainItemCount, ref addedPetCount, grantedItems, activatedPremiums, packageItem.SlotIndex))
                 {
                     FileLogger.Log($"  [SelectablePackage] REJECT: cannot insert selected reward item=0x{reward.ItemTemplateId:X8} count={reward.Count}");
                     return false;
@@ -328,6 +331,7 @@ namespace DfoServer.Game.Inventory
                 AddedPetCount = addedPetCount,
             };
             result.GrantedItems.AddRange(grantedItems);
+            result.ActivatedPremiums.AddRange(activatedPremiums);
             return true;
         }
 
@@ -473,6 +477,9 @@ namespace DfoServer.Game.Inventory
                     return false;
 
                 useResult.Rewards.AddRange(rewardResults);
+                foreach (var r in rewardResults)
+                    if (r.SpecialOutcome != null && r.SpecialOutcome.Kind == SpecialRewardKind.Premium)
+                        useResult.ActivatedPremiums.Add((r.SpecialOutcome.ItemTemplateId, r.SpecialOutcome.Count));
             }
 
             if (isSeriaLuckValueSource)
@@ -556,6 +563,9 @@ namespace DfoServer.Game.Inventory
                     return false;
 
                 useResult.Rewards.AddRange(rewardResults);
+                foreach (var r in rewardResults)
+                    if (r.SpecialOutcome != null && r.SpecialOutcome.Kind == SpecialRewardKind.Premium)
+                        useResult.ActivatedPremiums.Add((r.SpecialOutcome.ItemTemplateId, r.SpecialOutcome.Count));
             }
 
             _auditLogger.WriteDeleteAuditLog(connection, transaction, characterId, source, 1);
@@ -569,15 +579,33 @@ namespace DfoServer.Game.Inventory
             SqliteConnection connection,
             SqliteTransaction transaction,
             int characterId,
+            int accountId,
             PackageRewardEntry reward,
             ref int addedMainItemCount,
             ref int addedPetCount,
             List<PackageGrantedItem> grantedItems = null,
+            List<(int itemTemplateId, int count)> activatedPremiums = null,
             short? sourceSlotToUseLast = null)
         {
             if (reward.ExpireTime > 0 && reward.ExpireTime <= DateTimeOffset.Now.ToUnixTimeSeconds())
             {
                 FileLogger.Log($"  [AvatarPackage] SKIP expired reward item=0x{reward.ItemTemplateId:X8} count={reward.Count} expire={reward.ExpireTime}");
+                return true;
+            }
+
+            if (SpecialRewardRouter.TryRoute(connection, transaction, characterId, accountId, reward.ItemTemplateId, reward.Count, out var specialOutcome))
+            {
+                grantedItems?.Add(new PackageGrantedItem
+                {
+                    ListType = InventoryListType.Main,
+                    SlotIndex = specialOutcome.Kind == SpecialRewardKind.ReviveCoin ? specialOutcome.WalletSlot : (short)0,
+                    ItemTemplateId = reward.ItemTemplateId,
+                    DisplayCount = reward.Count,
+                    Durability = 0,
+                });
+                if (specialOutcome.Kind == SpecialRewardKind.Premium)
+                    activatedPremiums?.Add((specialOutcome.ItemTemplateId, specialOutcome.Count));
+                addedMainItemCount++;
                 return true;
             }
 

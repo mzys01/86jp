@@ -270,6 +270,9 @@ namespace DfoServer.Network.Handlers
 
                     await SendAvatarOrPetUpdateListForGrantedItems(session, result.GrantedItems);
 
+                    if (result.ActivatedPremiums.Count > 0)
+                        await Game.Premium.PremiumService.ActivateAndNotify(session, result.ActivatedPremiums);
+
                     FileLogger.Log($"[{ProtocolName}] OPEN_AVATAR_PACKAGE: OK slot={result.SlotIndex} item=0x{result.PackageItemTemplateId:X8} avatar={result.AddedAvatarCount} main={result.AddedMainItemCount} pet={result.AddedPetCount}");
                     return;
                 }
@@ -308,6 +311,9 @@ namespace DfoServer.Network.Handlers
                         await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000E, mainUpdateBody));
 
                     await SendAvatarOrPetUpdateListForGrantedItems(session, result.GrantedItems);
+
+                    if (result.ActivatedPremiums.Count > 0)
+                        await Game.Premium.PremiumService.ActivateAndNotify(session, result.ActivatedPremiums);
 
                     FileLogger.Log($"[{ProtocolName}] OPEN_SELECTABLE_PACKAGE: OK slot={result.SlotIndex} item=0x{result.PackageItemTemplateId:X8} reward=0x{result.RewardItemTemplateId:X8} main={result.AddedMainItemCount} avatar={result.AddedAvatarCount} pet={result.AddedPetCount} ackItems={result.GrantedItems.Count}");
                     return;
@@ -600,6 +606,9 @@ namespace DfoServer.Network.Handlers
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000E, mainUpdateBody));
 
             await SendAvatarOrPetUpdateListForBoosterRewards(session, result);
+
+            if (result.ActivatedPremiums.Count > 0)
+                await Game.Premium.PremiumService.ActivateAndNotify(session, result.ActivatedPremiums);
         }
 
         internal static bool ShouldSendSourceAckForBoosterResponse(ushort responseType)

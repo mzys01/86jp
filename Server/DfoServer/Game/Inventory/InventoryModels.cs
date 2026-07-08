@@ -258,6 +258,37 @@ namespace DfoServer.Game.Inventory
         public int StackCount { get; set; }
 
         public int GrantedCount { get; set; }
+
+        public SpecialRewardOutcome SpecialOutcome { get; set; }
+
+        internal static BoosterRewardResult FromSpecialOutcome(SpecialRewardOutcome outcome)
+        {
+            if (outcome == null) return null;
+
+            if (outcome.Kind == SpecialRewardKind.ReviveCoin)
+            {
+                return new BoosterRewardResult
+                {
+                    ListType = InventoryListType.Main,
+                    SlotIndex = outcome.WalletSlot,
+                    ItemTemplateId = ReviveCoin.ReviveCoinService.ItemId,
+                    StackCount = outcome.WalletNewTotal,
+                    GrantedCount = outcome.Count,
+                    SpecialOutcome = outcome,
+                };
+            }
+
+            // 契约: 不入库, SlotIndex=0 不对应真实槽位
+            return new BoosterRewardResult
+            {
+                ListType = InventoryListType.Main,
+                SlotIndex = 0,
+                ItemTemplateId = outcome.ItemTemplateId,
+                StackCount = 0,
+                GrantedCount = outcome.Count,
+                SpecialOutcome = outcome,
+            };
+        }
     }
 
     public sealed class BoosterUseRequest
@@ -312,6 +343,8 @@ namespace DfoServer.Game.Inventory
         public bool SeriaLuckDoubleTriggered { get; set; }
 
         public byte MagicBoxClientType { get; set; }
+
+        public List<(int itemTemplateId, int count)> ActivatedPremiums { get; } = new List<(int itemTemplateId, int count)>();
     }
 
     public sealed class EquipmentSocketMutationResult
