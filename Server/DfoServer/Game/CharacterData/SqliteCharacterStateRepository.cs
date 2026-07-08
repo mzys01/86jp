@@ -483,6 +483,30 @@ ON CONFLICT(character_id) DO UPDATE SET character_option_blob = @body", conn))
             }
         }
 
+        public void SaveEmotionIndex(int characterId, ushort emotionIndex)
+        {
+            if (characterId <= 0)
+                return;
+
+            using (var conn = new SqliteConnection(_connectionString))
+            {
+                conn.Open();
+                using (var cmd = new SqliteCommand(@"
+INSERT INTO character_subtype0_fields (character_id, mood_value, emotion_index, action_byte)
+VALUES (@cid, @emotion, @emotion, @actionByte)
+ON CONFLICT(character_id) DO UPDATE SET
+    mood_value = @emotion,
+    emotion_index = @emotion,
+    action_byte = @actionByte", conn))
+                {
+                    cmd.Parameters.AddWithValue("@cid", characterId);
+                    cmd.Parameters.AddWithValue("@emotion", (int)emotionIndex);
+                    cmd.Parameters.AddWithValue("@actionByte", (int)Math.Min(emotionIndex, (ushort)byte.MaxValue));
+                    cmd.ExecuteNonQuery();
+                }
+            }
+        }
+
         public void SaveHotkeyConfig(int characterId, byte[] hotkeys)
         {
             if (characterId <= 0 || hotkeys == null)

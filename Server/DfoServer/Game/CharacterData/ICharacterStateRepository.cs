@@ -11,6 +11,8 @@ namespace DfoServer.Game.CharacterData
 
         void SaveCharacterOption(int characterId, byte[] body);
 
+        void SaveEmotionIndex(int characterId, ushort emotionIndex);
+
         void SaveHotkeyConfig(int characterId, byte[] hotkeys);
 
         bool HasFlags(int characterId);

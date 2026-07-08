@@ -110,7 +110,7 @@ namespace DfoServer.Network.Builders
             writer.WriteByte(t.ReturnUserFlag);             
             writer.WriteUInt16(t.ChannelDisplayMode);       
             writer.WriteByte(t.ChannelType);                
-            writer.WriteUInt16(t.ChannelId);                
+            writer.WriteUInt16(t.MoodValue);
             writer.WriteByte(t.SkillTreeIndex);             
             writer.WriteByte(t.IsReturnUser);               
             writer.WriteByte(t.LinkSlotEnabled);            

@@ -44,7 +44,7 @@ namespace DfoServer.Game.CharacterData
                 COALESCE(f.hardcore_death_count, 0), COALESCE(f.user_state_bits, 3),
                 COALESCE(f.chat_ban_end_time, 0), COALESCE(f.fatigue_update, 0),
                 COALESCE(f.return_user_flag, 1), COALESCE(f.channel_display_mode, 0),
-                COALESCE(f.channel_type, 0), COALESCE(f.channel_id, 2),
+                COALESCE(f.channel_type, 0), COALESCE(f.channel_id, 2), COALESCE(f.mood_value, 0),
                 COALESCE(f.is_return_user, 0), COALESCE(f.link_slot_enabled, 0),
                 COALESCE(f.link_type_a, 0), COALESCE(f.link_type_b, 0), COALESCE(f.emotion_index, 0),
                 COALESCE(f.action_byte, 0), COALESCE(f.fatigue_display_update, 0),
@@ -92,22 +92,23 @@ namespace DfoServer.Game.CharacterData
                         ChannelDisplayMode = (ushort)r.GetInt32(27),
                         ChannelType = (byte)r.GetInt32(28),
                         ChannelId = (ushort)r.GetInt32(29),
-                        IsReturnUser = (byte)r.GetInt32(30),
-                        LinkSlotEnabled = (byte)r.GetInt32(31),
-                        LinkTypeA = (byte)r.GetInt32(32),
-                        LinkTypeB = (byte)r.GetInt32(33),
-                        EmotionIndex = (ushort)r.GetInt32(34),
-                        ActionByte = (byte)r.GetInt32(35),
-                        FatigueDisplayUpdate = (ushort)r.GetInt32(36),
-                        CostumeFlag = (byte)r.GetInt32(37),
-                        AuraFlag = (byte)r.GetInt32(38),
-                        PetDisplayFlag = (byte)r.GetInt32(39),
-                        TitleDisplayFlag = (byte)r.GetInt32(40),
-                        PvpStatA = (uint)r.GetInt64(41),
-                        PvpWinStreak = (byte)r.GetInt32(42),
-                        PvpLoseStreak = (byte)r.GetInt32(43),
-                        PvpRankPoint = (uint)r.GetInt64(44),
-                        TrailingByte = (byte)r.GetInt32(45),
+                        MoodValue = (ushort)r.GetInt32(30),
+                        IsReturnUser = (byte)r.GetInt32(31),
+                        LinkSlotEnabled = (byte)r.GetInt32(32),
+                        LinkTypeA = (byte)r.GetInt32(33),
+                        LinkTypeB = (byte)r.GetInt32(34),
+                        EmotionIndex = (ushort)r.GetInt32(35),
+                        ActionByte = (byte)r.GetInt32(36),
+                        FatigueDisplayUpdate = (ushort)r.GetInt32(37),
+                        CostumeFlag = (byte)r.GetInt32(38),
+                        AuraFlag = (byte)r.GetInt32(39),
+                        PetDisplayFlag = (byte)r.GetInt32(40),
+                        TitleDisplayFlag = (byte)r.GetInt32(41),
+                        PvpStatA = (uint)r.GetInt64(42),
+                        PvpWinStreak = (byte)r.GetInt32(43),
+                        PvpLoseStreak = (byte)r.GetInt32(44),
+                        PvpRankPoint = (uint)r.GetInt64(45),
+                        TrailingByte = (byte)r.GetInt32(46),
                     };
                     RefreshDynamicTailFields(conn, characterId, snapshot);
                     return snapshot;
@@ -280,7 +281,7 @@ LIMIT 1;", conn))
                 is_private_store, is_premium_pc_room, server_group_id, black_count, guild_level,
                 chaos_point, disguise_kind, is_disguised, expert_job_type, expert_job_exp,
                 is_hardcore_mode, is_hardcore_dead, hardcore_death_count, user_state_bits, chat_ban_end_time,
-                fatigue_update, return_user_flag, channel_display_mode, channel_type, channel_id,
+                fatigue_update, return_user_flag, channel_display_mode, channel_type, channel_id, mood_value,
                 is_return_user, link_slot_enabled, link_type_a, link_type_b, emotion_index,
                 action_byte, fatigue_display_update, costume_flag, aura_flag, pet_display_flag,
                 title_display_flag, pvp_stat_a, pvp_win_streak, pvp_lose_streak, pvp_rank_point,
@@ -288,7 +289,7 @@ LIMIT 1;", conn))
             ) VALUES(
                 @cid, @uvp, @cf1, @cf2, @cf3, @cf4, @cb, @sta, @fp, @iec, @pcr,
                 @ips, @ippr, @sgi, @bc, @gl, @cp, @dk, @id2, @ejt, @eje,
-                @ihm, @ihd, @hdc, @usb, @cbe, @fu, @ruf, @cdm, @ct, @chid,
+                @ihm, @ihd, @hdc, @usb, @cbe, @fu, @ruf, @cdm, @ct, @chid, @mv,
                 @iru, @lse, @lta, @ltb, @ei, @ab, @fdu, @cof, @auf, @pdf,
                 @tdf, @psa, @pws, @pls, @prp, @tb
             )", conn))
@@ -324,6 +325,7 @@ LIMIT 1;", conn))
                 cmd.Parameters.AddWithValue("@cdm", (int)s.ChannelDisplayMode);
                 cmd.Parameters.AddWithValue("@ct", (int)s.ChannelType);
                 cmd.Parameters.AddWithValue("@chid", (int)s.ChannelId);
+                cmd.Parameters.AddWithValue("@mv", (int)s.MoodValue);
                 cmd.Parameters.AddWithValue("@iru", (int)s.IsReturnUser);
                 cmd.Parameters.AddWithValue("@lse", (int)s.LinkSlotEnabled);
                 cmd.Parameters.AddWithValue("@lta", (int)s.LinkTypeA);

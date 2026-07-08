@@ -1,4 +1,6 @@
 using System;
+using System.Threading.Tasks;
+using DfoServer.Game.Appearance;
 using DfoServer.Game.CharacterData;
 using DfoServer.Game.Settings;
 using DfoServer.Infrastructure;
@@ -67,6 +69,33 @@ namespace DfoServer.Network.Handlers
             int aid = session.Account?.AccountId ?? 1;
             _repo.SaveQuickchatBank(aid, bankIndex, blob);
             FileLogger.Log($"[GameProtocol] SAVE_QUICKCHAT: account={aid} bank={bankIndex} len={len}");
+        }
+
+        public async Task Handle_CHANGE_EMOTION(EnhancedClientSession session, GamePacketHeader header, byte[] body)
+        {
+            var (characterId, accountId) = SessionOwnerResolver.Resolve(session);
+            if (characterId <= 0 || body == null || body.Length < 2)
+            {
+                FileLogger.Log($"[GameProtocol] CHANGE_EMOTION ignored: character={characterId} account={accountId} len={body?.Length ?? 0}");
+                return;
+            }
+
+            var emotionIndex = BitConverter.ToUInt16(body, 0);
+            _characterStateRepository.SaveEmotionIndex(characterId, emotionIndex);
+
+            if (session?.Player != null)
+            {
+                var tail = session.Player.Subtype0Tail ?? new Game.SelectCharacter.UserInfoMinimumTailSnapshot();
+                tail.MoodValue = emotionIndex;
+                tail.EmotionIndex = emotionIndex;
+                tail.ActionByte = (byte)Math.Min(emotionIndex, (ushort)byte.MaxValue);
+                session.Player.Subtype0Tail = tail;
+
+                var notiBody = AppearanceService.BuildNoti2Body(session.Player);
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0002, notiBody));
+            }
+
+            FileLogger.Log($"[GameProtocol] CHANGE_EMOTION: character={characterId} account={accountId} emotion={emotionIndex}");
         }
 
         public void Handle_SAVE_CHARACTER_OPTION(EnhancedClientSession session, GamePacketHeader header, byte[] body)
