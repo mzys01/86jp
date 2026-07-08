@@ -1004,6 +1004,12 @@ namespace DfoServer.Game.Inventory
                 return rewards.Count > 0;
             }
 
+            if (stackableType.Equals("[upgradable legacy]", StringComparison.OrdinalIgnoreCase))
+            {
+                rewards = RollBoosterRewards(ParseUpgradableLegacyIntDataRewards(stackable.IntData));
+                return rewards.Count > 0;
+            }
+
             if (stackableType.Equals("[booster selection]", StringComparison.OrdinalIgnoreCase))
             {
                 if (selectedItemTemplateIds != null && selectedItemTemplateIds.Count > 0
@@ -1022,6 +1028,39 @@ namespace DfoServer.Game.Inventory
             }
 
             return false;
+        }
+
+        private static List<PvfLib.BoosterRewardEntry> ParseUpgradableLegacyIntDataRewards(string intData)
+        {
+            var rewards = new List<PvfLib.BoosterRewardEntry>();
+            if (string.IsNullOrWhiteSpace(intData))
+                return rewards;
+
+            var tokens = intData.Split(new[] { ' ', '\t', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+            for (var i = 0; i + 2 < tokens.Length; i += 3)
+            {
+                if (!int.TryParse(tokens[i], out var itemId)
+                    || !int.TryParse(tokens[i + 1], out var weight)
+                    || !int.TryParse(tokens[i + 2], out var count)
+                    || itemId <= 0
+                    || weight <= 0
+                    || count <= 0)
+                {
+                    continue;
+                }
+
+                rewards.Add(new PvfLib.BoosterRewardEntry
+                {
+                    RewardKind = "int data",
+                    Group = 0,
+                    DrawCount = 1,
+                    ItemId = itemId,
+                    Weight = weight,
+                    Count = count,
+                });
+            }
+
+            return rewards;
         }
 
         private static bool TryResolveMagicHammerBundleRewards(int sourceItemTemplateId, PvfLib.StackableItemFile stackable, out List<PvfLib.BoosterRewardEntry> rewards)
@@ -1158,6 +1197,7 @@ namespace DfoServer.Game.Inventory
                 || stackableType.Equals("[booster random]", StringComparison.OrdinalIgnoreCase)
                 || stackableType.Equals("[cera package]", StringComparison.OrdinalIgnoreCase)
                 || stackableType.Equals("[random upgradable legacy]", StringComparison.OrdinalIgnoreCase)
+                || stackableType.Equals("[upgradable legacy]", StringComparison.OrdinalIgnoreCase)
                 || stackableType.Equals("[usable cera package]", StringComparison.OrdinalIgnoreCase)
                 || stackableType.Equals("[booster selection]", StringComparison.OrdinalIgnoreCase);
         }
