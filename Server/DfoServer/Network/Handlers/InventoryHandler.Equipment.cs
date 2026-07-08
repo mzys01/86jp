@@ -31,8 +31,14 @@ namespace DfoServer.Network.Handlers
                 return;
             }
 
+            if (result.TargetListType == result.BeadListType)
+                await _refresh.SendUpdateItemList(session, result.TargetListType, new[] { result.TargetSlotIndex, result.BeadSlotIndex });
+            else
+            {
+                await _refresh.SendUpdateItemList(session, result.TargetListType, result.TargetSlotIndex);
+                await _refresh.SendUpdateItemList(session, result.BeadListType, result.BeadSlotIndex);
+            }
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0110, EnchantByBeadAckBuilder.BuildSuccess(result)));
-            await _refresh.SendUpdateItemList(session, result.BeadListType, result.BeadSlotIndex);
 
             FileLogger.Log($"[{ProtocolName}] ENCHANT_BY_BEAD: OK target=({request.TargetListType},{request.TargetSlotIndex}) enchantCard=0x{result.EnchantCardItemId:X8}");
         }
@@ -115,6 +121,7 @@ namespace DfoServer.Network.Handlers
 
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x031D, BuildSocketOpenAck(targetSlot, targetItemId, materialSlot)));
 
+            await _refresh.SendUpdateItemList(session, InventoryListType.Main, targetSlot);
             if (result.MaterialConsumed && result.MaterialItem != null)
                 await SendCommonMaterialRefresh(session, result.MaterialItem);
 
