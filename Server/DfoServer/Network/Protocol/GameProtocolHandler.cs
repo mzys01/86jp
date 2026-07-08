@@ -303,6 +303,8 @@ namespace DfoServer.Network
             d[0x014B] = _skillHandler.Handle_CHANGE_SKILL_COMMAND;                 //331
             d[0x014C] = _skillHandler.Handle_RESET_ALL_SKILL_COMMANDS;             //332
             d[0x01EC] = _skillHandler.Handle_SKILL_INIT;                           //492
+            d[0x01FD] = _skillHandler.Handle_COMBO_SKILL_INFO;                     //509
+            d[0x01FF] = _skillHandler.Handle_COMBO_SKILL_EXTENSION_QUICK_SLOT_RESET; //511
         }
 
         private void RegisterTownHandlers(Dictionary<ushort, Func<EnhancedClientSession, GamePacketHeader, byte[], Task>> d)

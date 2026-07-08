@@ -32,6 +32,10 @@ namespace DfoServer.Network
         // 玩家当前打开的收集箱 PVF [Index] 值(0388请求体末尾字节, 见 CollectionBoxHandler)
         public int SelectedCollectionBoxIndex { get; set; }
 
+        public int PendingDarkKnightAutoComboCharacterId { get; set; }
+
+        public DateTime PendingDarkKnightAutoComboUtc { get; set; }
+
         public EnhancedClientSession(TcpClient client, IPacketHeader packetStructure)
         {
             TcpClient = client;

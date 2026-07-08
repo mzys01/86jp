@@ -141,6 +141,17 @@ CREATE TABLE IF NOT EXISTS character_daily_counters (
             {
                 ("seria_luck_value", "INTEGER NOT NULL DEFAULT 0"),
             })),
+
+            // 黑暗武士组合技能页使用专用表；旧 character_init_bodies(0x01FD) 内容不迁移、不再读写。
+            (17, "character_dark_knight_combo_skill_pages 专用表", conn => ExecuteBatch(conn, @"
+CREATE TABLE IF NOT EXISTS character_dark_knight_combo_skill_pages (
+    character_id INTEGER NOT NULL,
+    page_index INTEGER NOT NULL CHECK (page_index >= 0 AND page_index <= 1),
+    body BLOB NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (character_id, page_index),
+    FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
+);")),
         };
 
         private static void ExecuteBatch(SqliteConnection connection, string sql)

@@ -14,6 +14,7 @@ namespace DfoServer.Network.Builders
             var collectBoxProgressRepository = new CollectBoxProgressRepository(ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
 
             Register(new SkillInfoBodyBuilder());              
+            Register(new DarkKnightComboSkillInfoBodyBuilder());
             Register(new QuestListBodyBuilder());              
             Register(new UserInfoBodyBuilder());               
             Register(new CreatureListBodyBuilder());           

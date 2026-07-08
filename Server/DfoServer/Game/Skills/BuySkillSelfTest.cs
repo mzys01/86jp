@@ -52,6 +52,8 @@ namespace DfoServer.Game.Skills
             CheckCalculatedPointStateBootstrap(testLevel);
             CheckSeedFromSnapshotCreatesPointState(testLevel);
             CheckSkillTreeIndexSurvivesSelectLoad(testLevel);
+            CheckDarkKnightInitialSkillLayout();
+            CheckDarkKnightComboSkillInfoPersists(testLevel);
 
             string tempDb = Path.Combine(Path.GetTempPath(), "buyskill_selftest.db");
             DeleteSqliteFiles(tempDb);
@@ -338,6 +340,218 @@ namespace DfoServer.Game.Skills
             }
         }
 
+        private static void CheckDarkKnightComboSkillInfoPersists(byte level)
+        {
+            const int characterId = 999004;
+            string tempDb = Path.Combine(Path.GetTempPath(), "buyskill_dark_knight_combo_selftest.db");
+            DeleteSqliteFiles(tempDb);
+
+            var repo = new SqliteCharacterProgressRepository(tempDb, ServerPaths.SchemaFilePath);
+            var comboRepo = new SqliteDarkKnightComboSkillRepository(tempDb, ServerPaths.SchemaFilePath);
+            var comboService = new DarkKnightComboSkillService(repo, comboRepo);
+            var charRepo = new Game.Characters.SqliteCharacterRepository(tempDb, ServerPaths.SchemaFilePath);
+            EnsureTestCharacter(tempDb, characterId, level, job: 9);
+
+            var skills = BuildDarkKnightSkillSnapshot(new (ushort SkillId, byte Slot)[]
+            {
+                (5, 10),
+                (8, 11),
+                (46, 12),
+                (108, 200),
+                (118, 14),
+                (119, 15),
+                (120, 16),
+                (121, 17),
+                (122, 18),
+                (123, 19),
+                (169, 6),
+            });
+            SeedSkillProgress(repo, characterId, skills, level, remainingSp: 100);
+
+            var body = BuildDarkKnightComboPage(0);
+            Check("dark knight combo save accepts raw body",
+                comboService.SaveComboSkillInfo(characterId, body) > 0);
+            Check("dark knight combo save rejects malformed body",
+                comboService.SaveComboSkillInfo(characterId, new byte[] { 0x00, 0x02, 0x76 }) == 0);
+            Check("dark knight combo save rejects unsupported page",
+                comboService.SaveComboSkillInfo(characterId, BuildDarkKnightComboPage(2)) == 0);
+
+            var reloaded = repo.LoadSkills(characterId);
+            Check("dark knight combo save does not rewrite ordinary skill slots",
+                SlotOf(reloaded.Pages[0], 118) == 14 &&
+                SlotOf(reloaded.Pages[0], 46) == 12 &&
+                BytesEqual(FirstComboSkillInfoBody(comboRepo, characterId), body));
+
+            var dataSource = new SqliteSelectCharacterDataSource(tempDb, ServerPaths.SchemaFilePath, charRepo);
+            var selectPackets = new List<byte[]>(SelectCharacterPacketBuilder.BuildPacketStream(dataSource, characterId, 1));
+            byte[] expectedInitBody;
+            Check("dark knight select init sends combo restore noti",
+                DarkKnightComboSkillInfoCodec.TryBuildNotificationBody(new[] { body }, out expectedInitBody) &&
+                selectPackets.Exists(p => IsPacket(p, 0x00, 0x01C0, expectedInitBody)));
+
+            SeedSkillProgress(repo, characterId, skills, level, remainingSp: 100);
+            var autoComboSave = comboService.SaveAutoComboSkillInfo(characterId, body);
+            var afterAutoCombo = repo.LoadSkills(characterId);
+            Check("dark knight auto combo moves saved child quick-slot duplicates out of shortcut slots",
+                autoComboSave.Saved &&
+                autoComboSave.QuickSlotsCleaned == 3 &&
+                !DarkKnightComboSkillInfoCodec.IsShortcutSlot(SlotOf(afterAutoCombo.Pages[0], 5)) &&
+                !DarkKnightComboSkillInfoCodec.IsShortcutSlot(SlotOf(afterAutoCombo.Pages[0], 8)) &&
+                !DarkKnightComboSkillInfoCodec.IsShortcutSlot(SlotOf(afterAutoCombo.Pages[0], 108)) &&
+                SlotOf(afterAutoCombo.Pages[0], 46) == 12 &&
+                BytesEqual(FirstComboSkillInfoBody(comboRepo, characterId), body));
+
+            byte[] singleChildBody =
+            {
+                0x00, 0x06,
+                0x76, 0x00, 0x01, 0x08, 0x00,
+                0x77, 0x00, 0x00,
+                0x78, 0x00, 0x00,
+                0x79, 0x00, 0x00,
+                0x7A, 0x00, 0x00,
+                0x7B, 0x00, 0x00,
+            };
+            SeedSkillProgress(repo, characterId, skills, level, remainingSp: 100);
+            comboService.SaveComboSkillInfo(characterId, singleChildBody);
+            var inferredMoveResult = comboService.SwapDarkKnightSkillSlot(characterId, 0, 54, 8);
+            var afterSwap = repo.LoadSkills(characterId);
+            Check("dark knight inferred combo slot move keeps destination shortcut state",
+                inferredMoveResult &&
+                BytesEqual(FirstComboSkillInfoBody(comboRepo, characterId), singleChildBody) &&
+                SlotOf(afterSwap.Pages[0], 8) == 8 &&
+                SlotOf(afterSwap.Pages[0], 5) == 10 &&
+                SlotOf(afterSwap.Pages[0], 108) == 200);
+        }
+
+        private static void CheckDarkKnightInitialSkillLayout()
+        {
+            const int characterId = 999014;
+            string tempDb = Path.Combine(Path.GetTempPath(), "buyskill_dark_knight_initial_selftest.db");
+            DeleteSqliteFiles(tempDb);
+
+            var repo = new SqliteCharacterProgressRepository(tempDb, ServerPaths.SchemaFilePath);
+            var comboRepo = new SqliteDarkKnightComboSkillRepository(tempDb, ServerPaths.SchemaFilePath);
+            var charRepo = new Game.Characters.SqliteCharacterRepository(tempDb, ServerPaths.SchemaFilePath);
+            EnsureTestCharacter(tempDb, characterId, level: 1, job: 9);
+
+            var initialSkills = InitialCharacterSkills.Build(9);
+            Check("dark knight initial skills keep ordinary quick slots",
+                initialSkills.Pages.Count >= 2 &&
+                SlotOf(initialSkills.Pages[0], 118) == 0 &&
+                SlotOf(initialSkills.Pages[0], 169) == 6 &&
+                SlotOf(initialSkills.Pages[0], 108) == 10);
+
+            var initialBodies = DarkKnightInitialSkillLayout.BuildDefaultComboSkillInfoBodies(initialSkills);
+            var page0Roots = initialBodies.Count > 0
+                ? DarkKnightComboSkillInfoCodec.GetRootSkillIds(initialBodies[0])
+                : new HashSet<ushort>();
+            var page0Children = initialBodies.Count > 0
+                ? DarkKnightComboSkillInfoCodec.GetChildSkillIds(initialBodies[0])
+                : new HashSet<ushort>();
+            Check("dark knight initial combo pages are derived from PVF combo sets",
+                initialBodies.Count == 2 &&
+                DarkKnightComboSkillInfoCodec.IsValidPageBlock(initialBodies[0]) &&
+                DarkKnightComboSkillInfoCodec.IsValidPageBlock(initialBodies[1]) &&
+                initialBodies[0][0] == 0 &&
+                initialBodies[1][0] == 1 &&
+                page0Roots.Contains(118) &&
+                page0Roots.Contains(119) &&
+                page0Children.Contains(46) &&
+                page0Children.Contains(8) &&
+                page0Children.Contains(5) &&
+                page0Children.Contains(108));
+
+            var dataSource = new SqliteSelectCharacterDataSource(tempDb, ServerPaths.SchemaFilePath, charRepo);
+            dataSource.InitializeNewCharacter(characterId, 1, 9);
+
+            var persistedBodies = comboRepo.LoadPageBodies(characterId);
+            var reloadedSkills = repo.LoadSkills(characterId);
+            Check("dark knight new character persists quick slots and combo pages",
+                SlotOf(reloadedSkills.Pages[0], 118) == 0 &&
+                SlotOf(reloadedSkills.Pages[0], 108) == 10 &&
+                persistedBodies.Count == initialBodies.Count &&
+                BytesEqual(persistedBodies[0], initialBodies[0]) &&
+                BytesEqual(persistedBodies[1], initialBodies[1]));
+            Check("dark knight combo pages are not stored in legacy init bodies",
+                CountLegacyComboInitBodies(tempDb, characterId) == 0);
+
+            byte[] expectedInitBody;
+            var selectPackets = new List<byte[]>(SelectCharacterPacketBuilder.BuildPacketStream(dataSource, characterId, 1));
+            Check("dark knight new character select init sends default combo restore noti",
+                DarkKnightComboSkillInfoCodec.TryBuildNotificationBody(initialBodies, out expectedInitBody) &&
+                selectPackets.Exists(p => IsPacket(p, 0x00, 0x01C0, expectedInitBody)));
+        }
+
+
+        private static int CountLegacyComboInitBodies(string databasePath, int characterId)
+        {
+            using (var conn = new SqliteConnection(SqliteDatabaseBootstrap.BuildConnectionString(databasePath)))
+            {
+                conn.Open();
+                using (var cmd = conn.CreateCommand())
+                {
+                    cmd.CommandText = "SELECT COUNT(*) FROM character_init_bodies WHERE character_id=@cid AND noti_type=0x01FD";
+                    cmd.Parameters.AddWithValue("@cid", characterId);
+                    return Convert.ToInt32(cmd.ExecuteScalar());
+                }
+            }
+        }
+
+        private static byte[] BuildDarkKnightComboPage(byte page)
+        {
+            return new byte[]
+            {
+                page, 0x06,
+                0x76, 0x00, 0x02, 0x2E, 0x00, 0x08, 0x00,
+                0x77, 0x00, 0x02, 0x05, 0x00, 0x6C, 0x00,
+                0x78, 0x00, 0x00,
+                0x79, 0x00, 0x00,
+                0x7A, 0x00, 0x00,
+                0x7B, 0x00, 0x00,
+            };
+        }
+
+        private static SkillInfoSnapshot BuildDarkKnightSkillSnapshot((ushort SkillId, byte Slot)[] slots)
+        {
+            var skills = new SkillInfoSnapshot();
+            var page0 = new SkillInfoPageSnapshot { HeaderValue = 0x0005 };
+            foreach (var seed in slots)
+            {
+                page0.Entries.Add(new SkillInfoEntrySnapshot
+                {
+                    Slot = seed.Slot,
+                    SkillId = seed.SkillId,
+                    Level = 1,
+                });
+            }
+            skills.Pages.Add(page0);
+
+            var page1 = new SkillInfoPageSnapshot { HeaderValue = 0x2BF2 };
+            foreach (var entry in page0.Entries)
+            {
+                page1.Entries.Add(new SkillInfoEntrySnapshot
+                {
+                    Slot = entry.Slot,
+                    SkillId = entry.SkillId,
+                    Level = entry.Level,
+                });
+            }
+            skills.Pages.Add(page1);
+            return skills;
+        }
+
+        private static byte[] FirstComboSkillInfoBody(SqliteDarkKnightComboSkillRepository comboRepo, int characterId)
+        {
+            var bodies = comboRepo.LoadPageBodies(characterId);
+            return bodies.Count > 0 ? bodies[0] : null;
+        }
+
+        private static int SlotOf(SkillInfoPageSnapshot page, ushort skillId)
+        {
+            var entry = page?.Entries.Find(x => x.SkillId == skillId);
+            return entry == null ? -1 : entry.Slot;
+        }
+
         private static void SeedSkillProgress(
             SqliteCharacterProgressRepository repo,
             int cid,
@@ -363,7 +577,7 @@ namespace DfoServer.Game.Skills
             return data.SpCostPerLevel.Length > 0 ? data.SpCostPerLevel[0] : -1;
         }
 
-        private static void EnsureTestCharacter(string databasePath, int characterId, byte level)
+        private static void EnsureTestCharacter(string databasePath, int characterId, byte level, byte job = 0)
         {
             using (var conn = new SqliteConnection(SqliteDatabaseBootstrap.BuildConnectionString(databasePath)))
             {
@@ -382,9 +596,10 @@ VALUES (@cid, 1, 'selftest');";
                 {
                     cmd.CommandText = @"
 UPDATE characters
-SET job = 0, level = @level, bonus_sp = 0, bonus_tp = 0
+SET job = @job, level = @level, bonus_sp = 0, bonus_tp = 0
 WHERE character_id = @cid;";
                     cmd.Parameters.AddWithValue("@cid", characterId);
+                    cmd.Parameters.AddWithValue("@job", (int)job);
                     cmd.Parameters.AddWithValue("@level", (int)level);
                     cmd.ExecuteNonQuery();
                 }
@@ -445,6 +660,18 @@ VALUES (
             if (a == null || b == null || a.Length != b.Length) return false;
             for (int i = 0; i < a.Length; i++) if (a[i] != b[i]) return false;
             return true;
+        }
+
+        private static bool IsPacket(byte[] packet, byte command, ushort type, byte[] body)
+        {
+            if (packet == null || packet.Length < 15)
+                return false;
+            if (packet[0] != command || BitConverter.ToUInt16(packet, 1) != type)
+                return false;
+
+            var packetBody = new byte[packet.Length - 15];
+            Buffer.BlockCopy(packet, 15, packetBody, 0, packetBody.Length);
+            return BytesEqual(packetBody, body);
         }
 
         private static string ToHex(byte[] b)

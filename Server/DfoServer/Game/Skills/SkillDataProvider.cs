@@ -14,6 +14,7 @@ namespace DfoServer.Game.Skills
     {
         public int Job;
         public int SkillIndex;          
+        public string PvfPath;
         public string Name;
         public bool IsActive;           
         public int MaxLevel = 1;        
@@ -82,7 +83,6 @@ namespace DfoServer.Game.Skills
                 return data;
             }
         }
-
         private static void EnsureJobIndexLoaded()
         {
             if (_jobSkillPaths != null) return;
@@ -113,6 +113,7 @@ namespace DfoServer.Game.Skills
             {
                 Job = job,
                 SkillIndex = skillIndex,
+                PvfPath = sklRel,
                 Name = skl.Name,
                 IsActive = skl.Type != null && skl.Type.IndexOf("active", StringComparison.OrdinalIgnoreCase) >= 0,
                 MaxLevel = skl.MaximumLevel > 0 ? skl.MaximumLevel : 1,

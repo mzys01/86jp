@@ -77,6 +77,8 @@ namespace DfoServer.Game.SelectCharacter
 
         public SkillInfoSnapshot SkillInfo { get; set; } = new SkillInfoSnapshot();
 
+        public List<byte[]> DarkKnightComboSkillInfoBodies { get; } = new List<byte[]>();
+
         public CreatureItemListSnapshot CreatureItemList { get; set; } = new CreatureItemListSnapshot();
 
         public List<SelectCharacterUserInfoPacketSnapshot> UserInfoPackets { get; } = new List<SelectCharacterUserInfoPacketSnapshot>();
