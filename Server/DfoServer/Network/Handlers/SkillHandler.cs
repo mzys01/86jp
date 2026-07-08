@@ -86,11 +86,79 @@ namespace DfoServer.Network.Handlers
                 try
                 {
                     int page = body[0] == 1 ? 1 : 0;
-                    new Game.CharacterData.SqliteCharacterProgressRepository(
-                        Infrastructure.ServerPaths.DatabasePath, Infrastructure.ServerPaths.SchemaFilePath)
-                        .SwapSkillSlot(cid, page, body[1], body[2]);
+                    var repo = new Game.CharacterData.SqliteCharacterProgressRepository(
+                        Infrastructure.ServerPaths.DatabasePath, Infrastructure.ServerPaths.SchemaFilePath);
+                    if (session.Player?.Job == 9)
+                    {
+                        CreateDarkKnightComboSkillService(repo).SwapDarkKnightSkillSlot(cid, page, body[1], body[2]);
+                    }
+                    else
+                    {
+                        repo.SwapSkillSlot(cid, page, body[1], body[2]);
+                    }
                 }
                 catch (Exception ex) { FileLogger.Log($"[SkillHandler] CHANGE_SKILLSLOT persist failed: {ex.Message}"); }
+            }
+        }
+
+        public async Task Handle_COMBO_SKILL_INFO(EnhancedClientSession session, GamePacketHeader header, byte[] body)
+        {
+            int cid = session.Player != null ? session.Player.CharacterId : 0;
+            if (cid <= 0 || body == null || body.Length == 0)
+            {
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, header.type, new byte[] { 0x00, 0x04 }));
+                return;
+            }
+
+            if (session.Player.Job != 9)
+            {
+                FileLogger.Log($"[SkillHandler] COMBO_SKILL_INFO ignored non-dark-knight char={cid} job={session.Player.Job} len={body.Length}");
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, header.type, new byte[] { 0x00, 0x04 }));
+                return;
+            }
+
+            try
+            {
+                var repo = new Game.CharacterData.SqliteCharacterProgressRepository(
+                    Infrastructure.ServerPaths.DatabasePath, Infrastructure.ServerPaths.SchemaFilePath);
+                var isAutoComboCommit = ConsumePendingDarkKnightAutoCombo(session, cid);
+                var darkKnightComboService = CreateDarkKnightComboSkillService(repo);
+                var result = isAutoComboCommit
+                    ? darkKnightComboService.SaveAutoComboSkillInfo(cid, body)
+                    : new Game.Skills.DarkKnightComboSkillSaveResult
+                    {
+                        Saved = darkKnightComboService.SaveComboSkillInfo(cid, body) > 0,
+                    };
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, header.type, CommonPacketBodyBuilder.BuildSuccessAck()));
+                if (!result.Saved || result.QuickSlotsCleaned > 0)
+                {
+                    FileLogger.Log(
+                        $"[SkillHandler] COMBO_SKILL_INFO char={cid} len={body.Length} " +
+                        $"saved={result.Saved} auto={isAutoComboCommit} cleaned={result.QuickSlotsCleaned}");
+                }
+            }
+            catch (Exception ex)
+            {
+                FileLogger.Log($"[SkillHandler] COMBO_SKILL_INFO persist failed: {ex.Message}");
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, header.type, new byte[] { 0x00, 0x04 }));
+            }
+        }
+
+        public async Task Handle_COMBO_SKILL_EXTENSION_QUICK_SLOT_RESET(EnhancedClientSession session, GamePacketHeader header, byte[] body)
+        {
+            int cid = session.Player != null ? session.Player.CharacterId : 0;
+            if (cid > 0 && session.Player?.Job == 9)
+                await TryRefreshDarkKnightSkillInfoBeforeAutoCombo(session, cid, body);
+
+            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
+                0x01,
+                header.type,
+                CommonPacketBodyBuilder.BuildSuccessAck()));
+
+            if (cid > 0 && session.Player?.Job == 9)
+            {
+                session.PendingDarkKnightAutoComboCharacterId = cid;
+                session.PendingDarkKnightAutoComboUtc = DateTime.UtcNow;
             }
         }
 
@@ -285,6 +353,67 @@ namespace DfoServer.Network.Handlers
         {
             byte value;
             return TryNormalizeSkillTreeIndex(raw, out value) ? value : (byte)0;
+        }
+
+        private static async Task TryRefreshDarkKnightSkillInfoBeforeAutoCombo(
+            EnhancedClientSession session,
+            int characterId,
+            byte[] requestBody)
+        {
+            try
+            {
+                var page = requestBody != null && requestBody.Length > 0 && requestBody[0] == 1 ? 1 : 0;
+                var repo = new Game.CharacterData.SqliteCharacterProgressRepository(
+                    Infrastructure.ServerPaths.DatabasePath, Infrastructure.ServerPaths.SchemaFilePath);
+                var cleanup = CreateDarkKnightComboSkillService(repo).CleanDuplicateQuickSlots(characterId, page);
+                if (cleanup.QuickSlotsCleaned <= 0)
+                    return;
+
+                var snapshot = new SelectCharacterDataSnapshot();
+                snapshot.InitializationSnapshot.SkillInfo = repo.LoadSkills(characterId);
+                var skillBody = new SkillInfoBodyBuilder();
+                if (!skillBody.TryBuild(snapshot, 0, out var skillBytes))
+                    return;
+
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0013, skillBytes));
+                FileLogger.Log(
+                    $"[SkillHandler] COMBO_SKILL_EXTENSION_QUICK_SLOT_RESET pre-clean " +
+                    $"char={characterId} page={page} cleaned={cleanup.QuickSlotsCleaned} skillInfoLen={skillBytes.Length}");
+            }
+            catch (Exception ex)
+            {
+                FileLogger.Log($"[SkillHandler] COMBO_SKILL_EXTENSION_QUICK_SLOT_RESET pre-clean failed: {ex.Message}");
+            }
+        }
+
+
+        private static Game.Skills.DarkKnightComboSkillService CreateDarkKnightComboSkillService(
+            Game.CharacterData.SqliteCharacterProgressRepository skillRepository)
+        {
+            return new Game.Skills.DarkKnightComboSkillService(
+                skillRepository,
+                new Game.CharacterData.SqliteDarkKnightComboSkillRepository(
+                    Infrastructure.ServerPaths.DatabasePath,
+                    Infrastructure.ServerPaths.SchemaFilePath));
+        }
+
+
+        private static bool ConsumePendingDarkKnightAutoCombo(EnhancedClientSession session, int characterId)
+        {
+            if (session == null || characterId <= 0)
+                return false;
+
+            var matches = session.PendingDarkKnightAutoComboCharacterId == characterId
+                && session.PendingDarkKnightAutoComboUtc > DateTime.MinValue
+                && DateTime.UtcNow - session.PendingDarkKnightAutoComboUtc <= TimeSpan.FromSeconds(10);
+
+            if (matches || session.PendingDarkKnightAutoComboCharacterId == characterId)
+            {
+                session.PendingDarkKnightAutoComboCharacterId = 0;
+                session.PendingDarkKnightAutoComboUtc = DateTime.MinValue;
+            }
+
+            return matches;
         }
     }
 }

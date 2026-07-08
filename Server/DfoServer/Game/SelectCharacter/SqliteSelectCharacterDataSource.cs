@@ -18,6 +18,7 @@ namespace DfoServer.Game.SelectCharacter
         private readonly IInventoryStore _inventoryStore;
         private readonly IAssetService _assetService;
         private readonly SqliteCharacterProgressRepository _initDataRepository;
+        private readonly SqliteDarkKnightComboSkillRepository _darkKnightComboSkillRepository;
         private readonly SqliteUserInfoBlobRepository _userInfoBlobRepository;
         private readonly ICharacterStateRepository _initFlagsRepository;
         private readonly PacketSequenceRepository _packetSequenceRepository;
@@ -47,6 +48,7 @@ namespace DfoServer.Game.SelectCharacter
             _inventoryStore = inventoryStore ?? new SqliteInventoryStore(databasePath, schemaFilePath, _rentalTimeProvider);
             _assetService = assetService;
             _initDataRepository = new SqliteCharacterProgressRepository(databasePath, schemaFilePath);
+            _darkKnightComboSkillRepository = new SqliteDarkKnightComboSkillRepository(databasePath, schemaFilePath);
             _userInfoBlobRepository = new SqliteUserInfoBlobRepository(databasePath, schemaFilePath);
             _initFlagsRepository = new SqliteCharacterStateRepository(databasePath, schemaFilePath);
             _packetSequenceRepository = new PacketSequenceRepository(databasePath, schemaFilePath);
@@ -107,6 +109,10 @@ namespace DfoServer.Game.SelectCharacter
 
             if (_initDataRepository.HasSkills(characterId))
                 initSnapshot.SkillInfo = _initDataRepository.LoadSkills(characterId);
+            var comboSkillBodies = _darkKnightComboSkillRepository.LoadPageBodies(characterId);
+            foreach (var comboSkillBody in comboSkillBodies)
+                initSnapshot.DarkKnightComboSkillInfoBodies.Add(comboSkillBody);
+            SanitizeDarkKnightComboSkillInfo(initSnapshot);
             if (_initDataRepository.HasCreatures(characterId))
                 initSnapshot.CreatureItemList = _initDataRepository.LoadCreatures(characterId);
 
@@ -131,6 +137,7 @@ namespace DfoServer.Game.SelectCharacter
                         rec.BonusTp,
                         persist: false);
                     initSnapshot.SkillInfo = synced.Skills;
+                    SanitizeDarkKnightComboSkillInfo(initSnapshot);
                 }
             }
 
@@ -214,7 +221,7 @@ namespace DfoServer.Game.SelectCharacter
 
             
             var subtype1Repo = new CharacterData.SqliteSubtype1Repository(
-                Infrastructure.ServerPaths.DatabasePath, Infrastructure.ServerPaths.SchemaFilePath);
+                _databasePath, _schemaFilePath);
             if (subtype1Repo.HasData(characterId))
             {
                 initSnapshot.UserInfoAddition = subtype1Repo.Load(characterId);
@@ -230,7 +237,7 @@ namespace DfoServer.Game.SelectCharacter
             if (characterRecord != null)
             {
                 var tailSnap = new CharacterData.SqliteSubtype0FieldsRepository(
-                    Infrastructure.ServerPaths.DatabasePath, Infrastructure.ServerPaths.SchemaFilePath).Load(characterId);
+                    _databasePath, _schemaFilePath).Load(characterId);
                 if (tailSnap != null)
                     characterRecord.Subtype0Tail = tailSnap;
 
@@ -327,6 +334,26 @@ namespace DfoServer.Game.SelectCharacter
             for (var i = 0; i < count; i++)
                 Buffer.BlockCopy(BitConverter.GetBytes(slots[i]), 0, result, i * 2, 2);
             return result;
+        }
+
+        private static void SanitizeDarkKnightComboSkillInfo(SelectCharacterInitializationSnapshot initSnapshot)
+        {
+            if (initSnapshot?.SkillInfo?.Pages == null || initSnapshot.DarkKnightComboSkillInfoBodies.Count == 0)
+                return;
+
+            var rootSkillIds = Skills.DarkKnightComboSkillInfoCodec.GetRootSkillIds(
+                initSnapshot.DarkKnightComboSkillInfoBodies);
+            if (rootSkillIds.Count == 0)
+                return;
+
+            foreach (var page in initSnapshot.SkillInfo.Pages)
+            {
+                foreach (var entry in page.Entries)
+                {
+                    if (rootSkillIds.Contains(entry.SkillId))
+                        entry.ExtraValues.Clear();
+                }
+            }
         }
 
         private void PersistAdventureManageLevel(IReadOnlyList<CharacterRecord> accountCharacters, byte manageLevel)
@@ -518,11 +545,16 @@ ON CONFLICT(character_id) DO UPDATE SET manage_level=excluded.manage_level;";
             var initialSkills = InitialCharacterSkills.Build(job);
             if (initialSkills != null)
             {
+                var initialDarkKnightComboBodies = job == 9
+                    ? DarkKnightInitialSkillLayout.BuildDefaultComboSkillInfoBodies(initialSkills)
+                    : null;
                 var points = Skills.SkillStateService.ResolvePointState(
                     initialSkills, null, job, 1, 0, 0);
                 points.RemainingSp = points.TotalSp;
                 points.RemainingTp = points.TotalTp;
                 Skills.SkillStateService.Persist(_initDataRepository, characterId, initialSkills, points);
+                if (initialDarkKnightComboBodies != null)
+                    _darkKnightComboSkillRepository.SavePageBodies(characterId, initialDarkKnightComboBodies);
             }
 
             var initialEquip = InitialCharacterEquipment.Get(job);
@@ -539,7 +571,7 @@ ON CONFLICT(character_id) DO UPDATE SET manage_level=excluded.manage_level;";
         private void SeedNewCharacterStructuredData(int characterId, byte job)
         {
             var connStr = Infrastructure.SqliteDatabaseBootstrap.Initialize(
-                Infrastructure.ServerPaths.DatabasePath, Infrastructure.ServerPaths.SchemaFilePath);
+                _databasePath, _schemaFilePath);
             using (var conn = new SqliteConnection(connStr))
             {
                 conn.Open();

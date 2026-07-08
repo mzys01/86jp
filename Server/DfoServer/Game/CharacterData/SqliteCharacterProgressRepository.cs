@@ -304,6 +304,75 @@ ON CONFLICT(character_id) DO UPDATE SET
             }
         }
 
+        public bool MoveSkillToSlot(int characterId, int page, ushort skillId, int toSlot)
+        {
+            if (characterId <= 0)
+                return false;
+
+            using (var conn = new SqliteConnection(_connectionString))
+            {
+                conn.Open();
+                using (var tx = conn.BeginTransaction())
+                {
+                    var changed = MoveSkillIdToSlot(conn, tx, characterId, page, skillId, toSlot) > 0;
+                    tx.Commit();
+                    return changed;
+                }
+            }
+        }
+
+        public List<SkillSlotRecord> LoadSkillSlots(int characterId, int page)
+        {
+            var rows = new List<SkillSlotRecord>();
+            if (characterId <= 0)
+                return rows;
+
+            using (var conn = new SqliteConnection(_connectionString))
+            {
+                conn.Open();
+                using (var cmd = new SqliteCommand(
+                    "SELECT slot, skill_id FROM character_skills WHERE character_id=@cid AND page_index=@page ORDER BY slot", conn))
+                {
+                    cmd.Parameters.AddWithValue("@cid", characterId);
+                    cmd.Parameters.AddWithValue("@page", page);
+                    using (var reader = cmd.ExecuteReader())
+                    {
+                        while (reader.Read())
+                        {
+                            rows.Add(new SkillSlotRecord
+                            {
+                                Slot = reader.GetInt32(0),
+                                SkillId = (ushort)reader.GetInt32(1),
+                            });
+                        }
+                    }
+                }
+            }
+
+            return rows;
+        }
+
+        public int MoveSkillsToSlots(int characterId, int page, IReadOnlyList<SkillSlotMove> moves)
+        {
+            if (characterId <= 0 || moves == null || moves.Count == 0)
+                return 0;
+
+            using (var conn = new SqliteConnection(_connectionString))
+            {
+                conn.Open();
+                using (var tx = conn.BeginTransaction())
+                {
+                    var changed = 0;
+                    foreach (var move in moves)
+                    {
+                        changed += MoveSkillIdToSlot(conn, tx, characterId, page, move.SkillId, move.ToSlot);
+                    }
+                    tx.Commit();
+                    return changed;
+                }
+            }
+        }
+
         private static void MoveSkillSlot(SqliteConnection conn, SqliteTransaction tx, int cid, int page, int fromSlot, int toSlot)
         {
             using (var cmd = new SqliteCommand(
@@ -314,6 +383,26 @@ ON CONFLICT(character_id) DO UPDATE SET
                 cmd.Parameters.AddWithValue("@page", page);
                 cmd.Parameters.AddWithValue("@from", fromSlot);
                 cmd.ExecuteNonQuery();
+            }
+        }
+
+        private static int MoveSkillIdToSlot(
+            SqliteConnection conn,
+            SqliteTransaction tx,
+            int characterId,
+            int page,
+            ushort skillId,
+            int toSlot)
+        {
+            MoveSkillSlot(conn, tx, characterId, page, toSlot, -1);
+            using (var cmd = new SqliteCommand(
+                "UPDATE character_skills SET slot = @to WHERE character_id = @cid AND page_index = @page AND skill_id = @sid", conn, tx))
+            {
+                cmd.Parameters.AddWithValue("@to", toSlot);
+                cmd.Parameters.AddWithValue("@cid", characterId);
+                cmd.Parameters.AddWithValue("@page", page);
+                cmd.Parameters.AddWithValue("@sid", (int)skillId);
+                return cmd.ExecuteNonQuery();
             }
         }
 
@@ -469,5 +558,19 @@ ON CONFLICT(character_id) DO UPDATE SET
 
             return (0, 1, 0, 0);
         }
+    }
+
+    public sealed class SkillSlotRecord
+    {
+        public int Slot { get; set; }
+
+        public ushort SkillId { get; set; }
+    }
+
+    public sealed class SkillSlotMove
+    {
+        public ushort SkillId { get; set; }
+
+        public int ToSlot { get; set; }
     }
 }
