@@ -62,19 +62,16 @@ namespace DfoServer.Game.Inventory
 
             var updatedGold = CurrencyService.LoadWallet(connection, transaction, characterId).Gold;
 
-            var item = _db.LoadCommonItem(connection, transaction, characterId, InventoryListType.Main, target.SlotIndex);
-            if (item == null)
-                return false;
-
-            item.TailData2F = NormalizeMagicSealTail(item.TailData2F);
-            WriteMagicSealOptions(item.TailData2F, entries);
-            _db.UpdateCommonExtraJson(connection, transaction, target.ItemUid, item);
+            var targetExtra = ItemExtraView.Parse(target.ExtraJson);
+            var updatedExtra = BuildMagicSealExtraView(targetExtra, entries);
+            target.ExtraJson = updatedExtra.Serialize();
+            _db.UpdateItemExtraJson(connection, transaction, target.ItemUid, target.ExtraJson);
             _auditLogger.WriteAuditLog(connection, transaction, characterId, "unseal_random_option", target, target.ListType, target.SlotIndex, entries.Count);
             transaction.Commit();
 
             result = new RandomOptionUnsealResult
             {
-                TargetItem = item,
+                TargetListType = target.ListType,
                 TargetSlotIndex = target.SlotIndex,
                 TargetItemTemplateId = target.ItemTemplateId,
                 GoldCost = goldCost,
@@ -126,12 +123,9 @@ namespace DfoServer.Game.Inventory
         {
             result = null;
             var metadata = ItemMetadataResolver.Resolve(target.ItemTemplateId);
-            var item = _db.LoadCommonItem(connection, transaction, characterId, InventoryListType.Main, target.SlotIndex);
-            if (item == null)
-                return false;
-
-            item.TailData2F = NormalizeMagicSealTail(item.TailData2F);
-            var entries = ReadMagicSealOptions(item.TailData2F);
+            var targetExtra = ItemExtraView.Parse(target.ExtraJson);
+            var tailData2F = NormalizeMagicSealTail(targetExtra.Equipment.TailData2F);
+            var entries = ReadMagicSealOptions(tailData2F);
             if (!TryReplaceSingleOption(metadata, requestedOptionIndex, entries, out var replacedIndex))
                 return false;
 
@@ -140,14 +134,15 @@ namespace DfoServer.Game.Inventory
                 return false;
 
             var updatedGold = CurrencyService.LoadWallet(connection, transaction, characterId).Gold;
-            WriteMagicSealOptions(item.TailData2F, entries);
-            _db.UpdateCommonExtraJson(connection, transaction, target.ItemUid, item);
+            var updatedExtra = BuildMagicSealExtraView(targetExtra, entries);
+            target.ExtraJson = updatedExtra.Serialize();
+            _db.UpdateItemExtraJson(connection, transaction, target.ItemUid, target.ExtraJson);
             _auditLogger.WriteAuditLog(connection, transaction, characterId, "change_random_option", target, target.ListType, target.SlotIndex, replacedIndex);
             transaction.Commit();
 
             result = new RandomOptionUnsealResult
             {
-                TargetItem = item,
+                TargetListType = target.ListType,
                 TargetSlotIndex = target.SlotIndex,
                 TargetItemTemplateId = target.ItemTemplateId,
                 GoldCost = goldCost,
@@ -238,6 +233,15 @@ namespace DfoServer.Game.Inventory
             item.SealGenuineUpgrade = 0;
             item.SealCheck = 0xFF;
             item.SealExtra = 0;
+        }
+
+        private static ItemExtraView BuildMagicSealExtraView(ItemExtraView original, IReadOnlyList<RandomOptionEntry> entries)
+        {
+            var builder = ItemExtraViewBuilder.FromView(original);
+            var tailData2F = NormalizeMagicSealTail(original?.Equipment.TailData2F);
+            WriteMagicSealOptions(tailData2F, entries);
+            builder.Equipment.TailData2F = tailData2F;
+            return builder.Build();
         }
 
         private static MakeEquipListCodec.Entry LoadEquippedEntryForRandomOption(SqliteConnection connection, SqliteTransaction transaction, int characterId, short slotIndex)

@@ -152,6 +152,41 @@ namespace DfoServer.SelfTests
                 && Hex(upgradedView.Raw84.JewelSocket) == Hex(jewel));
             Check("from-view builder 写回 extData0 仅替换低5位", upgradedView.Raw84.Attr == ((109 & 0xE0) | 14));
 
+            var socketBuilder = ItemExtraViewBuilder.FromView(view);
+            var socketTail = new byte[37];
+            socketTail[0] = 2;
+            BitConverter.GetBytes(-1).CopyTo(socketTail, 1);
+            BitConverter.GetBytes(0x10203040).CopyTo(socketTail, 5);
+            var socketJewel = new byte[30];
+            BitConverter.GetBytes((ushort)0x04).CopyTo(socketJewel, 0);
+            BitConverter.GetBytes(0x10203040u).CopyTo(socketJewel, 2);
+            BitConverter.GetBytes((ushort)0x04).CopyTo(socketJewel, 6);
+            BitConverter.GetBytes(0x50607080u).CopyTo(socketJewel, 8);
+            socketBuilder.Equipment.TailData2F = socketTail;
+            socketBuilder.Equipment.JewelSocket = socketJewel;
+            var socketView = socketBuilder.Build();
+            Check("from-view builder 装备开孔/镶嵌写回 tail/jewel", Hex(socketView.Raw84.TailData2F) == Hex(socketTail)
+                && Hex(socketView.Raw84.JewelSocket) == Hex(socketJewel)
+                && socketView.Equipment.JewelSockets[0].SocketType == 0x04
+                && socketView.Equipment.JewelSockets[0].EmblemItemId == 0x10203040u);
+
+            var sealBuilder = ItemExtraViewBuilder.FromView(view);
+            var sealTail = SqliteInventoryStore.NormalizeMagicSealTail(view.Equipment.TailData2F);
+            SqliteInventoryStore.WriteMagicSealOptions(sealTail, new[]
+            {
+                new RandomOptionEntry { Type = 0x31, Value1 = 0x41, Value2 = 0x51 },
+                new RandomOptionEntry { Type = 0x32, Value1 = 0x42, Value2 = 0x52 },
+                new RandomOptionEntry { Type = 0x33, Value1 = 0x43, Value2 = 0x53 },
+            });
+            sealBuilder.Equipment.TailData2F = sealTail;
+            var sealView = sealBuilder.Build();
+            Check("from-view builder 魔法封印写回 tailData2F", sealView.Equipment.SealCount == 3
+                && sealView.Equipment.SealTypes[0] == 0x31
+                && sealView.Equipment.SealVal1s[1] == 0x42
+                && sealView.Equipment.SealVal2s[2] == 0x53
+                && sealView.Equipment.Rune == 0x4567
+                && sealView.Equipment.Forging == 0x55);
+
             var enchantBuilder = ItemExtraViewBuilder.FromView(view);
             enchantBuilder.Equipment.EnchantCardId = 0x10203040;
             enchantBuilder.Equipment.EnchantUpgradeCount = 9;
@@ -212,6 +247,29 @@ namespace DfoServer.SelfTests
                 && avatar.UnknownFixed4 == 4
                 && avatar.Reserved2.Length == 30
                 && avatar.TailData.Length == 7);
+
+            var avatarView = ItemExtraView.Parse("{\"reserved0\":\"" + Hex(Sequence(5, 1)) + "\""
+                + ",\"reserved1\":\"" + Hex(Sequence(71, 2)) + "\""
+                + ",\"reserved2\":\"" + Hex(Sequence(30, 3)) + "\""
+                + ",\"unknownFixed4\":4"
+                + ",\"tailData\":\"" + Hex(Sequence(7, 4)) + "\"}");
+            var avatarReserved2 = avatarView.Avatar.Reserved2;
+            avatarReserved2[0] = 0;
+            avatarReserved2[1] = 0x04;
+            var avatarEmblemBytes = BitConverter.GetBytes(0x102030);
+            Buffer.BlockCopy(avatarEmblemBytes, 0, avatarReserved2, 3, 3);
+            var avatarBuilder = ItemExtraViewBuilder.FromAvatarView(avatarView);
+            avatarBuilder.Avatar.Reserved2 = avatarReserved2;
+            var avatarBuiltJson = avatarBuilder.Build().Serialize();
+            var avatarBuiltView = ItemExtraView.Parse(avatarBuiltJson);
+            Check("avatar builder 只输出时装 extra 字段", avatarBuiltJson.Contains("\"reserved2\"", StringComparison.Ordinal)
+                && !avatarBuiltJson.Contains("\"prefixData0E\"", StringComparison.Ordinal)
+                && !avatarBuiltJson.Contains("\"tailData2F\"", StringComparison.Ordinal));
+            Check("avatar builder 保留并写回 reserved2", Hex(avatarBuiltView.Avatar.Reserved0) == Hex(avatarView.Avatar.Reserved0)
+                && Hex(avatarBuiltView.Avatar.Reserved1) == Hex(avatarView.Avatar.Reserved1)
+                && Hex(avatarBuiltView.Avatar.Reserved2) == Hex(avatarReserved2)
+                && avatarBuiltView.Avatar.UnknownFixed4 == 4
+                && Hex(avatarBuiltView.Avatar.TailData) == Hex(avatarView.Avatar.TailData));
 
             var pet = InventoryProtocolMapper.ToPetItem(new SqliteInventoryStore.ItemRecord
             {

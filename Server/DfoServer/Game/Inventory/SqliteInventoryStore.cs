@@ -589,22 +589,105 @@ WHERE item_uid = @itemUid;";
                 _equipStore.UpsertAccountCargoState(connection, transaction, characterId, accountId, snapshot.AccountCargoState);
 
                 foreach (var item in snapshot.MainItems)
-                    _db.InsertCommonItem(connection, transaction, characterId, InventoryListType.Main, item);
+                    InsertSnapshotCommonItem(connection, transaction, characterId, InventoryListType.Main, item);
 
                 foreach (var item in snapshot.AvatarItems)
-                    _db.InsertAvatarItem(connection, transaction, characterId, item);
+                    InsertSnapshotAvatarItem(connection, transaction, characterId, item);
 
                 foreach (var item in snapshot.PersonalCargoItems)
-                    _db.InsertCommonItem(connection, transaction, characterId, InventoryListType.PersonalCargo, item);
+                    InsertSnapshotCommonItem(connection, transaction, characterId, InventoryListType.PersonalCargo, item);
 
                 foreach (var item in snapshot.PetItems)
-                    _db.InsertPetItem(connection, transaction, characterId, item);
+                    InsertSnapshotPetItem(connection, transaction, characterId, item);
 
                 foreach (var item in snapshot.AccountCargoItems)
-                    _db.InsertAccountCargoItem(connection, transaction, accountId, item);
+                    InsertSnapshotAccountCargoItem(connection, transaction, accountId, item);
 
                 transaction.Commit();
             }
+        }
+
+        private void InsertSnapshotCommonItem(SqliteConnection connection, SqliteTransaction transaction, int characterId, InventoryListType listType, CommonInventoryItem item)
+        {
+            _db.InsertCharacterItem(
+                connection,
+                transaction,
+                characterId,
+                listType,
+                item.SlotIndex,
+                item.ItemTemplateId,
+                InventoryItemCodec.InferCommonItemKind(item),
+                item.CountOrInstanceValue,
+                item.CountOrInstanceValue,
+                item.Durability,
+                item.SealFlag,
+                0,
+                item.ExpireTime,
+                item.Marker16,
+                0,
+                InventoryItemCodec.SerializeCommon(item),
+                item.EquipmentLockId);
+        }
+
+        private void InsertSnapshotAvatarItem(SqliteConnection connection, SqliteTransaction transaction, int characterId, AvatarInventoryItem item)
+        {
+            _db.InsertCharacterItem(
+                connection,
+                transaction,
+                characterId,
+                InventoryListType.Avatar,
+                item.SlotIndex,
+                item.AvatarItemId,
+                "avatar",
+                0,
+                0,
+                0,
+                0,
+                item.OptionValue,
+                0,
+                item.UnknownFixed30,
+                0,
+                InventoryItemCodec.SerializeAvatar(item));
+        }
+
+        private void InsertSnapshotPetItem(SqliteConnection connection, SqliteTransaction transaction, int characterId, PetInventoryItem item)
+        {
+            _db.InsertCharacterItem(
+                connection,
+                transaction,
+                characterId,
+                InventoryListType.Pet,
+                item.SlotIndex,
+                item.CreatureItemId,
+                "pet",
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                item.CreatureSerialOrHandle,
+                InventoryItemCodec.SerializePet(item));
+        }
+
+        private void InsertSnapshotAccountCargoItem(SqliteConnection connection, SqliteTransaction transaction, int accountId, CommonInventoryItem item)
+        {
+            _db.InsertAccountCargoItem(
+                connection,
+                transaction,
+                accountId,
+                item.SlotIndex,
+                item.ItemTemplateId,
+                InventoryItemCodec.InferCommonItemKind(item),
+                item.CountOrInstanceValue,
+                item.CountOrInstanceValue,
+                item.Durability,
+                item.SealFlag,
+                0,
+                item.ExpireTime,
+                item.Marker16,
+                InventoryItemCodec.SerializeCommon(item));
         }
 
         public void SeedNewCharacterEquipment(int characterId, int accountId, (short slot, int itemId)[] equipment)
@@ -632,16 +715,16 @@ WHERE item_uid = @itemUid;";
             return states.TryGetValue(listType, out var value) ? value : (ushort)0;
         }
 
-        internal static AvatarInventoryItem CreateDefaultAvatarItem(short slotIndex, int avatarItemId, byte optionValue)
+        internal static string CreateDefaultAvatarExtraJson()
         {
-            return new AvatarInventoryItem
-            {
-                SlotIndex = slotIndex,
-                AvatarItemId = avatarItemId,
-                OptionValue = optionValue,
-                UnknownFixed30 = DefaultAvatarUnknownFixed30,
-                UnknownFixed4 = DefaultAvatarUnknownFixed4,
-            };
+            var builder = ItemExtraViewBuilder.FromAvatarView(null);
+            builder.Avatar.UnknownFixed4 = DefaultAvatarUnknownFixed4;
+            return builder.Build().Serialize();
+        }
+
+        internal static string CreateDefaultPetExtraJson()
+        {
+            return "{\"tailData0A\":\"" + ItemExtraView.ToHex(new byte[74]) + "\"}";
         }
 
             internal static bool IsSupportedDeleteOrSellListType(InventoryListType listType)

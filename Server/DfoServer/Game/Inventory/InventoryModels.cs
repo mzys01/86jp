@@ -316,8 +316,6 @@ namespace DfoServer.Game.Inventory
 
     public sealed class EquipmentSocketMutationResult
     {
-        public CommonInventoryItem TargetItem { get; set; }
-
         public InventoryMutationResult MaterialItem { get; set; }
 
         public bool MaterialConsumed { get; set; }
@@ -334,7 +332,9 @@ namespace DfoServer.Game.Inventory
 
     public sealed class EquipmentEmblemMutationResult
     {
-        public CommonInventoryItem TargetItem { get; set; }
+        public InventoryListType TargetListType { get; set; } = InventoryListType.Main;
+
+        public short TargetSlotIndex { get; set; }
 
         public bool TargetEquipped { get; set; }
 
@@ -343,8 +343,6 @@ namespace DfoServer.Game.Inventory
 
     public sealed class AvatarSocketMutationResult
     {
-        public AvatarInventoryItem TargetItem { get; set; }
-
         public InventoryMutationResult MaterialItem { get; set; }
 
         public bool MaterialConsumed { get; set; }
@@ -352,7 +350,9 @@ namespace DfoServer.Game.Inventory
 
     public sealed class AvatarEmblemMutationResult
     {
-        public AvatarInventoryItem TargetItem { get; set; }
+        public InventoryListType TargetListType { get; set; } = InventoryListType.Avatar;
+
+        public short TargetSlotIndex { get; set; }
 
         public bool TargetEquipped { get; set; }
 

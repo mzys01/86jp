@@ -201,27 +201,23 @@ namespace DfoServer.Game.Inventory
             }
 
             var resultCode = success ? (byte)0 : (byte)Math.Max(1, effectivePenaltyType);
-            var extraItems = new List<CommonInventoryItem>();
 
-            if (!ConsumeMaterial(connection, transaction, characterId, accountId, command.MaterialSlotIndex, material, context.Cost, out var materialCommon))
+            if (!ConsumeMaterial(connection, transaction, characterId, accountId, command.MaterialSlotIndex, material, context.Cost, out var materialUpdate))
             {
                 LogUpgradeReject("扣除材料失败", ItemUpgradeResult.ErrorInvalidMaterial, command, context, row, material);
                 result = ItemUpgradeResult.Error(command, ItemUpgradeResult.ErrorInvalidMaterial);
                 return false;
             }
 
-            CommonInventoryItem protectCommon = null;
             if (protectedByTicket)
             {
-                if (!ConsumeMaterial(connection, transaction, characterId, accountId, protectTicket.Item.SlotIndex, protectTicket.Item, protectTicket.Config.Cost, out protectCommon))
+                if (!ConsumeMaterial(connection, transaction, characterId, accountId, protectTicket.Item.SlotIndex, protectTicket.Item, protectTicket.Config.Cost, out _))
                 {
                     LogUpgradeReject("扣除保护券失败", ItemUpgradeResult.ErrorInvalidMaterial, command, context, row, protectTicket.Item);
                     result = ItemUpgradeResult.Error(command, ItemUpgradeResult.ErrorInvalidMaterial);
                     return false;
                 }
 
-                if (protectCommon != null)
-                    extraItems.Add(protectCommon);
             }
 
             var updatedGold = wallet.Gold - context.Cost.Gold;
@@ -232,35 +228,30 @@ namespace DfoServer.Game.Inventory
                 return false;
             }
 
-            CommonInventoryItem targetUpdate;
             if (destroyed)
             {
                 _db.DeleteItem(connection, transaction, target.ItemUid);
                 // 损坏后给客户端发空 entry，清掉原装备所在 slot。
-                targetUpdate = CreateCountOnlyItem(command.TargetSlotIndex, 0, 0);
             }
             else
             {
                 var updatedExtra = BuildUpgradeExtraView(targetExtra, newLevel);
                 target.ExtraJson = updatedExtra.Serialize();
                 _db.UpdateItemExtraJson(connection, transaction, target.ItemUid, target.ExtraJson);
-                targetUpdate = InventoryProtocolMapper.ToCommonItem(target, updatedExtra);
             }
 
-            CommonInventoryItem destroyRewardCommon = null;
+            ItemUpgradeSlotCount destroyRewardUpdate = null;
             if (destroyed)
             {
                 CurrencyService.AddCubeFragment(connection, transaction, accountId, DefaultDestroyRewardItemId, DefaultDestroyRewardCount);
-                destroyRewardCommon = CreateCountOnlyItem(
+                destroyRewardUpdate = CreateSlotCount(
                     (short)CurrencyService.GetCubeFragmentSlot(DefaultDestroyRewardItemId),
                     DefaultDestroyRewardItemId,
                     LoadCubeFragmentCount(connection, transaction, accountId, DefaultDestroyRewardItemId));
-                extraItems.Add(destroyRewardCommon);
-
-                if (materialCommon != null
-                    && materialCommon.ItemTemplateId == DefaultDestroyRewardItemId
-                    && materialCommon.SlotIndex == destroyRewardCommon.SlotIndex)
-                    materialCommon = destroyRewardCommon;
+                if (materialUpdate != null
+                    && materialUpdate.ItemTemplateId == DefaultDestroyRewardItemId
+                    && materialUpdate.SlotIndex == destroyRewardUpdate.SlotIndex)
+                    materialUpdate = destroyRewardUpdate;
             }
 
             if (context.Cost.MaterialCount > 0 && material != null)
@@ -268,7 +259,7 @@ namespace DfoServer.Game.Inventory
             if (protectedByTicket)
                 _auditLogger.WriteDeleteAuditLog(connection, transaction, characterId, protectTicket.Item, protectTicket.Config.Cost.MaterialCount);
             _auditLogger.WriteAuditLog(connection, transaction, characterId, destroyed ? "upgrade_item_destroyed" : "upgrade_item", target, InventoryListType.Main, target.SlotIndex, newLevel - oldLevel);
-            LogUpgradeResult(context, row, chance, finalWeight, roll, success, penaltyType, effectivePenaltyType, resultCode, oldLevel, newLevel, wallet.Gold, updatedGold, materialCommon, protectTicket, protectedByTicket, destroyed, destroyRewardCommon);
+            LogUpgradeResult(context, row, chance, finalWeight, roll, success, penaltyType, effectivePenaltyType, resultCode, oldLevel, newLevel, wallet.Gold, updatedGold, materialUpdate, protectTicket, protectedByTicket, destroyed, destroyRewardUpdate);
 
             var upgradeResult = new ItemUpgradeResult
             {
@@ -286,8 +277,7 @@ namespace DfoServer.Game.Inventory
                 ResultCode = resultCode,
                 UpgradeSucceeded = success,
                 FinalSuccessWeight = finalWeight,
-                TargetItem = targetUpdate,
-                MaterialItem = materialCommon,
+                MaterialRemainingStackCount = materialUpdate != null ? materialUpdate.Count : 0,
                 GoldCost = context.Cost != null ? context.Cost.Gold : 0,
                 UpdatedGold = updatedGold,
                 NoticeRequired = success
@@ -295,14 +285,11 @@ namespace DfoServer.Game.Inventory
                     : ItemUpgradeTableProvider.IsNoticeLevel(tableKind, oldLevel),
             };
 
-            foreach (var item in extraItems)
-                upgradeResult.ExtraItems.Add(item);
-
-            if (destroyRewardCommon != null)
+            if (destroyRewardUpdate != null)
             {
                 upgradeResult.DestroyRewardItems.Add(new ItemUpgradeRewardItem
                 {
-                    SlotIndex = destroyRewardCommon.SlotIndex,
+                    SlotIndex = destroyRewardUpdate.SlotIndex,
                     ItemTemplateId = DefaultDestroyRewardItemId,
                     Count = DefaultDestroyRewardCount,
                 });
@@ -361,11 +348,11 @@ namespace DfoServer.Game.Inventory
             byte newLevel,
             int oldGold,
             int updatedGold,
-            CommonInventoryItem materialCommon,
+            ItemUpgradeSlotCount materialUpdate,
             ProtectTicketSelection protectTicket,
             bool protectedByTicket,
             bool destroyed,
-            CommonInventoryItem destroyRewardCommon)
+            ItemUpgradeSlotCount destroyRewardUpdate)
         {
             if (!UpgradeLogEnabled)
                 return;
@@ -373,9 +360,9 @@ namespace DfoServer.Game.Inventory
             FileLogger.Log($"[ItemUpgrade] 基础成功率：{FormatWeight(chance.BaseSuccessWeight)}");
             FileLogger.Log($"[ItemUpgrade] 最终成功率：{FormatWeight(finalWeight)}");
             FileLogger.Log($"[ItemUpgrade] 目标强化等级：{chance.TargetLevel}");
-            FileLogger.Log($"[ItemUpgrade] 失败惩罚: {FormatPenalty(penaltyType, effectivePenaltyType, context, row, protectedByTicket, destroyed, destroyRewardCommon)}");
+            FileLogger.Log($"[ItemUpgrade] 失败惩罚: {FormatPenalty(penaltyType, effectivePenaltyType, context, row, protectedByTicket, destroyed, destroyRewardUpdate)}");
             FileLogger.Log($"[ItemUpgrade] 保护券：{FormatProtectTicket(protectTicket, protectedByTicket)}");
-            FileLogger.Log($"[ItemUpgrade] 强化结果：{(success ? "成功" : "失败")}，强化值={oldLevel}->{newLevel}，结果码={resultCode}，随机roll={roll}/100000，金币={oldGold}->{updatedGold}，材料回包slot={materialCommon?.SlotIndex.ToString(CultureInfo.InvariantCulture) ?? "无"}，材料回包剩余数量={materialCommon?.CountOrInstanceValue.ToString(CultureInfo.InvariantCulture) ?? "无"}");
+            FileLogger.Log($"[ItemUpgrade] 强化结果：{(success ? "成功" : "失败")}，强化值={oldLevel}->{newLevel}，结果码={resultCode}，随机roll={roll}/100000，金币={oldGold}->{updatedGold}，材料slot={materialUpdate?.SlotIndex.ToString(CultureInfo.InvariantCulture) ?? "无"}，材料剩余数量={materialUpdate?.Count.ToString(CultureInfo.InvariantCulture) ?? "无"}");
         }
 
         private static string ResolveEquipmentName(int itemTemplateId, string fallback)
@@ -455,7 +442,7 @@ namespace DfoServer.Game.Inventory
             UpgradeTableRow row,
             bool protectedByTicket,
             bool destroyed,
-            CommonInventoryItem destroyRewardCommon)
+            ItemUpgradeSlotCount destroyRewardUpdate)
         {
             if (context != null && context.Scene == ItemUpgradeScene.Ticket)
                 return "券类失败不降级、不损坏";
@@ -465,8 +452,8 @@ namespace DfoServer.Game.Inventory
 
             if (destroyed)
             {
-                var reward = destroyRewardCommon != null
-                    ? $"{ResolveEquipmentOrStackableName(destroyRewardCommon.ItemTemplateId)}x{DefaultDestroyRewardCount}，slot={destroyRewardCommon.SlotIndex}，当前数量={destroyRewardCommon.CountOrInstanceValue}"
+                var reward = destroyRewardUpdate != null
+                    ? $"{ResolveEquipmentOrStackableName(destroyRewardUpdate.ItemTemplateId)}x{DefaultDestroyRewardCount}，slot={destroyRewardUpdate.SlotIndex}，当前数量={destroyRewardUpdate.Count}"
                     : $"{DefaultDestroyRewardItemId}x{DefaultDestroyRewardCount}";
                 return $"失败损坏装备，默认产物={reward}";
             }
@@ -972,9 +959,9 @@ namespace DfoServer.Game.Inventory
             short materialSlotIndex,
             SqliteInventoryStore.ItemRecord material,
             ItemUpgradeCost cost,
-            out CommonInventoryItem materialCommon)
+            out ItemUpgradeSlotCount materialUpdate)
         {
-            materialCommon = null;
+            materialUpdate = null;
             if (cost == null || cost.MaterialItemId <= 0 || cost.MaterialCount <= 0)
                 return true;
 
@@ -988,7 +975,7 @@ namespace DfoServer.Game.Inventory
                         if (cube.Count >= cost.MaterialCount)
                         {
                             CurrencyService.AddCubeFragment(connection, transaction, accountId, cost.MaterialItemId, -cost.MaterialCount);
-                            materialCommon = CreateCountOnlyItem((short)CurrencyService.GetCubeFragmentSlot(cost.MaterialItemId), cost.MaterialItemId, cube.Count - cost.MaterialCount);
+                            materialUpdate = CreateSlotCount((short)CurrencyService.GetCubeFragmentSlot(cost.MaterialItemId), cost.MaterialItemId, cube.Count - cost.MaterialCount);
                             return true;
                         }
                         break;
@@ -1003,13 +990,12 @@ namespace DfoServer.Game.Inventory
             if (remainingCount > 0)
             {
                 _db.UpdateStackCount(connection, transaction, material.ItemUid, remainingCount);
-                materialCommon = _db.LoadCommonItem(connection, transaction, characterId, InventoryListType.Main, materialSlotIndex)
-                    ?? CreateCountOnlyItem(materialSlotIndex, material.ItemTemplateId, remainingCount);
+                materialUpdate = CreateSlotCount(materialSlotIndex, material.ItemTemplateId, remainingCount);
             }
             else
             {
                 _db.DeleteItem(connection, transaction, material.ItemUid);
-                materialCommon = CreateCountOnlyItem(materialSlotIndex, material.ItemTemplateId, 0);
+                materialUpdate = CreateSlotCount(materialSlotIndex, material.ItemTemplateId, 0);
             }
 
             return true;
@@ -1180,14 +1166,13 @@ WHERE character_id = @cid
             }
         }
 
-        private static CommonInventoryItem CreateCountOnlyItem(short slotIndex, int itemTemplateId, int count)
+        private static ItemUpgradeSlotCount CreateSlotCount(short slotIndex, int itemTemplateId, int count)
         {
-            var normalizedCount = Math.Max(0, count);
-            return new CommonInventoryItem
+            return new ItemUpgradeSlotCount
             {
                 SlotIndex = slotIndex,
-                ItemTemplateId = normalizedCount > 0 ? itemTemplateId : -1,
-                CountOrInstanceValue = normalizedCount,
+                ItemTemplateId = itemTemplateId,
+                Count = Math.Max(0, count),
             };
         }
 

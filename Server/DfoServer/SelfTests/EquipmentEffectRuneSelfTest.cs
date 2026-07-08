@@ -46,8 +46,7 @@ namespace DfoServer.SelfTests
                 Check("peach rune success status", applyResult.Success);
                 Check("peach rune effect id", applyResult.AppliedEffectId == 1);
                 Check("peach rune consumes source stack", applyResult.SourceRemainingStackCount == 1);
-                Check("peach rune target refresh item", applyResult.TargetItem != null && ReadRune(applyResult.TargetItem) == 1);
-                Check("peach rune source refresh item", applyResult.SourceItem != null && applyResult.SourceItem.CountOrInstanceValue == 1);
+                Check("peach rune target slot", applyResult.TargetListType == InventoryListType.Main && applyResult.TargetSlotIndex == TargetWeaponSlot);
             }
 
             var afterApply = store.LoadCharacterItemListSnapshot(CharacterId, AccountId);
@@ -61,8 +60,7 @@ namespace DfoServer.SelfTests
                 Check("clear rune success status", clearResult.Success);
                 Check("clear rune effect id", clearResult.AppliedEffectId == 0);
                 Check("clear rune consumes source stack", clearResult.SourceRemainingStackCount == 0);
-                Check("clear rune source refresh empty", clearResult.SourceItem != null && clearResult.SourceItem.ItemTemplateId < 0);
-                Check("clear rune target refresh item", clearResult.TargetItem != null && ReadRune(clearResult.TargetItem) == 0);
+                Check("clear rune target slot", clearResult.TargetListType == InventoryListType.Main && clearResult.TargetSlotIndex == TargetWeaponSlot);
             }
 
             var afterClear = store.LoadCharacterItemListSnapshot(CharacterId, AccountId);
@@ -78,8 +76,7 @@ namespace DfoServer.SelfTests
                 Check("equipped weapon target list", equippedApplyResult.TargetListType == InventoryListType.Equipment);
                 Check("equipped weapon effect id", equippedApplyResult.AppliedEffectId == 1);
                 Check("equipped weapon consumes last source stack", equippedApplyResult.SourceRemainingStackCount == 0);
-                Check("equipped weapon source refresh empty", equippedApplyResult.SourceItem != null && equippedApplyResult.SourceItem.ItemTemplateId < 0);
-                Check("equipped weapon target refresh item", equippedApplyResult.TargetItem != null && ReadRune(equippedApplyResult.TargetItem) == 1);
+                Check("equipped weapon target slot", equippedApplyResult.TargetSlotIndex == EquippedWeaponSlot);
             }
 
             var equippedAfterApply = store.LoadEquipmentCommonItemForRefresh(CharacterId, EquippedWeaponSlot);

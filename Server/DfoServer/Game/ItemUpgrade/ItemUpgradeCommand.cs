@@ -1,4 +1,3 @@
-using DfoServer.Game.Inventory;
 using System.Collections.Generic;
 
 namespace DfoServer.Game.ItemUpgrade
@@ -42,10 +41,8 @@ namespace DfoServer.Game.ItemUpgrade
         public byte ResultCode { get; set; }
         public bool UpgradeSucceeded { get; set; }
         public int FinalSuccessWeight { get; set; }
-        public CommonInventoryItem TargetItem { get; set; }
-        public CommonInventoryItem MaterialItem { get; set; }
+        public int MaterialRemainingStackCount { get; set; }
         public List<ItemUpgradeRewardItem> DestroyRewardItems { get; } = new List<ItemUpgradeRewardItem>();
-        public List<CommonInventoryItem> ExtraItems { get; } = new List<CommonInventoryItem>();
         public int GoldCost { get; set; }
         public int UpdatedGold { get; set; }
         public bool NoticeRequired { get; set; }
@@ -66,6 +63,13 @@ namespace DfoServer.Game.ItemUpgrade
     }
 
     public sealed class ItemUpgradeRewardItem
+    {
+        public short SlotIndex { get; set; }
+        public int ItemTemplateId { get; set; }
+        public int Count { get; set; }
+    }
+
+    internal sealed class ItemUpgradeSlotCount
     {
         public short SlotIndex { get; set; }
         public int ItemTemplateId { get; set; }

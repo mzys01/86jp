@@ -28,11 +28,8 @@ namespace DfoServer.Network.Handlers
                 return;
             }
 
-            if (!result.TargetEquipped && result.TargetItem != null)
-            {
-                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000E,
-                    ItemListUpdateBuilder.BuildCommonUpdates(new[] { result.TargetItem })));
-            }
+            if (!result.TargetEquipped)
+                await _refresh.SendUpdateItemList(session, result.TargetListType, result.TargetSlotIndex);
 
             if (result.GoldCost > 0)
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000E,
@@ -65,8 +62,8 @@ namespace DfoServer.Network.Handlers
                 return;
             }
 
-            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000E,
-                ItemListUpdateBuilder.BuildCommonUpdates(new[] { result.TargetItem })));
+            if (!result.TargetEquipped)
+                await _refresh.SendUpdateItemList(session, result.TargetListType, result.TargetSlotIndex);
 
             if (result.GoldCost > 0)
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000E,

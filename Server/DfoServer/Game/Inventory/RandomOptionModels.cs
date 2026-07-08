@@ -11,7 +11,8 @@ namespace DfoServer.Game.Inventory
 
     public sealed class RandomOptionUnsealResult
     {
-        public CommonInventoryItem TargetItem { get; set; }
+        public InventoryListType TargetListType { get; set; } = InventoryListType.Main;
+
         public bool TargetEquipped { get; set; }
         public short TargetSlotIndex { get; set; }
         public int TargetItemTemplateId { get; set; }

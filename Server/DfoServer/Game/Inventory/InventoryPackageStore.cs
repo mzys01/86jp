@@ -69,11 +69,23 @@ namespace DfoServer.Game.Inventory
                             return false;
                         }
 
-                        _db.InsertAvatarItem(
+                        _db.InsertCharacterItem(
                             connection,
                             transaction,
                             characterId,
-                            SqliteInventoryStore.CreateDefaultAvatarItem((short)targetSlot, reward.ItemTemplateId, optionValue));
+                            InventoryListType.Avatar,
+                            (short)targetSlot,
+                            reward.ItemTemplateId,
+                            "avatar",
+                            0,
+                            0,
+                            0,
+                            0,
+                            optionValue,
+                            0,
+                            SqliteInventoryStore.DefaultAvatarUnknownFixed30,
+                            0,
+                            SqliteInventoryStore.CreateDefaultAvatarExtraJson());
                         grantedItems.Add(new PackageGrantedItem
                         {
                             ListType = InventoryListType.Avatar,
@@ -194,11 +206,23 @@ namespace DfoServer.Game.Inventory
                         return false;
                     }
 
-                    _db.InsertAvatarItem(
+                    _db.InsertCharacterItem(
                         connection,
                         transaction,
                         characterId,
-                        SqliteInventoryStore.CreateDefaultAvatarItem((short)targetSlot, choice.ItemTemplateId, choice.OptionValue));
+                        InventoryListType.Avatar,
+                        (short)targetSlot,
+                        choice.ItemTemplateId,
+                        "avatar",
+                        0,
+                        0,
+                        0,
+                        0,
+                        choice.OptionValue,
+                        0,
+                        SqliteInventoryStore.DefaultAvatarUnknownFixed30,
+                        0,
+                        SqliteInventoryStore.CreateDefaultAvatarExtraJson());
                     grantedItems.Add(new PackageGrantedItem
                     {
                         ListType = InventoryListType.Avatar,
@@ -252,11 +276,23 @@ namespace DfoServer.Game.Inventory
                         return false;
                     }
 
-                    _db.InsertAvatarItem(
+                    _db.InsertCharacterItem(
                         connection,
                         transaction,
                         characterId,
-                        SqliteInventoryStore.CreateDefaultAvatarItem((short)targetSlot, reward.ItemTemplateId, request.SelectionFlag));
+                        InventoryListType.Avatar,
+                        (short)targetSlot,
+                        reward.ItemTemplateId,
+                        "avatar",
+                        0,
+                        0,
+                        0,
+                        0,
+                        request.SelectionFlag,
+                        0,
+                        SqliteInventoryStore.DefaultAvatarUnknownFixed30,
+                        0,
+                        SqliteInventoryStore.CreateDefaultAvatarExtraJson());
                     grantedItems.Add(new PackageGrantedItem
                     {
                         ListType = InventoryListType.Avatar,

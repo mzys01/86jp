@@ -123,8 +123,6 @@ namespace DfoServer.Game.Inventory
 
         public int SourceRemainingStackCount { get; set; }
 
-        public CommonInventoryItem SourceItem { get; set; }
-
         public InventoryListType TargetListType { get; set; } = InventoryListType.Main;
 
         public short TargetSlotIndex { get; set; }
@@ -132,8 +130,6 @@ namespace DfoServer.Game.Inventory
         public int TargetItemTemplateId { get; set; }
 
         public ushort AppliedEffectId { get; set; }
-
-        public CommonInventoryItem TargetItem { get; set; }
 
         public bool Handled => Status != EquipmentEffectRuneStatus.NotApplicable;
 

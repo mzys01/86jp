@@ -95,7 +95,23 @@ namespace DfoServer.Game.Inventory
                         return false;
                     }
 
-                    _db.InsertAvatarItem(connection, transaction, characterId, CreateDefaultAvatarItem((short)newSlot, newItemId, newOption));
+                    _db.InsertCharacterItem(
+                        connection,
+                        transaction,
+                        characterId,
+                        InventoryListType.Avatar,
+                        (short)newSlot,
+                        newItemId,
+                        "avatar",
+                        0,
+                        0,
+                        0,
+                        0,
+                        newOption,
+                        0,
+                        DefaultAvatarUnknownFixed30,
+                        0,
+                        CreateDefaultAvatarExtraJson());
                     newSlotsOut.Add(newSlot);
                 }
 
@@ -194,7 +210,23 @@ namespace DfoServer.Game.Inventory
                     return false;
                 }
 
-                _db.InsertAvatarItem(connection, transaction, characterId, CreateDefaultAvatarItem((short)emptySlot, newItemId, newOption));
+                _db.InsertCharacterItem(
+                    connection,
+                    transaction,
+                    characterId,
+                    InventoryListType.Avatar,
+                    (short)emptySlot,
+                    newItemId,
+                    "avatar",
+                    0,
+                    0,
+                    0,
+                    0,
+                    newOption,
+                    0,
+                    DefaultAvatarUnknownFixed30,
+                    0,
+                    CreateDefaultAvatarExtraJson());
 
                     transaction.Commit();
                     newSlot = emptySlot;

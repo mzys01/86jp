@@ -7,12 +7,11 @@ namespace DfoServer.Network.Builders
     {
         public static byte[] BuildSuccess(ItemUpgradeResult result)
         {
-            var materialRemainingCount = result.MaterialItem != null ? result.MaterialItem.CountOrInstanceValue : 0;
             var writer = new GamePacketWriter();
             writer.WriteByte(0x01);
             writer.WriteByte((byte)result.Mode);
             writer.WriteInt16(result.MaterialSlotIndex);
-            writer.WriteInt32(materialRemainingCount);
+            writer.WriteInt32(result.MaterialRemainingStackCount);
             writer.WriteInt16(result.OptionalTicketSlotIndex);
             writer.WriteByte(0x00);
             writer.WriteByte(result.OldLevel);
