@@ -10,6 +10,20 @@ namespace PvfLib
         public Dictionary<string, double> RarityWeights { get; set; } =
             new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
 
+        public List<int> AmplificationRatesByRarity { get; set; } = new List<int>();
+
+        public Dictionary<int, int> PurifyMaterials { get; set; } = new Dictionary<int, int>();
+
+        public Dictionary<int, int> PurifyOnlyMaterials { get; set; } = new Dictionary<int, int>();
+
+        public Dictionary<int, int> PurifyOnlyCeraMaterials { get; set; } = new Dictionary<int, int>();
+
+        public List<AmplifyMaterialOption> InvestOptions { get; set; } = new List<AmplifyMaterialOption>();
+
+        public List<AmplifyMaterialOption> ReinvestOptions { get; set; } = new List<AmplifyMaterialOption>();
+
+        public List<AmplifyMaterialOption> RandomInvestUpgradeOptions { get; set; } = new List<AmplifyMaterialOption>();
+
         public List<AmplifyOptionData> OptionData { get; set; } = new List<AmplifyOptionData>();
 
         public double GetBaseValue(AmplifyOptionType optionType)
@@ -35,11 +49,32 @@ namespace PvfLib
             {
                 switch (node.Tag.ToLowerInvariant())
                 {
+                    case "amplification rate by rarity":
+                        file.AmplificationRatesByRarity = ParseIntList(node, content);
+                        break;
                     case "rarity weight":
                         file.RarityWeights = ParseNameDoubleMap(node, content);
                         break;
                     case "option data":
                         file.OptionData = ParseOptionData(node, content);
+                        break;
+                    case "purify material":
+                        AddItemCountMap(file.PurifyMaterials, node, content);
+                        break;
+                    case "purify only material":
+                        AddItemCountMap(file.PurifyOnlyMaterials, node, content);
+                        break;
+                    case "purify only cera material":
+                        AddItemCountMap(file.PurifyOnlyCeraMaterials, node, content);
+                        break;
+                    case "invest option":
+                        file.InvestOptions.AddRange(ParseMaterialOptions(node, content));
+                        break;
+                    case "reinvest option":
+                        file.ReinvestOptions.AddRange(ParseMaterialOptions(node, content));
+                        break;
+                    case "random invest upgrade option":
+                        file.RandomInvestUpgradeOptions.AddRange(ParseMaterialOptions(node, content));
                         break;
                 }
             }
@@ -63,6 +98,61 @@ namespace PvfLib
                     CumulativeWeight = cumulativeWeight,
                     BaseValue = baseValue,
                 });
+            }
+
+            return result;
+        }
+
+        private static List<AmplifyMaterialOption> ParseMaterialOptions(ScriptNode node, string content)
+        {
+            var result = new List<AmplifyMaterialOption>();
+            var tokens = ReadTokens(node, content);
+            for (var i = 0; i + 2 < tokens.Count; i += 3)
+            {
+                if (!int.TryParse(tokens[i + 1], NumberStyles.Integer, CultureInfo.InvariantCulture, out var itemId)
+                    || !int.TryParse(tokens[i + 2], NumberStyles.Integer, CultureInfo.InvariantCulture, out var count))
+                    continue;
+
+                result.Add(new AmplifyMaterialOption
+                {
+                    OptionType = ParseOptionType(tokens[i]),
+                    ItemId = itemId,
+                    Count = count,
+                });
+            }
+
+            return result;
+        }
+
+        private static void AddItemCountMap(Dictionary<int, int> target, ScriptNode node, string content)
+        {
+            foreach (var pair in ParseItemCountMap(node, content))
+                target[pair.Key] = pair.Value;
+        }
+
+        private static Dictionary<int, int> ParseItemCountMap(ScriptNode node, string content)
+        {
+            var result = new Dictionary<int, int>();
+            var tokens = ReadTokens(node, content);
+            for (var i = 0; i + 1 < tokens.Count; i += 2)
+            {
+                if (!int.TryParse(tokens[i], NumberStyles.Integer, CultureInfo.InvariantCulture, out var itemId)
+                    || !int.TryParse(tokens[i + 1], NumberStyles.Integer, CultureInfo.InvariantCulture, out var count))
+                    continue;
+
+                result[itemId] = count;
+            }
+
+            return result;
+        }
+
+        private static List<int> ParseIntList(ScriptNode node, string content)
+        {
+            var result = new List<int>();
+            foreach (var token in ReadTokens(node, content))
+            {
+                if (int.TryParse(token, NumberStyles.Integer, CultureInfo.InvariantCulture, out var value))
+                    result.Add(value);
             }
 
             return result;
@@ -155,5 +245,12 @@ namespace PvfLib
         public AmplifyOptionType OptionType { get; set; }
         public double CumulativeWeight { get; set; }
         public double BaseValue { get; set; }
+    }
+
+    public sealed class AmplifyMaterialOption
+    {
+        public AmplifyOptionType OptionType { get; set; }
+        public int ItemId { get; set; }
+        public int Count { get; set; }
     }
 }

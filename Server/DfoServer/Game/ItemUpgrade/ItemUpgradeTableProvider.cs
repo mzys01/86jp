@@ -169,6 +169,43 @@ namespace DfoServer.Game.ItemUpgrade
             return Math.Max(0, (int)(rarityWeight * baseValue));
         }
 
+        public static int GetAmplificationRateByRarity(int rarity)
+        {
+            return GetIndexedInt(AmplifyItemConfig.Value.AmplificationRatesByRarity, rarity, 0);
+        }
+
+        public static bool IsPurifyMaterial(int itemId)
+        {
+            return HasConfiguredItem(AmplifyItemConfig.Value.PurifyMaterials, itemId);
+        }
+
+        public static bool IsOutworldVigorClearMaterial(int itemId)
+        {
+            var config = AmplifyItemConfig.Value;
+            return HasConfiguredItem(config.PurifyOnlyMaterials, itemId)
+                || HasConfiguredItem(config.PurifyOnlyCeraMaterials, itemId);
+        }
+
+        public static bool IsInvestAmplifyOptionMaterial(int itemId)
+        {
+            return HasConfiguredOption(AmplifyItemConfig.Value.InvestOptions, itemId);
+        }
+
+        public static bool TryGetInvestAmplifyOptionType(int itemId, out AmplifyOptionType optionType)
+        {
+            return TryGetConfiguredOptionType(AmplifyItemConfig.Value.InvestOptions, itemId, out optionType);
+        }
+
+        public static bool IsReinvestAmplifyOptionMaterial(int itemId)
+        {
+            return HasConfiguredOption(AmplifyItemConfig.Value.ReinvestOptions, itemId);
+        }
+
+        public static bool IsRandomInvestUpgradeOptionMaterial(int itemId)
+        {
+            return HasConfiguredOption(AmplifyItemConfig.Value.RandomInvestUpgradeOptions, itemId);
+        }
+
         public static int CalculateAmplifyConstValue(int currentUpgradeLevel)
         {
             var file = GetFile(ItemUpgradeTableKind.Amplify);
@@ -220,6 +257,43 @@ namespace DfoServer.Game.ItemUpgrade
         {
             var rarityName = GetRarityName(rarity);
             return GetNamedDouble(AmplifyItemConfig.Value.RarityWeights, rarityName, 1);
+        }
+
+        private static bool HasConfiguredItem(System.Collections.Generic.Dictionary<int, int> values, int itemId)
+        {
+            return values != null && values.TryGetValue(itemId, out var count) && count > 0;
+        }
+
+        private static bool HasConfiguredOption(System.Collections.Generic.List<AmplifyMaterialOption> values, int itemId)
+        {
+            if (values == null)
+                return false;
+
+            foreach (var value in values)
+            {
+                if (value != null && value.ItemId == itemId && value.Count > 0)
+                    return true;
+            }
+
+            return false;
+        }
+
+        private static bool TryGetConfiguredOptionType(System.Collections.Generic.List<AmplifyMaterialOption> values, int itemId, out AmplifyOptionType optionType)
+        {
+            optionType = AmplifyOptionType.None;
+            if (values == null)
+                return false;
+
+            foreach (var value in values)
+            {
+                if (value != null && value.ItemId == itemId && value.Count > 0)
+                {
+                    optionType = value.OptionType;
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private static string GetRarityName(int rarity)
