@@ -64,38 +64,19 @@ namespace DfoServer.Game.Inventory
             var updatedTargetExtra = BuildEnchantTargetExtraView(targetExtra, enchantCardItemId, enchantUpgradeCount);
             target.ExtraJson = updatedTargetExtra.Serialize();
             _db.UpdateItemExtraJson(connection, transaction, target.ItemUid, target.ExtraJson);
-            var targetCommon = InventoryProtocolMapper.ToCommonItem(target, updatedTargetExtra);
 
             var remainingBeadCount = bead.StackCount - 1;
-            CommonInventoryItem beadCommon;
             if (remainingBeadCount > 0)
-            {
                 _db.UpdateStackCount(connection, transaction, bead.ItemUid, remainingBeadCount);
-                beadCommon = _db.LoadCommonItem(connection, transaction, characterId, InventoryListType.Main, command.BeadSlotIndex);
-                if (beadCommon == null)
-                    beadCommon = CreateEmptyCommonItem(command.BeadSlotIndex);
-            }
             else
-            {
                 _db.DeleteItem(connection, transaction, bead.ItemUid);
-                beadCommon = CreateEmptyCommonItem(command.BeadSlotIndex);
-            }
 
             _auditLogger.WriteDeleteAuditLog(connection, transaction, characterId, bead, 1);
             _auditLogger.WriteEnchantAuditLog(connection, transaction, characterId, bead, target, enchantCardItemId, enchantUpgradeCount);
 
             FileLogger.Log($"  [EnchantByBead] OK: beadSlot={command.BeadSlotIndex} targetSlot={command.TargetSlotIndex} enchantCard=0x{enchantCardItemId:X8} upgrade={enchantUpgradeCount} beadLeft={Math.Max(0, remainingBeadCount)}");
-            result = EnchantByBeadResult.Ok(command, targetCommon, beadCommon, enchantCardItemId);
+            result = EnchantByBeadResult.Ok(command, Math.Max(0, remainingBeadCount), enchantCardItemId);
             return true;
-        }
-
-        private static CommonInventoryItem CreateEmptyCommonItem(short slotIndex)
-        {
-            return new CommonInventoryItem
-            {
-                SlotIndex = slotIndex,
-                ItemTemplateId = -1,
-            };
         }
 
         private static byte ReadEnchantUpgradeCount(string extraJson)

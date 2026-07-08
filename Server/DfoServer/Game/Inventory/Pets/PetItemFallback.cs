@@ -70,7 +70,7 @@ WHERE item_uid = @uid;";
                 cmd.Parameters.AddWithValue("@listType", (int)InventoryListType.Pet);
                 cmd.Parameters.AddWithValue("@slot", (int)targetSlot);
                 cmd.Parameters.AddWithValue("@value", value);
-                cmd.Parameters.AddWithValue("@extraJson", InventoryItemCodec.SerializePet(new PetInventoryItem { TailData0A = new byte[74] }));
+                cmd.Parameters.AddWithValue("@extraJson", CreateDefaultPetExtraJson());
                 cmd.Parameters.AddWithValue("@uid", item.ItemUid);
                 cmd.ExecuteNonQuery();
             }
@@ -87,7 +87,7 @@ WHERE item_uid = @uid;";
             item.ExpireTime = 0;
             item.Marker16 = 0;
             item.PetSerialOrHandle = value;
-            item.ExtraJson = InventoryItemCodec.SerializePet(new PetInventoryItem { TailData0A = new byte[74] });
+            item.ExtraJson = CreateDefaultPetExtraJson();
             return true;
         }
 

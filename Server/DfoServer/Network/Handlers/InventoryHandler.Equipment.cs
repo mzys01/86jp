@@ -31,9 +31,8 @@ namespace DfoServer.Network.Handlers
                 return;
             }
 
-            var updateBody = ItemListUpdateBuilder.BuildCommonUpdates(new[] { result.TargetItem, result.BeadItem });
-            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000E, updateBody));
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0110, EnchantByBeadAckBuilder.BuildSuccess(result)));
+            await _refresh.SendUpdateItemList(session, result.BeadListType, result.BeadSlotIndex);
 
             FileLogger.Log($"[{ProtocolName}] ENCHANT_BY_BEAD: OK target=({request.TargetListType},{request.TargetSlotIndex}) enchantCard=0x{result.EnchantCardItemId:X8}");
         }
@@ -59,16 +58,7 @@ namespace DfoServer.Network.Handlers
                 return;
             }
 
-            var updates = new List<CommonInventoryItem>();
-            if (result.TargetItem != null)
-                updates.Add(result.TargetItem);
-            if (result.ExtraItems != null)
-                updates.AddRange(result.ExtraItems);
-
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0050, ItemUpgradeAckBuilder.BuildSuccess(result)));
-
-            if (updates.Count > 0)
-                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000E, ItemListUpdateBuilder.BuildCommonUpdates(updates)));
 
             if (result.GoldCost > 0)
             {
@@ -124,13 +114,6 @@ namespace DfoServer.Network.Handlers
             }
 
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x031D, BuildSocketOpenAck(targetSlot, targetItemId, materialSlot)));
-            if (result.TargetItem != null)
-            {
-                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
-                    0x00,
-                    0x000E,
-                    ItemListUpdateBuilder.BuildCommonUpdates(new[] { result.TargetItem })));
-            }
 
             if (result.MaterialConsumed && result.MaterialItem != null)
                 await SendCommonMaterialRefresh(session, result.MaterialItem);
@@ -163,13 +146,8 @@ namespace DfoServer.Network.Handlers
             }
 
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x031C, BuildEmblemAttachAck(targetSlot, targetItemId, emblems.Count)));
-            if (!result.TargetEquipped && result.TargetItem != null)
-            {
-                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
-                    0x00,
-                    0x000E,
-                    ItemListUpdateBuilder.BuildCommonUpdates(new[] { result.TargetItem })));
-            }
+            if (!result.TargetEquipped)
+                await _refresh.SendUpdateItemList(session, result.TargetListType, result.TargetSlotIndex);
             await _refresh.SendSortItemLockRefresh(session, InventoryListType.Main);
             FileLogger.Log($"[{ProtocolName}] EQUIP_EMBLEM_ATTACH: OK targetSlot={targetSlot} item=0x{targetItemId:X8} emblems={emblems.Count}");
         }
@@ -226,10 +204,8 @@ namespace DfoServer.Network.Handlers
                 return false;
 
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, ackType, BuildEmblemAttachAck(targetSlot, targetItemId, emblems.Count)));
-            if (!result.TargetEquipped && result.TargetItem != null)
-            {
-                await _refresh.SendUpdateItemList(session, InventoryListType.Avatar, targetSlot);
-            }
+            if (!result.TargetEquipped)
+                await _refresh.SendUpdateItemList(session, result.TargetListType, result.TargetSlotIndex);
 
             await _refresh.SendSortItemLockRefresh(session, InventoryListType.Main);
             if (!result.TargetEquipped)

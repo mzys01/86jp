@@ -611,9 +611,8 @@ VALUES (@accountId, @selectionKey, @value32, @itemCount, CURRENT_TIMESTAMP);";
                     var itemTemplateId = reader.GetInt32(0);
                     var extraJson = reader.IsDBNull(3) ? "{}" : reader.GetString(3);
                     var itemKind = reader.IsDBNull(4) ? "" : reader.GetString(4);
-                    var prefix = InventoryItemCodec.ReadHexValue(extraJson, "prefixData0E", 8);
-                    var tail = InventoryItemCodec.ReadHexValue(extraJson, "tailData2F", 37);
-                    var jewelHex = InventoryItemCodec.ReadRawStringValue(extraJson, "jewelSocket");
+                    var extra = ItemExtraView.Parse(extraJson);
+                    var equipmentExtra = extra.Equipment;
                     var durabilityFromDb = (ushort)reader.GetInt32(2);
                     var isAvatar = string.Equals(itemKind, "avatar", StringComparison.Ordinal);
                     var isPet = listType == InventoryListType.Pet && string.Equals(itemKind, "pet", StringComparison.Ordinal);
@@ -623,65 +622,29 @@ VALUES (@accountId, @selectionKey, @value32, @itemCount, CURRENT_TIMESTAMP);";
                     {
                         InstanceValue = unchecked((uint)(isPet ? petSerialOrHandle : reader.GetInt32(1))),
                         Durability = listType == InventoryListType.Avatar ? optionValue : durabilityFromDb,
-                        Reinforce = (byte)InventoryItemCodec.ReadIntValue(extraJson, "extData0"),
-                        Enchant = prefix.Length >= 4 ? BitConverter.ToUInt32(prefix, 0) : 0,
-                        EnchantUpgradeCount = prefix.Length >= 5 ? prefix[4] : (byte)0,
-                        AmplifyType = prefix.Length >= 6 ? prefix[5] : (byte)0,
-                        AmplifyValue = prefix.Length >= 8 ? BitConverter.ToUInt16(prefix, 6) : (ushort)0,
+                        Reinforce = equipmentExtra.ExtData0,
+                        Enchant = unchecked((uint)equipmentExtra.EnchantCardId),
+                        EnchantUpgradeCount = equipmentExtra.EnchantUpgradeCount,
+                        AmplifyType = equipmentExtra.AmplifyType,
+                        AmplifyValue = equipmentExtra.AmplifyValue,
                     };
                     if (isPet && petSerialOrHandle != 0 && CreatureExtraResolver.HasCreatureExtra(itemTemplateId))
                         f.CreatureExtra = unchecked((uint)petSerialOrHandle);
-                    // emblem from tail[0..8]
-                    if (tail.Length > 0)
+                    f.Emblem = equipmentExtra.EmblemData;
+                    f.Rune = equipmentExtra.Rune;
+                    f.MagicSealCount = equipmentExtra.SealCount;
+                    if (f.MagicSealCount > 0)
                     {
-                        int ec = tail[0];
-                        int embLen = 1 + ec * 4;
-                        if (embLen <= tail.Length)
-                        {
-                            f.Emblem = new byte[embLen];
-                            Buffer.BlockCopy(tail, 0, f.Emblem, 0, embLen);
-                        }
+                        f.MagicSealTypes = equipmentExtra.SealTypes;
+                        f.MagicSealVal1s = equipmentExtra.SealVal1s;
+                        f.MagicSealVal2s = equipmentExtra.SealVal2s;
+                        f.MagicSealTail = equipmentExtra.SealTail;
                     }
-                    // equipEffect from tail[9..10]
-                    if (tail.Length >= 11)
-                        f.Rune = BitConverter.ToUInt16(tail, 9);
-                    // seal from tail[11..]
-                    if (tail.Length > 11)
-                    {
-                        f.MagicSealCount = tail[11];
-                        f.MagicSealTypes = new byte[3];
-                        f.MagicSealVal1s = new byte[3];
-                        f.MagicSealVal2s = new byte[3];
-                        for (int i = 0; i < f.MagicSealCount && i < 3; i++)
-                        {
-                            if (12 + i < tail.Length) f.MagicSealTypes[i] = tail[12 + i];
-                            if (15 + i < tail.Length) f.MagicSealVal1s[i] = tail[15 + i];
-                            if (18 + i < tail.Length) f.MagicSealVal2s[i] = tail[18 + i];
-                        }
-                        if (f.MagicSealCount > 0 && 21 < tail.Length)
-                        {
-                            int sealTailLen = 2; // genuineUpgrade + check
-                            if (21 + 1 < tail.Length && tail[22] != 0xFF)
-                                sealTailLen += 4;
-                            f.MagicSealTail = new byte[Math.Min(sealTailLen, tail.Length - 21)];
-                            Buffer.BlockCopy(tail, 21, f.MagicSealTail, 0, f.MagicSealTail.Length);
-                        }
-                    }
-                    // forging from tail[27]
-                    if (tail.Length > 27)
-                        f.Forging = tail[27];
-                    // jewelSocket
+                    f.Forging = equipmentExtra.Forging;
                     if (isAvatar)
-                    {
-                        f.JewelSocket = SqliteInventoryStore.AvatarReservedToEquippedJewel(
-                            InventoryItemCodec.ReadHexValue(extraJson, "reserved2", 30));
-                    }
-                    else if (!string.IsNullOrEmpty(jewelHex))
-                    {
-                        f.JewelSocket = new byte[jewelHex.Length / 2];
-                        for (int i = 0; i < f.JewelSocket.Length; i++)
-                            f.JewelSocket[i] = Convert.ToByte(jewelHex.Substring(i * 2, 2), 16);
-                    }
+                        f.JewelSocket = SqliteInventoryStore.AvatarReservedToEquippedJewel(extra.Avatar.Reserved2);
+                    else
+                        f.JewelSocket = equipmentExtra.JewelSocket;
                     return f;
                 }
             }
@@ -713,20 +676,14 @@ VALUES (@accountId, @selectionKey, @value32, @itemCount, CURRENT_TIMESTAMP);";
                 countOrIv = unchecked((int)f.InstanceValue);
                 if (listType == InventoryListType.Avatar)
                 {
-                    var avatar = new AvatarInventoryItem
-                    {
-                        SlotIndex = slot,
-                        AvatarItemId = itemId,
-                        OptionValue = ResolveAvatarOptionValue(f),
-                        UnknownFixed30 = SqliteInventoryStore.DefaultAvatarUnknownFixed30,
-                        UnknownFixed4 = SqliteInventoryStore.DefaultAvatarUnknownFixed4,
-                        Reserved2 = SqliteInventoryStore.EquippedJewelToAvatarReserved(f.JewelSocket),
-                    };
+                    var avatarExtraBuilder = ItemExtraViewBuilder.FromAvatarView(null);
+                    avatarExtraBuilder.Avatar.UnknownFixed4 = SqliteInventoryStore.DefaultAvatarUnknownFixed4;
+                    avatarExtraBuilder.Avatar.Reserved2 = SqliteInventoryStore.EquippedJewelToAvatarReserved(f.JewelSocket);
                     _db.InsertCharacterItem(
                         connection, transaction, characterId, listType, slot, itemId, "avatar",
-                        stackCount: 0, instanceValue: 0, durability: 0, sealFlag: 0, optionValue: avatar.OptionValue,
-                        expireTime: 0, marker16: avatar.UnknownFixed30, petSerialOrHandle: 0,
-                        extraJson: InventoryItemCodec.SerializeAvatar(avatar), equipmentLockId: equipmentLockId);
+                        stackCount: 0, instanceValue: 0, durability: 0, sealFlag: 0, optionValue: ResolveAvatarOptionValue(f),
+                        expireTime: 0, marker16: SqliteInventoryStore.DefaultAvatarUnknownFixed30, petSerialOrHandle: 0,
+                        extraJson: avatarExtraBuilder.Build().Serialize(), equipmentLockId: equipmentLockId);
                     return;
                 }
 

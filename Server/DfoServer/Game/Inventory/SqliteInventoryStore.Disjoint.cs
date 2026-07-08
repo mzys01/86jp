@@ -61,9 +61,8 @@ namespace DfoServer.Game.Inventory
                 _db.DeleteItem(connection, transaction, source.ItemUid);
                 _auditLogger.WriteDeleteAuditLog(connection, transaction, characterId, source, 1);
 
-                CommonInventoryItem disjointToolRefresh = null;
                 if (disjointTool != null)
-                    disjointToolRefresh = ConsumePortableDisjointItem(connection, transaction, characterId, disjointTool);
+                    ConsumePortableDisjointItem(connection, transaction, disjointTool);
 
                 foreach (var material in materials)
                 {
@@ -85,59 +84,10 @@ namespace DfoServer.Game.Inventory
                     ErrorCode = 0,
                     SourceItemTemplateId = source.ItemTemplateId,
                 };
-                result.RefreshItems.Add(new CommonInventoryItem { SlotIndex = request.TargetSlotIndex });
-                if (disjointToolRefresh != null)
-                    result.RefreshItems.Add(disjointToolRefresh);
                 result.Materials.AddRange(materials);
-                AddRefreshItems(connection, characterId, accountId, result);
                 return true;
                 }
             }
-        }
-
-        private void AddRefreshItems(SqliteConnection connection, int characterId, int accountId, DisjointItemResult result)
-        {
-            if (result == null)
-                return;
-
-            foreach (var material in result.Materials)
-            {
-                if (material.SlotIndex < 0)
-                    continue;
-
-                var item = LoadCommonRefreshItem(connection, null, characterId, accountId, material.SlotIndex, material.ItemTemplateId);
-                if (item != null)
-                    result.RefreshItems.Add(item);
-            }
-        }
-
-        private CommonInventoryItem LoadCommonRefreshItem(SqliteConnection connection, SqliteTransaction transaction, int characterId, int accountId, short slotIndex, int itemTemplateId)
-        {
-            if (Game.Currency.CurrencyService.IsCubeFragment(itemTemplateId))
-            {
-                var cubes = Game.Currency.CurrencyService.LoadCubeFragments(connection, transaction, accountId);
-                foreach (var cube in cubes)
-                {
-                    if (cube.ItemId == itemTemplateId)
-                    {
-                        return new CommonInventoryItem
-                        {
-                            SlotIndex = (short)cube.Slot,
-                            ItemTemplateId = cube.ItemId,
-                            CountOrInstanceValue = cube.Count,
-                        };
-                    }
-                }
-
-                return new CommonInventoryItem
-                {
-                    SlotIndex = slotIndex,
-                    ItemTemplateId = itemTemplateId,
-                    CountOrInstanceValue = 0,
-                };
-            }
-
-            return _db.LoadCommonItem(connection, transaction, characterId, InventoryListType.Main, slotIndex);
         }
 
         private static bool TryValidateDisjoint(ItemRecord source, ItemMetadata metadata, out byte errorCode)
@@ -198,23 +148,16 @@ namespace DfoServer.Game.Inventory
             return targetLevel <= maxLevel;
         }
 
-        private CommonInventoryItem ConsumePortableDisjointItem(SqliteConnection connection, SqliteTransaction transaction, int characterId, ItemRecord disjointTool)
+        private void ConsumePortableDisjointItem(SqliteConnection connection, SqliteTransaction transaction, ItemRecord disjointTool)
         {
             var remainingCount = disjointTool.StackCount - 1;
             if (remainingCount > 0)
             {
                 _db.UpdateStackCount(connection, transaction, disjointTool.ItemUid, remainingCount);
-                return _db.LoadCommonItem(connection, transaction, characterId, InventoryListType.Main, disjointTool.SlotIndex)
-                    ?? new CommonInventoryItem
-                    {
-                        SlotIndex = disjointTool.SlotIndex,
-                        ItemTemplateId = disjointTool.ItemTemplateId,
-                        CountOrInstanceValue = remainingCount,
-                    };
+                return;
             }
 
             _db.DeleteItem(connection, transaction, disjointTool.ItemUid);
-            return new CommonInventoryItem { SlotIndex = disjointTool.SlotIndex };
         }
 
         private static int GetPortableDisjointMaxLevel(int portableDisjoint)
@@ -231,8 +174,7 @@ namespace DfoServer.Game.Inventory
 
         private static bool IsUnidentifiedAmplifyEquipment(ItemRecord source)
         {
-            var prefix = InventoryItemCodec.ReadHexValue(source.ExtraJson ?? "{}", "prefixData0E", 8);
-            var amplifyType = prefix.Length >= 6 ? prefix[5] : (byte)0;
+            var amplifyType = ItemExtraView.Parse(source.ExtraJson).Equipment.AmplifyType;
 
             // 最高位为未鉴定标志，低 7 位保留增幅属性类型。
             return (amplifyType & 0x80) != 0;

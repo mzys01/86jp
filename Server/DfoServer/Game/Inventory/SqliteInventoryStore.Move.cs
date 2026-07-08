@@ -802,8 +802,7 @@ WHERE character_id = @cid AND list_type = @lt
 
             try
             {
-                var tail = InventoryItemCodec.ReadHexValue(item.ExtraJson, "tailData2F", 37);
-                return tail.Length > 27 ? tail[27] : (byte)0;
+                return ItemExtraView.Parse(item.ExtraJson).Equipment.Forging;
             }
             catch
             {

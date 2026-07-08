@@ -31,8 +31,7 @@ namespace DfoServer.Network.Handlers
             }
 
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x001A, DisjointItemAckBuilder.BuildSuccess(result)));
-            if (result.RefreshItems.Count > 0)
-                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000E, ItemListUpdateBuilder.BuildCommonUpdates(result.RefreshItems)));
+            // 分解 ACK 自带目标槽位和产物 slot/item/count，客户端据此刷新，不额外补 0x000E。
 
             var materialText = result.Materials.Count > 0
                 ? string.Join(", ", result.Materials.ConvertAll(m => $"0x{m.ItemTemplateId:X8}x{m.Count}@{m.SlotIndex}"))

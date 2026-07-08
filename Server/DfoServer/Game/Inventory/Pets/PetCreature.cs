@@ -1176,13 +1176,23 @@ LIMIT 1;";
             int itemTemplateId,
             int petSerial)
         {
-            _db.InsertPetItem(connection, transaction, characterId, new PetInventoryItem
-            {
-                SlotIndex = slot,
-                CreatureItemId = itemTemplateId,
-                CreatureSerialOrHandle = petSerial,
-                TailData0A = new byte[74],
-            });
+            _db.InsertCharacterItem(
+                connection,
+                transaction,
+                characterId,
+                InventoryListType.Pet,
+                slot,
+                itemTemplateId,
+                "pet",
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                petSerial,
+                SqliteInventoryStore.CreateDefaultPetExtraJson());
         }
 
         private void InsertPetItemContainerItem(
@@ -1193,13 +1203,23 @@ LIMIT 1;";
             int itemTemplateId,
             int value)
         {
-            _db.InsertPetItem(connection, transaction, characterId, new PetInventoryItem
-            {
-                SlotIndex = slot,
-                CreatureItemId = itemTemplateId,
-                CreatureSerialOrHandle = value,
-                TailData0A = new byte[74],
-            });
+            _db.InsertCharacterItem(
+                connection,
+                transaction,
+                characterId,
+                InventoryListType.Pet,
+                slot,
+                itemTemplateId,
+                "pet",
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                value,
+                SqliteInventoryStore.CreateDefaultPetExtraJson());
         }
 
         private static void DeduplicateCreatureListEntries(SqliteConnection connection, SqliteTransaction transaction, int characterId)

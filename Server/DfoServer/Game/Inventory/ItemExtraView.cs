@@ -135,11 +135,23 @@ namespace DfoServer.Game.Inventory
     internal sealed class ItemExtraViewBuilder
     {
         public ItemExtraViewBuilder()
+            : this(writeEquipment: true)
         {
-            Equipment = new EquipmentExtraViewBuilder();
         }
 
+        private ItemExtraViewBuilder(bool writeEquipment)
+        {
+            Equipment = new EquipmentExtraViewBuilder();
+            Avatar = new AvatarExtraViewBuilder();
+            _writeEquipment = writeEquipment;
+        }
+
+        private readonly bool _writeEquipment;
+        private bool _writeAvatar;
+
         public EquipmentExtraViewBuilder Equipment { get; }
+
+        public AvatarExtraViewBuilder Avatar { get; }
 
         public static ItemExtraViewBuilder FromView(ItemExtraView view)
         {
@@ -149,10 +161,22 @@ namespace DfoServer.Game.Inventory
             return builder;
         }
 
+        public static ItemExtraViewBuilder FromAvatarView(ItemExtraView view)
+        {
+            var builder = new ItemExtraViewBuilder(writeEquipment: false);
+            builder._writeAvatar = true;
+            if (view != null)
+                builder.Avatar.LoadFromView(view);
+            return builder;
+        }
+
         public ItemExtraView Build()
         {
             var json = new JsonObject();
-            Equipment.WriteTo(json);
+            if (_writeEquipment)
+                Equipment.WriteTo(json);
+            if (_writeAvatar)
+                Avatar.WriteTo(json);
             return new ItemExtraView(json);
         }
     }
@@ -352,6 +376,66 @@ namespace DfoServer.Game.Inventory
                 return;
 
             Array.Clear(target, offset, Math.Min(length, target.Length - offset));
+        }
+    }
+
+    internal sealed class AvatarExtraViewBuilder
+    {
+        private byte[] _reserved0 = new byte[5];
+        private byte[] _reserved1 = new byte[71];
+        private byte[] _reserved2 = new byte[30];
+        private byte[] _tailData = new byte[7];
+
+        public byte[] Reserved0
+        {
+            get => ItemExtraView.Copy(_reserved0);
+            set => _reserved0 = FixedCopy(value, 5);
+        }
+
+        public byte[] Reserved1
+        {
+            get => ItemExtraView.Copy(_reserved1);
+            set => _reserved1 = FixedCopy(value, 71);
+        }
+
+        public byte[] Reserved2
+        {
+            get => ItemExtraView.Copy(_reserved2);
+            set => _reserved2 = FixedCopy(value, 30);
+        }
+
+        public ushort UnknownFixed4 { get; set; }
+
+        public byte[] TailData
+        {
+            get => ItemExtraView.Copy(_tailData);
+            set => _tailData = FixedCopy(value, 7);
+        }
+
+        internal void LoadFromView(ItemExtraView view)
+        {
+            Reserved0 = view.Avatar.Reserved0;
+            Reserved1 = view.Avatar.Reserved1;
+            Reserved2 = view.Avatar.Reserved2;
+            UnknownFixed4 = view.Avatar.UnknownFixed4;
+            TailData = view.Avatar.TailData;
+        }
+
+        internal void WriteTo(JsonObject json)
+        {
+            json["reserved0"] = ItemExtraView.ToHex(_reserved0);
+            json["reserved1"] = ItemExtraView.ToHex(_reserved1);
+            json["reserved2"] = ItemExtraView.ToHex(_reserved2);
+            json["unknownFixed4"] = UnknownFixed4;
+            json["tailData"] = ItemExtraView.ToHex(_tailData);
+        }
+
+        private static byte[] FixedCopy(byte[] source, int length)
+        {
+            var data = new byte[length];
+            if (source != null && source.Length > 0)
+                Buffer.BlockCopy(source, 0, data, 0, Math.Min(source.Length, length));
+            return data;
         }
     }
 

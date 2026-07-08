@@ -72,7 +72,7 @@ namespace DfoServer.Game.Inventory
                     return true;
                 }
 
-                if (!TryApplyEquipmentEffectRune(connection, transaction, characterId, target, effectId, out var targetRefresh))
+                if (!TryApplyEquipmentEffectRune(connection, transaction, characterId, target, effectId))
                 {
                     result.Status = EquipmentEffectRuneStatus.InvalidTarget;
                     result.TargetListType = target.ListType;
@@ -86,20 +86,14 @@ namespace DfoServer.Game.Inventory
                 _auditLogger.WriteAuditLog(connection, transaction, characterId, "equipment_effect_rune", target.ToItemRecord(), target.ListType, target.SlotIndex, effectId);
 
                 var remaining = Math.Max(0, source.StackCount - 1);
-                var sourceRefresh = remaining > 0
-                    ? _db.LoadCommonItem(connection, transaction, characterId, source.ListType, source.SlotIndex)
-                    : CreateEmptyCommonItem(source.SlotIndex);
-
                 transaction.Commit();
 
                 result.Status = EquipmentEffectRuneStatus.Applied;
                 result.SourceItemTemplateId = source.ItemTemplateId;
                 result.SourceRemainingStackCount = remaining;
-                result.SourceItem = sourceRefresh;
                 result.TargetListType = target.ListType;
                 result.TargetSlotIndex = target.SlotIndex;
                 result.TargetItemTemplateId = target.ItemTemplateId;
-                result.TargetItem = targetRefresh;
                 result.AppliedEffectId = effectId;
                 return true;
             }
@@ -227,11 +221,7 @@ namespace DfoServer.Game.Inventory
             if (equipment.Grade > 0 && equipment.Grade <= 2)
                 return false;
 
-            var common = _db.LoadCommonItem(connection, transaction, characterId, record.ListType, record.SlotIndex);
-            if (common == null)
-                return false;
-
-            target = EquipmentEffectTarget.FromCharacterItem(record, common);
+            target = EquipmentEffectTarget.FromCharacterItem(record);
             return true;
         }
 
@@ -260,11 +250,7 @@ namespace DfoServer.Game.Inventory
             if (equipment.Grade > 0 && equipment.Grade <= 2)
                 return false;
 
-            var common = LoadEquipmentCommonItemForRefresh(connection, transaction, characterId, candidate.SlotIndex);
-            if (common == null)
-                return false;
-
-            target = EquipmentEffectTarget.FromEquippedEntry(entry, common);
+            target = EquipmentEffectTarget.FromEquippedEntry(entry);
             return true;
         }
 
@@ -283,10 +269,8 @@ namespace DfoServer.Game.Inventory
             SqliteTransaction transaction,
             int characterId,
             EquipmentEffectTarget target,
-            ushort effectId,
-            out CommonInventoryItem targetRefresh)
+            ushort effectId)
         {
-            targetRefresh = null;
             if (target == null)
                 return false;
 
@@ -308,8 +292,7 @@ namespace DfoServer.Game.Inventory
                 equipped.Rune = effectId;
                 var rawEntry = equipped.ToBytes();
                 UpdateEquippedEntryRaw(connection, transaction, characterId, target.SlotIndex, target.ItemTemplateId, rawEntry);
-                targetRefresh = LoadEquipmentCommonItemForRefresh(connection, transaction, characterId, target.SlotIndex);
-                return targetRefresh != null;
+                return true;
             }
 
             if (target.ItemUid <= 0)
@@ -319,9 +302,9 @@ namespace DfoServer.Game.Inventory
             var builder = ItemExtraViewBuilder.FromView(extra);
             builder.Equipment.Rune = effectId;
             var updated = builder.Build();
-            _db.UpdateItemExtraJson(connection, transaction, target.ItemUid, updated.Serialize());
-            targetRefresh = _db.LoadCommonItem(connection, transaction, characterId, target.ListType, target.SlotIndex);
-            return targetRefresh != null;
+            target.ExtraJson = updated.Serialize();
+            _db.UpdateItemExtraJson(connection, transaction, target.ItemUid, target.ExtraJson);
+            return true;
         }
 
         private static IReadOnlyList<EquipmentEffectTargetCandidate> ParseTargetCandidates(byte[] body)
@@ -409,16 +392,6 @@ namespace DfoServer.Game.Inventory
             });
         }
 
-        private static CommonInventoryItem CreateEmptyCommonItem(short slotIndex)
-        {
-            return new CommonInventoryItem
-            {
-                SlotIndex = slotIndex,
-                ItemTemplateId = -1,
-                CountOrInstanceValue = 0,
-            };
-        }
-
         private sealed class EquipmentEffectTargetCandidate
         {
             public InventoryListType ListType { get; set; }
@@ -442,13 +415,17 @@ namespace DfoServer.Game.Inventory
 
             public byte EquipmentLockId { get; set; }
 
-            public CommonInventoryItem CommonItem { get; set; }
+            public int StackCount { get; set; }
+
+            public int InstanceValue { get; set; }
+
+            public ushort Durability { get; set; }
 
             public string ExtraJson { get; set; }
 
             public MakeEquipListCodec.Entry EquippedEntry { get; set; }
 
-            public static EquipmentEffectTarget FromCharacterItem(ItemRecord record, CommonInventoryItem common)
+            public static EquipmentEffectTarget FromCharacterItem(ItemRecord record)
             {
                 return new EquipmentEffectTarget
                 {
@@ -458,13 +435,26 @@ namespace DfoServer.Game.Inventory
                     ItemUid = record.ItemUid,
                     SealFlag = record.SealFlag,
                     EquipmentLockId = record.EquipmentLockId,
-                    CommonItem = common,
+                    StackCount = record.StackCount,
+                    InstanceValue = record.InstanceValue,
+                    Durability = record.Durability,
                     ExtraJson = record.ExtraJson,
                 };
             }
 
-            public static EquipmentEffectTarget FromEquippedEntry(MakeEquipListCodec.Entry entry, CommonInventoryItem common)
+            public static EquipmentEffectTarget FromEquippedEntry(MakeEquipListCodec.Entry entry)
             {
+                InvenItem item = null;
+                try
+                {
+                    if (entry.Raw != null && entry.Raw.Length > 0)
+                        item = InvenItem.Parse(entry.Raw);
+                }
+                catch
+                {
+                    item = null;
+                }
+
                 return new EquipmentEffectTarget
                 {
                     ListType = InventoryListType.Equipment,
@@ -473,7 +463,9 @@ namespace DfoServer.Game.Inventory
                     ItemUid = 0,
                     SealFlag = 0,
                     EquipmentLockId = entry.EquipmentLockId,
-                    CommonItem = common,
+                    StackCount = item != null ? unchecked((int)item.Value) : 0,
+                    InstanceValue = item != null ? unchecked((int)item.Value) : 0,
+                    Durability = item != null ? item.Durability : (ushort)0,
                     EquippedEntry = entry,
                 };
             }
@@ -487,11 +479,12 @@ namespace DfoServer.Game.Inventory
                     SlotIndex = SlotIndex,
                     ItemTemplateId = ItemTemplateId,
                     ItemKind = "equipment",
-                    StackCount = CommonItem != null ? CommonItem.CountOrInstanceValue : 0,
-                    InstanceValue = CommonItem != null ? CommonItem.CountOrInstanceValue : 0,
-                    Durability = CommonItem != null ? CommonItem.Durability : (ushort)0,
+                    StackCount = StackCount,
+                    InstanceValue = InstanceValue,
+                    Durability = Durability,
                     SealFlag = SealFlag,
                     EquipmentLockId = EquipmentLockId,
+                    ExtraJson = ExtraJson,
                 };
             }
         }

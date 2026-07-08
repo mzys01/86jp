@@ -14,9 +14,15 @@ namespace DfoServer.Game.ExpertJob
 
         public EnchantByBeadCommand Command { get; set; }
 
-        public CommonInventoryItem TargetItem { get; set; }
+        public InventoryListType TargetListType { get; set; }
 
-        public CommonInventoryItem BeadItem { get; set; }
+        public short TargetSlotIndex { get; set; }
+
+        public InventoryListType BeadListType { get; set; }
+
+        public short BeadSlotIndex { get; set; }
+
+        public int BeadRemainingStackCount { get; set; }
 
         public int EnchantCardItemId { get; set; }
 
@@ -29,14 +35,17 @@ namespace DfoServer.Game.ExpertJob
             };
         }
 
-        public static EnchantByBeadResult Ok(EnchantByBeadCommand command, CommonInventoryItem targetItem, CommonInventoryItem beadItem, int enchantCardItemId)
+        public static EnchantByBeadResult Ok(EnchantByBeadCommand command, int beadRemainingStackCount, int enchantCardItemId)
         {
             return new EnchantByBeadResult
             {
                 Success = true,
                 Command = command,
-                TargetItem = targetItem,
-                BeadItem = beadItem,
+                TargetListType = command.TargetListType,
+                TargetSlotIndex = command.TargetSlotIndex,
+                BeadListType = command.BeadListType,
+                BeadSlotIndex = command.BeadSlotIndex,
+                BeadRemainingStackCount = beadRemainingStackCount,
                 EnchantCardItemId = enchantCardItemId,
             };
         }

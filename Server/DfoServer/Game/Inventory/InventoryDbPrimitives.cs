@@ -424,22 +424,32 @@ VALUES (
             }
         }
 
-        internal void InsertCommonItem(SqliteConnection connection, SqliteTransaction transaction, int characterId, InventoryListType listType, CommonInventoryItem item)
+        internal void InsertCharacterItemRecord(SqliteConnection connection, SqliteTransaction transaction, int characterId, SqliteInventoryStore.ItemRecord item)
         {
-            InsertCharacterItem(connection, transaction, characterId, listType, item.SlotIndex, item.ItemTemplateId, InventoryItemCodec.InferCommonItemKind(item), item.CountOrInstanceValue, item.CountOrInstanceValue, item.Durability, item.SealFlag, 0, item.ExpireTime, item.Marker16, 0, InventoryItemCodec.SerializeCommon(item), item.EquipmentLockId);
+            if (item == null)
+                throw new ArgumentNullException(nameof(item));
+
+            InsertCharacterItem(
+                connection,
+                transaction,
+                characterId,
+                item.ListType,
+                item.SlotIndex,
+                item.ItemTemplateId,
+                item.ItemKind,
+                item.StackCount,
+                item.InstanceValue,
+                item.Durability,
+                item.SealFlag,
+                item.OptionValue,
+                item.ExpireTime,
+                item.Marker16,
+                item.PetSerialOrHandle,
+                item.ExtraJson,
+                item.EquipmentLockId);
         }
 
-        internal void InsertAvatarItem(SqliteConnection connection, SqliteTransaction transaction, int characterId, AvatarInventoryItem item)
-        {
-            InsertCharacterItem(connection, transaction, characterId, InventoryListType.Avatar, item.SlotIndex, item.AvatarItemId, "avatar", 0, 0, 0, 0, item.OptionValue, 0, item.UnknownFixed30, 0, InventoryItemCodec.SerializeAvatar(item));
-        }
-
-        internal void InsertPetItem(SqliteConnection connection, SqliteTransaction transaction, int characterId, PetInventoryItem item)
-        {
-            InsertCharacterItem(connection, transaction, characterId, InventoryListType.Pet, item.SlotIndex, item.CreatureItemId, "pet", 0, 0, 0, 0, 0, 0, 0, item.CreatureSerialOrHandle, InventoryItemCodec.SerializePet(item));
-        }
-
-        internal void InsertAccountCargoItem(SqliteConnection connection, SqliteTransaction transaction, int accountId, CommonInventoryItem item)
+        internal void InsertAccountCargoItem(SqliteConnection connection, SqliteTransaction transaction, int accountId, short slotIndex, int templateId, string itemKind, int stackCount, int instanceValue, ushort durability, byte sealFlag, byte optionValue, int expireTime, int marker16, string extraJson)
         {
             using (var command = connection.CreateCommand())
             {
@@ -454,17 +464,17 @@ VALUES (
     @stackCount, @instanceValue, @durability, @sealFlag, @optionValue, @expireTime, @marker16,
     @extraJson);";
                 command.Parameters.AddWithValue("@accountId", accountId);
-                command.Parameters.AddWithValue("@slotIndex", item.SlotIndex);
-                command.Parameters.AddWithValue("@templateId", item.ItemTemplateId);
-                command.Parameters.AddWithValue("@itemKind", InventoryItemCodec.InferCommonItemKind(item));
-                command.Parameters.AddWithValue("@stackCount", item.CountOrInstanceValue);
-                command.Parameters.AddWithValue("@instanceValue", item.CountOrInstanceValue);
-                command.Parameters.AddWithValue("@durability", item.Durability);
-                command.Parameters.AddWithValue("@sealFlag", item.SealFlag);
-                command.Parameters.AddWithValue("@optionValue", 0);
-                command.Parameters.AddWithValue("@expireTime", item.ExpireTime);
-                command.Parameters.AddWithValue("@marker16", item.Marker16);
-                command.Parameters.AddWithValue("@extraJson", InventoryItemCodec.SerializeCommon(item));
+                command.Parameters.AddWithValue("@slotIndex", slotIndex);
+                command.Parameters.AddWithValue("@templateId", templateId);
+                command.Parameters.AddWithValue("@itemKind", itemKind);
+                command.Parameters.AddWithValue("@stackCount", stackCount);
+                command.Parameters.AddWithValue("@instanceValue", instanceValue);
+                command.Parameters.AddWithValue("@durability", durability);
+                command.Parameters.AddWithValue("@sealFlag", sealFlag);
+                command.Parameters.AddWithValue("@optionValue", optionValue);
+                command.Parameters.AddWithValue("@expireTime", expireTime);
+                command.Parameters.AddWithValue("@marker16", marker16);
+                command.Parameters.AddWithValue("@extraJson", string.IsNullOrWhiteSpace(extraJson) ? "{}" : extraJson);
                 command.ExecuteNonQuery();
             }
         }
@@ -532,32 +542,21 @@ WHERE account_id = @accountId AND slot_index = @slotIndex;";
 
         internal void InsertAccountCargoItemRecord(SqliteConnection connection, SqliteTransaction transaction, int accountId, SqliteInventoryStore.ItemRecord source, short destSlot, int stackCount)
         {
-            using (var command = connection.CreateCommand())
-            {
-                command.Transaction = transaction;
-                command.CommandText = @"
-INSERT OR REPLACE INTO account_cargo_items (
-    account_id, slot_index, item_template_id, item_kind,
-    stack_count, instance_value, durability, seal_flag, option_value, expire_time, marker_16,
-    extra_json)
-VALUES (
-    @accountId, @slotIndex, @templateId, @itemKind,
-    @stackCount, @instanceValue, @durability, @sealFlag, @optionValue, @expireTime, @marker16,
-    @extraJson);";
-                command.Parameters.AddWithValue("@accountId", accountId);
-                command.Parameters.AddWithValue("@slotIndex", destSlot);
-                command.Parameters.AddWithValue("@templateId", source.ItemTemplateId);
-                command.Parameters.AddWithValue("@itemKind", source.ItemKind);
-                command.Parameters.AddWithValue("@stackCount", stackCount);
-                command.Parameters.AddWithValue("@instanceValue", LoadStackableItem(source.ItemTemplateId) != null ? stackCount : source.InstanceValue);
-                command.Parameters.AddWithValue("@durability", source.Durability);
-                command.Parameters.AddWithValue("@sealFlag", source.SealFlag);
-                command.Parameters.AddWithValue("@optionValue", source.OptionValue);
-                command.Parameters.AddWithValue("@expireTime", source.ExpireTime);
-                command.Parameters.AddWithValue("@marker16", source.Marker16);
-                command.Parameters.AddWithValue("@extraJson", source.ExtraJson ?? "{}");
-                command.ExecuteNonQuery();
-            }
+            InsertAccountCargoItem(
+                connection,
+                transaction,
+                accountId,
+                destSlot,
+                source.ItemTemplateId,
+                source.ItemKind,
+                stackCount,
+                LoadStackableItem(source.ItemTemplateId) != null ? stackCount : source.InstanceValue,
+                source.Durability,
+                source.SealFlag,
+                source.OptionValue,
+                source.ExpireTime,
+                source.Marker16,
+                source.ExtraJson);
         }
 
         internal void MoveItemFromAccountCargo(SqliteConnection connection, SqliteTransaction transaction, int characterId, SqliteInventoryStore.ItemRecord source, InventoryListType destList, short destSlot)
@@ -645,11 +644,6 @@ WHERE item_uid = @itemUid;";
             }
         }
 
-        internal void UpdateCommonExtraJson(SqliteConnection connection, SqliteTransaction transaction, long itemUid, CommonInventoryItem item)
-        {
-            UpdateItemExtraJson(connection, transaction, itemUid, InventoryItemCodec.SerializeCommon(item));
-        }
-
         internal void UpdateItemExtraJson(SqliteConnection connection, SqliteTransaction transaction, long itemUid, string extraJson)
         {
             using (var command = connection.CreateCommand())
@@ -661,26 +655,6 @@ SET extra_json = @extraJson,
     updated_at = CURRENT_TIMESTAMP
 WHERE item_uid = @itemUid;";
                 command.Parameters.AddWithValue("@extraJson", string.IsNullOrWhiteSpace(extraJson) ? "{}" : extraJson);
-                command.Parameters.AddWithValue("@itemUid", itemUid);
-                command.ExecuteNonQuery();
-            }
-        }
-
-        internal void UpdateAvatarExtraJson(SqliteConnection connection, SqliteTransaction transaction, long itemUid, AvatarInventoryItem item)
-        {
-            using (var command = connection.CreateCommand())
-            {
-                command.Transaction = transaction;
-                command.CommandText = @"
-UPDATE character_items
-SET extra_json = @extraJson,
-    option_value = @optionValue,
-    marker_16 = @marker16,
-    updated_at = CURRENT_TIMESTAMP
-WHERE item_uid = @itemUid;";
-                command.Parameters.AddWithValue("@extraJson", InventoryItemCodec.SerializeAvatar(item));
-                command.Parameters.AddWithValue("@optionValue", (int)item.OptionValue);
-                command.Parameters.AddWithValue("@marker16", item.UnknownFixed30);
                 command.Parameters.AddWithValue("@itemUid", itemUid);
                 command.ExecuteNonQuery();
             }
@@ -954,9 +928,7 @@ WHERE character_id = @characterId AND list_type = @listType;";
             var extraJson = "{}";
             if (insertListType == InventoryListType.Avatar)
             {
-                var avatarItem = SqliteInventoryStore.CreateDefaultAvatarItem((short)targetSlot, itemTemplateId, 0);
-                optionValue = avatarItem.OptionValue;
-                extraJson = InventoryItemCodec.SerializeAvatar(avatarItem);
+                extraJson = SqliteInventoryStore.CreateDefaultAvatarExtraJson();
             }
 
             var sealFlag = metadata.IsSealed ? (byte)1 : (byte)0;

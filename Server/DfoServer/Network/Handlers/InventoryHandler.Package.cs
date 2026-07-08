@@ -980,7 +980,7 @@ namespace DfoServer.Network.Handlers
             }
 
             if (!_inventoryStore.TryCompoundAvatarSet(cid, aid, consumeSlots, consumeSlotItemIds, ResolveNewItemId, (byte)option,
-                    consumeStackableSlot, out int newSlot, out var oldItemIds, out int newItemId, out int consumedTemplateId, out int consumedRemaining))
+                    consumeStackableSlot, out int newSlot, out _, out int newItemId, out _, out _))
             {
                 var err = new GamePacketWriter();
                 err.WriteByte(0x00);
@@ -1004,17 +1004,6 @@ namespace DfoServer.Network.Handlers
             var respBody2 = w2.ToArray();
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x03EA, respBody2));
 
-            if (consumedTemplateId > 0)
-            {
-                var consumeItem = new CommonInventoryItem
-                {
-                    SlotIndex = consumeStackableSlot,
-                    ItemTemplateId = consumedRemaining > 0 ? consumedTemplateId : -1,
-                    CountOrInstanceValue = consumedRemaining,
-                };
-                var consumeUpd = ItemListUpdateBuilder.BuildCommonUpdates(new List<CommonInventoryItem> { consumeItem });
-                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000E, consumeUpd));
-            }
         }
     }
 }

@@ -1032,24 +1032,23 @@ namespace DfoServer.Game.Inventory
             var durability = (isAvatar || usesPetInventory) ? (ushort)0 : metadata.Durability;
             if (isAvatar)
             {
-                var avatarItem = SqliteInventoryStore.CreateDefaultAvatarItem((short)targetSlot, itemTemplateId, (byte)attributeValue);
                 _db.InsertCharacterItem(
                     connection,
                     transaction,
                     characterId,
                     insertListType,
-                    avatarItem.SlotIndex,
-                    avatarItem.AvatarItemId,
+                    (short)targetSlot,
+                    itemTemplateId,
                     insertKind,
                     0,
                     0,
                     durability,
                     0,
-                    avatarItem.OptionValue,
+                    (byte)attributeValue,
                     expireTime,
-                    avatarItem.UnknownFixed30,
+                    SqliteInventoryStore.DefaultAvatarUnknownFixed30,
                     0,
-                    InventoryItemCodec.SerializeAvatar(avatarItem));
+                    SqliteInventoryStore.CreateDefaultAvatarExtraJson());
             }
             else
             {
