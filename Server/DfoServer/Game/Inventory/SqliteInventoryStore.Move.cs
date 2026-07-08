@@ -430,11 +430,7 @@ ORDER BY sort_order;";
                 if (dbListType == InventoryListType.AccountCargo)
                     return _db.LoadAccountCargoCommonItem(connection, transaction, accountId, slotIndex);
 
-                return ApplySeriaLuckValueToCommonItem(
-                    connection,
-                    transaction,
-                    accountId,
-                    _db.LoadCommonItem(connection, transaction, characterId, dbListType, slotIndex));
+                return _db.LoadCommonItem(connection, transaction, characterId, dbListType, slotIndex);
             }
         }
 

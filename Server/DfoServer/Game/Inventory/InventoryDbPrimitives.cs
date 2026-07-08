@@ -11,46 +11,6 @@ namespace DfoServer.Game.Inventory
 {
     internal sealed class InventoryDbPrimitives
     {
-        internal const int SeriaLuckValueMax = 8;
-
-        internal int LoadSeriaLuckValue(SqliteConnection connection, SqliteTransaction transaction, int accountId)
-        {
-            using (var command = connection.CreateCommand())
-            {
-                command.Transaction = transaction;
-                command.CommandText = @"
-SELECT seria_luck_value
-FROM accounts
-WHERE account_id = @accountId;";
-                command.Parameters.AddWithValue("@accountId", accountId);
-                var raw = command.ExecuteScalar();
-                return NormalizeSeriaLuckValue(raw == null || raw == DBNull.Value ? 0 : Convert.ToInt32(raw));
-            }
-        }
-
-        internal void UpdateSeriaLuckValue(SqliteConnection connection, SqliteTransaction transaction, int accountId, int value)
-        {
-            using (var command = connection.CreateCommand())
-            {
-                command.Transaction = transaction;
-                command.CommandText = @"
-UPDATE accounts
-SET seria_luck_value = @value
-WHERE account_id = @accountId;";
-                command.Parameters.AddWithValue("@accountId", accountId);
-                command.Parameters.AddWithValue("@value", NormalizeSeriaLuckValue(value));
-                command.ExecuteNonQuery();
-            }
-        }
-
-        internal static int NormalizeSeriaLuckValue(int value)
-        {
-            if (value < 0)
-                return 0;
-            if (value > SeriaLuckValueMax)
-                return SeriaLuckValueMax;
-            return value;
-        }
         // ── Query ──────────────────────────────────────────────
 
         internal int FindEmptySlot(SqliteConnection connection, SqliteTransaction transaction, int characterId, InventoryListType listType, int slotStart = 0, int slotEnd = -1)

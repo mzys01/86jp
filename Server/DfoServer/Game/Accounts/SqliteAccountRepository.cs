@@ -10,6 +10,8 @@ namespace DfoServer.Game.Accounts
 {
     public sealed class SqliteAccountRepository : IAccountRepository
     {
+        internal const int SeriaLuckValueMax = 8;
+
         private readonly string _connectionString;
 
         public SqliteAccountRepository(string databasePath, string schemaFilePath)
@@ -80,6 +82,45 @@ namespace DfoServer.Game.Accounts
                 cmd.Parameters.AddWithValue("@id", accountId);
                 cmd.ExecuteNonQuery();
             }
+        }
+
+        internal static int LoadSeriaLuckValue(SqliteConnection connection, SqliteTransaction transaction, int accountId)
+        {
+            using (var command = connection.CreateCommand())
+            {
+                command.Transaction = transaction;
+                command.CommandText = @"
+SELECT seria_luck_value
+FROM accounts
+WHERE account_id = @accountId;";
+                command.Parameters.AddWithValue("@accountId", accountId);
+                var raw = command.ExecuteScalar();
+                return NormalizeSeriaLuckValue(raw == null || raw == DBNull.Value ? 0 : Convert.ToInt32(raw));
+            }
+        }
+
+        internal static void UpdateSeriaLuckValue(SqliteConnection connection, SqliteTransaction transaction, int accountId, int value)
+        {
+            using (var command = connection.CreateCommand())
+            {
+                command.Transaction = transaction;
+                command.CommandText = @"
+UPDATE accounts
+SET seria_luck_value = @value
+WHERE account_id = @accountId;";
+                command.Parameters.AddWithValue("@accountId", accountId);
+                command.Parameters.AddWithValue("@value", NormalizeSeriaLuckValue(value));
+                command.ExecuteNonQuery();
+            }
+        }
+
+        internal static int NormalizeSeriaLuckValue(int value)
+        {
+            if (value < 0)
+                return 0;
+            if (value > SeriaLuckValueMax)
+                return SeriaLuckValueMax;
+            return value;
         }
 
         private static AccountRecord Map(IDataRecord r)

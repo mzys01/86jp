@@ -1,3 +1,4 @@
+using DfoServer.Game.Accounts;
 using DfoServer.Infrastructure;
 using System;
 using System.Collections.Generic;
@@ -12,8 +13,6 @@ namespace DfoServer.Game.Inventory
         private const int MagicHammerBoxItemTemplateId = 10007368;
         private const int MagicHammerBundleMinItemTemplateId = 10007472;
         private const int MagicHammerBundleMaxItemTemplateId = 10007477;
-        private const int SeriaLuckItemTemplateId = 2682272;
-
         private readonly InventoryDbPrimitives _db;
         private readonly InventoryAuditLogger _auditLogger;
 
@@ -366,9 +365,9 @@ namespace DfoServer.Game.Inventory
                 return false;
             }
 
-            var isSeriaLuckValueSource = source.ItemTemplateId == SeriaLuckItemTemplateId;
+            var isSeriaLuckValueSource = source.ItemTemplateId == SeriaLuckItemConstants.ItemTemplateId;
             var seriaLuckValueBefore = isSeriaLuckValueSource
-                ? _db.LoadSeriaLuckValue(connection, transaction, accountId)
+                ? SqliteAccountRepository.LoadSeriaLuckValue(connection, transaction, accountId)
                 : 0;
             var seriaLuckValue = seriaLuckValueBefore;
             var displayRewardEntries = new List<PvfLib.BoosterRewardEntry>();
@@ -397,14 +396,14 @@ namespace DfoServer.Game.Inventory
                 if (!isSeriaLuckValueSource)
                     continue;
 
-                if (seriaLuckValue >= InventoryDbPrimitives.SeriaLuckValueMax)
+                if (seriaLuckValue >= SqliteAccountRepository.SeriaLuckValueMax)
                 {
                     AddRewardEntries(doubleRewardEntries, validRewards);
                     AddRewardEntries(rewardsToGrant, validRewards);
                     seriaLuckValue = 0;
                 }
 
-                seriaLuckValue = Math.Min(InventoryDbPrimitives.SeriaLuckValueMax, seriaLuckValue + 1);
+                seriaLuckValue = Math.Min(SqliteAccountRepository.SeriaLuckValueMax, seriaLuckValue + 1);
             }
 
             if (!TryConsumeStackableCount(connection, transaction, source, requestedCount))
@@ -426,7 +425,7 @@ namespace DfoServer.Game.Inventory
                 IsSeriaLuckValueSource = isSeriaLuckValueSource,
                 SeriaLuckValueBefore = seriaLuckValueBefore,
                 SeriaLuckValueAfter = isSeriaLuckValueSource ? seriaLuckValue : 0,
-                SeriaLuckValueMax = InventoryDbPrimitives.SeriaLuckValueMax,
+                SeriaLuckValueMax = SqliteAccountRepository.SeriaLuckValueMax,
                 SeriaLuckDoubleTriggered = doubleRewardEntries.Count > 0,
             };
             AddDisplayRewards(useResult.DisplayRewards, displayRewardEntries);
@@ -441,7 +440,7 @@ namespace DfoServer.Game.Inventory
             }
 
             if (isSeriaLuckValueSource)
-                _db.UpdateSeriaLuckValue(connection, transaction, accountId, seriaLuckValue);
+                SqliteAccountRepository.UpdateSeriaLuckValue(connection, transaction, accountId, seriaLuckValue);
 
             _auditLogger.WriteDeleteAuditLog(connection, transaction, characterId, source, requestedCount);
             if (material != null && material.ItemUid != source.ItemUid)

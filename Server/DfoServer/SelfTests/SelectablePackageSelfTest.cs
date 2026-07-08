@@ -1,3 +1,4 @@
+using DfoServer.Game.Accounts;
 using DfoServer.Game.Inventory;
 using DfoServer.Infrastructure;
 using DfoServer.Network.Builders;
@@ -40,10 +41,8 @@ namespace DfoServer.SelfTests
         private const int MagicBoxItemTemplateId = 10007368;
         private const int MagicHammerItemTemplateId = 10007367;
         private const int InstantTeleportPotionItemTemplateId = 2600014;
-        private const int SeriaLuckItemTemplateId = 2682272;
         private const int MagicBoxBatchCount = 100;
         private const int SeriaLuckBatchCount = 10;
-        private const int SeriaLuckValueMax = 8;
         private const int SeriaLuckValueAfterTenOpenFromZero = 2;
         private const int SeriaLuckValueAfterTenThenSingle = 3;
         private const int MagicBoxBatchRewardRowSize = 31;
@@ -450,7 +449,7 @@ namespace DfoServer.SelfTests
                 Check("parse captured 0x03F3 Seria luck request", MagicBoxOpenRequest.TryParse(CapturedSeriaLuckOpenRequestBody, out var seriaLuckRequest));
                 if (seriaLuckRequest != null)
                 {
-                    Check($"Seria luck request item={seriaLuckRequest.ItemTemplateId}", seriaLuckRequest.ItemTemplateId == SeriaLuckItemTemplateId);
+                    Check($"Seria luck request item={seriaLuckRequest.ItemTemplateId}", seriaLuckRequest.ItemTemplateId == SeriaLuckItemConstants.ItemTemplateId);
                     Check($"Seria luck request material slot={seriaLuckRequest.MaterialSlotIndex}", seriaLuckRequest.MaterialSlotIndex == -1);
                     Check($"Seria luck request count={seriaLuckRequest.RequestedCount}", seriaLuckRequest.RequestedCount == SeriaLuckBatchCount);
                     Check($"Seria luck request client type={seriaLuckRequest.RawListType}", seriaLuckRequest.RawListType == 4);
@@ -542,7 +541,7 @@ namespace DfoServer.SelfTests
                     Check("magic-box grants at least one reward", magicBoxResult.Rewards.Count > 0);
                     Check("magic-box keeps one popup reward row per resolved draw", magicBoxResult.DisplayRewards.Count >= magicBoxResult.Rewards.Count);
                     Check($"magic-box grants instant teleport potions", magicBoxResult.Rewards.Find(x => x.ItemTemplateId == InstantTeleportPotionItemTemplateId)?.GrantedCount == MagicBoxBatchCount * 2);
-                    Check($"magic-box grants Seria luck boxes", magicBoxResult.Rewards.Find(x => x.ItemTemplateId == SeriaLuckItemTemplateId)?.GrantedCount == MagicBoxBatchCount);
+                    Check($"magic-box grants Seria luck boxes", magicBoxResult.Rewards.Find(x => x.ItemTemplateId == SeriaLuckItemConstants.ItemTemplateId)?.GrantedCount == MagicBoxBatchCount);
                     Check("0x03F3 non-Seria magic-box does not use native ACK before client layout is known",
                         !InventoryHandler.ShouldUseNativeMagicBoxBatchAck(magicBoxResult));
                     Check("0x03F3 non-Seria magic-box legacy popup uses aggregated reward rows",
@@ -557,9 +556,8 @@ namespace DfoServer.SelfTests
                     Check("snapshot material-tab magic hammer consumed", snapshot.MainItems.Find(x => x.SlotIndex == requestMaterialSlot) == null);
                     Check($"wrong-tab magic hammer still ignored", snapshot.MainItems.Find(x => x.SlotIndex == WrongMagicHammerSlot)?.CountOrInstanceValue == 1);
                     Check($"snapshot instant teleport potion count", snapshot.MainItems.Find(x => x.ItemTemplateId == InstantTeleportPotionItemTemplateId)?.CountOrInstanceValue == MagicBoxBatchCount * 2);
-                    var seriaLuckItem = snapshot.MainItems.Find(x => x.ItemTemplateId == SeriaLuckItemTemplateId);
+                    var seriaLuckItem = snapshot.MainItems.Find(x => x.ItemTemplateId == SeriaLuckItemConstants.ItemTemplateId);
                     Check($"snapshot Seria luck count", seriaLuckItem?.CountOrInstanceValue == MagicBoxBatchCount);
-                    Check("snapshot Seria luck ext_data1 starts at zero", seriaLuckItem?.ExtData0 == 0);
                     if (seriaLuckItem != null)
                         seriaLuckSlot = seriaLuckItem.SlotIndex;
                 }
@@ -623,9 +621,6 @@ namespace DfoServer.SelfTests
                         var snapshot = store.LoadCharacterItemListSnapshot(CharacterId, AccountId);
                         var refreshedSeriaLuck = snapshot.MainItems.Find(x => x.SlotIndex == seriaLuckSlot);
                         Check($"snapshot Seria luck remaining count", refreshedSeriaLuck?.CountOrInstanceValue == MagicBoxBatchCount - SeriaLuckBatchCount);
-                        Check("snapshot Seria luck ext_data1 after ten-open", refreshedSeriaLuck?.ExtData0 == SeriaLuckValueAfterTenOpenFromZero);
-                        Check("single-item refresh Seria luck ext_data1 after ten-open",
-                            store.LoadCommonItemForRefresh(CharacterId, AccountId, InventoryListType.Main, seriaLuckSlot)?.ExtData0 == SeriaLuckValueAfterTenOpenFromZero);
                     }
 
                     if (seriaLuckSingleRequest != null)
@@ -669,10 +664,9 @@ namespace DfoServer.SelfTests
                             var snapshot = store.LoadCharacterItemListSnapshot(CharacterId, AccountId);
                             var refreshedSeriaLuck = snapshot.MainItems.Find(x => x.SlotIndex == seriaLuckSlot);
                             Check($"snapshot Seria luck remaining after single count", refreshedSeriaLuck?.CountOrInstanceValue == MagicBoxBatchCount - SeriaLuckBatchCount - 1);
-                            Check("snapshot Seria luck ext_data1 after single-open", refreshedSeriaLuck?.ExtData0 == SeriaLuckValueAfterTenThenSingle);
                         }
 
-                        SetSeriaLuckValue(tempDb, SeriaLuckValueMax);
+                        SetSeriaLuckValue(tempDb, SqliteAccountRepository.SeriaLuckValueMax);
                         BoosterUseResult seriaLuckDoubleResult = null;
                         Check("open full-value Seria luck single succeeds",
                             store.TryUseBoosterItem(CharacterId, AccountId, new BoosterUseRequest
@@ -689,7 +683,7 @@ namespace DfoServer.SelfTests
                             seriaLuckDoubleResult.MagicBoxClientType = seriaLuckSingleRequest.RawListType;
                             var fullValueAck = MagicBoxOpenAckBuilder.BuildSingle(seriaLuckDoubleResult);
                             var fullValueListCount = fullValueAck.Length >= 9 ? BitConverter.ToUInt16(fullValueAck, 7) : 0;
-                            Check("full-value Seria luck single sees max value before open", seriaLuckDoubleResult.SeriaLuckValueBefore == SeriaLuckValueMax);
+                            Check("full-value Seria luck single sees max value before open", seriaLuckDoubleResult.SeriaLuckValueBefore == SqliteAccountRepository.SeriaLuckValueMax);
                             Check("full-value Seria luck single triggers double reward", seriaLuckDoubleResult.SeriaLuckDoubleTriggered && seriaLuckDoubleResult.DoubleRewards.Count > 0);
                             Check("full-value Seria luck single restarts value after double reward", seriaLuckDoubleResult.SeriaLuckValueAfter == 1);
                             Check("full-value Seria luck single persists restarted value", LoadSeriaLuckValue(tempDb) == 1);
@@ -701,11 +695,6 @@ namespace DfoServer.SelfTests
                                 fullValueListCount == seriaLuckDoubleResult.Rewards.Count);
                         }
 
-                        {
-                            var snapshot = store.LoadCharacterItemListSnapshot(CharacterId, AccountId);
-                            Check("snapshot Seria luck ext_data1 after full-value single",
-                                snapshot.MainItems.Find(x => x.SlotIndex == seriaLuckSlot)?.ExtData0 == 1);
-                        }
                     }
                 }
 
@@ -873,7 +862,7 @@ VALUES
         private static int FindTimedSeriaLuckRewardId(out int usablePeriod)
         {
             usablePeriod = 0;
-            var seriaLuck = InventoryDbPrimitives.LoadStackableItem(SeriaLuckItemTemplateId);
+            var seriaLuck = InventoryDbPrimitives.LoadStackableItem(SeriaLuckItemConstants.ItemTemplateId);
             if (seriaLuck == null)
                 return 0;
 
@@ -907,7 +896,7 @@ VALUES
         private static int FindSeriaLuckQuickslotStackRewardId(out int rewardCount)
         {
             rewardCount = 1;
-            var seriaLuck = InventoryDbPrimitives.LoadStackableItem(SeriaLuckItemTemplateId);
+            var seriaLuck = InventoryDbPrimitives.LoadStackableItem(SeriaLuckItemConstants.ItemTemplateId);
             if (seriaLuck == null)
                 return 0;
 
@@ -1073,22 +1062,17 @@ WHERE character_id=@characterId AND list_type=0 AND slot_index=@slotIndex;";
             using (var connection = new SqliteConnection(SqliteDatabaseBootstrap.BuildConnectionString(databasePath)))
             {
                 connection.Open();
-                using (var command = connection.CreateCommand())
-                {
-                    command.CommandText = @"
-UPDATE accounts
-SET seria_luck_value=@value
-WHERE account_id=@accountId;";
-                    command.Parameters.AddWithValue("@accountId", AccountId);
-                    command.Parameters.AddWithValue("@value", value);
-                    command.ExecuteNonQuery();
-                }
+                SqliteAccountRepository.UpdateSeriaLuckValue(connection, null, AccountId, value);
             }
         }
 
         private static int LoadSeriaLuckValue(string databasePath)
         {
-            return LoadAccountInteger(databasePath, "seria_luck_value");
+            using (var connection = new SqliteConnection(SqliteDatabaseBootstrap.BuildConnectionString(databasePath)))
+            {
+                connection.Open();
+                return SqliteAccountRepository.LoadSeriaLuckValue(connection, null, AccountId);
+            }
         }
 
         private static int LoadLuckyStar(string databasePath)

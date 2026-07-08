@@ -6,7 +6,6 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
-using System.Linq;
 using System.Text;
 using System.Threading;
 using Microsoft.Data.Sqlite;
@@ -18,7 +17,6 @@ namespace DfoServer.Game.Inventory
         internal const int DefaultAvatarUnknownFixed30 = 0x00001E00;
         internal const ushort DefaultAvatarUnknownFixed4 = 0x0400;
         internal const ushort DefaultPersonalCargoCapacity = 8;
-        private const int SeriaLuckItemTemplateId = 2682272;
         internal static readonly object StackableItemCacheLock = new object();
         internal static readonly Dictionary<int, PvfLib.StackableItemFile> StackableItemCache = new Dictionary<int, PvfLib.StackableItemFile>();
 
@@ -213,31 +211,8 @@ ORDER BY slot_index;";
                     }
                 }
 
-                ApplySeriaLuckValueToCommonItems(connection, null, accountId, snapshot.MainItems);
                 return snapshot;
             }
-        }
-
-        private void ApplySeriaLuckValueToCommonItems(SqliteConnection connection, SqliteTransaction transaction, int accountId, IEnumerable<CommonInventoryItem> items)
-        {
-            if (items == null)
-                return;
-
-            var matchingItems = items.Where(item => item.ItemTemplateId == SeriaLuckItemTemplateId).ToList();
-            if (matchingItems.Count == 0)
-                return;
-
-            var value = (byte)_db.LoadSeriaLuckValue(connection, transaction, accountId);
-            foreach (var item in matchingItems)
-                item.ExtData0 = value;
-        }
-
-        private CommonInventoryItem ApplySeriaLuckValueToCommonItem(SqliteConnection connection, SqliteTransaction transaction, int accountId, CommonInventoryItem item)
-        {
-            if (item != null && item.ItemTemplateId == SeriaLuckItemTemplateId)
-                item.ExtData0 = (byte)_db.LoadSeriaLuckValue(connection, transaction, accountId);
-
-            return item;
         }
 
         public int DeleteExpiredRentalEquipment(int characterId, int accountId)
