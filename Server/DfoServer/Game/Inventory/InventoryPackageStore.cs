@@ -469,10 +469,10 @@ namespace DfoServer.Game.Inventory
 
             foreach (var reward in AggregateRewards(rewardsToGrant))
             {
-                if (!_db.TryAddBoosterRewardItem(connection, transaction, characterId, accountId, reward.ItemId, reward.Count, out var rewardResult))
+                if (!_db.TryAddBoosterRewardItems(connection, transaction, characterId, accountId, reward.ItemId, reward.Count, out var rewardResults))
                     return false;
 
-                useResult.Rewards.Add(rewardResult);
+                useResult.Rewards.AddRange(rewardResults);
             }
 
             if (isSeriaLuckValueSource)
@@ -552,10 +552,10 @@ namespace DfoServer.Game.Inventory
 
             foreach (var reward in rewards)
             {
-                if (!_db.TryAddBoosterRewardItem(connection, transaction, characterId, accountId, reward.ItemId, reward.Count, out var rewardResult))
+                if (!_db.TryAddBoosterRewardItems(connection, transaction, characterId, accountId, reward.ItemId, reward.Count, out var rewardResults))
                     return false;
 
-                useResult.Rewards.Add(rewardResult);
+                useResult.Rewards.AddRange(rewardResults);
             }
 
             _auditLogger.WriteDeleteAuditLog(connection, transaction, characterId, source, 1);

@@ -833,13 +833,14 @@ namespace DfoServer.Game.Inventory
                 {
                     foreach (var reward in autoOpenRewards)
                     {
-                        if (!_db.TryAddBoosterRewardItem(connection, transaction, characterId, accountId, reward.ItemId, reward.Count, out var rewardResult))
+                        if (!_db.TryAddBoosterRewardItems(connection, transaction, characterId, accountId, reward.ItemId, reward.Count, out var rewardResults))
                         {
                             FileLogger.Log($"  [CeraShopBuy] auto-open failed source=0x{itemTemplateId:X8} reward=0x{reward.ItemId:X8} count={reward.Count}");
                             return false;
                         }
 
-                        openedResults.Add(ToInventoryMutationResult(rewardResult));
+                        foreach (var rewardResult in rewardResults)
+                            openedResults.Add(ToInventoryMutationResult(rewardResult));
                     }
                 }
 
