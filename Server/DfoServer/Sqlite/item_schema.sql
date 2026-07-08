@@ -528,7 +528,8 @@ CREATE TABLE IF NOT EXISTS character_subtype0_fields (
     return_user_flag INTEGER NOT NULL DEFAULT 1,        -- +73 u8 (sub_1FAC210; 默认1=旧builder新角色基线)
     channel_display_mode INTEGER NOT NULL DEFAULT 0,    -- +74 u16
     channel_type INTEGER NOT NULL DEFAULT 0,            -- +76 u8
-    channel_id INTEGER NOT NULL DEFAULT 2,              -- +77 u16 (<1000=普通频道)
+    channel_id INTEGER NOT NULL DEFAULT 2,              -- legacy field, no longer serialized into subtype0 +77
+    mood_value INTEGER NOT NULL DEFAULT 0,              -- +77 u16 mood popup default; 0=normal
     is_return_user INTEGER NOT NULL DEFAULT 0,          -- +80 u8
     link_slot_enabled INTEGER NOT NULL DEFAULT 0,       -- +81 u8
     link_type_a INTEGER NOT NULL DEFAULT 0,             -- +82 u8 (sub_F50410)

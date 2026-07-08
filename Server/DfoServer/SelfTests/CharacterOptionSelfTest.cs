@@ -69,6 +69,26 @@ namespace DfoServer.SelfTests
                 Check("0x0187 builder succeeds", built);
                 Check("0x0187 builder returns exact saved body", ByteEquals(builtBody, optionBody));
 
+                Check("fresh character mood popup defaults to normal",
+                    snapshot.CharacterRecord.Subtype0Tail != null
+                    && snapshot.CharacterRecord.Subtype0Tail.MoodValue == 0
+                    && snapshot.CharacterRecord.Subtype0Tail.EmotionIndex == 0
+                    && snapshot.CharacterRecord.Subtype0Tail.ActionByte == 0);
+
+                stateRepo.SaveEmotionIndex(CharacterId, 6);
+                var snapshotWithEmotion = dataSource.Load(CharacterId, AccountId);
+                Check("change emotion persists to subtype0 tail",
+                    snapshotWithEmotion.CharacterRecord.Subtype0Tail != null
+                    && snapshotWithEmotion.CharacterRecord.Subtype0Tail.EmotionIndex == 6);
+                Check("change emotion mirrors mood_value popup source field",
+                    snapshotWithEmotion.CharacterRecord.Subtype0Tail != null
+                    && snapshotWithEmotion.CharacterRecord.Subtype0Tail.MoodValue == 6);
+                Check("change emotion mirrors action byte for client final field",
+                    snapshotWithEmotion.CharacterRecord.Subtype0Tail != null
+                    && snapshotWithEmotion.CharacterRecord.Subtype0Tail.ActionByte == 6);
+                Check("change emotion leaves legacy channel_id untouched",
+                    ReadLegacyChannelId(tempDb) == 2);
+
                 var mainOption = CopyBytes(AccountSettings.DefaultMainGameOption);
                 mainOption[36] = 0x05;
                 var accountSettingsRepo = new AccountSettingsRepository(tempDb, ServerPaths.SchemaFilePath);
@@ -235,6 +255,21 @@ VALUES (@cid);";
                     cmd.Parameters.AddWithValue("@aid", AccountId);
                     cmd.Parameters.AddWithValue("@cid", CharacterId);
                     cmd.ExecuteNonQuery();
+                }
+            }
+        }
+
+        private static int ReadLegacyChannelId(string databasePath)
+        {
+            var connectionString = SqliteDatabaseBootstrap.Initialize(databasePath, ServerPaths.SchemaFilePath);
+            using (var conn = new SqliteConnection(connectionString))
+            {
+                conn.Open();
+                using (var cmd = conn.CreateCommand())
+                {
+                    cmd.CommandText = "SELECT channel_id FROM character_subtype0_fields WHERE character_id = @cid";
+                    cmd.Parameters.AddWithValue("@cid", CharacterId);
+                    return Convert.ToInt32(cmd.ExecuteScalar());
                 }
             }
         }

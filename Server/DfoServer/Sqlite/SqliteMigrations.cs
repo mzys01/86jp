@@ -152,6 +152,11 @@ CREATE TABLE IF NOT EXISTS character_dark_knight_combo_skill_pages (
     PRIMARY KEY (character_id, page_index),
     FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
 );")),
+
+            (18, "character_subtype0_fields mood_value", conn => SqliteSchemaMigrator.EnsureColumns(conn, "character_subtype0_fields", new[]
+            {
+                ("mood_value", "INTEGER NOT NULL DEFAULT 0"),
+            })),
         };
 
         private static void ExecuteBatch(SqliteConnection connection, string sql)

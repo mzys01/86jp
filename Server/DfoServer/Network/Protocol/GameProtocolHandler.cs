@@ -322,6 +322,7 @@ namespace DfoServer.Network
             d[0x00C5] = (s, h, b) => { _settingsHandler.Handle_SAVE_GAME_OPTION_1(s, h, b); return Task.CompletedTask; };
             d[0x00C6] = (s, h, b) => { _settingsHandler.Handle_SAVE_GAME_OPTION_2(s, h, b); return Task.CompletedTask; };
             d[0x0170] = (s, h, b) => { _settingsHandler.Handle_SAVE_QUICKCHAT(s, h, b); return Task.CompletedTask; };
+            d[0x00FE] = _settingsHandler.Handle_CHANGE_EMOTION;
             d[0x01C0] = (s, h, b) => { _settingsHandler.Handle_SAVE_CHARACTER_OPTION(s, h, b); return Task.CompletedTask; };
         }
 

@@ -54,6 +54,7 @@ namespace DfoServer.Game.SelectCharacter
         public ushort ChannelDisplayMode { get; set; }       
         public byte ChannelType { get; set; }                
         public ushort ChannelId { get; set; } = 2;           
+        public ushort MoodValue { get; set; }
         public byte SkillTreeIndex { get; set; }             
         public byte IsReturnUser { get; set; }               
         public byte LinkSlotEnabled { get; set; }            
@@ -122,7 +123,7 @@ namespace DfoServer.Game.SelectCharacter
                 ReturnUserFlag = t[73],
                 ChannelDisplayMode = BitConverter.ToUInt16(t, 74),
                 ChannelType = t[76],
-                ChannelId = BitConverter.ToUInt16(t, 77),
+                MoodValue = BitConverter.ToUInt16(t, 77),
                 SkillTreeIndex = t[79],
                 IsReturnUser = t[80],
                 LinkSlotEnabled = t[81],
