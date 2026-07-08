@@ -48,19 +48,17 @@ namespace DfoServer.Network.Handlers
             // 购物车: 逐件结算, 每个 commodityNo 买 1 份(份内数量由商品定义)
             var results = new System.Collections.Generic.List<InventoryMutationResult>();
             var successItems = new System.Collections.Generic.List<System.Tuple<int, InventoryMutationResult>>();
-            var boughtExpertContract = false;
-            var boughtDevilContract = false;
-            var premiumNotifications = new List<(int premiumType, long remaining)>();
+            var contractItems = new List<(int itemTemplateId, int count)>();
             for (int idx = 0; idx < request.CommodityNos.Count; idx++)
             {
                 var commodityNo = request.CommodityNos[idx];
                 var attrValue = idx < request.AttributeValues.Count ? request.AttributeValues[idx] : (byte)0;
 
-                if (Game.Premium.PremiumService.TryBuyDevilContractSlot(aid, commodityNo, out var dcResult))
+                var (dcOk, dcResult) = await Game.Premium.PremiumService.TryBuyDevilContractSlot(session, commodityNo, _sqliteSelectCharacterDataSource);
+                if (dcOk)
                 {
                     successItems.Add(System.Tuple.Create(commodityNo, dcResult));
                     results.Add(dcResult);
-                    boughtDevilContract = true;
                     continue;
                 }
 
@@ -69,11 +67,8 @@ namespace DfoServer.Network.Handlers
                     FileLogger.Log($"[{ProtocolName}] CERA_SHOP_BUY: OK commodityNo={commodityNo} slot={result.SlotIndex} item=0x{result.ItemTemplateId:X8} count={result.AppliedCount} coin={result.UpdatedCoin} extra={result.ExtraResults.Count}");
                     results.Add(result);
                     successItems.Add(System.Tuple.Create(commodityNo, result));
-                    if (result.ItemTemplateId == 44 || result.ItemTemplateId == 45)
-                        boughtExpertContract = true;
-                    var activated = Game.Premium.PremiumService.TryActivateContract(aid, result.ItemTemplateId);
-                    if (activated != null)
-                        premiumNotifications.Add(activated.Value);
+                    if (Game.Premium.PremiumService.IsContractItem(result.ItemTemplateId))
+                        contractItems.Add((result.ItemTemplateId, 1));
                 }
                 else
                 {
@@ -196,61 +191,11 @@ namespace DfoServer.Network.Handlers
                 FileLogger.Log($"[{ProtocolName}] CERA_SHOP_BUY: name tag appearance refresh sent");
             }
 
-            foreach (var pn in premiumNotifications)
-            {
-                var nw = new GamePacketWriter();
-                nw.WriteUInt16(2);
-                nw.WriteByte((byte)pn.premiumType);
-                nw.WriteBytes(BitConverter.GetBytes(pn.remaining));
-                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0042, nw.ToArray()));
-                FileLogger.Log($"[{ProtocolName}] CERA_SHOP_BUY: premium notify type={pn.premiumType} remaining={pn.remaining}");
-            }
-
-            if (boughtExpertContract || boughtDevilContract)
-                await SendPremiumServiceRefresh(session, cid, aid);
-
-            if (boughtDevilContract)
-            {
-                var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-                var maxExpire = Game.Premium.PremiumService.LoadDevilContractMaxExpire(
-                    Infrastructure.SqliteDatabaseBootstrap.Initialize(
-                        Infrastructure.ServerPaths.DatabasePath, Infrastructure.ServerPaths.SchemaFilePath),
-                    aid);
-                if (maxExpire > now)
-                {
-                    var nw = new GamePacketWriter();
-                    nw.WriteUInt16(2);
-                    nw.WriteByte((byte)Game.Premium.DevilContractCatalog.ActivationPremiumType);
-                    nw.WriteBytes(BitConverter.GetBytes(maxExpire - now));
-                    await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0042, nw.ToArray()));
-                    FileLogger.Log($"[{ProtocolName}] CERA_SHOP_BUY: devil contract notify type=58 remaining={maxExpire - now}");
-                }
-            }
+            if (contractItems.Count > 0)
+                await Game.Premium.PremiumService.ActivateAndNotify(session, contractItems, _sqliteSelectCharacterDataSource);
 
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0035,
                 CeraUpdateBuilder.Build(last.UpdatedCoin, last.UpdatedTokenCera, last.UpdatedHappyTokenCera)));
-        }
-
-        private async Task SendPremiumServiceRefresh(EnhancedClientSession session, int characterId, int accountId)
-        {
-            try
-            {
-                var snapshot = _sqliteSelectCharacterDataSource.Load(characterId, accountId);
-                var initSnap = snapshot?.InitializationSnapshot;
-                if (initSnap?.PremiumServiceData == null)
-                    return;
-
-                var writer = new GamePacketWriter();
-                writer.WriteByte(1);
-                writer.WriteUInt16(initSnap.PremiumServiceType);
-                writer.WriteBytes(initSnap.PremiumServiceData);
-                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0312, writer.ToArray()));
-                FileLogger.Log($"[{ProtocolName}] CERA_SHOP_BUY: premium service refresh sent char={characterId} account={accountId}");
-            }
-            catch (Exception ex)
-            {
-                FileLogger.Log($"[{ProtocolName}] CERA_SHOP_BUY: premium service refresh failed: {ex.Message}");
-            }
         }
 
         private async Task SendAvatarItemListUpdate(EnhancedClientSession session, int characterId, int accountId, IReadOnlyCollection<short> slots)

@@ -1,37 +1,129 @@
 using DfoServer.Game.Currency;
 using DfoServer.Game.Inventory;
+using DfoServer.Game.SelectCharacter;
 using DfoServer.Network;
+using DfoServer.Network.Builders;
 using Microsoft.Data.Sqlite;
 using System;
+using System.Collections.Generic;
+using System.Threading.Tasks;
 
 namespace DfoServer.Game.Premium
 {
     public static class PremiumService
     {
-        public static (int premiumType, long remaining)? TryActivateContract(int accountId, int itemTemplateId)
+        public static bool IsContractItem(int itemTemplateId)
         {
-            if (!PremiumCatalog.Load().TryGetValue(itemTemplateId, out var premiumType, out var durationDays))
-                return null;
-            if (premiumType <= 0 || durationDays <= 0)
-                return null;
-
-            var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-            var duration = (long)durationDays * 86400;
-            var connStr = Infrastructure.SqliteDatabaseBootstrap.Initialize(
-                Infrastructure.ServerPaths.DatabasePath, Infrastructure.ServerPaths.SchemaFilePath);
-
-            var newExpire = UpsertPremiumExpire(connStr, accountId, premiumType, now, duration);
-            var remaining = newExpire - now;
-            FileLogger.Log($"[PremiumService] Contract activated: account={accountId} type={premiumType} days={durationDays} remaining={remaining} item=0x{itemTemplateId:X8}");
-            return (premiumType, remaining);
+            return PremiumCatalog.Load().TryGetValue(itemTemplateId, out var pt, out var dd)
+                && pt > 0 && dd > 0;
         }
 
-        public static bool TryBuyDevilContractSlot(int accountId, int commodityNo, out InventoryMutationResult result)
+        public static async Task ActivateAndNotify(
+            EnhancedClientSession session,
+            IReadOnlyList<(int itemTemplateId, int count)> items,
+            ISelectCharacterDataSource dataSource = null)
         {
-            result = null;
+            if (session == null)
+                return;
+
+            var accountId = session.Account?.AccountId ?? 0;
+            if (accountId <= 0)
+                return;
+
+            var notifications = new List<(int premiumType, long remaining)>();
+            if (items != null && items.Count > 0)
+            {
+                var connStr = Infrastructure.SqliteDatabaseBootstrap.Initialize(
+                    Infrastructure.ServerPaths.DatabasePath, Infrastructure.ServerPaths.SchemaFilePath);
+
+                using (var conn = new SqliteConnection(connStr))
+                {
+                    conn.Open();
+                    using (var tx = conn.BeginTransaction())
+                    {
+                        var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+                        foreach (var (itemTemplateId, count) in items)
+                        {
+                            if (!PremiumCatalog.Load().TryGetValue(itemTemplateId, out var premiumType, out var durationDays))
+                                continue;
+                            if (premiumType <= 0 || durationDays <= 0)
+                                continue;
+
+                            var effectiveCount = Math.Max(1, count);
+                            var totalDuration = (long)durationDays * 86400 * effectiveCount;
+                            var newExpire = UpsertPremiumExpire(conn, tx, accountId, premiumType, now, totalDuration);
+                            var remaining = newExpire - now;
+                            notifications.Add((premiumType, remaining));
+                            FileLogger.Log($"[PremiumService] Contract activated: account={accountId} type={premiumType} days={durationDays}x{effectiveCount} remaining={remaining} item=0x{itemTemplateId:X8}");
+                        }
+
+                        tx.Commit();
+                    }
+                }
+            }
+
+            foreach (var (premiumType, remaining) in notifications)
+            {
+                var body = BuildCeraSpecialItemNotification(premiumType, remaining);
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0042, body));
+            }
+
+            await SendPremiumServiceRefresh(session, accountId, dataSource);
+        }
+
+        private static byte[] BuildCeraSpecialItemNotification(int premiumType, long remaining)
+        {
+            var writer = new GamePacketWriter();
+            writer.WriteUInt16(2);
+            writer.WriteByte((byte)premiumType);
+            writer.WriteBytes(BitConverter.GetBytes(remaining));
+            return writer.ToArray();
+        }
+
+        private static async Task SendPremiumServiceRefresh(
+            EnhancedClientSession session,
+            int accountId,
+            ISelectCharacterDataSource dataSource)
+        {
+            try
+            {
+                var source = dataSource ?? new SqliteSelectCharacterDataSource(
+                    Infrastructure.ServerPaths.DatabasePath,
+                    Infrastructure.ServerPaths.SchemaFilePath,
+                    null);
+
+                int cid = session.Player?.CharacterId ?? 0;
+                if (cid <= 0) return;
+
+                var snapshot = source.Load(cid, accountId);
+                var initSnap = snapshot?.InitializationSnapshot;
+                if (initSnap?.PremiumServiceData == null)
+                    return;
+
+                var writer = new GamePacketWriter();
+                writer.WriteByte(1);
+                writer.WriteUInt16(initSnap.PremiumServiceType);
+                writer.WriteBytes(initSnap.PremiumServiceData);
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0312, writer.ToArray()));
+            }
+            catch (Exception ex)
+            {
+                FileLogger.Log($"[PremiumService] premium service refresh failed: {ex.Message}");
+            }
+        }
+
+        public static async Task<(bool success, InventoryMutationResult result)> TryBuyDevilContractSlot(
+            EnhancedClientSession session,
+            int commodityNo,
+            ISelectCharacterDataSource dataSource = null)
+        {
+            var accountId = session?.Account?.AccountId ?? 0;
+            if (accountId <= 0)
+                return (false, null);
+
             var catalog = DevilContractCatalog.Load();
             if (!catalog.TryGetSlot(commodityNo, out var slotIndex, out var durationDays, out var ceraPrice))
-                return false;
+                return (false, null);
 
             var connStr = Infrastructure.SqliteDatabaseBootstrap.Initialize(
                 Infrastructure.ServerPaths.DatabasePath, Infrastructure.ServerPaths.SchemaFilePath);
@@ -40,6 +132,7 @@ namespace DfoServer.Game.Premium
             var premiumType = DevilContractCatalog.SlotToPremiumType(slotIndex);
 
             int updatedCera, tokenCera, happyTokenCera;
+            long remaining;
             using (var conn = new SqliteConnection(connStr))
             {
                 conn.Open();
@@ -53,30 +146,36 @@ namespace DfoServer.Game.Premium
                     if (val != null && val != DBNull.Value)
                         cid = Convert.ToInt32(val);
                 }
-                if (cid <= 0) return false;
+                if (cid <= 0) return (false, null);
 
-                // 读余额、条件扣减、写到期时间放同一事务; 旧版事务外读+绝对值覆写会与
-                // CeraShop 购物车里其他商品的扣费交错, 产生点券丢失更新。
                 using (var tx = conn.BeginTransaction())
                 {
                     var wallet = CurrencyService.LoadWallet(conn, tx, cid);
                     if (!CurrencyService.TrySpendCera(conn, tx, cid, ceraPrice))
                     {
                         FileLogger.Log($"[PremiumService] Devil slot {slotIndex} rejected: cera {wallet.Cera} < {ceraPrice}");
-                        return false;
+                        return (false, null);
                     }
                     updatedCera = wallet.Cera - ceraPrice;
                     tokenCera = wallet.TokenCera;
                     happyTokenCera = wallet.HappyTokenCera;
 
-                    UpsertPremiumExpire(conn, tx, accountId, premiumType, now, duration);
+                    var newExpire = UpsertPremiumExpire(conn, tx, accountId, premiumType, now, duration);
+                    remaining = newExpire - now;
                     tx.Commit();
                 }
 
                 FileLogger.Log($"[PremiumService] Devil slot {slotIndex} activated: account={accountId} days={durationDays} cera={updatedCera}");
             }
 
-            result = new InventoryMutationResult
+            if (session != null)
+            {
+                var body = BuildCeraSpecialItemNotification(premiumType, remaining);
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0042, body));
+                await SendPremiumServiceRefresh(session, accountId, dataSource);
+            }
+
+            var result = new InventoryMutationResult
             {
                 ConsumedOnPurchase = true,
                 UpdatedCoin = updatedCera,
@@ -85,7 +184,7 @@ namespace DfoServer.Game.Premium
                 RequestedCount = 1,
                 AppliedCount = 1,
             };
-            return true;
+            return (true, result);
         }
 
         public static byte[] BuildPremiumServiceData(string connStr, int accountId)
@@ -142,26 +241,6 @@ namespace DfoServer.Game.Premium
             }
         }
 
-        public static long LoadDevilContractMaxExpire(string connStr, int accountId)
-        {
-            long maxExpire = 0;
-            using (var conn = new SqliteConnection(connStr))
-            {
-                conn.Open();
-                using (var cmd = conn.CreateCommand())
-                {
-                    cmd.CommandText = "SELECT MAX(end_time) FROM account_premiums WHERE account_id=@aid AND premium_type>=@lo AND premium_type<@hi AND end_time>@now;";
-                    cmd.Parameters.AddWithValue("@aid", accountId);
-                    cmd.Parameters.AddWithValue("@lo", DevilContractCatalog.SlotPremiumTypeBase);
-                    cmd.Parameters.AddWithValue("@hi", DevilContractCatalog.SlotPremiumTypeBase + 8);
-                    cmd.Parameters.AddWithValue("@now", DateTimeOffset.UtcNow.ToUnixTimeSeconds());
-                    var val = cmd.ExecuteScalar();
-                    if (val != null && val != DBNull.Value)
-                        maxExpire = Convert.ToInt64(val);
-                }
-            }
-            return maxExpire;
-        }
 
         public static bool HasActivePremium(string connStr, int accountId, params int[] premiumTypes)
         {
