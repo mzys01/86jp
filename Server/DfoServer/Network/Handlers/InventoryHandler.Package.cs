@@ -471,7 +471,8 @@ namespace DfoServer.Network.Handlers
             if (requestType != 0x0218 || body == null || body.Length != 2)
                 return false;
 
-            if (body[0] != 0x00 || body[1] > 0x05)
+            // 00 FF 表示契约已开启但不选晶体，也必须覆盖旧选择。
+            if (body[0] != 0x00 || (body[1] > 0x05 && body[1] != 0xFF))
                 return false;
 
             crystalContractBody = new byte[] { body[0], body[1] };

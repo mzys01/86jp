@@ -65,9 +65,11 @@ namespace DfoServer.SelfTests
                     "0x0218 default cube body parses as crystal selection",
                     InventoryHandler.TryBuildCrystalContractBodyFromUpdateRequest(0x0218, new byte[] { 0x00, 0x00 }, out var defaultCrystalBody)
                         && ByteEquals(defaultCrystalBody, new byte[] { 0x00, 0x00 }));
+                var emptyBody = new byte[] { 0x00, 0xFF };
                 Check(
-                    "0x0218 cancel body is ignored",
-                    !InventoryHandler.TryBuildCrystalContractBodyFromUpdateRequest(0x0218, new byte[] { 0x00, 0xFF }, out _));
+                    "0x0218 empty cube body parses as crystal selection",
+                    InventoryHandler.TryBuildCrystalContractBodyFromUpdateRequest(0x0218, emptyBody, out var emptyCrystalBody)
+                        && ByteEquals(emptyCrystalBody, emptyBody));
                 Check(
                     "0x0218 little-endian slot body is not a crystal selection",
                     !InventoryHandler.TryBuildCrystalContractBodyFromUpdateRequest(0x0218, new byte[] { 0x05, 0x00 }, out _));
@@ -75,6 +77,17 @@ namespace DfoServer.SelfTests
                     "crystal selection saves 0x0300 init body",
                     dataSource.TrySaveCrystalContractSelection(CharacterId, crystalBody)
                         && ByteEquals(LoadInitBody(tempDb, CharacterId, 0x0300), selectBody));
+                Check(
+                    "empty crystal selection overwrites previous 0x0300 init body",
+                    dataSource.TrySaveCrystalContractSelection(CharacterId, emptyCrystalBody)
+                        && ByteEquals(LoadInitBody(tempDb, CharacterId, 0x0300), emptyBody));
+
+                snapshot = dataSource.Load(CharacterId, AccountId);
+                Check("select data source loads empty cube type", snapshot.InitializationSnapshot.CubeType == emptyBody[0]);
+                Check("select data source loads empty cube grade", snapshot.InitializationSnapshot.CubeGrade == emptyBody[1]);
+                Check("0x0300 builder returns empty cube body",
+                    builder.TryBuild(snapshot, 0, out builtBody)
+                        && ByteEquals(builtBody, emptyBody));
 
                 SeedCharacter(tempDb, SeedCharacterId);
                 var seededBody = new byte[] { 0x05, 0x00 };
