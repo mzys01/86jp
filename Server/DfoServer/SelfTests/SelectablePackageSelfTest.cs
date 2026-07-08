@@ -318,6 +318,41 @@ namespace DfoServer.SelfTests
                         x.SlotIndex != QuickConsumableSlot).Count == 0);
             }
 
+            var nonStackableSeriaLuckRewardId = FindNonStackableSeriaLuckRewardId();
+            Check("Seria luck PVF contains non-stackable reward", nonStackableSeriaLuckRewardId > 0);
+            if (nonStackableSeriaLuckRewardId > 0)
+            {
+                var beforeCount = CountCharacterItemsByTemplateId(tempDb, nonStackableSeriaLuckRewardId);
+                List<BoosterRewardResult> nonStackableRewardResults = null;
+                using (var connection = new SqliteConnection(SqliteDatabaseBootstrap.BuildConnectionString(tempDb)))
+                {
+                    connection.Open();
+                    using (var transaction = connection.BeginTransaction())
+                    {
+                        var db = new InventoryDbPrimitives();
+                        Check("add doubled non-stackable Seria luck reward succeeds",
+                            db.TryAddBoosterRewardItems(
+                                connection,
+                                transaction,
+                                CharacterId,
+                                AccountId,
+                                nonStackableSeriaLuckRewardId,
+                                2,
+                                out nonStackableRewardResults));
+                        transaction.Commit();
+                    }
+                }
+
+                var afterCount = CountCharacterItemsByTemplateId(tempDb, nonStackableSeriaLuckRewardId);
+                Check("doubled non-stackable Seria luck reward creates two item rows",
+                    afterCount - beforeCount == 2);
+                Check("doubled non-stackable Seria luck result exposes both refresh slots",
+                    nonStackableRewardResults != null &&
+                    nonStackableRewardResults.Count == 2 &&
+                    nonStackableRewardResults[0].SlotIndex != nonStackableRewardResults[1].SlotIndex &&
+                    nonStackableRewardResults.TrueForAll(x => x.GrantedCount == 1));
+            }
+
             var packageQuickslotReward = FindSelectablePackageQuickslotStackReward();
             Check("PVF contains selectable package no-expire quickslot consumable reward",
                 packageQuickslotReward.PackageItemTemplateId > 0 &&
@@ -988,6 +1023,39 @@ VALUES
             return 0;
         }
 
+        private static int FindNonStackableSeriaLuckRewardId()
+        {
+            var seriaLuck = InventoryDbPrimitives.LoadStackableItem(SeriaLuckItemConstants.ItemTemplateId);
+            if (seriaLuck == null)
+                return 0;
+
+            var pools = new[]
+            {
+                seriaLuck.RandomBoxRewards,
+                seriaLuck.BoosterRewards,
+                seriaLuck.PackageRewards,
+                seriaLuck.BoosterSelectionRewards,
+            };
+
+            foreach (var pool in pools)
+            {
+                foreach (var reward in pool)
+                {
+                    if (reward == null || reward.ItemId <= 0)
+                        continue;
+
+                    var metadata = ItemMetadataResolver.Resolve(reward.ItemId);
+                    if (metadata.IsStackable ||
+                        string.Equals(metadata.ItemKind, "special", StringComparison.Ordinal))
+                        continue;
+
+                    return reward.ItemId;
+                }
+            }
+
+            return 0;
+        }
+
         private static PackageQuickslotRewardSample FindSelectablePackageQuickslotStackReward()
         {
             var stackableList = LstFile.Parse(PvfArchiveAccessor.ReadText("stackable/stackable.lst"));
@@ -1108,6 +1176,24 @@ WHERE character_id=@characterId AND list_type=0 AND slot_index=@slotIndex;";
                 command.Parameters.AddWithValue("@slotIndex", slotIndex);
                 var value = command.ExecuteScalar();
                 return value == null || value == DBNull.Value ? -1 : Convert.ToInt32(value, CultureInfo.InvariantCulture);
+            }
+        }
+
+        private static int CountCharacterItemsByTemplateId(string databasePath, int itemTemplateId)
+        {
+            using (var connection = new SqliteConnection(SqliteDatabaseBootstrap.BuildConnectionString(databasePath)))
+            {
+                connection.Open();
+                using (var command = connection.CreateCommand())
+                {
+                    command.CommandText = @"
+SELECT COUNT(*)
+FROM character_items
+WHERE character_id=@characterId AND item_template_id=@itemTemplateId;";
+                    command.Parameters.AddWithValue("@characterId", CharacterId);
+                    command.Parameters.AddWithValue("@itemTemplateId", itemTemplateId);
+                    return Convert.ToInt32(command.ExecuteScalar(), CultureInfo.InvariantCulture);
+                }
             }
         }
 

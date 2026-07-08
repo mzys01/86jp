@@ -783,6 +783,34 @@ WHERE character_id = @characterId AND list_type = @listType;";
         internal bool TryAddBoosterRewardItem(SqliteConnection connection, SqliteTransaction transaction, int characterId, int accountId, int itemTemplateId, int stackCount, out BoosterRewardResult result)
         {
             result = null;
+            if (!TryAddBoosterRewardItems(connection, transaction, characterId, accountId, itemTemplateId, stackCount, out var results) ||
+                results.Count == 0)
+            {
+                return false;
+            }
+
+            result = results[0];
+            if (results.Count == 1)
+                return true;
+
+            var grantedCount = 0;
+            foreach (var item in results)
+                grantedCount += Math.Max(1, item.GrantedCount);
+
+            result = new BoosterRewardResult
+            {
+                ListType = results[0].ListType,
+                SlotIndex = results[0].SlotIndex,
+                ItemTemplateId = itemTemplateId,
+                StackCount = results[0].StackCount,
+                GrantedCount = grantedCount,
+            };
+            return true;
+        }
+
+        internal bool TryAddBoosterRewardItems(SqliteConnection connection, SqliteTransaction transaction, int characterId, int accountId, int itemTemplateId, int stackCount, out List<BoosterRewardResult> results)
+        {
+            results = new List<BoosterRewardResult>();
             var metadata = ItemMetadataResolver.Resolve(itemTemplateId);
             if (metadata.ItemKind == "special")
                 return false;
@@ -791,7 +819,7 @@ WHERE character_id = @characterId AND list_type = @listType;";
             {
                 var count = Math.Max(1, stackCount);
                 CurrencyService.AddCubeFragment(connection, transaction, accountId, itemTemplateId, count);
-                result = new BoosterRewardResult
+                var rewardResult = new BoosterRewardResult
                 {
                     ListType = InventoryListType.Main,
                     SlotIndex = (short)CurrencyService.GetCubeFragmentSlot(itemTemplateId),
@@ -799,6 +827,7 @@ WHERE character_id = @characterId AND list_type = @listType;";
                     StackCount = count,
                     GrantedCount = count,
                 };
+                results.Add(rewardResult);
                 return true;
             }
 
@@ -834,7 +863,6 @@ WHERE character_id = @characterId AND list_type = @listType;";
                 slotEnd = SqliteInventoryStore.PetInventorySlotEnd;
                 expireTime = 0;
                 marker16 = 0;
-                petSerial = NextPetSerialOrHandle(connection, transaction, characterId);
             }
             else if (isPetArtifactEquipment)
             {
@@ -897,68 +925,81 @@ WHERE character_id = @characterId AND list_type = @listType;";
                         UpdatePetStackCount(connection, transaction, existing.ItemUid, newStackCount);
                     else
                         UpdateStackCount(connection, transaction, existing.ItemUid, newStackCount);
-                    result = new BoosterRewardResult
+                    results.Add(new BoosterRewardResult
                     {
                         ListType = insertListType,
                         SlotIndex = existing.SlotIndex,
                         ItemTemplateId = itemTemplateId,
                         StackCount = newStackCount,
                         GrantedCount = effectiveCount,
-                    };
+                    });
                     return true;
                 }
             }
 
-            var targetSlot = FindEmptySlot(connection, transaction, characterId, insertListType, slotStart, slotEnd);
-            if (targetSlot < 0)
+            var insertRows = metadata.IsStackable && !isAvatarReward ? 1 : effectiveCount;
+            for (var rowIndex = 0; rowIndex < insertRows; rowIndex++)
             {
-                FileLogger.Log($"  [Booster] no empty slot item=0x{itemTemplateId:X8} list={insertListType} range={slotStart}-{slotEnd}");
-                return false;
+                var targetSlot = FindEmptySlot(connection, transaction, characterId, insertListType, slotStart, slotEnd);
+                if (targetSlot < 0)
+                {
+                    FileLogger.Log($"  [Booster] no empty slot item=0x{itemTemplateId:X8} list={insertListType} range={slotStart}-{slotEnd}");
+                    return false;
+                }
+
+                var petSerialForInsert = isCreature
+                    ? NextPetSerialOrHandle(connection, transaction, characterId)
+                    : petSerial;
+                var petNonStackable = isCreature || isPetArtifactEquipment;
+                var grantedCount = metadata.IsStackable && !isAvatarReward ? effectiveCount : 1;
+                var instanceValue = metadata.IsStackable && !isAvatarReward
+                    ? effectiveCount
+                    : insertListType == InventoryListType.Pet || insertListType == InventoryListType.Avatar
+                        ? 0
+                        : GenerateInstanceValue(itemTemplateId, targetSlot);
+                var storedStackCount = petNonStackable || insertListType == InventoryListType.Avatar
+                    ? 0
+                    : metadata.IsStackable && !isAvatarReward ? effectiveCount : instanceValue;
+                var durability = insertListType == InventoryListType.Pet || insertListType == InventoryListType.Avatar
+                    ? (ushort)0
+                    : metadata.Durability;
+                var optionValue = (byte)0;
+                var extraJson = "{}";
+                if (insertListType == InventoryListType.Avatar)
+                {
+                    extraJson = SqliteInventoryStore.CreateDefaultAvatarExtraJson();
+                }
+
+                var sealFlag = metadata.IsSealed ? (byte)1 : (byte)0;
+                InsertCharacterItem(
+                    connection,
+                    transaction,
+                    characterId,
+                    insertListType,
+                    (short)targetSlot,
+                    itemTemplateId,
+                    insertKind,
+                    storedStackCount,
+                    instanceValue,
+                    durability,
+                    sealFlag,
+                    optionValue,
+                    expireTime,
+                    marker16,
+                    petSerialForInsert,
+                    extraJson);
+
+                results.Add(new BoosterRewardResult
+                {
+                    ListType = insertListType,
+                    SlotIndex = (short)targetSlot,
+                    ItemTemplateId = itemTemplateId,
+                    StackCount = storedStackCount,
+                    GrantedCount = grantedCount,
+                });
             }
 
-            var petNonStackable = isCreature || isPetArtifactEquipment;
-            var instanceValue = metadata.IsStackable ? effectiveCount : insertListType == InventoryListType.Pet || insertListType == InventoryListType.Avatar ? 0 : GenerateInstanceValue(itemTemplateId, targetSlot);
-            var storedStackCount = petNonStackable || insertListType == InventoryListType.Avatar
-                ? 0
-                : metadata.IsStackable ? effectiveCount : instanceValue;
-            var durability = insertListType == InventoryListType.Pet || insertListType == InventoryListType.Avatar
-                ? (ushort)0
-                : metadata.Durability;
-            var optionValue = (byte)0;
-            var extraJson = "{}";
-            if (insertListType == InventoryListType.Avatar)
-            {
-                extraJson = SqliteInventoryStore.CreateDefaultAvatarExtraJson();
-            }
-
-            var sealFlag = metadata.IsSealed ? (byte)1 : (byte)0;
-            InsertCharacterItem(
-                connection,
-                transaction,
-                characterId,
-                insertListType,
-                (short)targetSlot,
-                itemTemplateId,
-                insertKind,
-                storedStackCount,
-                instanceValue,
-                durability,
-                sealFlag,
-                optionValue,
-                expireTime,
-                marker16,
-                petSerial,
-                extraJson);
-
-            result = new BoosterRewardResult
-            {
-                ListType = insertListType,
-                SlotIndex = (short)targetSlot,
-                ItemTemplateId = itemTemplateId,
-                StackCount = storedStackCount,
-                GrantedCount = effectiveCount,
-            };
-            return true;
+            return results.Count > 0;
         }
 
         private static bool IsQuickSlotConsumable(ItemMetadata metadata)
