@@ -1,5 +1,6 @@
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Inventory;
+using DfoServer.GameWorld;
 using DfoServer.Infrastructure;
 using DfoServer.Network.Builders;
 using DfoServer.Network.Builders.CeraShop;
@@ -49,6 +50,11 @@ namespace DfoServer.SelfTests
         private const int MagicBoxSingleRewardRowSize = 31;
         private const short QuickConsumableSlot = 3;
         private const int QuickConsumableInitialCount = 7;
+        private const short PackageQuickConsumableSlot = 4;
+        private const short PackageBagConsumableSlot = 90;
+        private const short StackableRewardPackageSlot = 72;
+        private const int PackageQuickConsumableInitialCount = 7;
+        private const int PackageBagConsumableInitialCount = 20;
         private const int SampleSelectedTitleRewardId = 400330051;
         private const int SampleCrossJobAuraRewardId = 112590011;
         private const int InvalidRewardItemTemplateId = 1;
@@ -310,6 +316,51 @@ namespace DfoServer.SelfTests
                     snapshot.MainItems.FindAll(x =>
                         x.ItemTemplateId == quickslotRewardId &&
                         x.SlotIndex != QuickConsumableSlot).Count == 0);
+            }
+
+            var packageQuickslotReward = FindSelectablePackageQuickslotStackReward();
+            Check("PVF contains selectable package no-expire quickslot consumable reward",
+                packageQuickslotReward.PackageItemTemplateId > 0 &&
+                packageQuickslotReward.RewardItemTemplateId > 0);
+            if (packageQuickslotReward.PackageItemTemplateId > 0 && packageQuickslotReward.RewardItemTemplateId > 0)
+            {
+                InsertStackableItem(tempDb, packageQuickslotReward.PackageItemTemplateId, StackableRewardPackageSlot, 1);
+                InsertStackableItem(tempDb, packageQuickslotReward.RewardItemTemplateId, PackageQuickConsumableSlot, PackageQuickConsumableInitialCount);
+                InsertStackableItem(tempDb, packageQuickslotReward.RewardItemTemplateId, PackageBagConsumableSlot, PackageBagConsumableInitialCount);
+
+                SelectablePackageOpenResult packageQuickslotResult = null;
+                Check("open selectable package quickslot consumable reward succeeds",
+                    store.TryOpenSelectablePackage(
+                        CharacterId,
+                        AccountId,
+                        new SelectablePackageOpenRequest
+                        {
+                            SlotIndex = StackableRewardPackageSlot,
+                            SelectedItemTemplateId = packageQuickslotReward.RewardItemTemplateId,
+                        },
+                        out packageQuickslotResult));
+
+                var snapshot = store.LoadCharacterItemListSnapshot(CharacterId, AccountId);
+                var quickslotItem = snapshot.MainItems.Find(x =>
+                    x.SlotIndex == PackageQuickConsumableSlot &&
+                    x.ItemTemplateId == packageQuickslotReward.RewardItemTemplateId);
+                var bagItem = snapshot.MainItems.Find(x =>
+                    x.SlotIndex == PackageBagConsumableSlot &&
+                    x.ItemTemplateId == packageQuickslotReward.RewardItemTemplateId);
+
+                Check("selectable package consumable reward prefers quick slot over larger bag stack",
+                    quickslotItem != null &&
+                    quickslotItem.CountOrInstanceValue == PackageQuickConsumableInitialCount + packageQuickslotReward.RewardCount);
+                Check("selectable package consumable reward leaves bag stack unchanged when quick slot has room",
+                    bagItem != null &&
+                    bagItem.CountOrInstanceValue == PackageBagConsumableInitialCount);
+                Check("selectable package granted result points to quick slot",
+                    packageQuickslotResult != null &&
+                    packageQuickslotResult.GrantedItems.Exists(x =>
+                        x.ListType == InventoryListType.Main &&
+                        x.SlotIndex == PackageQuickConsumableSlot &&
+                        x.ItemTemplateId == packageQuickslotReward.RewardItemTemplateId &&
+                        x.DisplayCount == packageQuickslotReward.RewardCount));
             }
 
             SelectablePackageOpenResult result = null;
@@ -935,6 +986,64 @@ VALUES
             }
 
             return 0;
+        }
+
+        private static PackageQuickslotRewardSample FindSelectablePackageQuickslotStackReward()
+        {
+            var stackableList = LstFile.Parse(PvfArchiveAccessor.ReadText("stackable/stackable.lst"));
+            foreach (var entry in stackableList.Entries)
+            {
+                SelectablePackageDefinition definition;
+                if (!SelectablePackageDefinitionResolver.TryResolve(entry.Id, out definition))
+                    continue;
+
+                foreach (var reward in definition.Rewards)
+                {
+                    if (reward == null || reward.ItemTemplateId <= 0)
+                        continue;
+
+                    var metadata = ItemMetadataResolver.Resolve(reward.ItemTemplateId);
+                    if (!IsQuickSlotConsumable(metadata))
+                        continue;
+
+                    if (reward.ExpireTime != 0)
+                        continue;
+
+                    var stackable = InventoryDbPrimitives.LoadStackableItem(reward.ItemTemplateId);
+                    if (stackable == null || stackable.UsablePeriod > 0)
+                        continue;
+
+                    var rewardCount = Math.Max(1, reward.Count);
+                    if (metadata.StackLimit > 0 &&
+                        (PackageQuickConsumableInitialCount + rewardCount > metadata.StackLimit ||
+                         PackageBagConsumableInitialCount + rewardCount > metadata.StackLimit))
+                        continue;
+
+                    return new PackageQuickslotRewardSample
+                    {
+                        PackageItemTemplateId = entry.Id,
+                        RewardItemTemplateId = reward.ItemTemplateId,
+                        RewardCount = rewardCount,
+                    };
+                }
+            }
+
+            return new PackageQuickslotRewardSample();
+        }
+
+        private static bool IsQuickSlotConsumable(ItemMetadata metadata)
+        {
+            return metadata != null &&
+                metadata.IsStackable &&
+                metadata.StackableType != null &&
+                metadata.StackableType.IndexOf("[waste]", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        private struct PackageQuickslotRewardSample
+        {
+            public int PackageItemTemplateId;
+            public int RewardItemTemplateId;
+            public int RewardCount;
         }
 
         private static void InsertLegacyNoExpireTimedReward(string databasePath, int itemTemplateId, short slotIndex)

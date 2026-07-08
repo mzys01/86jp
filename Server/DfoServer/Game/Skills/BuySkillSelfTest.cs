@@ -1,4 +1,5 @@
 using DfoServer.Game.CharacterData;
+using DfoServer.Game.Inventory;
 using DfoServer.Game.SelectCharacter;
 using DfoServer.Infrastructure;
 using DfoServer.Network.Builders;
@@ -144,13 +145,17 @@ namespace DfoServer.Game.Skills
             Check($"upgrade persisted slot={up64?.Slot ?? 255} level={up64?.Level ?? 0}",
                 up64 != null && up64.Slot == 3 && up64.Level == 2);
 
-            var refunded = RunBuy(repo, cid, new List<BuySkillEntry>
+            SeedStackableItem(tempDb, cid, 64, SkillResetConsumableService.ForgetRiverWaterItemTemplateId, 2);
+            var inventoryStore = new SqliteInventoryStore(tempDb, ServerPaths.SchemaFilePath);
+            var refunded = RunBuyWithRefundConsumable(inventoryStore, repo, cid, new List<BuySkillEntry>
             {
                 new BuySkillEntry { SkillIndex = 64, Level = 0, IsRefund = 1 }
             }, testLevel);
             Check("learned skill refund success", refunded != null && refunded.Success);
             Check($"learned skill refund remaining SP={refunded?.RemainSp ?? 0}, expected {afterFirst}",
                 refunded != null && refunded.RemainSp == afterFirst);
+            Check("learned skill refund consumes forget-river water",
+                inventoryStore.CountItem(cid, SkillResetConsumableService.ForgetRiverWaterItemTemplateId) == 1);
             var reloadAfterRefund = repo.LoadSkills(cid);
             var refunded64 = reloadAfterRefund.Pages.Count > 0 ? reloadAfterRefund.Pages[0].Entries.Find(x => x.SkillId == 64) : null;
             Check($"learned skill refund keeps slot={refunded64?.Slot ?? 255} level={refunded64?.Level ?? 0}",
@@ -193,10 +198,25 @@ namespace DfoServer.Game.Skills
             Check("SP-insufficient does not add skill64", notLearned == null);
             Check($"SP-insufficient keeps Tail1={reload3.Tail1}, expected 0", reload3.Tail1 == 0);
 
-            var reset = SkillStateService.ResetToInitial(repo, cid, 0, testLevel, 0, 0);
-            Check("reset removes learned skill64", reset.Skills.Pages[0].Entries.Find(x => x.SkillId == 64) == null);
-            Check($"reset remaining SP={reset.Points.RemainingSp}, expected total {reset.Points.TotalSp}",
-                reset.Points.RemainingSp == reset.Points.TotalSp);
+            string tempDb5 = Path.Combine(Path.GetTempPath(), "buyskill_refund_no_water_selftest.db");
+            DeleteSqliteFiles(tempDb5);
+            var repo5 = new SqliteCharacterProgressRepository(tempDb5, ServerPaths.SchemaFilePath);
+            EnsureTestCharacter(tempDb5, cid, testLevel);
+            var noWaterSeed = new SkillInfoSnapshot();
+            noWaterSeed.Pages.Add(new SkillInfoPageSnapshot { HeaderValue = (ushort)afterSecond });
+            noWaterSeed.Pages[0].Entries.Add(new SkillInfoEntrySnapshot { Slot = 3, SkillId = 64, Level = 2 });
+            noWaterSeed.Pages.Add(new SkillInfoPageSnapshot { HeaderValue = 0x2BF2 });
+            SeedSkillProgress(repo5, cid, noWaterSeed, testLevel, afterSecond);
+            var noWaterStore = new SqliteInventoryStore(tempDb5, ServerPaths.SchemaFilePath);
+            var noWaterRefund = RunBuyWithRefundConsumable(noWaterStore, repo5, cid, new List<BuySkillEntry>
+            {
+                new BuySkillEntry { SkillIndex = 64, Level = 0, IsRefund = 1 }
+            }, testLevel);
+            var noWaterReload = repo5.LoadSkills(cid);
+            var noWaterSkill64 = noWaterReload.Pages.Count > 0 ? noWaterReload.Pages[0].Entries.Find(x => x.SkillId == 64) : null;
+            Check("learned skill refund without forget-river water fails", noWaterRefund != null && !noWaterRefund.Success);
+            Check("learned skill refund without forget-river water keeps skill level",
+                noWaterSkill64 != null && noWaterSkill64.Level == 2);
 
             Console.WriteLine($"=== result: {_pass} PASS, {_fail} FAIL ===");
             return _fail == 0 ? 0 : 1;
@@ -212,6 +232,32 @@ namespace DfoServer.Game.Skills
             catch (Exception ex)
             {
                 Console.WriteLine("  BuySkillService exception: " + ex);
+                return null;
+            }
+        }
+
+        private static BuySkillResult RunBuyWithRefundConsumable(
+            IInventoryStore inventoryStore,
+            SqliteCharacterProgressRepository repo,
+            int cid,
+            List<BuySkillEntry> entries,
+            byte level)
+        {
+            try
+            {
+                return BuySkillService.ExecuteWithRefundConsumable(
+                    inventoryStore,
+                    repo,
+                    cid,
+                    1,
+                    0,
+                    0,
+                    entries,
+                    level: level);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("  BuySkillService refund consumable exception: " + ex);
                 return null;
             }
         }
@@ -341,6 +387,43 @@ WHERE character_id = @cid;";
                     cmd.Parameters.AddWithValue("@cid", characterId);
                     cmd.Parameters.AddWithValue("@level", (int)level);
                     cmd.ExecuteNonQuery();
+                }
+            }
+        }
+
+        private static void SeedStackableItem(string databasePath, int characterId, short slotIndex, int itemTemplateId, int stackCount)
+        {
+            using (var conn = new SqliteConnection(SqliteDatabaseBootstrap.BuildConnectionString(databasePath)))
+            {
+                conn.Open();
+                using (var delete = conn.CreateCommand())
+                {
+                    delete.CommandText = @"
+DELETE FROM character_items
+WHERE character_id = @cid
+  AND list_type = 0
+  AND slot_index = @slot;";
+                    delete.Parameters.AddWithValue("@cid", characterId);
+                    delete.Parameters.AddWithValue("@slot", slotIndex);
+                    delete.ExecuteNonQuery();
+                }
+
+                using (var insert = conn.CreateCommand())
+                {
+                    insert.CommandText = @"
+INSERT INTO character_items (
+    owner_scope, owner_id, character_id, list_type, slot_index, item_template_id, item_kind,
+    stack_count, instance_value, durability, seal_flag, option_value, expire_time, marker_16,
+    pet_serial_or_handle, extra_json)
+VALUES (
+    'character', @cid, @cid, 0, @slot, @itemId, 'stackable',
+    @count, @count, 0, 0, 0, 0, 0,
+    0, '{}');";
+                    insert.Parameters.AddWithValue("@cid", characterId);
+                    insert.Parameters.AddWithValue("@slot", slotIndex);
+                    insert.Parameters.AddWithValue("@itemId", itemTemplateId);
+                    insert.Parameters.AddWithValue("@count", stackCount);
+                    insert.ExecuteNonQuery();
                 }
             }
         }
