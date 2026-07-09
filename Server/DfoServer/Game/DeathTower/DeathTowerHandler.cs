@@ -7,16 +7,20 @@ namespace DfoServer.Game.DeathTower
 {
     public sealed class DeathTowerHandler
     {
-        public async Task<bool> TryHandleSelectDungeon(EnhancedClientSession session, int dungeonId)
+        public async Task<bool> TryHandleSelectDungeon(EnhancedClientSession session, int dungeonId, byte difficulty = 0)
         {
             var config = DeathTowerData.GetConfig(dungeonId);
             if (config == null)
                 return false;
 
-            var tower = new DeathTowerSession(config);
-            Network.Handlers.Dungeon.DungeonRunLifecycle.BeginTowerRun(session, dungeonId, tower);
+            var tower = new DeathTowerSession(config, DeathTowerRunMode.Formal);
+            Network.Handlers.Dungeon.DungeonRunLifecycle.BeginTowerRun(session, dungeonId, tower, difficulty);
 
-            FileLogger.Log($"[DeathTower] ENTER: cid={session.Player.CharacterId} dungeon={dungeonId} stages={config.TotalStages} basisLv={config.BasisLevel}");
+            FileLogger.Log($"[DeathTower] ENTER: cid={session.Player.CharacterId} dungeon={dungeonId} difficulty={difficulty} mode={tower.EntryMode} stages={config.TotalStages} basisLv={config.BasisLevel}");
+
+            var dungeonInfoBody = DeathTowerPacketBuilder.BuildFormalDungeonInfo(dungeonId, difficulty);
+            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x001C, dungeonInfoBody));
+            FileLogger.Log($"[DeathTower] SENT 0x001C DUNGEON_INFO(formal tower): bodyLen={dungeonInfoBody.Length}");
 
             // NOTI 142 DEATH_TOWER_INFO (8B)
             var infoBody = DeathTowerPacketBuilder.BuildTowerInfo(dungeonId, (ushort)config.TotalStages);
@@ -59,18 +63,18 @@ namespace DfoServer.Game.DeathTower
             return true;
         }
 
-        public Task HandleStageCommand(EnhancedClientSession session, GamePacketHeader header, byte[] body)
+        public async Task HandleStageCommand(EnhancedClientSession session, GamePacketHeader header, byte[] body)
         {
             var tower = session.Player.DeathTowerState;
             if (tower == null)
             {
                 FileLogger.Log($"[DeathTower] STAGE_CMD ignored: cid={session.Player?.CharacterId} not in tower");
-                return Task.CompletedTask;
+                return;
             }
             if (body == null || body.Length < 1)
             {
                 FileLogger.Log($"[DeathTower] STAGE_CMD ignored: body null or empty");
-                return Task.CompletedTask;
+                return;
             }
 
             var commandType = body[0];
@@ -83,14 +87,42 @@ namespace DfoServer.Game.DeathTower
                 case 2:
                     tower.SetCleared();
                     FileLogger.Log($"[DeathTower] STAGE_CMD(2) stage clear: cid={session.Player.CharacterId} stage={tower.CurrentStage}/{tower.EndStage} isLast={tower.IsLastStage}");
+                    if (TryResolveFormalStageClearMapId(tower, out var clearMapId))
+                    {
+                        if (session.GameSession?.QuestManager != null)
+                        {
+                            await session.GameSession.QuestManager.SyncClearMapQuestProgressAsync(0, clearMapId);
+                            FileLogger.Log($"[DeathTower] CLEAR_MAP_SYNC: cid={session.Player.CharacterId} stage={tower.CurrentStage} map={clearMapId}");
+                        }
+                        else
+                        {
+                            FileLogger.Log($"[DeathTower] CLEAR_MAP_SYNC skipped: cid={session.Player.CharacterId} stage={tower.CurrentStage} map={clearMapId} questManager=null");
+                        }
+                    }
+                    else
+                    {
+                        FileLogger.Log($"[DeathTower] CLEAR_MAP_SYNC skipped: cid={session.Player.CharacterId} stage={tower.CurrentStage} mode={tower.EntryMode} map={tower.GetCurrentMapId()}");
+                    }
                     if (tower.IsLastStage)
-                        return SendSettlement(session, tower);
+                    {
+                        await SendSettlement(session, tower);
+                        return;
+                    }
                     break;
                 default:
                     FileLogger.Log($"[DeathTower] STAGE_CMD unknown commandType={commandType}: cid={session.Player.CharacterId} bodyHex={BitConverter.ToString(body)}");
                     break;
             }
-            return Task.CompletedTask;
+        }
+
+        internal static bool TryResolveFormalStageClearMapId(DeathTowerSession tower, out int mapId)
+        {
+            mapId = 0;
+            if (tower == null || !tower.IsFormalRun)
+                return false;
+
+            mapId = tower.GetCurrentMapId();
+            return mapId > 0;
         }
 
         // 返城时清除塔状态(由生命周期统一清理路径调用; run 置换后本方法只负责日志与提前摘除)

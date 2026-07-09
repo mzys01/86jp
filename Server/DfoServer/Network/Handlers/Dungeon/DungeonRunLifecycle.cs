@@ -19,11 +19,11 @@ namespace DfoServer.Network.Handlers.Dungeon
         }
 
         // 进塔: 塔是一局副本的变体, 同样换新局(顺带丢弃上一局的全部残留状态)。
-        internal static void BeginTowerRun(EnhancedClientSession session, int dungeonId, Game.DeathTower.DeathTowerSession tower)
+        internal static void BeginTowerRun(EnhancedClientSession session, int dungeonId, Game.DeathTower.DeathTowerSession tower, byte difficulty = 0)
         {
             CancelAutoFlip(session);
 
-            session.Player.CurrentRun = new DungeonRun((short)dungeonId, 0);
+            session.Player.CurrentRun = new DungeonRun((short)dungeonId, difficulty);
             session.Player.CurrentRun.Tower = tower;
         }
 
