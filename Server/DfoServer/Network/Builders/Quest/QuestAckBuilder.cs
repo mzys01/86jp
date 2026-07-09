@@ -62,7 +62,7 @@ namespace DfoServer.Network.Builders
             {
                 w.WriteByte(ce.UpdateType);
                 w.WriteUInt16(ce.SlotIndex);
-                w.WriteUInt32(ce.RemainingCount);
+                w.WriteUInt32(ce.ConsumedCount);
             }
 
             w.WriteByte((byte)r.ChainType);

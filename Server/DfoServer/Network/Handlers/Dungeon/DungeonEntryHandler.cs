@@ -96,31 +96,21 @@ namespace DfoServer.Network.Handlers.Dungeon
                 FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] SELECT_DUNGEON: manual hell requested dungeon={req.DungeonId} enabled={run.HellMode}");
 
             HashSet<int> activeQuestIds = null;
-            HashSet<int> relatedQuestIds = null;
+            HashSet<int> clearedQuestIds = null;
             try
             {
                 var connStr = SqliteDatabaseBootstrap.Initialize(
                     ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
                 var quests = QuestService.LoadActiveQuests(connStr, session.Player.CharacterId);
                 if (quests.Count > 0)
-                {
                     activeQuestIds = new HashSet<int>(quests.ConvertAll(q => (int)q.QuestId));
-                    relatedQuestIds = new HashSet<int>();
-                    foreach (var quest in quests)
-                    {
-                        var preRequired = QuestData.GetPreRequiredQuests(quest.QuestId);
-                        foreach (var questId in preRequired)
-                        {
-                            if (questId > 0 && !activeQuestIds.Contains(questId))
-                                relatedQuestIds.Add(questId);
-                        }
-                    }
-                    if (relatedQuestIds.Count == 0)
-                        relatedQuestIds = null;
-                }
+                var clearedFlags = new Game.Quests.QuestRepository(connStr)
+                    .LoadClearedFlags(session.Player.CharacterId);
+                if (clearedFlags.Count > 0)
+                    clearedQuestIds = new HashSet<int>(clearedFlags.Keys);
             }
-            catch (Exception ex) { FileLogger.Log($"[DungeonHandler] SELECT_DUNGEON ERROR: active quest load failed, maze selection ignores quests: {ex.Message}"); }
-            var selection = DungeonData.SelectDungeonMaze(req.DungeonId, activeQuestIds, relatedQuestIds);
+            catch (Exception ex) { FileLogger.Log($"[DungeonHandler] SELECT_DUNGEON ERROR: quest load failed: {ex.Message}"); }
+            var selection = DungeonData.SelectDungeonMaze(req.DungeonId, req.Difficulty, activeQuestIds, clearedQuestIds);
             run.MazeIndex = selection.Index;
             run.MazeQuestConnected = selection.Maze.QuestConnection != null
                 && selection.Maze.QuestConnection.Length >= 2;

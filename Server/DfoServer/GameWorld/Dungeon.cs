@@ -381,10 +381,15 @@ namespace DfoServer.GameWorld
             return new[] { bossMap[pick * 2], bossMap[pick * 2 + 1] };
         }
 
+        // df_game_r CBattle_Field::GetAppropriateMaze — two-pass quest connection matching.
+        // Pass 1 (questType=0): match mazes where the quest is currently active (IsDoingQuest).
+        // Pass 2 (questType=1): match mazes where the quest is already cleared (isClearQuest).
+        // qc[0]=questType, qc[1]=questId, qc[2]=minDifficulty (-1 = no restriction).
         public static (MazeInfo Maze, int Index) SelectDungeonMaze(
             int dungeonId,
+            int difficulty = 0,
             ICollection<int> activeQuestIds = null,
-            ICollection<int> relatedQuestIds = null)
+            ICollection<int> clearedQuestIds = null)
         {
             var dgnlst = LoadLstFile(Path.Combine("dungeon", "dungeon.lst"));
             if (dgnlst == null)
@@ -395,16 +400,20 @@ namespace DfoServer.GameWorld
             if (dngFile.Mazes == null || dngFile.Mazes.Count == 0)
                 throw new Exception("未解析到迷宫信息");
 
-            var questMazeIndex = FindQuestConnectedMazeIndex(
-                dngFile.Mazes,
-                activeQuestIds,
-                relatedQuestIds,
-                out var matchedQuestId,
-                out var matchSource);
-            if (questMazeIndex >= 0)
+            var doingMatch = FindQuestConnectedMazeIndex(dngFile.Mazes, activeQuestIds, 0, difficulty);
+            if (doingMatch >= 0)
             {
-                FileLogger.Log($"[Dungeon] SelectMaze: dungeon={dungeonId} matched quest maze #{questMazeIndex} (questId={matchedQuestId} source={matchSource})");
-                return (dngFile.Mazes[questMazeIndex], questMazeIndex);
+                var qc = dngFile.Mazes[doingMatch].QuestConnection;
+                FileLogger.Log($"[Dungeon] SelectMaze: dungeon={dungeonId} matched quest maze #{doingMatch} (questId={qc[1]} type=doing)");
+                return (dngFile.Mazes[doingMatch], doingMatch);
+            }
+
+            var clearedMatch = FindQuestConnectedMazeIndex(dngFile.Mazes, clearedQuestIds, 1, difficulty);
+            if (clearedMatch >= 0)
+            {
+                var qc = dngFile.Mazes[clearedMatch].QuestConnection;
+                FileLogger.Log($"[Dungeon] SelectMaze: dungeon={dungeonId} matched quest maze #{clearedMatch} (questId={qc[1]} type=cleared)");
+                return (dngFile.Mazes[clearedMatch], clearedMatch);
             }
 
             var candidates = new List<(MazeInfo maze, int index)>();
@@ -441,57 +450,36 @@ namespace DfoServer.GameWorld
             }
         }
 
-        internal static int FindQuestConnectedMazeIndex(
-            IReadOnlyList<MazeInfo> mazes,
-            ICollection<int> primaryQuestIds,
-            ICollection<int> fallbackQuestIds,
-            out int matchedQuestId,
-            out string matchSource)
-        {
-            matchedQuestId = -1;
-            matchSource = string.Empty;
-
-            var primaryMatch = FindQuestConnectedMazeIndex(mazes, primaryQuestIds, out matchedQuestId);
-            if (primaryMatch >= 0)
-            {
-                matchSource = "active";
-                return primaryMatch;
-            }
-
-            var fallbackMatch = FindQuestConnectedMazeIndex(mazes, fallbackQuestIds, out matchedQuestId);
-            if (fallbackMatch >= 0)
-            {
-                matchSource = "related";
-                return fallbackMatch;
-            }
-
-            matchedQuestId = -1;
-            return -1;
-        }
-
+        // df_game_r CParty::CheckQuestConnection — match by questType and difficulty.
         private static int FindQuestConnectedMazeIndex(
             IReadOnlyList<MazeInfo> mazes,
             ICollection<int> questIds,
-            out int matchedQuestId)
+            int requiredQuestType,
+            int difficulty)
         {
-            matchedQuestId = -1;
             if (mazes == null || questIds == null || questIds.Count == 0)
                 return -1;
 
+            var candidates = new List<int>();
             for (int i = 0; i < mazes.Count; i++)
             {
                 var qc = mazes[i].QuestConnection;
                 if (qc == null || qc.Length < 2)
                     continue;
-
+                if (qc[0] != requiredQuestType)
+                    continue;
                 if (!questIds.Contains(qc[1]))
                     continue;
-
-                matchedQuestId = qc[1];
-                return i;
+                if (requiredQuestType == 0 && qc.Length >= 3 && qc[2] >= 0 && difficulty < qc[2])
+                    continue;
+                candidates.Add(i);
             }
 
-            return -1;
+            if (candidates.Count == 0)
+                return -1;
+            if (candidates.Count == 1)
+                return candidates[0];
+            return candidates[Infrastructure.ServerRandom.Next(candidates.Count)];
         }
 
         public static int[] GetLayeredMapIds(int dungeonId, int x, int y, int mazeIndex)

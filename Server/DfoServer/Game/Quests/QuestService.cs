@@ -446,7 +446,7 @@ namespace DfoServer.Game.Quests
                 short slot;
                 int remaining;
                 if (_assetService.TryRemoveItem(scope, eventItem.ItemId, eventItem.Count, out slot, out remaining))
-                    consumedEntries.Add(new ConsumedItemEntry { UpdateType = 0, SlotIndex = (ushort)slot, RemainingCount = (uint)remaining });
+                    consumedEntries.Add(new ConsumedItemEntry { UpdateType = 0, SlotIndex = (ushort)slot, ConsumedCount = (uint)eventItem.Count });
             }
         }
 
@@ -589,7 +589,7 @@ namespace DfoServer.Game.Quests
                         short slot;
                         int remaining;
                         if (_assetService.TryRemoveItem(scope, ci.ItemId, ci.Count, out slot, out remaining))
-                            consumedEntries.Add(new ConsumedItemEntry { UpdateType = 0, SlotIndex = (ushort)slot, RemainingCount = (uint)remaining });
+                            consumedEntries.Add(new ConsumedItemEntry { UpdateType = 0, SlotIndex = (ushort)slot, ConsumedCount = (uint)ci.Count });
                     }
                 }
 
@@ -602,7 +602,7 @@ namespace DfoServer.Game.Quests
                     short slot;
                     int remaining;
                     if (_assetService.TryRemoveItem(scope, si.ItemId, si.Count, out slot, out remaining))
-                        consumedEntries.Add(new ConsumedItemEntry { UpdateType = 0, SlotIndex = (ushort)slot, RemainingCount = (uint)remaining });
+                        consumedEntries.Add(new ConsumedItemEntry { UpdateType = 0, SlotIndex = (ushort)slot, ConsumedCount = (uint)si.Count });
                 }
 
                 ConsumeNonCarryForwardEventItems(

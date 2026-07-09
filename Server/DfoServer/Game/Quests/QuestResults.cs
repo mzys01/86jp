@@ -67,11 +67,12 @@ namespace DfoServer.Game.Quests
         public static QuestFinishResult Fail(byte errorCode) => new QuestFinishResult { ErrorCode = errorCode };
     }
 
+    // 客户端 CMDFUNC_FINISH_QUEST 对此字段做减法 (currentStack -= value)，必须填扣除量。
     public sealed class ConsumedItemEntry
     {
         public byte UpdateType;
         public ushort SlotIndex;
-        public uint RemainingCount;
+        public uint ConsumedCount;
     }
 
     public sealed class InsertedItemEntry

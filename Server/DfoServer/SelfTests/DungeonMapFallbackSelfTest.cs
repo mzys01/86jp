@@ -163,21 +163,6 @@ namespace DfoServer.SelfTests
                 lowercaseBossFallbackMapId == 77002 && reason.StartsWith("nearest coordinate map", StringComparison.Ordinal),
                 ref failures);
 
-            var mazes = new List<MazeInfo>
-            {
-                new MazeInfo { QuestConnection = null },
-                new MazeInfo { QuestConnection = new[] { 0, 1848, 1 } },
-            };
-            var mazeIndex = DungeonData.FindQuestConnectedMazeIndex(
-                mazes,
-                primaryQuestIds: new HashSet<int> { 1849 },
-                fallbackQuestIds: new HashSet<int> { 1848 },
-                matchedQuestId: out var matchedQuestId,
-                matchSource: out var matchSource);
-
-            Check("quest maze selection falls back to active quest prerequisites",
-                mazeIndex == 1 && matchedQuestId == 1848 && matchSource == "related",
-                ref failures);
 
             CheckSuitableLevelEligibility(ref failures);
 
