@@ -49,6 +49,9 @@ namespace PvfLib
         public RidableObjectScript RidableScript { get; set; }
         public List<ClearConditionEntry> ClearConditions { get; set; } = new List<ClearConditionEntry>();
 
+        public string BossMapSpecification { get; set; }
+        public string LayeredMapSpecification { get; set; }
+
         /// <summary>该 maze 块的所有 ScriptNode 子节点（可用于访问未类型化的字段）</summary>
         public List<ScriptNode> Nodes { get; set; } = new List<ScriptNode>();
     }
@@ -84,6 +87,192 @@ namespace PvfLib
         public int[] RecommendedLevel { get; set; }         // [min, max]
         public int LimitPartyCount { get; set; } = -1;
 
+        // 进本/经济
+        public int HellDungeon { get; set; } = -1;
+        public int EscapeHell { get; set; } = -1;
+        public int CoinLimit { get; set; } = -1;
+        public int HellCoinLimit { get; set; } = -1;
+        public int CharacterCoinLimit { get; set; } = -1;
+        public int PartyMemberCoinLimit { get; set; } = -1;
+        public int LimitInoutCount { get; set; } = -1;
+        public int LimitEscapeCharacter { get; set; } = -1;
+        public int GoldCardUse { get; set; } = -1;
+        public int JoinCostGold { get; set; } = -1;
+        public int GoldDropProb { get; set; } = -1;
+        public int Fatigue { get; set; } = -1;
+        public int FatigueResult { get; set; } = -1;
+        public int ProhibitPractice { get; set; } = -1;
+        public int SharedDifficultDungeonIndex { get; set; } = -1;
+        public int ImpossibleDungeonClassification { get; set; } = -1;
+        public int AiCharacterAppearRate { get; set; } = -1;
+        public int DummyAppearCount { get; set; } = -1;
+        public int PartyNumCheck { get; set; } = -1;
+        public int QuestNpcDungeon { get; set; } = -1;
+        public int HerosmodeEnable { get; set; } = -1;
+        public int HerosmodeRequiredQuest { get; set; } = -1;
+        public int EventDungeonDifficulty { get; set; } = -1;
+        public int EventDungeonCof { get; set; } = -1;
+        public int AdjustMobExpByLevel { get; set; } = -1;
+        public int BloodMaxRound { get; set; } = -1;
+        public int MobLevelCharacLevelReplaceFlag { get; set; } = -1;
+
+        // 塔
+        public int TowerOfDespair { get; set; } = -1;
+        public int TowerFpCubepiece { get; set; } = -1;
+        public int TowerLimitOfStackableItem { get; set; } = -1;
+        public int TowerMaxClearItemNum { get; set; } = -1;
+        public int TowerItemDrop { get; set; } = -1;
+        public int TowerRandomMapIndexes { get; set; } = -1;
+
+        // 战场/竞技
+        public int WarroomMapIndex { get; set; } = -1;
+        public int MaxMonster { get; set; } = -1;
+        public int SpawnStepMax { get; set; } = -1;
+        public int BattleSpawnTime { get; set; } = -1;
+        public int PlayerKc { get; set; } = -1;
+        public int TournamentRoundFatigue { get; set; } = -1;
+        public int TournamentClearRewardGoldRate { get; set; } = -1;
+        public int MonsterRandomAppearOnly { get; set; } = -1;
+        public int RemainMonsterCountVisible { get; set; } = -1;
+
+        // bool 标记
+        public bool DefenseDungeon { get; set; }
+        public bool BloodDungeon { get; set; }
+        public bool DimensionDungeon { get; set; }
+        public bool TournamentDungeon { get; set; }
+        public bool PowerwarDungeon { get; set; }
+        public bool RiskDungeon { get; set; }
+        public bool AncientDungeon { get; set; }
+        public bool EventDungeon { get; set; }
+        public bool CrackOfDimensionDungeon { get; set; }
+        public bool DisableExit { get; set; }
+        public bool IndividualMapMovement { get; set; }
+        public bool OpenDoorEvenEnemy { get; set; }
+        public bool MoveMapEvenEnemy { get; set; }
+        public bool EnterWithoutFatigue { get; set; }
+        public bool UseFatigueOnlyStartDungeon { get; set; }
+        public bool SpecialDungeon { get; set; }
+        public bool KronosDungeon { get; set; }
+        public bool SaoDungeon { get; set; }
+        public bool NoCheckEnterBossRoom { get; set; }
+        public bool NoGiveupPanalty { get; set; }
+        public bool BossMarkDisable { get; set; }
+        public bool EnableApcStackable { get; set; }
+        public bool MovableEvenBossDie { get; set; }
+        public bool IgnoreClearEffectAndSound { get; set; }
+        public bool DontKillMobWhenBossDie { get; set; }
+        public bool RemoveDungeonScoreAndRank { get; set; }
+        public bool NoRevivalTimerLimit { get; set; }
+        public bool MultiStartPoint { get; set; }
+        public bool IgnoreDefaultDungeonClear { get; set; }
+
+        // string
+        public string RevisionTable { get; set; }
+        public string MonsterapcDiffTable { get; set; }
+        public string EnteringTitleNext { get; set; }
+        public string MonsterLevelRivision { get; set; }
+        public string DungeonTypeForExtraDrop { get; set; }
+        public string MinimapIcon { get; set; }
+
+        // float
+        public float KillCountConst { get; set; } = -1f;
+        public float MoveSpeed { get; set; } = -1f;
+
+        // 复杂/原始字符串
+        public string RequiredItem { get; set; }
+        public string EventRequiredItem { get; set; }
+        public string AddedRequiredItem { get; set; }
+        public string CoinInfo { get; set; }
+        public string Schedule { get; set; }
+        public string EventMonster { get; set; }
+        public string EventMonster2 { get; set; }
+        public string EventMonster3 { get; set; }
+        public string EventMonsterRandomMap { get; set; }
+        public string MonsterDifficultyBonus { get; set; }
+        public string TowerDialog { get; set; }
+        public string TowerStage { get; set; }
+        public string TowerRecovery { get; set; }
+        public string TowerHighSkillInitialCoolTime { get; set; }
+        public string TowerHighSkillInitialCoolTimeRate { get; set; }
+        public string DeathTowerMapIndexes { get; set; }
+        public string ResultCard { get; set; }
+        public string RewardItemRate { get; set; }
+        public string TournamentClearRewardExp { get; set; }
+        public string ClearMap { get; set; }
+        public string ClearRewardItem { get; set; }
+        public string BossRoomEntranceCondition { get; set; }
+        public string NamedMonsterMapPos { get; set; }
+        public string WarpMapCondition { get; set; }
+        public string DungeonMinimapIconSetting { get; set; }
+        public string RealdungeonCheckup { get; set; }
+        public string CommonPassiveObject { get; set; }
+        public string OnClearAddPassiveObject { get; set; }
+        public string AppendageDestoryObject { get; set; }
+        public string LinkedDungeon { get; set; }
+        public string ClearAction { get; set; }
+        public string PointByType { get; set; }
+        public string DungeonExpBonusMonster { get; set; }
+        public string ClearPartyBuffCard { get; set; }
+        public string AdvanceAltarType { get; set; }
+        public string AdvanceAltarMap { get; set; }
+        public string AdvanceAltarClearReward { get; set; }
+        public string AdvanceAltarSurvivalMap { get; set; }
+        public string AdvanceAltarSurvivalClearReward { get; set; }
+        public string RankType { get; set; }
+        public string FeverTime { get; set; }
+        public string LostLandParameters { get; set; }
+        public string LimitTime { get; set; }
+        public string NateramTimeAttackInfo { get; set; }
+        public string VillageAttackRevengeDungeon { get; set; }
+        public string TimeSpiral { get; set; }
+        public string SpiciesDungeon { get; set; }
+        public string SummonMonster { get; set; }
+        public string MonsterTypeSpawnProb { get; set; }
+        public string MonsterTypeSpawnCost { get; set; }
+        public string MonsterTypeSpawnIntervalRate { get; set; }
+        public string MonsterSpawnBaseInterval { get; set; }
+        public string MonsterSpawnRandomInterval { get; set; }
+        public string SpawnCommonMonsterIndex { get; set; }
+        public string SpawnCommonChampionIndex { get; set; }
+        public string SpawnSuperChampionIndex { get; set; }
+        public string SpawnBossIndex { get; set; }
+        public string SpawnStepResourcePool { get; set; }
+        public string CommonMonsterItemDropProb { get; set; }
+        public string CommonChampionItemDropProb { get; set; }
+        public string SuperChampionItemDropProb { get; set; }
+        public string BossItemDropProb { get; set; }
+        public string CommonMonsterExpConst { get; set; }
+        public string CommonChampionExpConst { get; set; }
+        public string SuperChampionExpConst { get; set; }
+        public string BossExpConst { get; set; }
+        public string CommonMonsterItemDropList { get; set; }
+        public string CommonChampionItemDropList { get; set; }
+        public string SuperChampionItemDropList { get; set; }
+        public string BossItemDropList { get; set; }
+        public string MonsterExpBonusPerUserDecrease { get; set; }
+        public string ResultExpBonusPerUserDecrease { get; set; }
+        public string Evil { get; set; }
+        public string EvilHighLevel { get; set; }
+        public string EvilRate { get; set; }
+        public string Easy { get; set; }
+        public string Medium { get; set; }
+        public string Hard { get; set; }
+        public string Round { get; set; }
+        public string List { get; set; }
+        public string DgnType { get; set; }
+        public string ObjectType { get; set; }
+        public string HideGrid { get; set; }
+        public string OnGuideMovieDungeon { get; set; }
+        public string RecommendParty { get; set; }
+        public string RecommendEquipment { get; set; }
+        public string MinimapBossIcon { get; set; }
+        public string SwayEffect { get; set; }
+        public string FreeDifficulty { get; set; }
+        public string EntryDungeon { get; set; }
+        public string AdjustHpGauge { get; set; }
+        public string NecessaryParty { get; set; }
+        public string UseFatigueOnlyStartDungeonData { get; set; }
+
         #endregion
 
         public List<SpecialPassiveObjectItem> SpecialPassiveObjectItems { get; set; } = new List<SpecialPassiveObjectItem>();
@@ -97,7 +286,8 @@ namespace PvfLib
         {
             "size", "greed", "map specification", "start map", "boss map",
             "hit count", "seal door appear rate", "seal door map index", "seal door pos", "quest connection",
-            "randomized object creation", "clear condition"
+            "randomized object creation", "clear condition",
+            "boss map specification", "layered map specification"
         };
 
         public static DungeonFile Parse(string content)
@@ -214,6 +404,196 @@ namespace PvfLib
                         try { ParseSpecialPassiveObjectItem(data, dgn); }
                         catch { }
                         break;
+
+                    // --- int ---
+                    case "hell dungeon": dgn.HellDungeon = ParseInt(data); break;
+                    case "escape hell": dgn.EscapeHell = ParseInt(data); break;
+                    case "coin limit": dgn.CoinLimit = ParseInt(data); break;
+                    case "hell coin limit": dgn.HellCoinLimit = ParseInt(data); break;
+                    case "character coin limit": dgn.CharacterCoinLimit = ParseInt(data); break;
+                    case "party member coin limit": dgn.PartyMemberCoinLimit = ParseInt(data); break;
+                    case "limit inout count": dgn.LimitInoutCount = ParseInt(data); break;
+                    case "limit escape character": dgn.LimitEscapeCharacter = ParseInt(data); break;
+                    case "gold card use": dgn.GoldCardUse = ParseInt(data); break;
+                    case "join cost gold": dgn.JoinCostGold = ParseInt(data); break;
+                    case "gold drop prob": dgn.GoldDropProb = ParseInt(data); break;
+                    case "fatigue": dgn.Fatigue = ParseInt(data); break;
+                    case "fatigue result": dgn.FatigueResult = ParseInt(data); break;
+                    case "prohibit practice": dgn.ProhibitPractice = ParseInt(data); break;
+                    case "shared difficult dungeon index": dgn.SharedDifficultDungeonIndex = ParseInt(data); break;
+                    case "impossible dungeon classification": dgn.ImpossibleDungeonClassification = ParseInt(data); break;
+                    case "ai character appear rate": dgn.AiCharacterAppearRate = ParseInt(data); break;
+                    case "dummy appear count": dgn.DummyAppearCount = ParseInt(data); break;
+                    case "party num check": dgn.PartyNumCheck = ParseInt(data); break;
+                    case "quest npc dungeon": dgn.QuestNpcDungeon = ParseInt(data); break;
+                    case "herosmode enable": dgn.HerosmodeEnable = ParseInt(data); break;
+                    case "herosmode required quest": dgn.HerosmodeRequiredQuest = ParseInt(data); break;
+                    case "event dungeon difficulty": dgn.EventDungeonDifficulty = ParseInt(data); break;
+                    case "event dungeon cof": dgn.EventDungeonCof = ParseInt(data); break;
+                    case "adjust mob exp by level": dgn.AdjustMobExpByLevel = ParseInt(data); break;
+                    case "blood max round": dgn.BloodMaxRound = ParseInt(data); break;
+                    case "mob level charac level replace flag": dgn.MobLevelCharacLevelReplaceFlag = ParseInt(data); break;
+                    case "tower of despair": dgn.TowerOfDespair = ParseInt(data); break;
+                    case "tower fp cubepiece": dgn.TowerFpCubepiece = ParseInt(data); break;
+                    case "tower limit of stackable item": dgn.TowerLimitOfStackableItem = ParseInt(data); break;
+                    case "tower max clear item num": dgn.TowerMaxClearItemNum = ParseInt(data); break;
+                    case "tower item drop": dgn.TowerItemDrop = ParseInt(data); break;
+                    case "warroom map index": dgn.WarroomMapIndex = ParseInt(data); break;
+                    case "max monster": dgn.MaxMonster = ParseInt(data); break;
+                    case "spawn step max": dgn.SpawnStepMax = ParseInt(data); break;
+                    case "battle spawn time": dgn.BattleSpawnTime = ParseInt(data); break;
+                    case "player kc": dgn.PlayerKc = ParseInt(data); break;
+                    case "tournament round fatigue": dgn.TournamentRoundFatigue = ParseInt(data); break;
+                    case "tournament clear reward gold rate": dgn.TournamentClearRewardGoldRate = ParseInt(data); break;
+                    case "monster random appear only": dgn.MonsterRandomAppearOnly = ParseInt(data); break;
+                    case "remain monster count visible": dgn.RemainMonsterCountVisible = ParseInt(data); break;
+
+                    // --- bool ---
+                    case "defense dungeon": dgn.DefenseDungeon = true; break;
+                    case "blood dungeon": dgn.BloodDungeon = true; break;
+                    case "dimension dungeon": dgn.DimensionDungeon = true; break;
+                    case "tournament dungeon": dgn.TournamentDungeon = true; break;
+                    case "powerwar dungeon": dgn.PowerwarDungeon = true; break;
+                    case "risk dungeon": dgn.RiskDungeon = true; break;
+                    case "ancient dungeon": dgn.AncientDungeon = true; break;
+                    case "event dungeon": dgn.EventDungeon = true; break;
+                    case "crack of dimension dungeon": dgn.CrackOfDimensionDungeon = true; break;
+                    case "disable exit": dgn.DisableExit = true; break;
+                    case "individual map movement": dgn.IndividualMapMovement = true; break;
+                    case "open door even enemy": dgn.OpenDoorEvenEnemy = true; break;
+                    case "move map even enemy": dgn.MoveMapEvenEnemy = true; break;
+                    case "enter without fatigue": dgn.EnterWithoutFatigue = true; break;
+                    case "special dungeon": dgn.SpecialDungeon = true; break;
+                    case "kronos dungeon": dgn.KronosDungeon = true; break;
+                    case "sao dungeon": dgn.SaoDungeon = true; break;
+                    case "no check enter boss room": dgn.NoCheckEnterBossRoom = true; break;
+                    case "no giveup panalty": dgn.NoGiveupPanalty = true; break;
+                    case "boss mark disable": dgn.BossMarkDisable = true; break;
+                    case "enable apc stackable": dgn.EnableApcStackable = true; break;
+                    case "movable even boss die": dgn.MovableEvenBossDie = true; break;
+                    case "ignore clear effect and sound": dgn.IgnoreClearEffectAndSound = true; break;
+                    case "dont kill mob when boss die": dgn.DontKillMobWhenBossDie = true; break;
+                    case "remove dungeon score and rank": dgn.RemoveDungeonScoreAndRank = true; break;
+                    case "no revival timer limit": dgn.NoRevivalTimerLimit = true; break;
+                    case "multi start point": dgn.MultiStartPoint = true; break;
+                    case "ignore default dungeon clear": dgn.IgnoreDefaultDungeonClear = true; break;
+
+                    // --- string ---
+                    case "revision table": dgn.RevisionTable = StripBacktick(data); break;
+                    case "monsterapc diff table": dgn.MonsterapcDiffTable = StripBacktick(data); break;
+                    case "entering title next": dgn.EnteringTitleNext = StripBacktick(data); break;
+                    case "monster level rivision": dgn.MonsterLevelRivision = StripBacktick(data); break;
+                    case "dungeon type for extra drop": dgn.DungeonTypeForExtraDrop = StripBacktick(data); break;
+
+                    // --- float ---
+                    case "kill count const":
+                        if (float.TryParse(data?.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out var kcf))
+                            dgn.KillCountConst = kcf;
+                        break;
+                    case "move speed":
+                        if (float.TryParse(data?.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out var msf))
+                            dgn.MoveSpeed = msf;
+                        break;
+
+                    // --- complex raw string ---
+                    case "required item": dgn.RequiredItem = data; break;
+                    case "event required item": dgn.EventRequiredItem = data; break;
+                    case "added required item": dgn.AddedRequiredItem = data; break;
+                    case "coin info": dgn.CoinInfo = data; break;
+                    case "schedule": dgn.Schedule = data; break;
+                    case "event monster": dgn.EventMonster = data; break;
+                    case "event monster2": dgn.EventMonster2 = data; break;
+                    case "event monster3": dgn.EventMonster3 = data; break;
+                    case "event monster random map": dgn.EventMonsterRandomMap = data; break;
+                    case "monster difficulty bonus": dgn.MonsterDifficultyBonus = data; break;
+                    case "tower dialog": dgn.TowerDialog = data; break;
+                    case "tower stage": dgn.TowerStage = data; break;
+                    case "tower recovery": dgn.TowerRecovery = data; break;
+                    case "tower high skill initial cool time": dgn.TowerHighSkillInitialCoolTime = data; break;
+                    case "tower high skill initial cool time rate": dgn.TowerHighSkillInitialCoolTimeRate = data; break;
+                    case "death tower map indexes": dgn.DeathTowerMapIndexes = data; break;
+                    case "tower random map indexes": dgn.TowerRandomMapIndexes = ParseInt(data); break;
+                    case "result card": dgn.ResultCard = data; break;
+                    case "reward item rate": dgn.RewardItemRate = data; break;
+                    case "tournament clear reward exp": dgn.TournamentClearRewardExp = data; break;
+                    case "clear map": dgn.ClearMap = data; break;
+                    case "clear reward item": dgn.ClearRewardItem = data; break;
+                    case "boss room entrance condition": dgn.BossRoomEntranceCondition = data; break;
+                    case "named monster map pos": dgn.NamedMonsterMapPos = data; break;
+                    case "warp map condition": dgn.WarpMapCondition = data; break;
+                    case "dungeon minimap icon setting": dgn.DungeonMinimapIconSetting = data; break;
+                    case "realdungeon checkup": dgn.RealdungeonCheckup = data; break;
+                    case "common passive object": dgn.CommonPassiveObject = data; break;
+                    case "on clear add passive object": dgn.OnClearAddPassiveObject = data; break;
+                    case "appendage destory object": dgn.AppendageDestoryObject = data; break;
+                    case "linked dungeon": dgn.LinkedDungeon = data; break;
+                    case "clear action": dgn.ClearAction = data; break;
+                    case "point by type": dgn.PointByType = data; break;
+                    case "dungeon exp bonus monster": dgn.DungeonExpBonusMonster = data; break;
+                    case "clear_party_buff_card": dgn.ClearPartyBuffCard = data; break;
+                    case "advance altar type": dgn.AdvanceAltarType = data; break;
+                    case "advance altar map": dgn.AdvanceAltarMap = data; break;
+                    case "advance altar clear reward": dgn.AdvanceAltarClearReward = data; break;
+                    case "advance altar survival map": dgn.AdvanceAltarSurvivalMap = data; break;
+                    case "advance altar survival clear reward": dgn.AdvanceAltarSurvivalClearReward = data; break;
+                    case "rank type": dgn.RankType = data; break;
+                    case "fever time": dgn.FeverTime = data; break;
+                    case "lost land parameters": dgn.LostLandParameters = data; break;
+                    case "limit time": dgn.LimitTime = data; break;
+                    case "nateram time attack info": dgn.NateramTimeAttackInfo = data; break;
+                    case "village attack revenge dungeon": dgn.VillageAttackRevengeDungeon = data; break;
+                    case "time spiral": dgn.TimeSpiral = data; break;
+                    case "spicies dungeon": dgn.SpiciesDungeon = data; break;
+                    case "summon monster": dgn.SummonMonster = data; break;
+                    case "monster type spawn prob": dgn.MonsterTypeSpawnProb = data; break;
+                    case "monster type spawn cost": dgn.MonsterTypeSpawnCost = data; break;
+                    case "monster type spawn interval rate": dgn.MonsterTypeSpawnIntervalRate = data; break;
+                    case "monster spawn base interval": dgn.MonsterSpawnBaseInterval = data; break;
+                    case "monster spawn random interval": dgn.MonsterSpawnRandomInterval = data; break;
+                    case "spawn common monster index": dgn.SpawnCommonMonsterIndex = data; break;
+                    case "spawn common champion index": dgn.SpawnCommonChampionIndex = data; break;
+                    case "spawn super champion index": dgn.SpawnSuperChampionIndex = data; break;
+                    case "spawn boss index": dgn.SpawnBossIndex = data; break;
+                    case "spawn step resource pool": dgn.SpawnStepResourcePool = data; break;
+                    case "common monster item drop prob": dgn.CommonMonsterItemDropProb = data; break;
+                    case "common champion item drop prob": dgn.CommonChampionItemDropProb = data; break;
+                    case "super champion item drop prob": dgn.SuperChampionItemDropProb = data; break;
+                    case "boss item drop prob": dgn.BossItemDropProb = data; break;
+                    case "common monster exp const": dgn.CommonMonsterExpConst = data; break;
+                    case "common champion exp const": dgn.CommonChampionExpConst = data; break;
+                    case "super champion exp const": dgn.SuperChampionExpConst = data; break;
+                    case "boss exp const": dgn.BossExpConst = data; break;
+                    case "common monster item drop list": dgn.CommonMonsterItemDropList = data; break;
+                    case "common champion item drop list": dgn.CommonChampionItemDropList = data; break;
+                    case "super champion item drop list": dgn.SuperChampionItemDropList = data; break;
+                    case "boss item drop list": dgn.BossItemDropList = data; break;
+                    case "monster exp bonus per user decrease": dgn.MonsterExpBonusPerUserDecrease = data; break;
+                    case "result exp bonus per user decrease": dgn.ResultExpBonusPerUserDecrease = data; break;
+                    case "evil": dgn.Evil = data; break;
+                    case "evil high level": dgn.EvilHighLevel = data; break;
+                    case "evil rate": dgn.EvilRate = data; break;
+                    case "easy": dgn.Easy = data; break;
+                    case "medium": dgn.Medium = data; break;
+                    case "hard": dgn.Hard = data; break;
+                    case "round": dgn.Round = data; break;
+                    case "list": dgn.List = data; break;
+                    case "type": dgn.DgnType = data; break;
+                    case "object type": dgn.ObjectType = data; break;
+                    case "hide grid": dgn.HideGrid = data; break;
+                    case "on guide movie dungeon": dgn.OnGuideMovieDungeon = data; break;
+                    case "recommend party": dgn.RecommendParty = data; break;
+                    case "recommend equipment": dgn.RecommendEquipment = data; break;
+                    case "minimap boss icon": dgn.MinimapBossIcon = data; break;
+                    case "sway effect": dgn.SwayEffect = data; break;
+                    case "free difficulty": dgn.FreeDifficulty = data; break;
+                    case "entry dungeon": dgn.EntryDungeon = data; break;
+                    case "adjust hp gauge": dgn.AdjustHpGauge = data; break;
+                    case "necessary party": dgn.NecessaryParty = data; break;
+                    case "use fatigue only start dungeon":
+                        dgn.UseFatigueOnlyStartDungeon = true;
+                        dgn.UseFatigueOnlyStartDungeonData = data;
+                        break;
+                    case "minimap icon": dgn.MinimapIcon = data; break;
                 }
             }
         }
@@ -293,6 +673,14 @@ namespace PvfLib
                         break;
                     case "clear condition":
                         maze.ClearConditions = ParseClearConditions(node, text);
+                        break;
+                    case "boss map specification":
+                        maze.BossMapSpecification = string.IsNullOrEmpty(maze.BossMapSpecification)
+                            ? data : maze.BossMapSpecification + " " + data;
+                        break;
+                    case "layered map specification":
+                        maze.LayeredMapSpecification = string.IsNullOrEmpty(maze.LayeredMapSpecification)
+                            ? data : maze.LayeredMapSpecification + " " + data;
                         break;
                 }
             }

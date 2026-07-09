@@ -25,7 +25,7 @@ namespace DfoServer.SelfTests
             };
             var mapDirs = new List<string> { "eternal_dream" };
 
-            var mapId = DungeonData.SelectFallbackMapIdForUnresolvedRoom(
+            var mapId = DfoServer.GameWorld.DungeonMapResolver.SelectFallbackMapIdForUnresolvedRoom(
                 dungeonId: 1004,
                 mazeIndex: 0,
                 x: 7,
@@ -88,7 +88,7 @@ namespace DfoServer.SelfTests
                 new LstEntry { Id = 13417, FilePath = "eternal_dream/01.map" },
                 new LstEntry { Id = 15000, FilePath = "eternal_dream/q7_0.map" },
             };
-            var compactQuestMapId = DungeonData.SelectFallbackMapIdForUnresolvedRoom(
+            var compactQuestMapId = DfoServer.GameWorld.DungeonMapResolver.SelectFallbackMapIdForUnresolvedRoom(
                 dungeonId: 1004,
                 mazeIndex: 0,
                 x: 7,
@@ -103,7 +103,7 @@ namespace DfoServer.SelfTests
                 compactQuestMapId == 15000 && reason.StartsWith("quest-variant", StringComparison.Ordinal),
                 ref failures);
 
-            var ordinaryMapId = DungeonData.SelectFallbackMapIdForUnresolvedRoom(
+            var ordinaryMapId = DfoServer.GameWorld.DungeonMapResolver.SelectFallbackMapIdForUnresolvedRoom(
                 dungeonId: 1004,
                 mazeIndex: 0,
                 x: 7,
@@ -128,7 +128,7 @@ namespace DfoServer.SelfTests
                 new LstEntry { Id = 36041, FilePath = "158_DecayArea/maze(2,2).map" },
                 new LstEntry { Id = 18911, FilePath = "158_DecayArea/18911(0,5)N.map" },
             };
-            var rottenFallbackMapId = DungeonData.SelectFallbackMapIdForUnresolvedRoom(
+            var rottenFallbackMapId = DfoServer.GameWorld.DungeonMapResolver.SelectFallbackMapIdForUnresolvedRoom(
                 dungeonId: 158,
                 mazeIndex: 0,
                 x: 1,
@@ -148,7 +148,7 @@ namespace DfoServer.SelfTests
                 new LstEntry { Id = 77001, FilePath = "generic/77001(2,4)b.map" },
                 new LstEntry { Id = 77002, FilePath = "generic/77002(2,6)N.map" },
             };
-            var lowercaseBossFallbackMapId = DungeonData.SelectFallbackMapIdForUnresolvedRoom(
+            var lowercaseBossFallbackMapId = DfoServer.GameWorld.DungeonMapResolver.SelectFallbackMapIdForUnresolvedRoom(
                 dungeonId: 9000,
                 mazeIndex: 0,
                 x: 2,

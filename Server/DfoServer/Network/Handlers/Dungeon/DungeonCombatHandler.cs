@@ -1,8 +1,8 @@
 using DfoServer.Game.Accounts;
+using DfoServer.Game.Characters;
 using DfoServer.Game.Dungeon;
 using DfoServer.Game.Premium;
 using DfoServer.Game.Skills;
-using DfoServer.GameWorld;
 using DfoServer.Infrastructure;
 using DfoServer.Network.Builders;
 using DfoServer.Network.Parsers.Dungeon;
@@ -104,7 +104,6 @@ namespace DfoServer.Network.Handlers.Dungeon
                 var growthContractBonusExp = CalculateGrowthContractMonsterBonus(session, gainedExp);
                 var totalGainedExp = AddSaturating(gainedExp, growthContractBonusExp);
 
-                var slotCounter = run.SceneSlotCounter;
                 int dungeonBasisLevel = monsterLevel;
                 try { dungeonBasisLevel = DungeonData.GetDungeonBasicLv(run.DungeonId); } catch (Exception ex) { FileLogger.Log($"[DungeonHandler] DIE_MONSTER ERROR: basic level fallback dungeon={run.DungeonId} default={dungeonBasisLevel}: {ex.Message}"); }
                 int dungeonMinimumLevel = dungeonBasisLevel;
@@ -113,37 +112,25 @@ namespace DfoServer.Network.Handlers.Dungeon
                 List<DropInfo> generatedDrops;
                 if (monster.IsHellPartyActor && dieRoomState != null && dieRoomState.IsHellPartyRoom)
                 {
-                    generatedDrops = GenerateHellPartyActorDrops(
-                        session,
-                        dieRoomState,
-                        monster,
-                        dungeonMinimumLevel,
-                        dungeonBasisLevel,
-                        ref slotCounter);
+                    var abyssRequest = BuildAbyssPartyDropRequest(
+                        dieRoomState, monster, dungeonMinimumLevel, dungeonBasisLevel);
+                    generatedDrops = _svc.Drops.GenerateAbyssPartyAndRegister(run, abyssRequest);
                     goldGained = 0;
+                    FileLogger.Log($"[DungeonHandler] ABYSS_PARTY_DROP: code={monster.Code} type={monster.Type} group={monster.HellPartyGroupId} abyssDifficulty={monster.HellPartyDifficulty} isLastGroup={abyssRequest.IsLastGroupMonster} abyssMonster={monster.IsHellMonsterScript} rewardRolls={monster.HellRewardRollCount} drops={generatedDrops.Count}");
                 }
                 else
                 {
-                    var dropPool = MonsterDropTable.GetDropPool(monster.Code);
-
-                    // Area material is added by the server to the normal monster item pool; hidden hell actors do not use this path.
-                    int areaMaterialId = AreaMaterialDropProvider.GetAreaMaterialItem(run.DungeonId);
-                    if (areaMaterialId > 0)
-                    {
-                        var extended = new List<MonsterDropTable.DropPoolEntry>();
-                        if (dropPool != null) extended.AddRange(dropPool);
-                        extended.Add(new MonsterDropTable.DropPoolEntry { ItemId = areaMaterialId, Weight = 100 });
-                        dropPool = extended;
-                    }
-
-                    var generator = new DropGenerator(run.RoomLcg);
                     var dropRateLevel = run.HellMode ? dungeonBasisLevel : (int)monsterLevel;
-                    var result = generator.GenerateMonsterDrops(dropRateLevel, rewardMonsterType, monster.Code, run.Difficulty, dungeonBasisLevel, ref slotCounter, dropPool);
-                    goldGained = result.goldAmount;
-                    generatedDrops = result.drops;
+                    var dropResult = _svc.Drops.GenerateAndRegister(run, new MonsterDropRequest
+                    {
+                        DropRateLevel = dropRateLevel,
+                        MonsterType = rewardMonsterType,
+                        MonsterCode = monster.Code,
+                        DungeonBasisLevel = dungeonBasisLevel
+                    });
+                    goldGained = dropResult.GoldAmount;
+                    generatedDrops = dropResult.Drops;
                 }
-
-                run.SceneSlotCounter = slotCounter;
 
                 var prevLevel = session.Player.Level;
                 var prevExp = session.Player.Exp;
@@ -186,10 +173,8 @@ namespace DfoServer.Network.Handlers.Dungeon
 
                 FileLogger.Log($"[DungeonHandler] DIE_MONSTER_EXP: seqId={req.LocalIndex} local={roomLocalIndex} code={monster.Code} type={monster.Type} level={monsterLevel} weight={weight:0.###} baseExp={baseExp} totalExp={gainedExp} growthContract={growthContractBonusExp} awardedExp={totalGainedExp} boss={isBossMonster} champion={isChampionMonster} superChampion={isSuperChampionMonster} named={isNamedMonster} dungeonTotalExp={run.TotalExp} bossTotalExp={run.BossTotalExp} championTotalExp={run.ChampionTotalExp} superChampionTotalExp={run.SuperChampionTotalExp} namedTotalExp={run.NamedMonsterTotalExp} monsterGrowthContractTotal={run.MonsterGrowthContractBonusExp}");
 
-                if (generatedDrops.Count > 0)
+                if (generatedDrops != null && generatedDrops.Count > 0)
                 {
-                    foreach (var drop in generatedDrops)
-                        run.Drops[drop.SceneSlot] = drop;
                     drops = generatedDrops;
                     FileLogger.Log($"[DungeonHandler] DROP: {generatedDrops.Count} items, seqId={req.LocalIndex} seed={run.RoomLcg.Seed:X8}");
                 }
@@ -199,7 +184,7 @@ namespace DfoServer.Network.Handlers.Dungeon
                 var leveledUp = session.Player.Level > prevLevel;
                 if (leveledUp || normalizedMaxExp)
                 {
-                    _svc.PersistLevelAndExp(session.Player.CharacterId, session.Player.Level, session.Player.Exp);
+                    CharacterProgressService.PersistLevelAndExp(session.Player.CharacterId, session.Player.Level, session.Player.Exp);
                 }
 
                 var (remainSp, remainTp) = _svc.GetRemainingSpTp(session, persist: leveledUp, logTag: "DIE_MONSTER");
@@ -335,58 +320,39 @@ namespace DfoServer.Network.Handlers.Dungeon
                 && run.RoomKey.Y == run.MazeStartY;
         }
 
-        private static List<DropInfo> GenerateHellPartyActorDrops(
-            EnhancedClientSession session,
+        private static AbyssPartyDropRequest BuildAbyssPartyDropRequest(
             RoomState roomState,
             DungeonData.MonsterSumInfo monster,
             int dungeonMinimumLevel,
-            int dungeonBasisLevel,
-            ref ushort slotCounter)
+            int dungeonBasisLevel)
         {
-            var run = session.Player.CurrentRun;
-            var drops = IndependentDropSystem.GenerateDrops(
-                monster.Code,
-                run.Difficulty,
-                dungeonBasisLevel,
-                run.RoomLcg,
-                ref slotCounter);
-
-            var remainingBefore = 0;
-            var remainingAfter = 0;
             var isLastGroupMonster = false;
             if (roomState.HellPartyGroupRemaining != null
                 && monster.HellPartyGroupId > 0
-                && roomState.HellPartyGroupRemaining.TryGetValue(monster.HellPartyGroupId, out remainingBefore))
+                && roomState.HellPartyGroupRemaining.TryGetValue(monster.HellPartyGroupId, out var remaining))
             {
-                remainingAfter = Math.Max(0, remainingBefore - 1);
-                if (remainingAfter == 0)
+                var after = Math.Max(0, remaining - 1);
+                if (after == 0)
                 {
                     roomState.HellPartyGroupRemaining.Remove(monster.HellPartyGroupId);
                     isLastGroupMonster = true;
                 }
                 else
                 {
-                    roomState.HellPartyGroupRemaining[monster.HellPartyGroupId] = remainingAfter;
+                    roomState.HellPartyGroupRemaining[monster.HellPartyGroupId] = after;
                 }
             }
 
-            var hellRewardDrops = 0;
-            if (isLastGroupMonster && !monster.IsHellMonsterScript)
+            return new AbyssPartyDropRequest
             {
-                var rewardDrops = HellMonsterDropConfig.GenerateSpecificEquipmentDrops(
-                    run.RoomLcg,
-                    dungeonMinimumLevel,
-                    dungeonBasisLevel,
-                    run.Difficulty,
-                    monster.HellPartyDifficulty,
-                    monster.HellRewardRollCount,
-                    ref slotCounter);
-                hellRewardDrops = rewardDrops.Count;
-                drops.AddRange(rewardDrops);
-            }
-
-            FileLogger.Log($"[DungeonHandler] HELLPARTY_DROP: code={monster.Code} type={monster.Type} group={monster.HellPartyGroupId} hellDifficulty={monster.HellPartyDifficulty} remainingBefore={remainingBefore} remainingAfter={remainingAfter} isLastGroup={isLastGroupMonster} hellMonster={monster.IsHellMonsterScript} rewardRolls={monster.HellRewardRollCount} independentDrops={drops.Count - hellRewardDrops} hellRewardDrops={hellRewardDrops}");
-            return drops;
+                MonsterCode = monster.Code,
+                DungeonMinimumLevel = dungeonMinimumLevel,
+                DungeonBasisLevel = dungeonBasisLevel,
+                AbyssPartyDifficulty = monster.HellPartyDifficulty,
+                RewardRollCount = monster.HellRewardRollCount,
+                IsLastGroupMonster = isLastGroupMonster,
+                IsAbyssMonsterScript = monster.IsHellMonsterScript
+            };
         }
 
         internal async Task HandleDieCharacter(EnhancedClientSession session, GamePacketHeader header, byte[] body)
@@ -471,41 +437,29 @@ namespace DfoServer.Network.Handlers.Dungeon
             var req = GetItemRequest.Parse(body);
             FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] GET_ITEM: cid={session.Player.CharacterId} srcSlot={req.SrcSlot}");
 
-            DropInfo matchedDrop;
-            if (!run.Drops.TryGetValue(req.SrcSlot, out matchedDrop))
+            var accountId = session.Account?.AccountId ?? 1;
+            var pickup = _svc.Drops.TryPickup(run, req.SrcSlot, session.Player.CharacterId, accountId);
+
+            if (!pickup.Success)
             {
-                FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] GET_ITEM: no pending drop for srcSlot={req.SrcSlot}, ignored");
+                FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] GET_ITEM: {pickup.FailReason} srcSlot={req.SrcSlot}");
                 return;
             }
 
-            var accountId = session.Account?.AccountId ?? 1;
-
-            if (matchedDrop.IsGold)
+            if (pickup.IsGold)
             {
-                var baseGold = (int)matchedDrop.StackCount;
-                var totalBonusPct = _svc.GetEquippedGoldBonus(session.Player.CharacterId);
-                var extraGold = baseGold * totalBonusPct / 100;
-                _svc.PersistGold(session.Player.CharacterId, accountId, baseGold + extraGold);
-                run.Drops.Remove(req.SrcSlot);
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0027,
-                    DropItemBuilder.BuildPickupGold(req.SrcSlot, session.Player.UserId, baseGold + extraGold, extraGold)));
-                FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] GET_ITEM: gold pickup srcSlot={req.SrcSlot} baseGold={baseGold} extraGold={extraGold}");
+                    DropItemBuilder.BuildPickupGold(req.SrcSlot, session.Player.UserId, pickup.GoldAmount, pickup.ExtraGold)));
+                FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] GET_ITEM: gold pickup srcSlot={req.SrcSlot} gold={pickup.GoldAmount} extra={pickup.ExtraGold}");
             }
             else
             {
-                short invSlot;
-                if (!_svc.TryPickupItemToInventory(session.Player.CharacterId, accountId, (int)matchedDrop.TemplateId, (int)matchedDrop.StackCount, out invSlot))
-                {
-                    FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] GET_ITEM: FAILED to insert item templateId={matchedDrop.TemplateId} -- inventory full or special, drop preserved for retry");
-                    return;
-                }
-                run.Drops.Remove(req.SrcSlot);
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0027,
-                    DropItemBuilder.BuildPickupItem(req.SrcSlot, session.Player.UserId, (ushort)invSlot, 7)));
-                if (session.GameSession?.QuestManager != null && matchedDrop.TemplateId > 0)
+                    DropItemBuilder.BuildPickupItem(req.SrcSlot, session.Player.UserId, (ushort)pickup.InventorySlot, 7)));
+                if (session.GameSession?.QuestManager != null && pickup.PickedUpItemId > 0)
                     await session.GameSession.QuestManager.SyncItemSeekingQuestProgressAsync(
-                        new[] { (int)matchedDrop.TemplateId });
-                FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] GET_ITEM: item pickup srcSlot={req.SrcSlot} templateId={matchedDrop.TemplateId} invSlot={invSlot}");
+                        new[] { pickup.PickedUpItemId });
+                FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] GET_ITEM: item pickup srcSlot={req.SrcSlot} templateId={pickup.PickedUpItemId} invSlot={pickup.InventorySlot}");
             }
         }
     }

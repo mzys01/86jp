@@ -1,4 +1,5 @@
 using DfoServer.Game.CharacterData;
+using DfoServer.Game.Characters;
 using DfoServer.Game.Dungeon;
 using DfoServer.Game.SelectCharacter;
 using DfoServer.GameWorld;
@@ -43,8 +44,8 @@ namespace DfoServer.Network.Handlers.Dungeon
             // Enemy APC/BOSS actors still block the room until their DIE_MONSTER is received.
             if (pauseFlag == 1 && (session.Player.CurrentRun?.DungeonId ?? 0) > 0)
             {
-                var progress = DungeonSharedServices.GetCurrentRoomProgress(session);
-                if (DungeonSharedServices.ShouldClearAfterApcDialog(progress))
+                var progress = DungeonRoomTopology.GetCurrentRoomProgress(session);
+                if (DungeonRoomTopology.ShouldClearAfterApcDialog(progress))
                 {
                     await _settlement.TryClearDungeon(session, "APC dialog + all normals dead");
                 }
@@ -79,7 +80,7 @@ namespace DfoServer.Network.Handlers.Dungeon
                     foreach (var r in rewards)
                     {
                         short slot;
-                        if (_svc.TryPickupItemToInventory(session.Player.CharacterId, accountId, r.ItemId, r.Count, out slot))
+                        if (TryPickupItemToInventory(session.Player.CharacterId, accountId, r.ItemId, r.Count, out slot))
                         {
                             inserted.Add((slot, r.ItemId, r.Count));
                             FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] RewardTutorial: flag={flagIndex} gave item {r.ItemId} x{r.Count} -> slot {slot}");
@@ -146,7 +147,7 @@ namespace DfoServer.Network.Handlers.Dungeon
             session.Player.Exp = targetExp;
             session.Player.Level = target;
 
-            _svc.PersistLevelAndExp(session.Player.CharacterId, session.Player.Level, session.Player.Exp);
+            CharacterProgressService.PersistLevelAndExp(session.Player.CharacterId, session.Player.Level, session.Player.Exp);
             FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] TUTORIAL_LEVEL_UP: {1}->{target} exp={targetExp}");
 
             var (remainSp, remainTp) = _svc.GetRemainingSpTp(session, persist: true, logTag: "TUTORIAL_LEVEL_UP");
@@ -184,6 +185,25 @@ namespace DfoServer.Network.Handlers.Dungeon
             await _svc.SendHonorLevelInfoAsync(session, "tutorial-back-to-village");
 
             FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] ReturnToVillage: 4 town packets + subtype0 honor + honor info sent");
+        }
+
+        private bool TryPickupItemToInventory(int characterId, int accountId, int itemTemplateId, int stackCount, out short assignedSlot)
+        {
+            assignedSlot = -1;
+            try
+            {
+                using (var scope = _svc.AssetService.OpenScope(characterId, accountId))
+                {
+                    var result = _svc.AssetService.TryAddItem(scope, itemTemplateId, stackCount, out assignedSlot);
+                    if (result) scope.Commit();
+                    return result;
+                }
+            }
+            catch (Exception ex)
+            {
+                FileLogger.Log($"[DungeonTutorial] TryPickupItemToInventory ERROR: {ex.Message}");
+                return false;
+            }
         }
     }
 }

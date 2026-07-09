@@ -271,5 +271,81 @@ namespace DfoServer.Network.Handlers.Dungeon
         {
             return ch != '0' && ch != '.' && ch != 'x' && ch != 'X';
         }
+
+        internal static DungeonRoomProgress GetCurrentRoomProgress(EnhancedClientSession session)
+            => GetRoomProgress(session, session?.Player?.CurrentRun?.RoomKilledSeqIds);
+
+        internal static DungeonRoomProgress GetRoomProgress(
+            EnhancedClientSession session,
+            ISet<ushort> killedSeqIds)
+        {
+            var run = session?.Player?.CurrentRun;
+            var monsters = run?.RoomMonsters ?? Array.Empty<GameWorld.Dungeon.MonsterSumInfo>();
+            var killed = killedSeqIds ?? new HashSet<ushort>();
+            var startSeq = run?.RoomStartSequence ?? 0;
+
+            int trackable = 0, killedTrackable = 0, remaining = 0;
+            int blocking = 0, blockingRemaining = 0;
+            int apc = 0, normal = 0, killedNormal = 0;
+
+            for (var i = 0; i < monsters.Count; i++)
+            {
+                var monster = monsters[i];
+                if (monster.Type == 9) continue;
+
+                trackable++;
+                if (monster.Type >= 5) apc++; else normal++;
+                if (monster.IsBlocking) blocking++;
+
+                var seqId = (ushort)(startSeq + i);
+                if (killed.Contains(seqId))
+                {
+                    killedTrackable++;
+                    if (monster.Type < 5) killedNormal++;
+                    continue;
+                }
+
+                remaining++;
+                if (monster.IsBlocking) blockingRemaining++;
+            }
+
+            return new DungeonRoomProgress(
+                trackable, killedTrackable, remaining,
+                blocking, blockingRemaining,
+                apc, normal, killedNormal);
+        }
+
+        internal static bool ShouldClearAfterApcDialog(DungeonRoomProgress progress)
+            => progress.ApcCount > 0
+                && progress.KilledNormalCount >= progress.NormalCount
+                && progress.BlockingRemainingCount == 0;
+    }
+
+    internal readonly struct DungeonRoomProgress
+    {
+        internal DungeonRoomProgress(
+            int trackableCount, int killedTrackableCount, int remainingCount,
+            int blockingCount, int blockingRemainingCount,
+            int apcCount, int normalCount, int killedNormalCount)
+        {
+            TrackableCount = trackableCount;
+            KilledTrackableCount = killedTrackableCount;
+            RemainingCount = remainingCount;
+            BlockingCount = blockingCount;
+            BlockingRemainingCount = blockingRemainingCount;
+            ApcCount = apcCount;
+            NormalCount = normalCount;
+            KilledNormalCount = killedNormalCount;
+        }
+
+        internal int TrackableCount { get; }
+        internal int KilledTrackableCount { get; }
+        internal int RemainingCount { get; }
+        internal int BlockingCount { get; }
+        internal int BlockingRemainingCount { get; }
+        internal int ApcCount { get; }
+        internal int NormalCount { get; }
+        internal int KilledNormalCount { get; }
+        internal bool RoomPassable => BlockingRemainingCount == 0;
     }
 }

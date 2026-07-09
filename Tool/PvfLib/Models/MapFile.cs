@@ -123,6 +123,94 @@ namespace PvfLib
         public string Buff { get; set; }
         public List<AICharacterInfo> AICharacters { get; set; } = new List<AICharacterInfo>();
 
+        // --- Simple int properties ---
+        public int FixChampion { get; set; } = -1;
+        public int HeroesModeMapIndex { get; set; } = -1;
+        public int BackgroundCorrection { get; set; } = -1;
+        public int BackgroundPosValue { get; set; } = -1;
+        public int ForegroundPatternAlpha { get; set; } = -1;
+        public int ApcRandomPoint { get; set; } = -1;
+        public int MonsterLock { get; set; } = -1;
+        public int DrawMonsterCount { get; set; } = -1;
+        public int SortBottom { get; set; } = -1;
+        public int AddGravity { get; set; } = -1;
+        public int JumpPowerRate { get; set; } = -1;
+
+        // --- Bool flags ---
+        public bool BlockUseStackableItem { get; set; }
+        public bool BlockUseActiveSkill { get; set; }
+        public bool VisibleOnDungeonClear { get; set; }
+        public bool LoopYAxis { get; set; }
+        public bool AllDeadCasePassable { get; set; }
+        public bool DisableItemEscapeStuck { get; set; }
+        public bool DisableCharacterEscapeStuck { get; set; }
+        public bool CannotUseCoinMap { get; set; }
+        public bool NoRevivalTimerLimit { get; set; }
+        public bool IgnoreDiehard { get; set; }
+        public bool DisableRebirth { get; set; }
+        public bool PreservePlayerCorpse { get; set; }
+        public bool CannotUseResolutionChangeZoom { get; set; }
+        public bool CenterFixedCamera { get; set; }
+        public bool ForceDrawPattern { get; set; }
+        public bool IsRevival { get; set; }
+        public bool IsMoiveEnd { get; set; }
+        public bool QuestStartMap { get; set; }
+        public bool HideMonster { get; set; }
+        public bool ShowDust { get; set; }
+
+        // --- Int array properties ---
+        public int[] DungeonStartArea { get; set; }
+        public int[] ScreenPos { get; set; }
+        public int[] MonsterTeam { get; set; }
+        public int[] PvpPracticeStartArea { get; set; }
+        public int[] VirtualMovableArea { get; set; }
+        public int[] TownMovableArea { get; set; }
+        public int[] PathgateObject { get; set; }
+
+        // --- String properties ---
+        public string OpeningBgm { get; set; }
+        public string MapLoadingImagePath { get; set; }
+        public string BasicAction { get; set; }
+        public string MapDialog { get; set; }
+        public string Dust { get; set; }
+        public string AbsoluteStartPath { get; set; }
+
+        // --- Complex raw string properties ---
+        public string MonsterCondition { get; set; }
+        public string MonsterSpawnPos { get; set; }
+        public string BloodMonster { get; set; }
+        public string BloodPhaseTime { get; set; }
+        public string UltimateMonster { get; set; }
+        public string UltimatePhaseTime { get; set; }
+        public string Darkness { get; set; }
+        public string StaticPlayerStartPos { get; set; }
+        public string BeltScrollMap { get; set; }
+        public string MoveLayeredMap { get; set; }
+        public string CustomizedScreenEdge { get; set; }
+        public string ExtendedTile { get; set; }
+        public string ScrollAnimation { get; set; }
+        public string ConditionalSummonMonster { get; set; }
+        public string MapOverMoveAni { get; set; }
+        public string CameraForceMove { get; set; }
+        public string CameraEdgeException { get; set; }
+        public string ReviveWithDlg { get; set; }
+        public string ZoneDefence { get; set; }
+        public string TournamentEnemies { get; set; }
+        public string TournamentStartArea { get; set; }
+        public string BeforeRenderingInfo { get; set; }
+        public string TimeLine { get; set; }
+        public string SummonStartArea { get; set; }
+        public string MapFrame { get; set; }
+        public string TileOption { get; set; }
+        public string BackgroundEffect { get; set; }
+        public string BlockEffect { get; set; }
+        public string Item { get; set; }
+        public string Quest { get; set; }
+        public string ApcCreateCondition { get; set; }
+        public string MapAnimation { get; set; }
+        public string RevivalMap { get; set; }
+        public string BlockPath { get; set; }
+
         private static readonly Regex BacktickStringRx = new Regex("`([^`]+)`", RegexOptions.Compiled);
         private static readonly Regex AniReferenceRx = new Regex("`[^`]+\\.ani`", RegexOptions.Compiled | RegexOptions.IgnoreCase);
         private static readonly Regex InlineHellPartyRx = new Regex(
@@ -211,6 +299,250 @@ namespace PvfLib
                         break;
                     case "ai character":
                         map.AICharacters = ParseAICharacters(data);
+                        break;
+
+                    // --- Simple int ---
+                    case "fix champion":
+                        map.FixChampion = ParseInt(data);
+                        break;
+                    case "heroes mode map index":
+                        map.HeroesModeMapIndex = ParseInt(data);
+                        break;
+                    case "background correction":
+                        map.BackgroundCorrection = ParseInt(data);
+                        break;
+                    case "background pos":
+                        map.BackgroundPosValue = ParseInt(data);
+                        break;
+                    case "foreground pattern alpha":
+                        map.ForegroundPatternAlpha = ParseInt(data);
+                        break;
+                    case "apc random point":
+                        map.ApcRandomPoint = ParseInt(data);
+                        break;
+                    case "monster lock":
+                        map.MonsterLock = ParseInt(data);
+                        break;
+                    case "draw monster count":
+                        map.DrawMonsterCount = ParseInt(data);
+                        break;
+                    case "sort bottom":
+                        map.SortBottom = ParseInt(data);
+                        break;
+                    case "add gravity":
+                        map.AddGravity = ParseInt(data);
+                        break;
+                    case "jump power rate":
+                        map.JumpPowerRate = ParseInt(data);
+                        break;
+
+                    // --- Bool flags ---
+                    case "block use stackable item":
+                        map.BlockUseStackableItem = true;
+                        break;
+                    case "block use active skill":
+                        map.BlockUseActiveSkill = true;
+                        break;
+                    case "visible on dungeon clear":
+                        map.VisibleOnDungeonClear = true;
+                        break;
+                    case "loop y axis":
+                        map.LoopYAxis = true;
+                        break;
+                    case "all dead case passable":
+                        map.AllDeadCasePassable = true;
+                        break;
+                    case "disable item escape stuck":
+                        map.DisableItemEscapeStuck = true;
+                        break;
+                    case "disable character escape stuck":
+                        map.DisableCharacterEscapeStuck = true;
+                        break;
+                    case "cannot use coin map":
+                        map.CannotUseCoinMap = true;
+                        break;
+                    case "no revival timer limit":
+                        map.NoRevivalTimerLimit = true;
+                        break;
+                    case "ignore diehard":
+                        map.IgnoreDiehard = true;
+                        break;
+                    case "disable rebirth":
+                        map.DisableRebirth = true;
+                        break;
+                    case "preserve player corpse":
+                        map.PreservePlayerCorpse = true;
+                        break;
+                    case "cannot use resolution change zoom":
+                        map.CannotUseResolutionChangeZoom = true;
+                        break;
+                    case "center fixed camera":
+                        map.CenterFixedCamera = true;
+                        break;
+                    case "force draw pattern":
+                        map.ForceDrawPattern = true;
+                        break;
+                    case "is revival":
+                        map.IsRevival = true;
+                        break;
+                    case "is moive end":
+                        map.IsMoiveEnd = true;
+                        break;
+                    case "quest start map":
+                        map.QuestStartMap = true;
+                        break;
+                    case "hide monster":
+                        map.HideMonster = true;
+                        break;
+                    case "show dust":
+                        map.ShowDust = true;
+                        break;
+
+                    // --- Int array ---
+                    case "dungeon start area":
+                        map.DungeonStartArea = ParseIntArray(data);
+                        break;
+                    case "screen pos":
+                        map.ScreenPos = ParseIntArray(data);
+                        break;
+                    case "monster team":
+                        map.MonsterTeam = ParseIntArray(data);
+                        break;
+                    case "pvp practice start area":
+                        map.PvpPracticeStartArea = ParseIntArray(data);
+                        break;
+                    case "virtual movable area":
+                        map.VirtualMovableArea = ParseIntArray(data);
+                        break;
+                    case "town movable area":
+                        map.TownMovableArea = ParseIntArray(data);
+                        break;
+                    case "pathgate object":
+                        map.PathgateObject = ParseIntArray(data);
+                        break;
+
+                    // --- String ---
+                    case "opening bgm":
+                        map.OpeningBgm = data;
+                        break;
+                    case "map loading image path":
+                        map.MapLoadingImagePath = StripBacktick(data);
+                        break;
+                    case "basic action":
+                        map.BasicAction = StripBacktick(data);
+                        break;
+                    case "map dialog":
+                        map.MapDialog = data;
+                        break;
+                    case "dust":
+                        map.Dust = data;
+                        break;
+                    case "absolute start path":
+                        map.AbsoluteStartPath = data;
+                        break;
+
+                    // --- Complex raw string ---
+                    case "monster condition":
+                        map.MonsterCondition = data;
+                        break;
+                    case "monster spawn pos":
+                        map.MonsterSpawnPos = data;
+                        break;
+                    case "blood monster":
+                        map.BloodMonster = data;
+                        break;
+                    case "blood phase time":
+                        map.BloodPhaseTime = data;
+                        break;
+                    case "ultimate monster":
+                        map.UltimateMonster = data;
+                        break;
+                    case "ultimate phase time":
+                        map.UltimatePhaseTime = data;
+                        break;
+                    case "darkness":
+                        map.Darkness = data;
+                        break;
+                    case "static player start pos":
+                        map.StaticPlayerStartPos = data;
+                        break;
+                    case "belt scroll map":
+                        map.BeltScrollMap = data;
+                        break;
+                    case "move layered map":
+                        map.MoveLayeredMap = data;
+                        break;
+                    case "customized screen edge":
+                        map.CustomizedScreenEdge = data;
+                        break;
+                    case "extended tile":
+                        map.ExtendedTile = data;
+                        break;
+                    case "scroll animation":
+                        map.ScrollAnimation = data;
+                        break;
+                    case "conditional summon monster":
+                        map.ConditionalSummonMonster = data;
+                        break;
+                    case "map over move ani":
+                        map.MapOverMoveAni = data;
+                        break;
+                    case "camera force move":
+                        map.CameraForceMove = data;
+                        break;
+                    case "camera edge exception":
+                        map.CameraEdgeException = data;
+                        break;
+                    case "revive with dlg":
+                        map.ReviveWithDlg = data;
+                        break;
+                    case "zone defence":
+                        map.ZoneDefence = data;
+                        break;
+                    case "tournament enemies":
+                        map.TournamentEnemies = data;
+                        break;
+                    case "tournament start area":
+                        map.TournamentStartArea = data;
+                        break;
+                    case "before rendering info":
+                        map.BeforeRenderingInfo = data;
+                        break;
+                    case "time line":
+                        map.TimeLine = data;
+                        break;
+                    case "summon start area":
+                        map.SummonStartArea = data;
+                        break;
+                    case "map frame":
+                        map.MapFrame = data;
+                        break;
+                    case "tile option":
+                        map.TileOption = data;
+                        break;
+                    case "background effect":
+                        map.BackgroundEffect = data;
+                        break;
+                    case "block effect":
+                        map.BlockEffect = data;
+                        break;
+                    case "item":
+                        map.Item = data;
+                        break;
+                    case "quest":
+                        map.Quest = data;
+                        break;
+                    case "apc create condition":
+                        map.ApcCreateCondition = data;
+                        break;
+                    case "map animation":
+                        map.MapAnimation = data;
+                        break;
+                    case "revival map":
+                        map.RevivalMap = data;
+                        break;
+                    case "block path":
+                        map.BlockPath = data;
                         break;
                 }
             }

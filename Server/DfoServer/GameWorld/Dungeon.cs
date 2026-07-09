@@ -10,7 +10,7 @@ namespace DfoServer.GameWorld
     {
         private const byte StartMapSpecialPassiveObjectType = 9;
 
-        private static LstFile LoadLstFile(string relativePath)
+        internal static LstFile LoadLstFile(string relativePath)
         {
             var content = PvfArchiveAccessor.ReadText(relativePath);
             return LstFile.Parse(content);
@@ -41,7 +41,7 @@ namespace DfoServer.GameWorld
         public static DungeonFile GetDungeonFile(int dungeonId)
             => LoadDungeonFileWithPath(dungeonId).File;
 
-        private static string ResolveFilePath(LstFile lstFile, int id, string description)
+        internal static string ResolveFilePath(LstFile lstFile, int id, string description)
         {
             var entry = lstFile.GetById(id);
             if (entry == null || string.IsNullOrEmpty(entry.FilePath))
@@ -336,9 +336,6 @@ namespace DfoServer.GameWorld
             return defaultMaze;
         }
 
-        
-        private static readonly Regex MapCoordinateFileNameRegex =
-            new Regex(@"\((?<x>-?\d+)[,.](?<y>-?\d+)\)", RegexOptions.Compiled);
         private static readonly Lazy<Dictionary<int, bool>> _monsterHellFlags =
             new Lazy<Dictionary<int, bool>>(() => LoadHellMonsterFlags("monster/monster.lst", "monster"));
         private static readonly Lazy<Dictionary<int, bool>> _aiCharacterHellFlags =
@@ -599,7 +596,7 @@ namespace DfoServer.GameWorld
                         continue;
 
                     var fileName = Path.GetFileName(entry.FilePath);
-                    if (!TryParseMapFileCoordinate(fileName, out var x, out var y))
+                    if (!DungeonMapResolver.TryParseMapFileCoordinate(fileName, out var x, out var y))
                         continue;
 
                     var key = x + "," + y;
@@ -795,7 +792,7 @@ namespace DfoServer.GameWorld
             return result;
         }
 
-        private static (DungeonFile File, string FilePath) LoadDungeonFileWithPath(int dungeonId)
+        internal static (DungeonFile File, string FilePath) LoadDungeonFileWithPath(int dungeonId)
         {
             return _dungeonFileCache.GetOrAdd(dungeonId, id =>
             {
@@ -813,7 +810,7 @@ namespace DfoServer.GameWorld
             return MapFile.Parse(PvfArchiveAccessor.ReadText(Path.Combine("map", mapFilePath)));
         }
 
-        private static List<string> BuildMapDirCandidates(LstFile maplst, MazeInfo maze, string dungeonFilePath)
+        internal static List<string> BuildMapDirCandidates(LstFile maplst, MazeInfo maze, string dungeonFilePath)
         {
             var result = new List<string>();
 
@@ -970,10 +967,8 @@ namespace DfoServer.GameWorld
             MazeInfo defaultMaze;
             if (mazeIndex >= 0)
             {
-                var dgnlstM = LoadLstFile(Path.Combine("dungeon", "dungeon.lst"));
-                var dgnFilePathM = ResolveFilePath(dgnlstM, dungeonId, "地下城");
-                var dngFileM = DungeonFile.Parse(PvfArchiveAccessor.ReadText(Path.Combine("dungeon", dgnFilePathM)));
-                defaultMaze = (mazeIndex < dngFileM.Mazes.Count) ? dngFileM.Mazes[mazeIndex] : GetDungeonDefaultMaze(dungeonId);
+                var dgnFile = GetDungeonFile(dungeonId);
+                defaultMaze = (mazeIndex < dgnFile.Mazes.Count) ? dgnFile.Mazes[mazeIndex] : GetDungeonDefaultMaze(dungeonId);
             }
             else
             {
@@ -987,503 +982,81 @@ namespace DfoServer.GameWorld
 
             if (overrideMapId > 0)
             {
-                var maplstO = LoadLstFile(Path.Combine("map", "map.lst"));
-                var mapFilePathO = ResolveFilePath(maplstO, overrideMapId, "门");
-                var mapFileO = MapFile.Parse(PvfArchiveAccessor.ReadText(Path.Combine("map", mapFilePathO)));
-                var listO = new List<MonsterSumInfo>();
-                foreach (var item in mapFileO.Monsters)
+                var maplst = LoadLstFile(Path.Combine("map", "map.lst"));
+                var mapFilePath = ResolveFilePath(maplst, overrideMapId, "门");
+                var mapFile = MapFile.Parse(PvfArchiveAccessor.ReadText(Path.Combine("map", mapFilePath)));
+                return new MazeSumInfo
                 {
-                    if (!item.MonsterId.HasValue || item.MonsterId.Value <= 0)
-                    {
-                        FileLogger.Log($"[Dungeon] GetDungeonMapMonsterSummaryInformation: skip monster with invalid id in override map={overrideMapId} dungeon={dungeonId}");
-                        continue;
-                    }
-                    var monsterType = (byte)item.Type;
-                    if (monsterType > 3)
-                    {
-                        FileLogger.Log($"[Dungeon] GetDungeonMapMonsterSummaryInformation: clamp monster type {monsterType} to 0 in override map={overrideMapId} dungeon={dungeonId}");
-                        monsterType = 0;
-                    }
-                    int rawMonsterLevel = item.Lv.GetValueOrDefault() != 0
-                        ? dungeonBasicLv + item.AutoLv.GetValueOrDefault()
-                        : item.AutoLv.GetValueOrDefault();
-                    byte monsterLevel = rawMonsterLevel > 0 ? (byte)Math.Min(rawMonsterLevel, 255) : dungeonBasicLv;
-                    listO.Add(new MonsterSumInfo
-                    {
-                        Code = item.MonsterId.Value,
-                        Type = monsterType,
-                        Level = monsterLevel,
-                        IsBlocking = true,
-                    });
-                }
-
-                AppendSpecialPassiveObjects(listO, mapFileO, dungeonBasicLv, overrideMapId, dungeonId, x, y);
-
-                foreach (var apc in mapFileO.AICharacters)
-                {
-                    if (apc.Code <= 0 || !TryGetAICharacterLevel(apc.Code, out var apcLevel))
-                    {
-                        FileLogger.Log($"[Dungeon] GetDungeonMapMonsterSummaryInformation: skip APC code={apc.Code} not found in override map={overrideMapId} dungeon={dungeonId}");
-                        continue;
-                    }
-                    var apcType = (byte)apc.AIType;
-                    if (apcType < 5 || apcType > 8)
-                    {
-                        FileLogger.Log($"[Dungeon] GetDungeonMapMonsterSummaryInformation: clamp APC type {apcType} to 5 in override map={overrideMapId} dungeon={dungeonId}");
-                        apcType = 5;
-                    }
-                    listO.Add(new MonsterSumInfo
-                    {
-                        Code = apc.Code,
-                        Type = apcType,
-                        Level = apcLevel,
-                        IsBlocking = IsBlockingAICharacter(apc),
-                    });
-                }
-                return new MazeSumInfo { Monsters = listO, X = x, Y = y, Index = overrideMapId };
+                    Monsters = ParseMapActors(mapFile, dungeonBasicLv, overrideMapId, dungeonId, x, y),
+                    X = x,
+                    Y = y,
+                    Index = overrideMapId,
+                };
             }
 
-            var maplst = LoadLstFile(Path.Combine("map", "map.lst"));
-            var dgnlstForDir = LoadLstFile(Path.Combine("dungeon", "dungeon.lst"));
-            var dgnFilePath2 = ResolveFilePath(dgnlstForDir, dungeonId, "地下城");
-            var dgnDir = System.IO.Path.GetFileNameWithoutExtension(dgnFilePath2);
-
-            var mapDirCandidates = new List<string>();
-            void AddDirCandidate(string dir)
-            {
-                if (string.IsNullOrEmpty(dir)) return;
-                dir = dir.Replace('\\', '/').TrimEnd('/');
-                if (string.IsNullOrEmpty(dir)) return;
-                foreach (var d in mapDirCandidates)
-                    if (string.Equals(d, dir, StringComparison.OrdinalIgnoreCase)) return;
-                mapDirCandidates.Add(dir);
-            }
-            if (defaultMaze.MapSpecifications != null && maplst != null)
-            {
-                foreach (var spec in defaultMaze.MapSpecifications)
-                {
-                    var entry = maplst.GetById(spec.Index);
-                    if (entry != null && !string.IsNullOrEmpty(entry.FilePath))
-                    {
-                        var dirPart = System.IO.Path.GetDirectoryName(entry.FilePath);
-                        AddDirCandidate(dirPart);
-                    }
-                }
-            }
-            AddDirCandidate(dgnDir);
-            if (dgnDir != null && dgnDir.StartsWith("tutorial_", StringComparison.OrdinalIgnoreCase))
-                AddDirCandidate(dgnDir.Substring("tutorial_".Length));
-            if (maplst != null && !string.IsNullOrEmpty(dgnDir))
-            {
-                foreach (var entry in maplst.Entries)
-                {
-                    if (entry.FilePath == null) continue;
-                    var fn = System.IO.Path.GetFileName(entry.FilePath);
-                    if (fn != null && fn.StartsWith(dgnDir, StringComparison.OrdinalIgnoreCase))
-                    {
-                        AddDirCandidate(System.IO.Path.GetDirectoryName(entry.FilePath));
-                    }
-                }
-            }
-            if (mapDirCandidates.Count == 0) AddDirCandidate(dgnDir);
-
-            var mapId = -1;
-
-            bool isStartRoom = defaultMaze.StartMap != null && defaultMaze.StartMap.Length >= 2
-                               && defaultMaze.StartMap[0] == x && defaultMaze.StartMap[1] == y;
-            var effectiveBoss = bossPos ?? (defaultMaze.BossMap != null && defaultMaze.BossMap.Length >= 2
-                ? new[] { defaultMaze.BossMap[0], defaultMaze.BossMap[1] } : null);
-            bool isBossRoom = effectiveBoss != null && effectiveBoss[0] == x && effectiveBoss[1] == y;
-            bool IsQuestVariantFile(string fileName)
-            {
-                return IsQuestVariantFileName(fileName);
-            }
-            bool InCandidateDir(string filePath)
-            {
-                if (filePath == null) return false;
-                foreach (var d in mapDirCandidates)
-                {
-                    if (filePath.StartsWith(d + "/", StringComparison.OrdinalIgnoreCase)
-                        || filePath.StartsWith(d + "\\", StringComparison.OrdinalIgnoreCase))
-                        return true;
-                }
-                return false;
-            }
-            int FindMapIdByFileName(string[] patterns, bool allowBossVariant = false)
-            {
-                if (maplst == null) return -1;
-                foreach (var pat in patterns)
-                {
-                    foreach (var entry in maplst.Entries)
-                    {
-                        if (!InCandidateDir(entry.FilePath)) continue;
-                        var fileName = System.IO.Path.GetFileName(entry.FilePath);
-                        if (IsQuestVariantFile(fileName)) continue;
-                        if (!allowBossVariant && IsBossVariantFileName(fileName)) continue;
-                        if (fileName.IndexOf(pat, StringComparison.OrdinalIgnoreCase) >= 0)
-                            return entry.Id;
-                    }
-                }
-                return -1;
-            }
-            int FindMapIdByPrefixChar(char ch)
-            {
-                if (maplst == null) return -1;
-                foreach (var entry in maplst.Entries)
-                {
-                    if (!InCandidateDir(entry.FilePath)) continue;
-                    var fileName = System.IO.Path.GetFileName(entry.FilePath);
-                    if (IsQuestVariantFile(fileName)) continue;
-                    if (fileName.Length > 1
-                        && char.ToLowerInvariant(fileName[0]) == char.ToLowerInvariant(ch)
-                        && char.IsDigit(fileName[1]))
-                        return entry.Id;
-                }
-                return -1;
-            }
-            int FindMapIdByDigitSuffix(char suffix)
-            {
-                if (maplst == null) return -1;
-                foreach (var entry in maplst.Entries)
-                {
-                    if (!InCandidateDir(entry.FilePath)) continue;
-                    var fileName = System.IO.Path.GetFileName(entry.FilePath);
-                    if (IsQuestVariantFile(fileName)) continue;
-                    var stem = System.IO.Path.GetFileNameWithoutExtension(fileName);
-                    if (stem.Length < 2) continue;
-                    if (stem[stem.Length - 1] != suffix) continue;
-                    char prev = stem[stem.Length - 2];
-                    if (!(char.IsDigit(prev) || prev == ')')) continue;
-                    bool hasDigit = false;
-                    for (int i = 0; i < stem.Length - 1; i++) if (char.IsDigit(stem[i])) { hasDigit = true; break; }
-                    if (!hasDigit) continue;
-                    return entry.Id;
-                }
-                return -1;
-            }
-            int FindMapIdByKeywordPrefix(string keyword)
-            {
-                if (maplst == null) return -1;
-                foreach (var entry in maplst.Entries)
-                {
-                    if (!InCandidateDir(entry.FilePath)) continue;
-                    var fileName = System.IO.Path.GetFileName(entry.FilePath);
-                    if (IsQuestVariantFile(fileName)) continue;
-                    var stem = System.IO.Path.GetFileNameWithoutExtension(fileName);
-                    if (string.IsNullOrEmpty(stem)) continue;
-                    if (stem.StartsWith(keyword, StringComparison.OrdinalIgnoreCase))
-                        return entry.Id;
-                    if (stem.Length > keyword.Length + 1
-                        && stem[stem.Length - keyword.Length - 1] == '_'
-                        && string.Compare(stem, stem.Length - keyword.Length, keyword, 0, keyword.Length, StringComparison.OrdinalIgnoreCase) == 0)
-                        return entry.Id;
-                    var us = stem.IndexOf('_');
-                    if (us > 0 && us < stem.Length - 1)
-                    {
-                        bool digitsOnly = true;
-                        for (int i = 0; i < us; i++) if (!char.IsDigit(stem[i])) { digitsOnly = false; break; }
-                        if (digitsOnly && string.Compare(stem, us + 1, keyword, 0, keyword.Length, StringComparison.OrdinalIgnoreCase) == 0)
-                            return entry.Id;
-                    }
-                }
-                return -1;
-            }
-            int FindNumericStemNeighbor(bool wantSmallest)
-            {
-                if (maplst == null) return -1;
-                int chosen = -1;
-                foreach (var entry in maplst.Entries)
-                {
-                    if (!InCandidateDir(entry.FilePath)) continue;
-                    var fileName = System.IO.Path.GetFileName(entry.FilePath);
-                    if (IsQuestVariantFile(fileName)) continue;
-                    var stem = System.IO.Path.GetFileNameWithoutExtension(fileName);
-                    if (string.IsNullOrEmpty(stem)) continue;
-                    bool allDigit = true;
-                    for (int i = 0; i < stem.Length; i++) if (!char.IsDigit(stem[i])) { allDigit = false; break; }
-                    if (!allDigit) continue;
-                    if (chosen == -1) { chosen = entry.Id; continue; }
-                    if (wantSmallest) { if (entry.Id < chosen) chosen = entry.Id; }
-                    else { if (entry.Id > chosen) chosen = entry.Id; }
-                }
-                return chosen;
-            }
-            int FindMapIdByDgnNamePrefix()
-            {
-                if (maplst == null || string.IsNullOrEmpty(dgnDir)) return -1;
-                foreach (var entry in maplst.Entries)
-                {
-                    if (!InCandidateDir(entry.FilePath)) continue;
-                    var fileName = System.IO.Path.GetFileName(entry.FilePath);
-                    if (IsQuestVariantFile(fileName)) continue;
-                    if (fileName.StartsWith(dgnDir, StringComparison.OrdinalIgnoreCase))
-                        return entry.Id;
-                }
-                return -1;
-            }
-            var bossActorMapCache = new Dictionary<int, bool>();
-            // Use parsed map content instead of map ids so duplicated BOSS coordinates work across PVFs.
-            bool HasBossActor(int mapId)
-            {
-                if (maplst == null || mapId <= 0) return false;
-                bool cached;
-                if (bossActorMapCache.TryGetValue(mapId, out cached))
-                    return cached;
-
-                var found = false;
-                try
-                {
-                    var mapFilePath = ResolveFilePath(maplst, mapId, "map");
-                    var mapFile = MapFile.Parse(PvfArchiveAccessor.ReadText(Path.Combine("map", mapFilePath)));
-                    foreach (var monster in mapFile.Monsters)
-                    {
-                        if (monster.MonsterId.GetValueOrDefault() > 0 && monster.Type == MonsterType.Boss)
-                        {
-                            found = true;
-                            break;
-                        }
-                    }
-                    if (!found)
-                    {
-                        foreach (var apc in mapFile.AICharacters)
-                        {
-                            if (apc.Code > 0 && apc.AIType == ApcAIType.Boss)
-                            {
-                                found = true;
-                                break;
-                            }
-                        }
-                    }
-                }
-                catch { }
-                bossActorMapCache[mapId] = found;
-                return found;
-            }
-            int ChooseBossRoomMapId(List<int> bossActorMapIds, int[] originalCandidates)
-            {
-                if (bossActorMapIds != null && bossActorMapIds.Count > 0)
-                {
-                    return bossActorMapIds.Count > 1
-                        ? bossActorMapIds[Infrastructure.ServerRandom.Next(bossActorMapIds.Count)]
-                        : bossActorMapIds[0];
-                }
-
-                if (originalCandidates == null || originalCandidates.Length == 0)
-                    return -1;
-                return originalCandidates.Length > 1
-                    ? originalCandidates[Infrastructure.ServerRandom.Next(originalCandidates.Length)]
-                    : originalCandidates[0];
-            }
-            int FindMapIdByMapSpecification(bool allowMapTypeForBossRoom)
-            {
-                if (defaultMaze.MapSpecifications == null)
-                    return -1;
-
-                if (isBossRoom)
-                {
-                    var bossActorMapIds = new List<int>();
-                    int[] originalCandidates = null;
-                    for (var specIndex = 0; specIndex < defaultMaze.MapSpecifications.Count; specIndex++)
-                    {
-                        var item = defaultMaze.MapSpecifications[specIndex];
-                        if (item.X != x || item.Y != y)
-                            continue;
-                        var specType = item.Type ?? string.Empty;
-                        if (!string.Equals(specType, "boss", StringComparison.OrdinalIgnoreCase)
-                            && !(allowMapTypeForBossRoom && string.Equals(specType, "map", StringComparison.OrdinalIgnoreCase)))
-                            continue;
-
-                        var candidates = item.MapCandidates != null && item.MapCandidates.Length > 0
-                            ? item.MapCandidates
-                            : new[] { item.Index };
-                        if (originalCandidates == null)
-                            originalCandidates = candidates;
-                        foreach (var candidate in candidates)
-                        {
-                            if (candidate > 0 && HasBossActor(candidate))
-                                bossActorMapIds.Add(candidate);
-                        }
-                    }
-
-                    // Some PVFs list an ordinary coordinate map before the actual BOSS variant
-                    // for the same room. Prefer maps whose content declares a BOSS actor; otherwise
-                    // keep the original first-match/random-candidate behavior.
-                    return ChooseBossRoomMapId(bossActorMapIds, originalCandidates);
-                }
-
-                foreach (var item in defaultMaze.MapSpecifications)
-                {
-                    if (item.X != x || item.Y != y)
-                        continue;
-                    if (string.Equals(item.Type, "boss", StringComparison.OrdinalIgnoreCase))
-                        continue;
-                    if (item.MapCandidates != null && item.MapCandidates.Length > 1)
-                        return item.MapCandidates[Infrastructure.ServerRandom.Next(item.MapCandidates.Length)];
-                    return item.Index;
-                }
-
-                return -1;
-            }
-
-            var isQuestConnectedMaze = defaultMaze.QuestConnection != null
-                && defaultMaze.QuestConnection.Length >= 2;
-
-            if (isQuestConnectedMaze)
-                mapId = FindMapIdByMapSpecification(allowMapTypeForBossRoom: false);
-
-            if (mapId == -1 && isStartRoom)
-            {
-                mapId = FindMapIdByFileName(new[]
-                {
-                    $"({x},{y})_start", $"({x},{y})start",
-                    $"({x}.{y})_start", $"({x}.{y})start",
-                });
-            }
-
-            if (mapId == -1 && isStartRoom && !isQuestConnectedMaze)
-            {
-                mapId = FindMapIdByPrefixChar('s');
-                if (mapId == -1)
-                    mapId = FindMapIdByDigitSuffix('S');
-                if (mapId == -1)
-                    mapId = FindMapIdByKeywordPrefix("start");
-            }
+            int mapId = DungeonMapResolver.ResolveMapId(dungeonId, x, y, defaultMaze, mazeIndex, bossPos);
 
             if (mapId == -1)
             {
-                mapId = FindMapIdByMapSpecification(allowMapTypeForBossRoom: false);
-            }
-
-            if (isBossRoom && mapId == -1)
-            {
-                int bossVariant = FindMapIdByFileName(new[]
-                {
-                    $"({x},{y})_boss", $"({x},{y})boss",
-                    $"({x}.{y})_boss", $"({x}.{y})boss",
-                }, allowBossVariant: true);
-                if (bossVariant == -1)
-                    bossVariant = FindMapIdByPrefixChar('b');
-                if (bossVariant == -1)
-                    bossVariant = FindMapIdByDigitSuffix('B');
-                if (bossVariant == -1)
-                    bossVariant = FindMapIdByKeywordPrefix("boss");
-                if (bossVariant != -1)
-                    mapId = bossVariant;
-            }
-
-            if (mapId == -1 && isBossRoom)
-            {
-                foreach (var item in defaultMaze.MapSpecifications)
-                {
-                    if (item.X == x && item.Y == y && item.Type == "map")
-                    {
-                        mapId = (item.MapCandidates != null && item.MapCandidates.Length > 1)
-                            ? item.MapCandidates[Infrastructure.ServerRandom.Next(item.MapCandidates.Length)]
-                            : item.Index;
-                        break;
-                    }
-                }
-            }
-
-            if (mapId == -1 && isBossRoom)
-            {
-                mapId = FindNumericStemNeighbor(wantSmallest: false);
-            }
-
-            if (mapId == -1 && isStartRoom)
-            {
-                mapId = FindMapIdByPrefixChar('s');
-                if (mapId == -1)
-                    mapId = FindMapIdByDigitSuffix('S');
-                if (mapId == -1)
-                    mapId = FindMapIdByKeywordPrefix("start");
-                if (mapId == -1)
-                    mapId = FindNumericStemNeighbor(wantSmallest: true);
-            }
-
-            if (mapId == -1)
-            {
-                mapId = FindMapIdByFileName(new[] { $"({x},{y})", $"({x}.{y})" });
-            }
-
-            if (mapId == -1 && (isStartRoom || isBossRoom))
-            {
-                mapId = FindMapIdByDgnNamePrefix();
-            }
-
-            if (mapId == -1)
-            {
-                var preferQuestVariantFallback = isStartRoom
-                    || (defaultMaze.QuestConnection != null && defaultMaze.QuestConnection.Length >= 2);
-                string fallbackReason;
-                mapId = SelectFallbackMapIdForUnresolvedRoom(
-                    dungeonId,
-                    mazeIndex,
-                    x,
-                    y,
-                    defaultMaze.MapSpecifications,
-                    maplst != null ? maplst.Entries : null,
-                    mapDirCandidates,
-                    preferQuestVariantFallback,
-                    out fallbackReason);
-
-                if (mapId > 0)
-                    FileLogger.Log($"[Dungeon] GetDungeonMapMonsterSummaryInformation fallback to {fallbackReason}: dungeon={dungeonId} maze={mazeIndex} room=({x},{y}) -> map={mapId}");
-            }
-
-            if (mapId == -1)
-            {
-                FileLogger.Log($"[Dungeon] GetDungeonMapMonsterSummaryInformation WARNING: no map resolved for dungeon={dungeonId} maze={mazeIndex} room=({x},{y}) startRoom={isStartRoom} bossRoom={isBossRoom}");
+                FileLogger.Log($"[Dungeon] GetDungeonMapMonsterSummaryInformation WARNING: no map resolved for dungeon={dungeonId} maze={mazeIndex} room=({x},{y})");
                 return new MazeSumInfo { X = x, Y = y, Index = 0, Monsters = new List<MonsterSumInfo>() };
             }
-            if (maplst == null)
-                throw new Exception("未能成功解析门LST文件 map/map.lst");
 
-            var mapFilePath = ResolveFilePath(maplst, mapId, "门");
-            var mapFile = MapFile.Parse(PvfArchiveAccessor.ReadText(Path.Combine("map", mapFilePath)));
+            var maplst2 = LoadLstFile(Path.Combine("map", "map.lst"));
+            var resolvedMapFilePath = ResolveFilePath(maplst2, mapId, "门");
+            var resolvedMapFile = MapFile.Parse(PvfArchiveAccessor.ReadText(Path.Combine("map", resolvedMapFilePath)));
 
+            return new MazeSumInfo
+            {
+                Monsters = ParseMapActors(resolvedMapFile, dungeonBasicLv, mapId, dungeonId, x, y),
+                X = x,
+                Y = y,
+                Index = mapId,
+            };
+        }
+
+        private static List<MonsterSumInfo> ParseMapActors(MapFile mapFile, byte dungeonBasicLv, int mapId, int dungeonId, int x, int y)
+        {
             var list = new List<MonsterSumInfo>();
             foreach (var item in mapFile.Monsters)
             {
                 if (!item.MonsterId.HasValue || item.MonsterId.Value <= 0)
                 {
-                    FileLogger.Log($"[Dungeon] GetDungeonMapMonsterSummaryInformation: skip monster with invalid id in map={mapId} dungeon={dungeonId} room=({x},{y})");
+                    FileLogger.Log($"[Dungeon] ParseMapActors: skip monster with invalid id in map={mapId} dungeon={dungeonId} room=({x},{y})");
                     continue;
                 }
                 var monsterType = (byte)item.Type;
                 if (monsterType > 3)
                 {
-                    FileLogger.Log($"[Dungeon] GetDungeonMapMonsterSummaryInformation: clamp monster type {monsterType} to 0 in map={mapId} dungeon={dungeonId} room=({x},{y})");
+                    FileLogger.Log($"[Dungeon] ParseMapActors: clamp monster type {monsterType} to 0 in map={mapId} dungeon={dungeonId} room=({x},{y})");
                     monsterType = 0;
                 }
                 int rawMonsterLevel = item.Lv.GetValueOrDefault() != 0
                     ? dungeonBasicLv + item.AutoLv.GetValueOrDefault()
                     : item.AutoLv.GetValueOrDefault();
                 byte monsterLevel = rawMonsterLevel > 0 ? (byte)Math.Min(rawMonsterLevel, 255) : dungeonBasicLv;
-                var monster = new MonsterSumInfo
+                list.Add(new MonsterSumInfo
                 {
                     Code = item.MonsterId.Value,
                     Type = monsterType,
                     Level = monsterLevel,
                     IsBlocking = true,
-                };
-                list.Add(monster);
+                });
             }
 
             AppendSpecialPassiveObjects(list, mapFile, dungeonBasicLv, mapId, dungeonId, x, y);
 
-            // APC
             foreach (var apc in mapFile.AICharacters)
             {
                 if (apc.Code <= 0 || !TryGetAICharacterLevel(apc.Code, out var apcLevel))
                 {
-                    FileLogger.Log($"[Dungeon] GetDungeonMapMonsterSummaryInformation: skip APC code={apc.Code} not found in map={mapId} dungeon={dungeonId} room=({x},{y})");
+                    FileLogger.Log($"[Dungeon] ParseMapActors: skip APC code={apc.Code} not found in map={mapId} dungeon={dungeonId} room=({x},{y})");
                     continue;
                 }
                 var apcType = (byte)apc.AIType;
                 if (apcType < 5 || apcType > 8)
                 {
-                    FileLogger.Log($"[Dungeon] GetDungeonMapMonsterSummaryInformation: clamp APC type {apcType} to 5 in map={mapId} dungeon={dungeonId} room=({x},{y})");
+                    FileLogger.Log($"[Dungeon] ParseMapActors: clamp APC type {apcType} to 5 in map={mapId} dungeon={dungeonId} room=({x},{y})");
                     apcType = 5;
                 }
                 list.Add(new MonsterSumInfo
@@ -1495,13 +1068,7 @@ namespace DfoServer.GameWorld
                 });
             }
 
-            return new MazeSumInfo
-            {
-                Monsters = list,
-                X = x,
-                Y = y,
-                Index = mapId,
-            };
+            return list;
         }
 
         private static bool IsBlockingAICharacter(AICharacterInfo apc)
@@ -1578,327 +1145,6 @@ namespace DfoServer.GameWorld
                 FileLogger.Log($"[Dungeon] special passive objects: dungeon={dungeonId} room=({x},{y}) map={mapId} objects={objectRows} templates={templateRows}");
         }
 
-        internal static int SelectFallbackMapIdForUnresolvedRoom(
-            int dungeonId,
-            int mazeIndex,
-            int x,
-            int y,
-            IReadOnlyList<MapSpecificationItem> mapSpecifications,
-            IReadOnlyList<LstEntry> mapEntries,
-            IReadOnlyList<string> mapDirCandidates,
-            bool preferQuestVariant,
-            out string reason)
-        {
-            reason = string.Empty;
-
-            if (preferQuestVariant)
-            {
-                var questMapId = FindQuestVariantMapId(mapEntries, mapDirCandidates, x, y, out var questReason);
-                if (questMapId > 0)
-                {
-                    reason = questReason;
-                    return questMapId;
-                }
-            }
-
-            // Use nearby ordinary coordinate maps by filename. This stays below exact
-            // map-spec/name matches, but above the old "first map spec" fallback that
-            // can point at an unrelated room. It must run before generic maze templates:
-            // distant maze(x,y) templates can have incompatible exits for sparse mazes.
-            var coordinateMapId = FindNearestCoordinateMapId(
-                mapEntries,
-                mapDirCandidates,
-                x,
-                y,
-                requireMazeTemplateName: false,
-                allowBossVariant: false,
-                allowQuestVariant: false,
-                out var coordinateReason);
-            if (coordinateMapId > 0)
-            {
-                reason = coordinateReason;
-                return coordinateMapId;
-            }
-
-            // Some PVFs omit ordinary rooms from [map specification] and keep a
-            // generic maze(x,y) map in the same directory. Use that PVF template only
-            // after nearby coordinate maps so a distant template cannot trap the client.
-            var mazeTemplateMapId = FindNearestCoordinateMapId(
-                mapEntries,
-                mapDirCandidates,
-                x,
-                y,
-                requireMazeTemplateName: true,
-                allowBossVariant: false,
-                allowQuestVariant: false,
-                out var mazeTemplateReason);
-            if (mazeTemplateMapId > 0)
-            {
-                reason = mazeTemplateReason;
-                return mazeTemplateMapId;
-            }
-
-            if (mapSpecifications != null)
-            {
-                for (var i = 0; i < mapSpecifications.Count; i++)
-                {
-                    var item = mapSpecifications[i];
-                    if (item == null || item.Index <= 0)
-                        continue;
-
-                    reason = "first map spec";
-                    if (item.MapCandidates != null && item.MapCandidates.Length > 0)
-                    {
-                        var pick = Infrastructure.ServerRandom.Next(item.MapCandidates.Length);
-                        return item.MapCandidates[pick];
-                    }
-                    return item.Index;
-                }
-            }
-
-            var ordinaryMapId = FindCandidateMapId(mapEntries, mapDirCandidates, allowQuestVariant: false, out var ordinaryReason);
-            if (ordinaryMapId > 0)
-            {
-                reason = ordinaryReason;
-                return ordinaryMapId;
-            }
-
-            var fallbackQuestMapId = FindQuestVariantMapId(mapEntries, mapDirCandidates, x, y, out var fallbackQuestReason);
-            if (fallbackQuestMapId > 0)
-            {
-                reason = fallbackQuestReason;
-                return fallbackQuestMapId;
-            }
-
-            return -1;
-        }
-
-        private static int FindNearestCoordinateMapId(
-            IReadOnlyList<LstEntry> mapEntries,
-            IReadOnlyList<string> mapDirCandidates,
-            int x,
-            int y,
-            bool requireMazeTemplateName,
-            bool allowBossVariant,
-            bool allowQuestVariant,
-            out string reason)
-        {
-            reason = string.Empty;
-            if (mapEntries == null)
-                return -1;
-
-            var bestId = -1;
-            var bestX = 0;
-            var bestY = 0;
-            var bestDistance = int.MaxValue;
-            var bestAxisScore = int.MinValue;
-
-            for (var i = 0; i < mapEntries.Count; i++)
-            {
-                var entry = mapEntries[i];
-                if (entry == null || !InMapDirCandidate(entry.FilePath, mapDirCandidates))
-                    continue;
-
-                var fileName = Path.GetFileName(entry.FilePath);
-                if (!allowQuestVariant && IsQuestVariantFileName(fileName))
-                    continue;
-                if (!allowBossVariant && IsBossVariantFileName(fileName))
-                    continue;
-                if (requireMazeTemplateName && !IsMazeTemplateFileName(fileName))
-                    continue;
-                if (!requireMazeTemplateName && IsMazeTemplateFileName(fileName))
-                    continue;
-                if (!TryParseMapFileCoordinate(fileName, out var mapX, out var mapY))
-                    continue;
-
-                // Prefer closer PVF coordinates, then same-row/same-column matches,
-                // then the smaller map id so repeated fallback is deterministic.
-                var distance = Math.Abs(mapX - x) + Math.Abs(mapY - y);
-                var axisScore = (mapX == x ? 1 : 0) + (mapY == y ? 1 : 0);
-                if (bestId > 0
-                    && (distance > bestDistance
-                        || (distance == bestDistance && axisScore < bestAxisScore)
-                        || (distance == bestDistance && axisScore == bestAxisScore && entry.Id >= bestId)))
-                    continue;
-
-                bestId = entry.Id;
-                bestX = mapX;
-                bestY = mapY;
-                bestDistance = distance;
-                bestAxisScore = axisScore;
-            }
-
-            if (bestId <= 0)
-                return -1;
-
-            reason = requireMazeTemplateName
-                ? $"nearest maze coordinate map ({bestX},{bestY})"
-                : $"nearest coordinate map ({bestX},{bestY})";
-            return bestId;
-        }
-
-        private static int FindCandidateMapId(
-            IReadOnlyList<LstEntry> mapEntries,
-            IReadOnlyList<string> mapDirCandidates,
-            bool allowQuestVariant,
-            out string reason)
-        {
-            reason = string.Empty;
-            if (mapEntries == null)
-                return -1;
-
-            for (var i = 0; i < mapEntries.Count; i++)
-            {
-                var entry = mapEntries[i];
-                if (entry == null || !InMapDirCandidate(entry.FilePath, mapDirCandidates))
-                    continue;
-
-                var fileName = Path.GetFileName(entry.FilePath);
-                if (!allowQuestVariant && IsQuestVariantFileName(fileName))
-                    continue;
-
-                reason = allowQuestVariant ? "first candidate map" : "first non-quest candidate map";
-                return entry.Id;
-            }
-
-            return -1;
-        }
-
-        private static int FindQuestVariantMapId(
-            IReadOnlyList<LstEntry> mapEntries,
-            IReadOnlyList<string> mapDirCandidates,
-            int x,
-            int y,
-            out string reason)
-        {
-            reason = string.Empty;
-            if (mapEntries == null)
-                return -1;
-
-            var bestId = -1;
-            var bestScore = -1;
-            for (var i = 0; i < mapEntries.Count; i++)
-            {
-                var entry = mapEntries[i];
-                if (entry == null || !InMapDirCandidate(entry.FilePath, mapDirCandidates))
-                    continue;
-
-                var fileName = Path.GetFileName(entry.FilePath);
-                if (!IsQuestVariantFileName(fileName))
-                    continue;
-
-                var score = ScoreQuestVariantFileName(fileName, x, y);
-                if (score <= bestScore)
-                    continue;
-
-                bestScore = score;
-                bestId = entry.Id;
-            }
-
-            if (bestId > 0)
-            {
-                reason = bestScore >= 100 ? "quest-variant coordinate map" : "quest-variant map";
-                return bestId;
-            }
-
-            return -1;
-        }
-
-        private static int ScoreQuestVariantFileName(string fileName, int x, int y)
-        {
-            if (string.IsNullOrEmpty(fileName))
-                return -1;
-
-            var stem = Path.GetFileNameWithoutExtension(fileName) ?? string.Empty;
-            if (stem.IndexOf($"({x},{y})", StringComparison.OrdinalIgnoreCase) >= 0
-                || stem.IndexOf($"({x}.{y})", StringComparison.OrdinalIgnoreCase) >= 0)
-                return 120;
-
-            if (stem.IndexOf($"{x}_{y}", StringComparison.OrdinalIgnoreCase) >= 0
-                || stem.IndexOf($"{x}-{y}", StringComparison.OrdinalIgnoreCase) >= 0
-                || stem.IndexOf($"{x}.{y}", StringComparison.OrdinalIgnoreCase) >= 0)
-                return 100;
-
-            return 10;
-        }
-
-        private static bool IsQuestVariantFileName(string fileName)
-        {
-            if (string.IsNullOrEmpty(fileName)) return false;
-            var stem = Path.GetFileNameWithoutExtension(fileName) ?? string.Empty;
-            return stem.StartsWith("q_", StringComparison.OrdinalIgnoreCase)
-                || stem.StartsWith("quest_", StringComparison.OrdinalIgnoreCase)
-                || (stem.Length > 1
-                    && char.ToLowerInvariant(stem[0]) == 'q'
-                    && char.IsDigit(stem[1]));
-        }
-
-        // Only unresolved ordinary-room fallback uses this filter. Real BOSS rooms
-        // are resolved earlier through map specs, boss coordinates, and actor checks.
-        private static bool IsBossVariantFileName(string fileName)
-        {
-            if (string.IsNullOrEmpty(fileName)) return false;
-
-            var stem = Path.GetFileNameWithoutExtension(fileName) ?? string.Empty;
-            if (stem.IndexOf("boss", StringComparison.OrdinalIgnoreCase) >= 0)
-                return true;
-
-            if (stem.EndsWith("B", StringComparison.OrdinalIgnoreCase))
-            {
-                var prev = stem.Length >= 2 ? stem[stem.Length - 2] : '\0';
-                return char.IsDigit(prev) || prev == ')';
-            }
-
-            return false;
-        }
-
-        private static bool IsMazeTemplateFileName(string fileName)
-        {
-            if (string.IsNullOrEmpty(fileName)) return false;
-
-            var stem = Path.GetFileNameWithoutExtension(fileName) ?? string.Empty;
-            return stem.IndexOf("maze(", StringComparison.OrdinalIgnoreCase) >= 0;
-        }
-
-        // PVF map filenames commonly encode room coordinates as "(x,y)" or "(x.y)".
-        // The parser is filename-only to avoid opening map contents on this fallback path.
-        private static bool TryParseMapFileCoordinate(string fileName, out int x, out int y)
-        {
-            x = 0;
-            y = 0;
-            if (string.IsNullOrEmpty(fileName))
-                return false;
-
-            var stem = Path.GetFileNameWithoutExtension(fileName) ?? string.Empty;
-            var match = MapCoordinateFileNameRegex.Match(stem);
-            return match.Success
-                && int.TryParse(match.Groups["x"].Value, out x)
-                && int.TryParse(match.Groups["y"].Value, out y);
-        }
-
-        private static bool InMapDirCandidate(string filePath, IReadOnlyList<string> mapDirCandidates)
-        {
-            if (string.IsNullOrEmpty(filePath))
-                return false;
-
-            if (mapDirCandidates == null || mapDirCandidates.Count == 0)
-                return true;
-
-            var normalizedPath = filePath.Replace('\\', '/');
-            for (var i = 0; i < mapDirCandidates.Count; i++)
-            {
-                var dir = mapDirCandidates[i];
-                if (string.IsNullOrEmpty(dir))
-                    continue;
-
-                dir = dir.Replace('\\', '/').TrimEnd('/');
-                if (normalizedPath.Equals(dir, StringComparison.OrdinalIgnoreCase)
-                    || normalizedPath.StartsWith(dir + "/", StringComparison.OrdinalIgnoreCase))
-                    return true;
-            }
-
-            return false;
-        }
 
         private static byte GetAICharacterLevel(int apcCode)
         {

@@ -233,7 +233,7 @@ namespace DfoServer.Network.Handlers.Dungeon
             if (session.Player.HellPartyGorgeousChallengeEnabled)
             {
                 var veryHardRoom = DungeonData.FindHellMapRoom(req.DungeonId, maze, mazeIndex, 1);
-                gorgeousGoldBefore = _svc.ReadGold(
+                gorgeousGoldBefore = ReadGold(
                     session.Player.CharacterId,
                     session.Account?.AccountId ?? 1);
                 if (veryHardRoom.Found && gorgeousGoldBefore >= GorgeousChallengeGoldCost)
@@ -262,17 +262,19 @@ namespace DfoServer.Network.Handlers.Dungeon
                 return;
             }
 
-            if (!_svc.TryConsumeHellPartyTicket(session, area, dungeonMinLevel, out var ticketResult))
+            var ticketResult = _svc.EntryCost.TryConsumeAbyssPartyTicket(
+                session.Player.CharacterId, session.Account?.AccountId ?? 1, area, dungeonMinLevel);
+            if (!ticketResult.Success)
             {
                 DisableCurrentHellParty(session);
-                FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] SELECT_DUNGEON: hell ticket check failed dungeon={req.DungeonId} area={area?.AreaId ?? -1} minLevel={dungeonMinLevel} reason={ticketResult.Reason}");
+                FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] SELECT_DUNGEON: hell ticket check failed dungeon={req.DungeonId} area={area?.AreaId ?? -1} minLevel={dungeonMinLevel} reason={ticketResult.FailReason}");
                 return;
             }
 
             var gorgeousApplied = false;
             if (gorgeousCanApply)
             {
-                if (_svc.TrySpendGold(session.Player.CharacterId, session.Account?.AccountId ?? 1, GorgeousChallengeGoldCost, out gorgeousGoldBefore, out gorgeousGoldAfter))
+                if (TrySpendGold(session.Player.CharacterId, session.Account?.AccountId ?? 1, GorgeousChallengeGoldCost, out gorgeousGoldBefore, out gorgeousGoldAfter))
                 {
                     gorgeousApplied = true;
                     run.HellGorgeousChallenge = true;
@@ -290,7 +292,7 @@ namespace DfoServer.Network.Handlers.Dungeon
             run.HellMapY = (byte)hellRoom.Y;
             run.HellRoomInfo = hellRoom;
 
-            FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] SELECT_DUNGEON: hell room=({hellRoom.X},{hellRoom.Y}) map={hellRoom.MapId} normalMap={hellRoom.NormalMapId} waves={hellRoom.Waves.Count} requestFlag={req.HellPartyRequestFlag} difficultyFlag={req.HellPartyDifficultyFlag} mode={run.HellPartyMode} veryDifficult={run.VeryDifficultHell} area={area?.AreaId ?? -1} minLevel={dungeonMinLevel} ticket={(ticketResult.IsFreePass ? "freepass" : "normal")} updates={ticketResult.Updates.Count}");
+            FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] SELECT_DUNGEON: hell room=({hellRoom.X},{hellRoom.Y}) map={hellRoom.MapId} normalMap={hellRoom.NormalMapId} waves={hellRoom.Waves.Count} requestFlag={req.HellPartyRequestFlag} difficultyFlag={req.HellPartyDifficultyFlag} mode={run.HellPartyMode} veryDifficult={run.VeryDifficultHell} area={area?.AreaId ?? -1} minLevel={dungeonMinLevel} ticket={(ticketResult.IsFreePass ? "freepass" : "normal")} updates={ticketResult.ConsumedItems.Count}");
 
             await SendHellPartyTicketUpdates(session, ticketResult);
             if (gorgeousApplied && gorgeousGoldAfter >= 0)
@@ -303,9 +305,9 @@ namespace DfoServer.Network.Handlers.Dungeon
 
         private static async Task SendHellPartyTicketUpdates(
             EnhancedClientSession session,
-            HellPartyTicketConsumeResult ticketResult)
+            EntryCostResult ticketResult)
         {
-            foreach (var update in ticketResult.Updates)
+            foreach (var update in ticketResult.ConsumedItems)
             {
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000E,
                     ItemListUpdateBuilder.BuildCommonSlotUpdate(update.SlotIndex, update.ItemId, update.RemainingCount)));
@@ -334,13 +336,48 @@ namespace DfoServer.Network.Handlers.Dungeon
                 try
                 {
                     if (includeHellParty)
-                        HellMonsterDropConfig.WarmUp();
+                        DropService.WarmUpAbyssParty();
                 }
                 catch (Exception ex)
                 {
                     FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] DROP_CONFIG_WARMUP ERROR: {ex.Message}");
                 }
             });
+        }
+
+        private int ReadGold(int characterId, int accountId)
+        {
+            try
+            {
+                using (var scope = _svc.AssetService.OpenScope(characterId, accountId))
+                    return _svc.AssetService.LoadWallet(scope).Gold;
+            }
+            catch (Exception ex) { FileLogger.Log($"[DungeonEntry] ReadGold ERROR: cid={characterId}: {ex.Message}"); return 0; }
+        }
+
+        private bool TrySpendGold(int characterId, int accountId, int goldCost, out int currentGold, out int updatedGold)
+        {
+            currentGold = 0;
+            updatedGold = 0;
+            try
+            {
+                using (var scope = _svc.AssetService.OpenScope(characterId, accountId))
+                {
+                    var wallet = _svc.AssetService.LoadWallet(scope);
+                    currentGold = wallet.Gold;
+                    updatedGold = wallet.Gold;
+                    if (!_svc.AssetService.TrySpendGold(scope, goldCost))
+                        return false;
+                    updatedGold = wallet.Gold - goldCost;
+                    scope.Commit();
+                    return true;
+                }
+            }
+            catch (Exception ex)
+            {
+                FileLogger.Log($"[DungeonEntry] TrySpendGold ERROR: {ex.Message}");
+                return false;
+            }
         }
     }
 }

@@ -27,18 +27,18 @@ namespace DfoServer.SelfTests
             };
             run.RoomKilledSeqIds = new HashSet<ushort> { 10 };
 
-            var progress = DungeonSharedServices.GetCurrentRoomProgress(session);
+            var progress = DungeonRoomTopology.GetCurrentRoomProgress(session);
             Check("enemy apc remains blocking after normal monster kill",
-                !DungeonSharedServices.ShouldClearAfterApcDialog(progress)
+                !DungeonRoomTopology.ShouldClearAfterApcDialog(progress)
                 && progress.KilledNormalCount == 1
                 && progress.BlockingRemainingCount == 1
                 && !progress.RoomPassable,
                 ref failures);
 
             run.RoomKilledSeqIds.Add(11);
-            progress = DungeonSharedServices.GetCurrentRoomProgress(session);
+            progress = DungeonRoomTopology.GetCurrentRoomProgress(session);
             Check("apc dialog may clear after blocking apc is defeated",
-                DungeonSharedServices.ShouldClearAfterApcDialog(progress)
+                DungeonRoomTopology.ShouldClearAfterApcDialog(progress)
                 && progress.BlockingRemainingCount == 0
                 && progress.RoomPassable,
                 ref failures);
@@ -49,9 +49,9 @@ namespace DfoServer.SelfTests
                 new DungeonData.MonsterSumInfo { Code = 300, Type = 5, Level = 1, IsBlocking = false },
             };
             run.RoomKilledSeqIds = new HashSet<ushort>();
-            progress = DungeonSharedServices.GetCurrentRoomProgress(session);
+            progress = DungeonRoomTopology.GetCurrentRoomProgress(session);
             Check("non-blocking apc dialog room can clear",
-                DungeonSharedServices.ShouldClearAfterApcDialog(progress)
+                DungeonRoomTopology.ShouldClearAfterApcDialog(progress)
                 && progress.BlockingRemainingCount == 0,
                 ref failures);
 
@@ -62,9 +62,9 @@ namespace DfoServer.SelfTests
                 new DungeonData.MonsterSumInfo { Code = 302, Type = 5, Level = 1, IsBlocking = false },
             };
             run.RoomKilledSeqIds = new HashSet<ushort>();
-            progress = DungeonSharedServices.GetCurrentRoomProgress(session);
+            progress = DungeonRoomTopology.GetCurrentRoomProgress(session);
             Check("apc dialog does not clear while normal monster remains",
-                !DungeonSharedServices.ShouldClearAfterApcDialog(progress)
+                !DungeonRoomTopology.ShouldClearAfterApcDialog(progress)
                 && progress.KilledNormalCount == 0
                 && progress.NormalCount == 1,
                 ref failures);
