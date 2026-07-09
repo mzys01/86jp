@@ -1,3 +1,4 @@
+using DfoServer.Game.Accounts;
 using DfoServer.Game.Dungeon;
 using DfoServer.Game.Premium;
 using DfoServer.Game.Skills;
@@ -144,7 +145,32 @@ namespace DfoServer.Network.Handlers.Dungeon
 
                 run.SceneSlotCounter = slotCounter;
 
-                session.Player.Exp = AddSaturating(session.Player.Exp, totalGainedExp);
+                var prevLevel = session.Player.Level;
+                var prevExp = session.Player.Exp;
+                var honorExpGain = HonorLevelDataProvider.CalculateHonorExpGain(prevLevel, prevExp, totalGainedExp);
+                var normalExpGain = totalGainedExp > honorExpGain ? totalGainedExp - honorExpGain : 0u;
+                var normalizedMaxExp = false;
+                if (prevLevel >= ExpTableProvider.MaxLevel)
+                {
+                    var maxLevelEntryExp = (uint)Math.Max(0, ExpTableProvider.GetLevelThreshold(ExpTableProvider.MaxLevel - 1));
+                    if (session.Player.Exp != maxLevelEntryExp)
+                    {
+                        session.Player.Exp = maxLevelEntryExp;
+                        normalizedMaxExp = true;
+                    }
+                }
+                else if (normalExpGain > 0)
+                {
+                    session.Player.Exp = AddSaturating(session.Player.Exp, normalExpGain);
+                }
+                if (honorExpGain > 0 && (session.Account?.AccountId ?? 0) > 0)
+                {
+                    var accountCharacters = _svc.CharacterRepository.ListByAccount(session.Account.AccountId);
+                    var honorSummary = _svc.HonorLevel.AddExp(session.Account.AccountId, honorExpGain, accountCharacters);
+                    FileLogger.Log($"[DungeonHandler] HONOR_EXP_GAIN monster: account={session.Account.AccountId} cid={session.Player.CharacterId} gain={honorExpGain}");
+                    await _svc.SendUserInfoBroadcast(session, honorSummary, accountCharacters);
+                    await _svc.SendHonorLevelInfoAsync(session, "monster-exp-gain", honorSummary);
+                }
                 run.TotalExp += gainedExp;
                 run.MonsterGrowthContractBonusExp =
                     AddSaturating(run.MonsterGrowthContractBonusExp, growthContractBonusExp);
@@ -168,20 +194,22 @@ namespace DfoServer.Network.Handlers.Dungeon
                     FileLogger.Log($"[DungeonHandler] DROP: {generatedDrops.Count} items, seqId={req.LocalIndex} seed={run.RoomLcg.Seed:X8}");
                 }
 
-                var prevLevel = session.Player.Level;
                 session.Player.Level = ExpTableProvider.ApplyLevelUps(session.Player.Level, session.Player.Exp);
 
                 var leveledUp = session.Player.Level > prevLevel;
-                if (leveledUp)
+                if (leveledUp || normalizedMaxExp)
                 {
                     _svc.PersistLevelAndExp(session.Player.CharacterId, session.Player.Level, session.Player.Exp);
                 }
 
                 var (remainSp, remainTp) = _svc.GetRemainingSpTp(session, persist: leveledUp, logTag: "DIE_MONSTER");
 
-                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0025,
-                    ExpNotificationBuilder.Build(session.Player.Level, session.Player.Exp, remainSp, remainTp,
-                        premiumBonusExp: growthContractBonusExp)));
+                if (normalExpGain > 0 || leveledUp)
+                {
+                    await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0025,
+                        ExpNotificationBuilder.Build(session.Player.Level, session.Player.Exp, remainSp, remainTp,
+                            premiumBonusExp: growthContractBonusExp)));
+                }
 
                 if (leveledUp)
                 {

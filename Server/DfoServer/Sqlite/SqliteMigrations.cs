@@ -157,6 +157,11 @@ CREATE TABLE IF NOT EXISTS character_dark_knight_combo_skill_pages (
             {
                 ("mood_value", "INTEGER NOT NULL DEFAULT 0"),
             })),
+
+            (19, "accounts honor_exp", conn => SqliteSchemaMigrator.EnsureColumns(conn, "accounts", new[]
+            {
+                ("honor_exp", "INTEGER NOT NULL DEFAULT 0"),
+            })),
         };
 
         private static void ExecuteBatch(SqliteConnection connection, string sql)

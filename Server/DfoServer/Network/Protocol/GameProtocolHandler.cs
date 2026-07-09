@@ -67,7 +67,7 @@ namespace DfoServer.Network
 
             _characterRepository = characterRepository;
             _selectCharacterDataSource = sqliteSelectCharacterDataSource;
-            _loginHandler = new LoginHandler(accountRepository);
+            _loginHandler = new LoginHandler(accountRepository, characterRepository);
             _characterSelectHandler = new CharacterSelectHandler(sqliteSelectCharacterDataSource, characterRepository, getUserInfoTemplate);
             _inventoryRefreshSender = new InventoryRefreshSender(inventoryStore, sqliteSelectCharacterDataSource, characterRepository);
             _inventoryHandler = new InventoryHandler(inventoryStore, sqliteSelectCharacterDataSource, characterRepository, _inventoryRefreshSender, broadcastGamePacket);

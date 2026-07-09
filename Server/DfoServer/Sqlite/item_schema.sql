@@ -17,7 +17,8 @@ CREATE TABLE IF NOT EXISTS accounts (
     cube_red       INTEGER NOT NULL DEFAULT 0,
     cube_blue      INTEGER NOT NULL DEFAULT 0,
     cube_clear     INTEGER NOT NULL DEFAULT 0,
-    cube_gold      INTEGER NOT NULL DEFAULT 0
+    cube_gold      INTEGER NOT NULL DEFAULT 0,
+    honor_exp      INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS characters (
@@ -137,6 +138,7 @@ CREATE TABLE IF NOT EXISTS account_premiums (
     PRIMARY KEY (account_id, premium_type),
     FOREIGN KEY (account_id) REFERENCES accounts(account_id) ON DELETE CASCADE
 );
+
 
 CREATE TABLE IF NOT EXISTS item_audit_log (
     audit_id INTEGER PRIMARY KEY AUTOINCREMENT,

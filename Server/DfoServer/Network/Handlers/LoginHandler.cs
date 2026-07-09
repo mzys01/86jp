@@ -1,4 +1,5 @@
 using DfoServer.Game.Accounts;
+using DfoServer.Game.Characters;
 using DfoServer.Game.Settings;
 using DfoServer.Network.Builders;
 using DfoServer.Network.Parsers;
@@ -12,13 +13,17 @@ namespace DfoServer.Network.Handlers
         private const string DefaultLoginMid = "10038";
 
         private readonly IAccountRepository _accountRepository;
+        private readonly ICharacterRepository _characterRepository;
         private readonly AccountSettingsRepository _settingsRepository;
+        private readonly HonorLevelSyncService _honorLevel;
 
         public string ProtocolName => "GameProtocol";
 
-        public LoginHandler(IAccountRepository accountRepository)
+        public LoginHandler(IAccountRepository accountRepository, ICharacterRepository characterRepository)
         {
             _accountRepository = accountRepository ?? throw new ArgumentNullException(nameof(accountRepository));
+            _characterRepository = characterRepository ?? throw new ArgumentNullException(nameof(characterRepository));
+            _honorLevel = new HonorLevelSyncService(_characterRepository);
             _settingsRepository = new AccountSettingsRepository(
                 Infrastructure.ServerPaths.DatabasePath,
                 Infrastructure.ServerPaths.SchemaFilePath);
@@ -68,7 +73,7 @@ namespace DfoServer.Network.Handlers
             await SendAccountSettingsOnLoginAsync(session);
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x00B7, ServiceNotificationBuilder.BuildAuctionService(0x00, 0x00)));
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x00B7, ServiceNotificationBuilder.BuildAuctionService(0x01, 0x00)));
-            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0289, CommonPacketBodyBuilder.BuildZeroBytes(8)));
+            await _honorLevel.SendInfoAsync(session, ProtocolName, null);
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x01A1, CommonPacketBodyBuilder.BuildZeroBytes(1)));
         }
 
