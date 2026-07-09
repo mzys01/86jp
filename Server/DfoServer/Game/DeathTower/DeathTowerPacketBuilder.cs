@@ -11,7 +11,7 @@ namespace DfoServer.Game.DeathTower
         public const byte ObservedTowerInfoModeByte = 1;
         public const byte ObservedRandomBuffType = 11;
 
-        public static byte[] BuildFormalDungeonInfo(int dungeonId, byte difficulty)
+        public static byte[] BuildTowerDungeonInfo(int dungeonId, byte difficulty)
         {
             return DungeonNotificationBuilder.BuildDungeonInfo(
                 dungeonId: dungeonId,

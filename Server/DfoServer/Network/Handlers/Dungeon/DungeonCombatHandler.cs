@@ -251,9 +251,10 @@ namespace DfoServer.Network.Handlers.Dungeon
                     await _settlement.TryClearDungeon(session, $"prepare_dungeon_clear ccType1={ccType1} endPoint={endPoint}", killedMonsterCode);
 
                 FileLogger.Log($"[DungeonHandler] ROOM CLEARED: dungeon={run.DungeonId} room=({run.RoomKey.X},{run.RoomKey.Y}) map={currentMapId} killedBlocking={killedBlockingCount}/{blockingCount} killedTotal={run.RoomKilledSeqIds.Count}");
-                if (currentMapId > 0 && session.GameSession?.QuestManager != null)
+                if (currentMapId > 0)
                 {
                     if (ShouldDeferQuestConnectedStartMapSync(session, currentMapId)
+                        && session.GameSession?.QuestManager != null
                         && session.GameSession.QuestManager.HasDeferredQuestConnectedStartMapClearQuest(
                             session.Player.CharacterId,
                             currentMapId))
@@ -262,7 +263,7 @@ namespace DfoServer.Network.Handlers.Dungeon
                     }
                     else
                     {
-                        await session.GameSession.QuestManager.SyncClearMapQuestProgressAsync(0, currentMapId);
+                        await DungeonClearMapQuestSync.SyncAsync(session, 0, currentMapId, "room_clear");
                     }
                 }
             }

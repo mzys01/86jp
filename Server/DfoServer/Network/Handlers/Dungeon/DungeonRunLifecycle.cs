@@ -10,7 +10,10 @@ namespace DfoServer.Network.Handlers.Dungeon
     internal static class DungeonRunLifecycle
     {
         // 进本: 掐掉旧局残留定时器 -> 换新局。
-        internal static void BeginRun(EnhancedClientSession session, int dungeonId, byte difficulty)
+        internal static void BeginRun(
+            EnhancedClientSession session,
+            int dungeonId,
+            byte difficulty)
         {
             CancelAutoFlip(session);
             Game.DeathTower.DeathTowerHandler.ClearTowerState(session);
@@ -19,7 +22,11 @@ namespace DfoServer.Network.Handlers.Dungeon
         }
 
         // 进塔: 塔是一局副本的变体, 同样换新局(顺带丢弃上一局的全部残留状态)。
-        internal static void BeginTowerRun(EnhancedClientSession session, int dungeonId, Game.DeathTower.DeathTowerSession tower, byte difficulty = 0)
+        internal static void BeginTowerRun(
+            EnhancedClientSession session,
+            int dungeonId,
+            Game.DeathTower.DeathTowerSession tower,
+            byte difficulty = 0)
         {
             CancelAutoFlip(session);
 

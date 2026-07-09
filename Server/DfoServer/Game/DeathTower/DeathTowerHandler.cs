@@ -7,23 +7,29 @@ namespace DfoServer.Game.DeathTower
 {
     public sealed class DeathTowerHandler
     {
-        public async Task<bool> TryHandleSelectDungeon(EnhancedClientSession session, int dungeonId, byte difficulty = 0)
+        public bool TryCreateSession(int dungeonId, out DeathTowerSession tower)
         {
+            tower = null;
             var config = DeathTowerData.GetConfig(dungeonId);
             if (config == null)
                 return false;
 
-            var tower = new DeathTowerSession(config, DeathTowerRunMode.Formal);
-            Network.Handlers.Dungeon.DungeonRunLifecycle.BeginTowerRun(session, dungeonId, tower, difficulty);
+            tower = new DeathTowerSession(config);
+            return true;
+        }
 
-            FileLogger.Log($"[DeathTower] ENTER: cid={session.Player.CharacterId} dungeon={dungeonId} difficulty={difficulty} mode={tower.EntryMode} stages={config.TotalStages} basisLv={config.BasisLevel}");
+        public async Task SendEntryPacketsAsync(EnhancedClientSession session, DeathTowerSession tower, byte difficulty = 0)
+        {
+            var dungeonId = tower.Config.DungeonId;
+            var hasRun = session.Player.CurrentRun != null;
+            FileLogger.Log($"[DeathTower] ENTER: cid={session.Player.CharacterId} dungeon={dungeonId} difficulty={difficulty} hasRun={hasRun} stages={tower.Config.TotalStages} basisLv={tower.Config.BasisLevel}");
 
-            var dungeonInfoBody = DeathTowerPacketBuilder.BuildFormalDungeonInfo(dungeonId, difficulty);
+            var dungeonInfoBody = DeathTowerPacketBuilder.BuildTowerDungeonInfo(dungeonId, difficulty);
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x001C, dungeonInfoBody));
             FileLogger.Log($"[DeathTower] SENT 0x001C DUNGEON_INFO(formal tower): bodyLen={dungeonInfoBody.Length}");
 
             // NOTI 142 DEATH_TOWER_INFO (8B)
-            var infoBody = DeathTowerPacketBuilder.BuildTowerInfo(dungeonId, (ushort)config.TotalStages);
+            var infoBody = DeathTowerPacketBuilder.BuildTowerInfo(dungeonId, (ushort)tower.Config.TotalStages);
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x008E, infoBody));
             FileLogger.Log($"[DeathTower] SENT 0x008E TOWER_INFO: bodyLen={infoBody.Length}");
 
@@ -33,8 +39,6 @@ namespace DfoServer.Game.DeathTower
             // NOTI 0x1E FINISH_LOADING
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x001E, new byte[0]));
             FileLogger.Log($"[DeathTower] SENT 0x001E FINISH_LOADING (entry)");
-
-            return true;
         }
 
         public async Task<bool> TryHandleMoveMap(EnhancedClientSession session)
@@ -44,6 +48,9 @@ namespace DfoServer.Game.DeathTower
                 return false;
 
             var prevState = tower.State;
+            if (prevState >= 1)
+                await SyncCurrentStageClearMapAsync(session, tower, "tower_move_map");
+
             if (!tower.TryAdvanceStage())
             {
                 FileLogger.Log($"[DeathTower] MOVE_MAP rejected: cid={session.Player.CharacterId} stage={tower.CurrentStage}/{tower.EndStage} state={tower.State} (need state>=1, not last stage)");
@@ -87,22 +94,7 @@ namespace DfoServer.Game.DeathTower
                 case 2:
                     tower.SetCleared();
                     FileLogger.Log($"[DeathTower] STAGE_CMD(2) stage clear: cid={session.Player.CharacterId} stage={tower.CurrentStage}/{tower.EndStage} isLast={tower.IsLastStage}");
-                    if (TryResolveFormalStageClearMapId(tower, out var clearMapId))
-                    {
-                        if (session.GameSession?.QuestManager != null)
-                        {
-                            await session.GameSession.QuestManager.SyncClearMapQuestProgressAsync(0, clearMapId);
-                            FileLogger.Log($"[DeathTower] CLEAR_MAP_SYNC: cid={session.Player.CharacterId} stage={tower.CurrentStage} map={clearMapId}");
-                        }
-                        else
-                        {
-                            FileLogger.Log($"[DeathTower] CLEAR_MAP_SYNC skipped: cid={session.Player.CharacterId} stage={tower.CurrentStage} map={clearMapId} questManager=null");
-                        }
-                    }
-                    else
-                    {
-                        FileLogger.Log($"[DeathTower] CLEAR_MAP_SYNC skipped: cid={session.Player.CharacterId} stage={tower.CurrentStage} mode={tower.EntryMode} map={tower.GetCurrentMapId()}");
-                    }
+                    await SyncCurrentStageClearMapAsync(session, tower, "tower_stage_cmd");
                     if (tower.IsLastStage)
                     {
                         await SendSettlement(session, tower);
@@ -115,14 +107,10 @@ namespace DfoServer.Game.DeathTower
             }
         }
 
-        internal static bool TryResolveFormalStageClearMapId(DeathTowerSession tower, out int mapId)
+        private static Task SyncCurrentStageClearMapAsync(EnhancedClientSession session, DeathTowerSession tower, string source)
         {
-            mapId = 0;
-            if (tower == null || !tower.IsFormalRun)
-                return false;
-
-            mapId = tower.GetCurrentMapId();
-            return mapId > 0;
+            var mapId = tower.GetCurrentMapId();
+            return Network.Handlers.Dungeon.DungeonClearMapQuestSync.SyncAsync(session, 0, mapId, source);
         }
 
         // 返城时清除塔状态(由生命周期统一清理路径调用; run 置换后本方法只负责日志与提前摘除)

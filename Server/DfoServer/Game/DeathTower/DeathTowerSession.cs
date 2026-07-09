@@ -2,27 +2,18 @@ using System;
 
 namespace DfoServer.Game.DeathTower
 {
-    public enum DeathTowerRunMode : byte
-    {
-        Practice = 0,
-        Formal = 1,
-    }
-
     public sealed class DeathTowerSession
     {
         public DeathTowerData.TowerConfig Config { get; }
-        public DeathTowerRunMode EntryMode { get; }
-        public bool IsFormalRun => EntryMode == DeathTowerRunMode.Formal;
         public int CurrentStage { get; private set; }
         public int EndStage => Config.TotalStages - 1;
         public ushort MonsterSequence { get; private set; }
         public ushort ItemSequence { get; private set; }
         public int State { get; private set; }  // 0=init, 1=fighting, 2=cleared
 
-        public DeathTowerSession(DeathTowerData.TowerConfig config, DeathTowerRunMode entryMode = DeathTowerRunMode.Formal)
+        public DeathTowerSession(DeathTowerData.TowerConfig config)
         {
             Config = config ?? throw new ArgumentNullException(nameof(config));
-            EntryMode = entryMode;
             CurrentStage = 0;
             MonsterSequence = 1;
             ItemSequence = 1;

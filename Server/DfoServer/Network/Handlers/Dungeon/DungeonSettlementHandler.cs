@@ -340,19 +340,20 @@ namespace DfoServer.Network.Handlers.Dungeon
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x001F, DungeonNotificationBuilder.BuildEnableClearDungeon()));
             var npcId = SecretShopNpcIds[ServerRandom.Next(SecretShopNpcIds.Length)];
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0117, BitConverter.GetBytes(npcId)));
-            if (session.GameSession?.QuestManager != null)
+            var currentMapId = ResolveCurrentMapId(session);
+            await DungeonClearMapQuestSync.SyncAsync(
+                session,
+                run.DungeonId,
+                currentMapId,
+                "dungeon_clear");
+            if (ShouldSyncQuestConnectedStartMapOnDungeonClear(session, currentMapId))
             {
-                var currentMapId = ResolveCurrentMapId(session);
-                await session.GameSession.QuestManager.SyncClearMapQuestProgressAsync(
-                    run.DungeonId,
-                    currentMapId);
-                if (ShouldSyncQuestConnectedStartMapOnDungeonClear(session, currentMapId))
-                {
-                    FileLogger.Log($"[DungeonHandler] CLEAR_MAP sync deferred quest-connected start map: dungeon={run.DungeonId} maze={run.MazeIndex} map={run.MazeStartMapId}");
-                    await session.GameSession.QuestManager.SyncClearMapQuestProgressAsync(
-                        0,
-                        run.MazeStartMapId);
-                }
+                FileLogger.Log($"[DungeonHandler] CLEAR_MAP sync deferred quest-connected start map: dungeon={run.DungeonId} maze={run.MazeIndex} map={run.MazeStartMapId}");
+                await DungeonClearMapQuestSync.SyncAsync(
+                    session,
+                    0,
+                    run.MazeStartMapId,
+                    "dungeon_clear_deferred_start_map");
             }
             FileLogger.Log($"[DungeonHandler] ClearDungeon: {reason} secretShopNpc={npcId}");
         }

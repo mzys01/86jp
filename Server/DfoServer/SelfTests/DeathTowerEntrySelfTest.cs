@@ -1,5 +1,16 @@
 using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Net;
+using System.Net.Sockets;
+using DfoServer.Game.Accounts;
+using DfoServer.Game.DailyReset;
 using DfoServer.Game.DeathTower;
+using DfoServer.Game.Inventory;
+using DfoServer.Game.ReviveCoin;
+using DfoServer.Infrastructure;
+using DfoServer.Network;
+using DfoServer.Network.Handlers;
 
 namespace DfoServer.SelfTests
 {
@@ -18,38 +29,11 @@ namespace DfoServer.SelfTests
                 BasisLevel = 50,
             };
 
-            var formal = new DeathTowerSession(config);
-            Check("select-dungeon tower defaults to formal run",
-                formal.EntryMode == DeathTowerRunMode.Formal && formal.IsFormalRun,
-                ref failures);
-
-            Check("formal tower clear-map uses current stage map",
-                DeathTowerHandler.TryResolveFormalStageClearMapId(formal, out var formalMapId)
-                && formalMapId == 33060,
-                ref failures);
-
-            formal.SetFighting();
-            formal.SetCleared();
-            formal.TryAdvanceStage();
-            Check("formal tower clear-map follows advanced stage map",
-                DeathTowerHandler.TryResolveFormalStageClearMapId(formal, out var secondMapId)
-                && secondMapId == 33061,
-                ref failures);
-
-            var practice = new DeathTowerSession(config, DeathTowerRunMode.Practice);
-            Check("practice tower clear-map sync is blocked",
-                !DeathTowerHandler.TryResolveFormalStageClearMapId(practice, out _),
-                ref failures);
-
-            var missingMap = new DeathTowerSession(new DeathTowerData.TowerConfig
-            {
-                DungeonId = 11000,
-                TotalStages = 1,
-                StageMapIds = Array.Empty<int>(),
-                BasisLevel = 50,
-            });
-            Check("formal tower clear-map rejects missing map id",
-                !DeathTowerHandler.TryResolveFormalStageClearMapId(missingMap, out _),
+            var tower = new DeathTowerSession(config);
+            Check("tower session carries stage state but not quest-counting mode",
+                tower.CurrentStage == 0
+                && tower.State == 0
+                && tower.GetCurrentMapId() == 33060,
                 ref failures);
 
             var towerInfo = DeathTowerPacketBuilder.BuildTowerInfo(11000, 3);
@@ -67,13 +51,13 @@ namespace DfoServer.SelfTests
                 && towerInfo[7] == 11,
                 ref failures);
 
-            var dungeonInfo = DeathTowerPacketBuilder.BuildFormalDungeonInfo(11000, difficulty: 2);
-            Check("formal tower 0x001C encodes dungeon id and difficulty",
+            var dungeonInfo = DeathTowerPacketBuilder.BuildTowerDungeonInfo(11000, difficulty: 2);
+            Check("tower 0x001C encodes dungeon id and difficulty",
                 dungeonInfo.Length >= 12
                 && BitConverter.ToInt16(dungeonInfo, 0) == 11000
                 && dungeonInfo[2] == 2,
                 ref failures);
-            Check("formal tower 0x001C uses non-hell neutral map fields",
+            Check("tower 0x001C uses non-hell neutral map fields",
                 dungeonInfo[3] == 0
                 && dungeonInfo[4] == 0
                 && dungeonInfo[5] == 0
@@ -83,8 +67,42 @@ namespace DfoServer.SelfTests
                 && dungeonInfo[9] == 0,
                 ref failures);
 
+            using (var fixture = SelectDungeonFixture.Create())
+            {
+                var handler = fixture.CreateDungeonHandler();
+                handler
+                    .Handle_ENUM_CMDPACKET_SELECT_DUNGEON(
+                        fixture.Session,
+                        new GamePacketHeader(),
+                        BuildSelectDungeonBody(11000, difficulty: 2))
+                    .GetAwaiter()
+                    .GetResult();
+
+                var sentTypes = fixture.ReadSentTypes(expectedPackets: 4);
+                Check("select-dungeon tower creates CurrentRun payload",
+                    fixture.Session.Player.CurrentRun != null
+                    && fixture.Session.Player.CurrentRun.DungeonId == 11000
+                    && fixture.Session.Player.CurrentRun.Tower != null,
+                    ref failures);
+                Check("select-dungeon tower packet order starts with 0x001C then tower packets",
+                    sentTypes.Count >= 4
+                    && sentTypes[0] == 0x001C
+                    && sentTypes[1] == 0x008E
+                    && sentTypes[2] == 0x008F
+                    && sentTypes[3] == 0x001E,
+                    ref failures);
+            }
+
             Console.WriteLine(failures == 0 ? "PASS" : $"FAIL: {failures}");
             return failures == 0 ? 0 : 1;
+        }
+
+        private static byte[] BuildSelectDungeonBody(ushort dungeonId, byte difficulty)
+        {
+            var body = new byte[5];
+            BitConverter.GetBytes(dungeonId).CopyTo(body, 0);
+            body[2] = difficulty;
+            return body;
         }
 
         private static void Check(string name, bool ok, ref int failures)
@@ -92,6 +110,170 @@ namespace DfoServer.SelfTests
             Console.WriteLine($"[{(ok ? "OK" : "FAIL")}] {name}");
             if (!ok)
                 failures++;
+        }
+
+        private sealed class SelectDungeonFixture : IDisposable
+        {
+            private const int CharacterId = 484101;
+            private const int AccountId = 484101;
+
+            private readonly TcpListener _listener;
+            private readonly TcpClient _client;
+            private readonly TcpClient _accepted;
+            private readonly string _dbPath;
+            private readonly SqliteInventoryStore _inventoryStore;
+            private readonly SqliteAssetService _assetService;
+            private readonly DailyResetService _dailyReset;
+
+            public EnhancedClientSession Session { get; }
+
+            private SelectDungeonFixture(
+                TcpListener listener,
+                TcpClient client,
+                TcpClient accepted,
+                EnhancedClientSession session,
+                string dbPath,
+                SqliteInventoryStore inventoryStore,
+                SqliteAssetService assetService,
+                DailyResetService dailyReset)
+            {
+                _listener = listener;
+                _client = client;
+                _accepted = accepted;
+                Session = session;
+                _dbPath = dbPath;
+                _inventoryStore = inventoryStore;
+                _assetService = assetService;
+                _dailyReset = dailyReset;
+            }
+
+            public static SelectDungeonFixture Create()
+            {
+                var tempDir = Path.Combine(Path.GetTempPath(), "DfoServerSelfTests");
+                Directory.CreateDirectory(tempDir);
+                var dbPath = Path.Combine(tempDir, "death-tower-entry.db");
+                if (File.Exists(dbPath))
+                    File.Delete(dbPath);
+
+                SqliteDatabaseBootstrap.Initialize(dbPath, ServerPaths.SchemaFilePath);
+                SeedAccountAndCharacter(dbPath);
+
+                var inventoryStore = new SqliteInventoryStore(dbPath, ServerPaths.SchemaFilePath);
+                var assetService = new SqliteAssetService(dbPath, ServerPaths.SchemaFilePath, inventoryStore);
+                var dailyReset = new DailyResetService(dbPath, ServerPaths.SchemaFilePath);
+
+                var listener = new TcpListener(IPAddress.Loopback, 0);
+                listener.Start();
+                var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+                var client = new TcpClient();
+                var connectTask = client.ConnectAsync(IPAddress.Loopback, port);
+                var accepted = listener.AcceptTcpClient();
+                connectTask.GetAwaiter().GetResult();
+
+                var session = new EnhancedClientSession(accepted, new GamePacketHeader());
+                session.Player.CharacterId = CharacterId;
+                session.Player.UserId = 1;
+                session.Player.Level = 50;
+                session.Player.Job = 4;
+                session.Player.GrowType = 4;
+                session.Account = new AccountRecord
+                {
+                    AccountId = AccountId,
+                    MId = "death-tower-entry",
+                };
+
+                return new SelectDungeonFixture(
+                    listener,
+                    client,
+                    accepted,
+                    session,
+                    dbPath,
+                    inventoryStore,
+                    assetService,
+                    dailyReset);
+            }
+
+            public DungeonHandler CreateDungeonHandler()
+            {
+                var characterRepository = new Game.Characters.SqliteCharacterRepository(_dbPath, ServerPaths.SchemaFilePath);
+                var selectCharacterDataSource = new Game.SelectCharacter.SqliteSelectCharacterDataSource(
+                    _dbPath,
+                    ServerPaths.SchemaFilePath,
+                    characterRepository,
+                    _assetService,
+                    _inventoryStore,
+                    SystemRentalTimeProvider.Instance);
+                var reviveCoin = new ReviveCoinService(_inventoryStore, _assetService, _dailyReset);
+
+                return new DungeonHandler(
+                    _assetService,
+                    reviveCoin,
+                    characterRepository,
+                    selectCharacterDataSource,
+                    SystemRentalTimeProvider.Instance);
+            }
+
+            public List<ushort> ReadSentTypes(int expectedPackets)
+            {
+                var result = new List<ushort>();
+                _client.ReceiveTimeout = 2000;
+
+                for (var i = 0; i < expectedPackets; i++)
+                {
+                    var header = ReadExact(15);
+                    result.Add(BitConverter.ToUInt16(header, 1));
+                    var packetLength = BitConverter.ToInt32(header, 3);
+                    var bodyLength = packetLength - 15;
+                    if (bodyLength > 0)
+                        ReadExact(bodyLength);
+                }
+
+                return result;
+            }
+
+            private byte[] ReadExact(int count)
+            {
+                var buffer = new byte[count];
+                var offset = 0;
+                while (offset < count)
+                {
+                    var read = _client.GetStream().Read(buffer, offset, count - offset);
+                    if (read <= 0)
+                        throw new EndOfStreamException();
+                    offset += read;
+                }
+
+                return buffer;
+            }
+
+            private static void SeedAccountAndCharacter(string dbPath)
+            {
+                var connStr = SqliteDatabaseBootstrap.Initialize(dbPath, ServerPaths.SchemaFilePath);
+                using (var conn = new Microsoft.Data.Sqlite.SqliteConnection(connStr))
+                {
+                    conn.Open();
+                    using (var cmd = conn.CreateCommand())
+                    {
+                        cmd.CommandText = @"
+INSERT OR IGNORE INTO accounts (account_id, m_id, password_hash)
+VALUES (@aid, @mid, '');
+INSERT OR IGNORE INTO characters (character_id, account_id, name, job, grow_type, level)
+VALUES (@cid, @aid, @name, 4, 4, 50);";
+                        cmd.Parameters.AddWithValue("@aid", AccountId);
+                        cmd.Parameters.AddWithValue("@cid", CharacterId);
+                        cmd.Parameters.AddWithValue("@mid", "death-tower-entry");
+                        cmd.Parameters.AddWithValue("@name", "death-tower-entry");
+                        cmd.ExecuteNonQuery();
+                    }
+                }
+            }
+
+            public void Dispose()
+            {
+                _accepted.Dispose();
+                _client.Dispose();
+                _listener.Stop();
+            }
         }
     }
 }
