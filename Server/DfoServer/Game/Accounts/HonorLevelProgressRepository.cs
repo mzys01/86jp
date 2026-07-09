@@ -25,7 +25,7 @@ namespace DfoServer.Game.Accounts
 
         public HonorLevelSummary LoadSummary(int accountId, IEnumerable<CharacterRecord> characters)
         {
-            var totalExp = LoadOrCreateAccountHonorExp(accountId);
+            var totalExp = LoadAccountHonorExp(accountId);
             return HonorLevelDataProvider.CalculateFromHonorExp(totalExp, characters);
         }
 
@@ -37,7 +37,7 @@ namespace DfoServer.Game.Accounts
             characters = characters ?? _characterRepository?.ListByAccount(accountId);
             var totalExp = delta > 0
                 ? AddAccountHonorExp(accountId, delta)
-                : LoadOrCreateAccountHonorExp(accountId);
+                : LoadAccountHonorExp(accountId);
             return HonorLevelDataProvider.CalculateFromHonorExp(totalExp, characters);
         }
 
@@ -48,41 +48,34 @@ namespace DfoServer.Game.Accounts
                 conn.Open();
                 using (var tx = conn.BeginTransaction())
                 {
-                    var current = LoadOrCreateAccountHonorExp(conn, tx, accountId);
+                    var current = LoadAccountHonorExp(conn, tx, accountId);
                     var max = HonorLevelDataProvider.MaxTotalHonorExp;
                     var next = (ulong)delta >= max - current ? max : current + delta;
-                    UpsertAccountHonorExp(conn, tx, accountId, next);
+                    UpdateAccountHonorExp(conn, tx, accountId, next);
                     tx.Commit();
                     return next;
                 }
             }
         }
 
-        private ulong LoadOrCreateAccountHonorExp(int accountId)
-        {
-            using (var conn = new SqliteConnection(_connectionString))
-            {
-                conn.Open();
-                using (var tx = conn.BeginTransaction())
-                {
-                    var total = LoadOrCreateAccountHonorExp(conn, tx, accountId);
-                    tx.Commit();
-                    return total;
-                }
-            }
-        }
-
-        private ulong LoadOrCreateAccountHonorExp(SqliteConnection conn, SqliteTransaction tx, int accountId)
+        private ulong LoadAccountHonorExp(int accountId)
         {
             if (accountId <= 0)
                 return 0;
 
-            var existing = TryLoadAccountHonorExp(conn, tx, accountId);
-            if (existing.HasValue)
-                return existing.Value;
+            using (var conn = new SqliteConnection(_connectionString))
+            {
+                conn.Open();
+                return LoadAccountHonorExp(conn, null, accountId);
+            }
+        }
 
-            UpsertAccountHonorExp(conn, tx, accountId, 0);
-            return 0;
+        private ulong LoadAccountHonorExp(SqliteConnection conn, SqliteTransaction tx, int accountId)
+        {
+            if (accountId <= 0)
+                return 0;
+
+            return TryLoadAccountHonorExp(conn, tx, accountId).GetValueOrDefault();
         }
 
         private ulong? TryLoadAccountHonorExp(SqliteConnection conn, SqliteTransaction tx, int accountId)
@@ -90,7 +83,7 @@ namespace DfoServer.Game.Accounts
             using (var cmd = conn.CreateCommand())
             {
                 cmd.Transaction = tx;
-                cmd.CommandText = "SELECT total_exp FROM account_honor_level WHERE account_id=@aid;";
+                cmd.CommandText = "SELECT honor_exp FROM accounts WHERE account_id=@aid;";
                 cmd.Parameters.AddWithValue("@aid", accountId);
                 var value = cmd.ExecuteScalar();
                 if (value == null || value == DBNull.Value)
@@ -103,18 +96,16 @@ namespace DfoServer.Game.Accounts
             }
         }
 
-        private void UpsertAccountHonorExp(SqliteConnection conn, SqliteTransaction tx, int accountId, ulong totalExp)
+        private void UpdateAccountHonorExp(SqliteConnection conn, SqliteTransaction tx, int accountId, ulong totalExp)
         {
             var capped = Math.Min(totalExp, HonorLevelDataProvider.MaxTotalHonorExp);
             using (var cmd = conn.CreateCommand())
             {
                 cmd.Transaction = tx;
                 cmd.CommandText = @"
-INSERT INTO account_honor_level(account_id, total_exp, updated_at)
-VALUES(@aid, @exp, CURRENT_TIMESTAMP)
-ON CONFLICT(account_id) DO UPDATE SET
-    total_exp=excluded.total_exp,
-    updated_at=CURRENT_TIMESTAMP;";
+UPDATE accounts
+SET honor_exp = @exp
+WHERE account_id = @aid;";
                 cmd.Parameters.AddWithValue("@aid", accountId);
                 cmd.Parameters.AddWithValue("@exp", capped > long.MaxValue ? long.MaxValue : (long)capped);
                 cmd.ExecuteNonQuery();

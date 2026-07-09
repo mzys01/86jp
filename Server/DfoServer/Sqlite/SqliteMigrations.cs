@@ -158,13 +158,10 @@ CREATE TABLE IF NOT EXISTS character_dark_knight_combo_skill_pages (
                 ("mood_value", "INTEGER NOT NULL DEFAULT 0"),
             })),
 
-            (19, "account_honor_level account scoped honor progress", conn => ExecuteBatch(conn, @"
-CREATE TABLE IF NOT EXISTS account_honor_level (
-    account_id INTEGER PRIMARY KEY,
-    total_exp INTEGER NOT NULL DEFAULT 0,
-    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (account_id) REFERENCES accounts(account_id) ON DELETE CASCADE
-);")),
+            (19, "accounts honor_exp", conn => SqliteSchemaMigrator.EnsureColumns(conn, "accounts", new[]
+            {
+                ("honor_exp", "INTEGER NOT NULL DEFAULT 0"),
+            })),
         };
 
         private static void ExecuteBatch(SqliteConnection connection, string sql)

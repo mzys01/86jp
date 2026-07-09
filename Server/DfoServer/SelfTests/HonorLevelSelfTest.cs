@@ -67,7 +67,7 @@ INSERT INTO character_subtype1_fields(character_id, progress1, progress2) VALUES
                     }
 
                     var emptyAccount = repo.LoadSummary(100);
-                    Check("account honor repository ignores legacy character progress2", emptyAccount.TotalHonorExp == 0 && emptyAccount.HonorLevel == 1);
+                    Check("account honor repository reads no character progress as honor source", emptyAccount.TotalHonorExp == 0 && emptyAccount.HonorLevel == 1);
                     var afterAdd = repo.AddHonorExp(100, 273u);
                     Check("account honor repository stores account scoped total exp", afterAdd.TotalHonorExp == 273u && afterAdd.HonorExp == 273u);
                     using (var conn = new SqliteConnection(connStr))
@@ -75,8 +75,8 @@ INSERT INTO character_subtype1_fields(character_id, progress1, progress2) VALUES
                         conn.Open();
                         using (var cmd = conn.CreateCommand())
                         {
-                            cmd.CommandText = "SELECT total_exp FROM account_honor_level WHERE account_id=100;";
-                            Check("account_honor_level row is the persisted honor source", Convert.ToInt64(cmd.ExecuteScalar()) == 273L);
+                            cmd.CommandText = "SELECT honor_exp FROM accounts WHERE account_id=100;";
+                            Check("accounts.honor_exp is the persisted honor source", Convert.ToInt64(cmd.ExecuteScalar()) == 273L);
                         }
                     }
                 }
@@ -163,4 +163,3 @@ INSERT INTO character_subtype1_fields(character_id, progress1, progress2) VALUES
         }
     }
 }
-
