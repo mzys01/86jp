@@ -1,3 +1,4 @@
+using DfoServer.Game.Accounts;
 using DfoServer.Game.CharacterData;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Mercenary;
@@ -20,12 +21,14 @@ namespace DfoServer.Network.Handlers
 
         private readonly ICharacterRepository _characterRepository;
         private readonly GetUserInfoTemplate _getUserInfoTemplate;
+        private readonly HonorLevelSyncService _honorLevel;
         public string ProtocolName => "GameProtocol";
 
         public MercenaryHandler(ICharacterRepository characterRepository, GetUserInfoTemplate getUserInfoTemplate = null)
         {
             _characterRepository = characterRepository ?? throw new ArgumentNullException(nameof(characterRepository));
             _getUserInfoTemplate = getUserInfoTemplate;
+            _honorLevel = new HonorLevelSyncService(_characterRepository);
         }
 
         public async Task HandleUserInfoSubtypeRequest(EnhancedClientSession session, GamePacketHeader header, byte[] body)
@@ -44,9 +47,10 @@ namespace DfoServer.Network.Handlers
             }
 
             var roster = ListAccountCharacters(accountId);
+            var honorLevel = _honorLevel.LoadSummary(accountId, roster);
 
-            await SendAdventureGroupUserInfoAsync(session, roster);
-            await SendCandidateUserInfoAsync(session, roster, activeCharacterId);
+            await SendAdventureGroupUserInfoAsync(session, roster, honorLevel);
+            await SendCandidateUserInfoAsync(session, roster, activeCharacterId, honorLevel);
         }
 
         public async Task HandleMercenaryRequest(EnhancedClientSession session, GamePacketHeader header, byte[] body)
@@ -280,9 +284,10 @@ namespace DfoServer.Network.Handlers
 
         private async Task SendAdventureGroupUserInfoAsync(
             EnhancedClientSession session,
-            IReadOnlyList<CharacterRecord> roster)
+            IReadOnlyList<CharacterRecord> roster,
+            HonorLevelSummary honorLevel)
         {
-            var body = AccountCharacterListBodyBuilder.Build(roster, _getUserInfoTemplate, out _);
+            var body = AccountCharacterListBodyBuilder.Build(roster, _getUserInfoTemplate, out _, honorLevel);
             var packet = GamePacketEnvelopeBuilder.Build(0x00, UserInfoNotiType, body);
             if (_getUserInfoTemplate != null && packet.Length > 7)
                 packet[7] = _getUserInfoTemplate.Pkt0RoutingByte7;
@@ -293,7 +298,8 @@ namespace DfoServer.Network.Handlers
         private async Task SendCandidateUserInfoAsync(
             EnhancedClientSession session,
             IReadOnlyList<CharacterRecord> roster,
-            int activeCharacterId)
+            int activeCharacterId,
+            HonorLevelSummary honorLevel)
         {
             if (roster == null || roster.Count == 0)
                 return;
@@ -308,6 +314,7 @@ namespace DfoServer.Network.Handlers
                 {
                     if (character.Subtype0Tail == null)
                         character.Subtype0Tail = subtype0Repository.Load(character.CharacterId);
+                    _honorLevel.ApplyToCharacterRecord(character, honorLevel);
 
                     var writer = new GamePacketWriter();
                     writer.WriteByte(0);

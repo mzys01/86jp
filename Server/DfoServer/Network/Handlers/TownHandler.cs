@@ -1,3 +1,5 @@
+using DfoServer.Game.Accounts;
+using DfoServer.Game.CharacterData;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory;
 using DfoServer.Game.SelectCharacter;
@@ -15,6 +17,7 @@ namespace DfoServer.Network.Handlers
         private static readonly TimeSpan PositionPersistThrottle = TimeSpan.FromSeconds(5);
 
         private readonly ICharacterRepository _characterRepository;
+        private readonly HonorLevelSyncService _honorLevel;
         private readonly Game.Inventory.IInventoryStore _inventoryStore;
 
         public string ProtocolName => "GameProtocol";
@@ -22,11 +25,10 @@ namespace DfoServer.Network.Handlers
         public TownHandler(ICharacterRepository characterRepository, Game.Inventory.IInventoryStore inventoryStore)
         {
             _characterRepository = characterRepository ?? throw new ArgumentNullException(nameof(characterRepository));
+            _honorLevel = new HonorLevelSyncService(_characterRepository);
             _inventoryStore = inventoryStore ?? throw new ArgumentNullException(nameof(inventoryStore));
         }
 
-        /// <summary>
-        /// </summary>
         public void PersistPosition(EnhancedClientSession session, bool forceImmediate, string source)
         {
             try
@@ -167,6 +169,31 @@ namespace DfoServer.Network.Handlers
             list.Add(session.Player.CurAreaState);
             list.Add(session.Player.CurAreaId);
             await Handle_ENUM_CMDPACKET_SET_USER_AREA(session, header, list.ToArray());
+            await SendHonorTownRefreshAsync(session, "giveup-game");
+        }
+
+        private async Task SendHonorTownRefreshAsync(EnhancedClientSession session, string reason)
+        {
+            var accountId = session?.Account?.AccountId ?? 0;
+            var characterId = session?.Player?.CharacterId ?? 0;
+            if (accountId <= 0 || characterId <= 0)
+                return;
+
+            var summary = _honorLevel.LoadSummary(accountId);
+            var record = _characterRepository.GetById(characterId);
+            if (record != null)
+            {
+                record.Appearance = Game.Appearance.AppearanceService.LoadAppearanceFromEquipEntries(characterId);
+                record.Subtype0Tail = new SqliteSubtype0FieldsRepository(
+                    Infrastructure.ServerPaths.DatabasePath,
+                    Infrastructure.ServerPaths.SchemaFilePath).Load(characterId) ?? new UserInfoMinimumTailSnapshot();
+                _honorLevel.ApplyToCharacterRecord(record, summary);
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0002,
+                    UserInfoSubtype0Builder.BuildNotificationBody(record)));
+                session.Player.Subtype0Tail = record.Subtype0Tail;
+            }
+
+            await _honorLevel.SendInfoAsync(session, ProtocolName, reason, summary);
         }
     }
 }

@@ -46,13 +46,40 @@ namespace DfoServer.Network.Handlers.Dungeon
             var clearRank = CalculateClearRank(body);
             var clearExp = CalculateClearRewardExp(session, clearRank.RankBonusIndex);
             var prevLevel = session.Player.Level;
+            var prevExp = session.Player.Exp;
+            var clearHonorExpGain = 0u;
+            var clearNormalExpGain = clearExp.Total;
+            var normalizedMaxExp = false;
             if (clearExp.Total > 0)
             {
-                session.Player.Exp = AddSaturating(session.Player.Exp, clearExp.Total);
+                clearHonorExpGain = HonorLevelDataProvider.CalculateHonorExpGain(prevLevel, prevExp, clearExp.Total);
+                clearNormalExpGain = clearExp.Total > clearHonorExpGain ? clearExp.Total - clearHonorExpGain : 0u;
+                if (prevLevel >= ExpTableProvider.MaxLevel)
+                {
+                    var maxLevelEntryExp = (uint)Math.Max(0, ExpTableProvider.GetLevelThreshold(ExpTableProvider.MaxLevel - 1));
+                    if (session.Player.Exp != maxLevelEntryExp)
+                    {
+                        session.Player.Exp = maxLevelEntryExp;
+                        normalizedMaxExp = true;
+                    }
+                }
+                else if (clearNormalExpGain > 0)
+                {
+                    session.Player.Exp = AddSaturating(session.Player.Exp, clearNormalExpGain);
+                }
+                if (clearHonorExpGain > 0 && (session.Account?.AccountId ?? 0) > 0)
+                {
+                    var accountCharacters = _svc.CharacterRepository.ListByAccount(session.Account.AccountId);
+                    var honorSummary = _svc.HonorLevel.AddExp(session.Account.AccountId, clearHonorExpGain, accountCharacters);
+                    FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] HONOR_EXP_GAIN clear: account={session.Account.AccountId} cid={session.Player.CharacterId} gain={clearHonorExpGain}");
+                    await _svc.SendUserInfoBroadcast(session, honorSummary, accountCharacters);
+                    await _svc.SendHonorLevelInfoAsync(session, "clear-exp-gain", honorSummary);
+                }
                 session.Player.Level = ExpTableProvider.ApplyLevelUps(session.Player.Level, session.Player.Exp);
             }
             var leveledUp = session.Player.Level > prevLevel;
-            _svc.PersistLevelAndExp(session.Player.CharacterId, session.Player.Level, session.Player.Exp);
+            if (leveledUp || clearNormalExpGain > 0 || normalizedMaxExp)
+                _svc.PersistLevelAndExp(session.Player.CharacterId, session.Player.Level, session.Player.Exp);
 
             // Pre-generate card rewards (df_game_r: clear_reward generated before NOTI 35)
             int dungeonLevel = 85;
@@ -86,8 +113,11 @@ namespace DfoServer.Network.Handlers.Dungeon
                     rankGrade: clearRank.RankGrade, clientRankPoint: clearRank.ClientRankPoint)));
             var (remainSp, remainTp) = _svc.GetRemainingSpTp(session, persist: leveledUp, logTag: "SET_PLAY_RESULT");
 
-            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0025,
-                DungeonNotificationBuilder.BuildExp(session.Player.Level, session.Player.Exp, remainSp, remainTp)));
+            if (clearNormalExpGain > 0 || leveledUp)
+            {
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0025,
+                    DungeonNotificationBuilder.BuildExp(session.Player.Level, session.Player.Exp, remainSp, remainTp)));
+            }
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0023,
                 DungeonNotificationBuilder.BuildClearDungeonReward(
                     clearExp.Base, scoreBonusExp: ToInt32Saturated(clearExp.ScoreBonus), clearBonusExp: 0,
@@ -689,8 +719,10 @@ namespace DfoServer.Network.Handlers.Dungeon
                 TownAreaNotificationBuilder.BuildAreaUsers(snapshot)));
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x00CA,
                 new byte[] { 0x00 }));
+            await _svc.SendUserInfoSubtype0Broadcast(session);
+            await _svc.SendHonorLevelInfoAsync(session, "return-to-town");
 
-            FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] ReturnToVillage: 4 town packets sent");
+            FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] ReturnToVillage: 4 town packets + subtype0 honor + honor info sent");
         }
 
         // CMD ACK 71 body: 86JP 8-seat format

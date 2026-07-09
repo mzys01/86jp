@@ -138,6 +138,13 @@ CREATE TABLE IF NOT EXISTS account_premiums (
     FOREIGN KEY (account_id) REFERENCES accounts(account_id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS account_honor_level (
+    account_id INTEGER PRIMARY KEY,
+    total_exp INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (account_id) REFERENCES accounts(account_id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS item_audit_log (
     audit_id INTEGER PRIMARY KEY AUTOINCREMENT,
     owner_scope TEXT NOT NULL,

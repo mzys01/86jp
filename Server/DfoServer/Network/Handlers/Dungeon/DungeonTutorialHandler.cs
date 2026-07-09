@@ -180,8 +180,10 @@ namespace DfoServer.Network.Handlers.Dungeon
                 TownAreaNotificationBuilder.BuildAreaUsers(snapshot)));
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x00CA,
                 new byte[] { 0x00 }));
+            await _svc.SendUserInfoSubtype0Broadcast(session);
+            await _svc.SendHonorLevelInfoAsync(session, "tutorial-back-to-village");
 
-            FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] ReturnToVillage: 4 town packets sent");
+            FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] ReturnToVillage: 4 town packets + subtype0 honor + honor info sent");
         }
     }
 }

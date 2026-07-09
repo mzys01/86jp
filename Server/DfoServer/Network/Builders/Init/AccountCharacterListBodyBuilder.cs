@@ -12,10 +12,12 @@ namespace DfoServer.Network.Builders
         public static byte[] Build(
             IReadOnlyList<CharacterRecord> characters,
             GetUserInfoTemplate template,
-            out AdventureGroupSummary adventureGroup)
+            out AdventureGroupSummary adventureGroup,
+            HonorLevelSummary honorLevel = null)
         {
             characters = characters ?? Array.Empty<CharacterRecord>();
             adventureGroup = AdventureGroupDataProvider.Calculate(characters);
+            honorLevel = honorLevel ?? HonorLevelDataProvider.CalculateFromHonorExp(0, characters);
 
             var writer = new GamePacketWriter();
             var slotLimit = CharacterSlotPolicy.ResolveSlotLimit(template?.GateOrCount1, template?.GateOrCount2);
@@ -41,7 +43,7 @@ namespace DfoServer.Network.Builders
                 writer.WriteByte(ch.Job);
                 writer.WriteByte(ch.GrowType);
                 writer.WriteByte(ch.Level);
-                writer.WriteZeroBytes(10);
+                WriteHonorRosterFields(writer, honorLevel);
 
                 var appearances = AppearanceService.LoadAppearanceFromEquipEntries(ch.CharacterId);
                 writer.WriteByte((byte)Math.Min(byte.MaxValue, appearances.Length));
@@ -53,6 +55,13 @@ namespace DfoServer.Network.Builders
             }
 
             return writer.ToArray();
+        }
+
+        private static void WriteHonorRosterFields(GamePacketWriter writer, HonorLevelSummary honorLevel)
+        {
+            writer.WriteUInt32(honorLevel?.HonorLevel ?? 0);
+            writer.WriteUInt32(honorLevel?.HonorExp ?? 0);
+            writer.WriteUInt16(0);
         }
     }
 }

@@ -301,9 +301,12 @@ namespace DfoServer.Game.Quests
                 if (record != null && addition != null)
                 {
                     var characterRepository = new SqliteCharacterRepository(ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
+                    var accountCharacters = characterRepository.ListByAccount(record.AccountId);
+                    var honorLevel = CreateHonorLevelSyncService(characterRepository).LoadSummary(record.AccountId, accountCharacters);
                     AdventureGroupUserInfoSynchronizer.ApplyToUserInfoAddition(
                         addition,
-                        characterRepository.ListByAccount(record.AccountId));
+                        accountCharacters);
+                    HonorLevelDataProvider.ApplyToUserInfoAddition(addition, honorLevel);
                     var synced = SkillStateService.LoadAndSync(
                         skillRepo, characterId, record.Job, record.Level, record.BonusSp, record.BonusTp, persist: false);
                     var w = new Network.GamePacketWriter();
@@ -331,6 +334,8 @@ namespace DfoServer.Game.Quests
                     var record = SqliteCharacterRepository.LoadById(conn, characterId);
                     if (record == null) return;
                     record.Subtype0Tail = SqliteSubtype0FieldsRepository.Load(conn, characterId);
+                    var characterRepository = new SqliteCharacterRepository(ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
+                    CreateHonorLevelSyncService(characterRepository).ApplyToSubtype0Tail(record.Subtype0Tail, record.AccountId, null);
                     body = UserInfoSubtype0Builder.BuildNotificationBody(record);
                 }
 
@@ -352,6 +357,8 @@ namespace DfoServer.Game.Quests
                 if (record == null) return;
                 record.Subtype0Tail = new SqliteSubtype0FieldsRepository(ServerPaths.DatabasePath, ServerPaths.SchemaFilePath)
                     .Load(characterId);
+                var honorLevel = CreateHonorLevelSyncService(charRepo).LoadSummary(record.AccountId);
+                HonorLevelDataProvider.ApplyToSubtype0Tail(record.Subtype0Tail, honorLevel);
 
                 _sender.Player.GrowType = record.GrowType;
 
@@ -379,6 +386,8 @@ namespace DfoServer.Game.Quests
                     ?? new UserInfoMinimumTailSnapshot();
                 tail.ExpertJobType = (byte)expertJobType;
                 _sender.Player.Subtype0Tail = tail;
+                var honorLevel = CreateHonorLevelSyncService(charRepo).LoadSummary(record.AccountId);
+                HonorLevelDataProvider.ApplyToSubtype0Tail(tail, honorLevel);
                 record.Subtype0Tail = tail;
 
                 // NOTI 0x00CD ExpertJobInfo
@@ -404,6 +413,11 @@ namespace DfoServer.Game.Quests
             {
                 FileLogger.Log($"[QuestManager] SendExpertJobChangeNotification ERROR: {ex.Message}");
             }
+        }
+
+        private static HonorLevelSyncService CreateHonorLevelSyncService(ICharacterRepository characterRepository)
+        {
+            return new HonorLevelSyncService(characterRepository);
         }
 
         private byte[] BuildAcceptedQuestNoti(int characterId)

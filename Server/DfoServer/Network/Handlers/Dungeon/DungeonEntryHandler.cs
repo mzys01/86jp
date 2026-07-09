@@ -52,6 +52,7 @@ namespace DfoServer.Network.Handlers.Dungeon
                         var accountId = session.Account?.AccountId ?? record.AccountId;
                         var accountCharacters = _svc.CharacterRepository.ListByAccount(accountId);
                         AdventureGroupUserInfoSynchronizer.ApplyToUserInfoAddition(addition, accountCharacters);
+                        _svc.HonorLevel.ApplyToUserInfoAddition(addition, accountId, accountCharacters);
                         var skillSnap = _svc.LoadSyncedSkillState(cid, record.Level).Skills;
                         var w = new GamePacketWriter();
                         w.WriteByte(1); // subtype 1 ADDITION

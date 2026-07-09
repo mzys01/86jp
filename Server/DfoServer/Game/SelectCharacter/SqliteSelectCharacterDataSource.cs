@@ -28,6 +28,7 @@ namespace DfoServer.Game.SelectCharacter
         private readonly DailyReset.DailyResetService _dailyResetService;
         private readonly TitleBookMutationService _titleBookMutationService;
         private readonly CharacterAchievementProgressRepository _achievementProgressRepository;
+        private readonly HonorLevelSyncService _honorLevel;
         private readonly string _connectionString;
         private readonly string _databasePath;
         private readonly string _schemaFilePath;
@@ -58,6 +59,7 @@ namespace DfoServer.Game.SelectCharacter
             _dailyResetService = new DailyReset.DailyResetService(databasePath, schemaFilePath);
             _titleBookMutationService = new TitleBookMutationService(_connectionString);
             _achievementProgressRepository = new CharacterAchievementProgressRepository(_connectionString);
+            _honorLevel = new HonorLevelSyncService(_characterRepository);
         }
 
         public int GetSeedCharacterId()
@@ -216,8 +218,9 @@ namespace DfoServer.Game.SelectCharacter
 
             var accountCharacters = _characterRepository?.ListByAccount(accountId);
             var adventureGroup = AdventureGroupDataProvider.Calculate(accountCharacters);
-            // 客户端从角色侧字段读取冒险团常驻状态。
+            var honorLevel = _honorLevel.LoadSummary(accountId, accountCharacters);
             PersistAdventureManageLevel(accountCharacters, adventureGroup.ManageLevel);
+
 
             
             var subtype1Repo = new CharacterData.SqliteSubtype1Repository(
@@ -230,6 +233,9 @@ namespace DfoServer.Game.SelectCharacter
                     AdventureGroupUserInfoSynchronizer.ApplyToUserInfoAddition(
                         initSnapshot.UserInfoAddition,
                         adventureGroup);
+                    HonorLevelDataProvider.ApplyToUserInfoAddition(
+                        initSnapshot.UserInfoAddition,
+                        honorLevel);
                 }
             }
 
@@ -244,8 +250,7 @@ namespace DfoServer.Game.SelectCharacter
                 
                 if (characterRecord.Subtype0Tail != null && initSnapshot.UserInfoAddition != null)
                 {
-                    characterRecord.Subtype0Tail.ProgressA = initSnapshot.UserInfoAddition.Progress1;
-                    characterRecord.Subtype0Tail.ProgressB = initSnapshot.UserInfoAddition.Progress2;
+                    HonorLevelDataProvider.ApplyToSubtype0Tail(characterRecord.Subtype0Tail, honorLevel);
                     characterRecord.Subtype0Tail.SkillTreeIndex = initSnapshot.UserInfoAddition.SkillTreeIndex;
                 }
             }

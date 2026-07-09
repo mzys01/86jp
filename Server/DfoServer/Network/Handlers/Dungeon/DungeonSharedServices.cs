@@ -34,6 +34,7 @@ namespace DfoServer.Network.Handlers.Dungeon
         internal SqliteCharacterStateRepository CharacterStateRepository { get; }
         internal SqliteCharacterProgressRepository ProgressRepository { get; }
         internal SqliteSubtype0FieldsRepository Subtype0FieldsRepository { get; }
+        internal HonorLevelSyncService HonorLevel { get; }
 
         internal DungeonSharedServices(
             IAssetService assetService,
@@ -53,6 +54,12 @@ namespace DfoServer.Network.Handlers.Dungeon
             CharacterStateRepository = new SqliteCharacterStateRepository(ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
             ProgressRepository = new SqliteCharacterProgressRepository(ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
             Subtype0FieldsRepository = new SqliteSubtype0FieldsRepository(ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
+            HonorLevel = new HonorLevelSyncService(CharacterRepository);
+        }
+
+        internal Task SendHonorLevelInfoAsync(EnhancedClientSession session, string reason, HonorLevelSummary summary = null)
+        {
+            return HonorLevel.SendInfoAsync(session, ProtocolLogName, reason, summary);
         }
 
         internal static DungeonRoomProgress GetCurrentRoomProgress(EnhancedClientSession session)
@@ -559,7 +566,10 @@ namespace DfoServer.Network.Handlers.Dungeon
             }
         }
 
-        internal async Task SendUserInfoBroadcast(EnhancedClientSession session)
+        internal async Task SendUserInfoBroadcast(
+            EnhancedClientSession session,
+            HonorLevelSummary honorSummary = null,
+            IReadOnlyList<CharacterRecord> accountCharacters = null)
         {
             try
             {
@@ -568,8 +578,10 @@ namespace DfoServer.Network.Handlers.Dungeon
                 var addition = Subtype1Repository.HasData(cid) ? Subtype1Repository.Load(cid) : null;
                 if (record != null && addition != null)
                 {
-                    var accountCharacters = CharacterRepository.ListByAccount(session.Account?.AccountId ?? record.AccountId);
+                    var accountId = session.Account?.AccountId ?? record.AccountId;
+                    accountCharacters = accountCharacters ?? CharacterRepository.ListByAccount(accountId);
                     AdventureGroupUserInfoSynchronizer.ApplyToUserInfoAddition(addition, accountCharacters);
+                    HonorLevel.ApplyToUserInfoAddition(addition, accountId, accountCharacters, honorSummary);
                     var skillSnap = LoadSyncedSkillState(cid, session.Player.Level).Skills;
                     var w = new GamePacketWriter();
                     w.WriteByte(1);
@@ -594,7 +606,10 @@ namespace DfoServer.Network.Handlers.Dungeon
                 if (record == null)
                     return;
 
-                record.Subtype0Tail = Subtype0FieldsRepository.Load(cid);
+                record.Subtype0Tail = Subtype0FieldsRepository.Load(cid) ?? new UserInfoMinimumTailSnapshot();
+                var accountId = session.Account?.AccountId ?? record.AccountId;
+                var accountCharacters = CharacterRepository.ListByAccount(accountId);
+                HonorLevel.ApplyToSubtype0Tail(record.Subtype0Tail, accountId, accountCharacters);
 
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
                     0x00, 0x0002, UserInfoSubtype0Builder.BuildNotificationBody(record)));
