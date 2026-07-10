@@ -1,6 +1,8 @@
 using DfoServer.Game.Inventory;
 using DfoServer.Game.SelectCharacter;
+using DfoServer.Network.Builders;
 using DfoServer.Network.Handlers.Dungeon;
+using System;
 using System.Threading.Tasks;
 
 namespace DfoServer.Network.Handlers
@@ -92,5 +94,28 @@ namespace DfoServer.Network.Handlers
 
         public Task Handle_ENUM_CMDPACKET_DEATH_TOWER_STAGE_CMD(EnhancedClientSession session, GamePacketHeader header, byte[] body)
             => _services.DeathTower.HandleStageCommand(session, header, body);
+
+        public Task HandleDungeonSceneUniqueIdReport(EnhancedClientSession session, GamePacketHeader header, byte[] body)
+        {
+            if (session?.Player != null && body != null && body.Length >= 2)
+            {
+                var raw = body.Length >= 4
+                    ? BitConverter.ToUInt32(body, 0)
+                    : BitConverter.ToUInt16(body, 0);
+                var sceneUniqueId = (ushort)(raw & 0xFFFF);
+
+                if (sceneUniqueId != 0)
+                {
+                    session.Player.DungeonSceneUniqueId = sceneUniqueId;
+                    FileLogger.Log($"[DungeonHandler] DUNGEON_SCENE_UID: cid={session.Player.CharacterId} baseUid={session.Player.UserId} sceneUid={sceneUniqueId} raw=0x{raw:X8} body={BitConverter.ToString(body)}");
+                }
+                else
+                {
+                    FileLogger.Log($"[DungeonHandler] DUNGEON_SCENE_UID: ignored zero cid={session.Player.CharacterId} baseUid={session.Player.UserId} body={BitConverter.ToString(body)}");
+                }
+            }
+
+            return session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x01DE, CommonPacketBodyBuilder.BuildSuccessAck()));
+        }
     }
 }

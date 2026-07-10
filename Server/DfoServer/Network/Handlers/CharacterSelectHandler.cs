@@ -414,6 +414,7 @@ namespace DfoServer.Network.Handlers
 
         public async Task Handle_ENUM_CMDPACKET_RETURN_SELECT_CHARACTER(EnhancedClientSession session, GamePacketHeader header, byte[] body)
         {
+            Dungeon.DungeonRunLifecycle.EndRunOnTeardown(session, "return_select_character");
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0007, CommonPacketBodyBuilder.BuildSuccessAck()));
             FileLogger.Log($"[{ProtocolName}] RETURN_SELECT_CHARACTER: sent ACK for session {session.SessionId}");
             await SendCharacterListAsync(session);

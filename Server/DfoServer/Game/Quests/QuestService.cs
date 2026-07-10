@@ -579,6 +579,7 @@ namespace DfoServer.Game.Quests
             ulong totalHonorExp = 0;
             byte newLevel;
             uint newExp;
+            var petEvolution = PetCreatureEvolutionResult.Noop;
             int accountId = GetAccountIdByConnStr(characterId);
 
             using (var scope = _assetService.OpenScope(characterId, accountId))
@@ -667,6 +668,18 @@ namespace DfoServer.Game.Quests
                 {
                     UpdateSlotExpansion(scope.Connection, scope.Transaction, characterId, reward.GrowNumber);
                 }
+                else if (reward.ChainType == 10 || reward.ChainType == 25)
+                {
+                    petEvolution = SqliteInventoryStore.TryCompletePetCreatureEvolutionQuest(
+                        scope.Connection,
+                        scope.Transaction,
+                        characterId,
+                        reward.CreatureKind,
+                        reward.CreatureLevel,
+                        reward.GrowNumber);
+                    if (!petEvolution.Changed)
+                        return QuestFinishResult.Fail(22);
+                }
 
                 if (!GameWorld.QuestData.IsRepeatableQuest(questId))
                     QuestRepository.MarkQuestCleared(scope.Connection, scope.Transaction, characterId, questId, clearedFlagValue);
@@ -712,6 +725,7 @@ namespace DfoServer.Game.Quests
                 NewExp = newExp,
                 ChainType = reward.ChainType,
                 GrowNumber = reward.GrowNumber,
+                PetCreatureEvolution = petEvolution,
                 ConsumedEntries = consumedEntries,
                 InsertedEntries = insertedEntries,
             };

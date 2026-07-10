@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using DfoServer.Game.Inventory;
 
 namespace DfoServer.Game.Quests
 {
@@ -61,6 +62,7 @@ namespace DfoServer.Game.Quests
         public int ChainType;
         // chainType 1/2=转职号, 20=专家职类型, 30=开孔的装备栏位号。
         public int GrowNumber;
+        public PetCreatureEvolutionResult PetCreatureEvolution;
         public List<ConsumedItemEntry> ConsumedEntries = new List<ConsumedItemEntry>();
         public List<InsertedItemEntry> InsertedEntries = new List<InsertedItemEntry>();
 

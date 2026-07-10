@@ -5,6 +5,7 @@ using DfoServer.Game.Premium;
 using DfoServer.Game.Skills;
 using DfoServer.Infrastructure;
 using DfoServer.Network.Builders;
+using DfoServer.Network.Handlers.Pets;
 using DfoServer.Network.Parsers.Dungeon;
 using System;
 using System.Collections.Generic;
@@ -246,6 +247,8 @@ namespace DfoServer.Network.Handlers.Dungeon
                 int currentMapId = clearedRoomState != null ? clearedRoomState.Maze.Index : 0;
                 bool ccType1 = run.ClearCondition != null
                     && run.ClearCondition.Check(1, currentMapId);
+
+                await PetCreatureRuntimeService.GrantRoomClearExperienceOnceAsync(session, clearedRoomState, 1);
 
                 if (ccType1 || endPoint)
                     await _settlement.TryClearDungeon(session, $"prepare_dungeon_clear ccType1={ccType1} endPoint={endPoint}", killedMonsterCode);

@@ -82,6 +82,7 @@ namespace PvfLib
         public bool IgnoreQuestLevel4Exp { get; set; }
         public bool IsEvent { get; set; }
         public int CreatureKind { get; set; } = -1;
+        public int CreatureLevel { get; set; } = -1;
         public int ExpertJobType { get; set; } = -1;
         public int ExpertJobLevel { get; set; } = -1;
 
@@ -163,6 +164,7 @@ namespace PvfLib
                     case "ignore quest level 4 exp": qst.IgnoreQuestLevel4Exp = true; break;
                     case "event": if (ParseInt(data) != 0) qst.IsEvent = true; break;
                     case "creature kind": qst.CreatureKind = ParseInt(data); break;
+                    case "creature level": qst.CreatureLevel = ParseInt(data); break;
                     case "expertjob level":
                         var ejParts = data.Split(new[] { ' ', '\t' }, System.StringSplitOptions.RemoveEmptyEntries);
                         if (ejParts.Length >= 1) { int ejt; if (int.TryParse(ejParts[0], out ejt)) qst.ExpertJobType = ejt; }

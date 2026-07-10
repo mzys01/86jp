@@ -134,6 +134,12 @@ VALUES (
             {
                 connection.Open();
                 NormalizeRentalInventoryRows(connection, characterId, _rentalTimeProvider.UtcNowUnixSeconds());
+                using (var repairTransaction = connection.BeginTransaction())
+                {
+                    RepairPetCreatureItemListSlotConflict(connection, repairTransaction, characterId);
+                    repairTransaction.Commit();
+                }
+
                 var snapshot = new CharacterItemListSnapshot();
                 var listParams = _equipStore.LoadContainerState(connection, null, characterId, accountId);
                 snapshot.MainListParam16 = GetListParam(listParams, InventoryListType.Main);

@@ -42,10 +42,19 @@ namespace DfoServer.Infrastructure
             public Action<DateTime> Callback;
         }
 
+        private sealed class OneShotEntry
+        {
+            public string Name;
+            public DateTime DueUtc;
+            public Action<DateTime> Callback;
+        }
+
         private readonly object _sync = new object();
         private readonly List<KeyValuePair<string, Action<DateTime>>> _minuteTicks
             = new List<KeyValuePair<string, Action<DateTime>>>();
         private readonly List<MomentEntry> _moments = new List<MomentEntry>();
+        private readonly Dictionary<string, OneShotEntry> _oneShots
+            = new Dictionary<string, OneShotEntry>(StringComparer.Ordinal);
         private long _lastMinuteIndex = -1;
         private DateTime _lastCheckedUtc = DateTime.MinValue;
         private Timer _timer;
@@ -67,6 +76,35 @@ namespace DfoServer.Infrastructure
         // 每周指定星期的北京时间 HH:mm 触发一次。
         public void RegisterWeeklyMoment(string name, DayOfWeek day, int hour, int minute, Action<DateTime> callback)
             => RegisterMoment(name, day, hour, minute, callback);
+
+        // 进程内一次性定时器。同名任务会覆盖旧任务；会话/登录重建时,
+        // 调用方必须从持久化状态重新恢复仍需要的定时器。
+        public void ScheduleOneShot(string name, DateTime dueUtc, Action<DateTime> callback)
+        {
+            if (string.IsNullOrWhiteSpace(name)) throw new ArgumentException("name is empty", nameof(name));
+            if (callback == null) throw new ArgumentNullException(nameof(callback));
+            if (dueUtc.Kind == DateTimeKind.Local)
+                dueUtc = dueUtc.ToUniversalTime();
+
+            lock (_sync)
+            {
+                _oneShots[name] = new OneShotEntry
+                {
+                    Name = name,
+                    DueUtc = dueUtc,
+                    Callback = callback,
+                };
+            }
+        }
+
+        public bool CancelOneShot(string name)
+        {
+            if (string.IsNullOrWhiteSpace(name))
+                return false;
+
+            lock (_sync)
+                return _oneShots.Remove(name);
+        }
 
         private void RegisterMoment(string name, DayOfWeek? day, int hour, int minute, Action<DateTime> callback)
         {
@@ -122,6 +160,7 @@ namespace DfoServer.Infrastructure
         {
             List<KeyValuePair<string, Action<DateTime>>> dueMinuteTicks = null;
             List<MomentEntry> dueMoments = null;
+            List<OneShotEntry> dueOneShots = null;
 
             lock (_sync)
             {
@@ -168,6 +207,30 @@ namespace DfoServer.Infrastructure
             }
 
             // 回调在锁外执行: 允许回调内再注册, 也避免慢回调拖住注册
+            lock (_sync)
+            {
+                if (_oneShots.Count > 0)
+                {
+                    foreach (var oneShot in _oneShots.Values)
+                    {
+                        if (utcNow >= oneShot.DueUtc)
+                            (dueOneShots ?? (dueOneShots = new List<OneShotEntry>())).Add(oneShot);
+                    }
+
+                    if (dueOneShots != null)
+                    {
+                        foreach (var oneShot in dueOneShots)
+                        {
+                            if (_oneShots.TryGetValue(oneShot.Name, out var current)
+                                && ReferenceEquals(current, oneShot))
+                            {
+                                _oneShots.Remove(oneShot.Name);
+                            }
+                        }
+                    }
+                }
+            }
+
             if (dueMinuteTicks != null)
                 foreach (var tick in dueMinuteTicks)
                     Invoke(tick.Key, tick.Value, utcNow);
@@ -175,6 +238,10 @@ namespace DfoServer.Infrastructure
             if (dueMoments != null)
                 foreach (var moment in dueMoments)
                     Invoke(moment.Name, moment.Callback, utcNow);
+
+            if (dueOneShots != null)
+                foreach (var oneShot in dueOneShots)
+                    Invoke(oneShot.Name, oneShot.Callback, utcNow);
         }
 
         private static void Invoke(string name, Action<DateTime> callback, DateTime utcNow)

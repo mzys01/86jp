@@ -1,3 +1,5 @@
+using System;
+
 namespace DfoServer.Game.Session
 {
     public partial class PlayerContext
@@ -11,5 +13,15 @@ namespace DfoServer.Game.Session
 
         // 深渊华丽挑战 UI 开关: 在选图界面(进本之前)切换。
         public bool HellPartyGorgeousChallengeEnabled { get; set; }
+
+        // Pet satiety runtime anchors. DungeonRun is recreated per run, but town recovery
+        // spans the time between runs, so these stay on the player context.
+        public DateTime PetCreatureSatietyDungeonStartUtc { get; set; } = DateTime.MinValue;
+        public short PetCreatureSatietyDungeonId { get; set; }
+        public DateTime PetCreatureSatietyTownStartUtc { get; set; } = DateTime.MinValue;
+        public int PetCreatureLastDeathCreatureKey { get; set; }
+        public int PetCreatureDeathTimerVersion { get; set; }
+
+        public ushort DungeonSceneUniqueId { get; set; }
     }
 }

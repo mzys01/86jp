@@ -1,5 +1,7 @@
 using DfoServer.Game.SelectCharacter;
 using DfoServer.Game.Quests;
+using DfoServer.Game.Inventory;
+using DfoServer.Infrastructure;
 using DfoServer.Network;
 using System.Collections.Generic;
 
@@ -24,16 +26,37 @@ namespace DfoServer.Network.Builders
                     clearedFlags[entry.SlotIndex] = entry.FlagValue;
             }
 
-            body = BuildBody(level, job, growType, clearedFlags);
+            var allowedCreatureKinds = character != null && character.CharacterId > 0
+                ? SqliteInventoryStore.LoadEligiblePetCreatureEvolutionQuestKinds(
+                    ServerPaths.DatabasePath,
+                    ServerPaths.SchemaFilePath,
+                    character.CharacterId)
+                : null;
+
+            body = BuildBody(level, job, growType, clearedFlags, allowedCreatureKinds);
             return true;
         }
 
         // 可接任务列表(NOTI 0x0015)包体的唯一构建点 --
         // 选角初始化、交任务后的刷新、副本返城后的刷新三条路径共用。
         public static byte[] BuildBody(int level, int job, int growType, Dictionary<int, int> clearedFlags)
+            => BuildBody(level, job, growType, clearedFlags, null);
+
+        public static byte[] BuildBody(
+            int level,
+            int job,
+            int growType,
+            Dictionary<int, int> clearedFlags,
+            ISet<int> allowedCreatureKinds)
         {
             var clearedSet = new HashSet<int>(clearedFlags.Keys);
-            var questIds = GameWorld.QuestData.ComputeAcceptableQuests(level, job, growType, clearedSet, clearedFlags);
+            var questIds = GameWorld.QuestData.ComputeAcceptableQuests(
+                level,
+                job,
+                growType,
+                clearedSet,
+                clearedFlags,
+                allowedCreatureKinds);
 
             var writer = new GamePacketWriter();
             writer.WriteByte((byte)level);

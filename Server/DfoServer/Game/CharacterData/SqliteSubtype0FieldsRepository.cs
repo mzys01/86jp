@@ -235,7 +235,7 @@ LIMIT 1;", conn))
                 return;
 
             using (var cmd = new SqliteCommand(@"
-SELECT creature_text
+SELECT creature_text, field04
 FROM character_creatures
 WHERE character_id = @cid
   AND creature_key = @creatureKey
@@ -249,6 +249,9 @@ LIMIT 1;", conn))
                         return;
 
                     snapshot.EquippedCreatureNameBytes = reader.IsDBNull(0) ? new byte[0] : (byte[])reader.GetValue(0);
+                    snapshot.EquippedCreatureAliveState = reader.IsDBNull(1) || reader.GetInt32(1) > 0
+                        ? (byte)1
+                        : (byte)0;
                 }
             }
         }

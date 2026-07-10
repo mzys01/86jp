@@ -17,6 +17,7 @@ namespace DfoServer.Game.Session
             CharacterId = record.CharacterId;
             Name = record.Name ?? Name;
             UserId = (ushort)record.CharacterId;
+            DungeonSceneUniqueId = 0;
             Job = record.Job;
             GrowType = record.GrowType;
             Level = record.Level == 0 ? Level : record.Level;

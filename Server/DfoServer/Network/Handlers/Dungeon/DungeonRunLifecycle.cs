@@ -1,4 +1,5 @@
 using DfoServer.Game.Dungeon;
+using DfoServer.Network.Handlers.Pets;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -16,6 +17,7 @@ namespace DfoServer.Network.Handlers.Dungeon
             Game.DeathTower.DeathTowerHandler.ClearTowerState(session);
 
             session.Player.CurrentRun = new DungeonRun((short)dungeonId, difficulty);
+            PetCreatureRuntimeService.BeginDungeon(session, dungeonId, "begin_run");
         }
 
         // 进塔: 塔是一局副本的变体, 同样换新局(顺带丢弃上一局的全部残留状态)。
@@ -25,17 +27,19 @@ namespace DfoServer.Network.Handlers.Dungeon
 
             session.Player.CurrentRun = new DungeonRun((short)dungeonId, 0);
             session.Player.CurrentRun.Tower = tower;
+            PetCreatureRuntimeService.BeginDungeon(session, dungeonId, "begin_tower_run");
         }
 
         // 返城(EPLP/回城/放弃): 先掐定时器(残留的翻牌定时器不能对下一局或城镇状态发包), 再丢弃本局。
-        internal static Task EndRunToTownAsync(EnhancedClientSession session)
+        internal static async Task EndRunToTownAsync(EnhancedClientSession session)
         {
             CancelAutoFlip(session);
             PersistSessionExp(session, "town");
             Game.DeathTower.DeathTowerHandler.ClearTowerState(session);
+            await PetCreatureRuntimeService.EndDungeonToTownAsync(session, "town");
 
+            session.Player.DungeonSceneUniqueId = 0;
             session.Player.CurrentRun = null;
-            return Task.CompletedTask;
         }
 
         // 断线/换角色: 同样丢弃本局。
@@ -45,7 +49,9 @@ namespace DfoServer.Network.Handlers.Dungeon
             CancelAutoFlip(session);
             PersistSessionExp(session, source);
             Game.DeathTower.DeathTowerHandler.ClearTowerState(session);
+            PetCreatureRuntimeService.EndCharacterSession(session, source);
 
+            session.Player.DungeonSceneUniqueId = 0;
             session.Player.CurrentRun = null;
         }
 

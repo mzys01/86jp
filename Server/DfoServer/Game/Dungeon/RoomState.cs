@@ -54,6 +54,7 @@ namespace DfoServer.Game.Dungeon
         public int HellPartyPillarObjectCode;
         public int HellPartySpawnX;
         public int HellPartySpawnY;
+        public bool PetExperienceGranted;
         public List<GameWorld.Dungeon.HellPartyWaveInfo> HellPartyWaves;
         public HellPartyPhase HellPartyPhase;
         // 深渊小队剩余成员数。key 为 group index，value 为该 group 尚未收到死亡包的成员数。
