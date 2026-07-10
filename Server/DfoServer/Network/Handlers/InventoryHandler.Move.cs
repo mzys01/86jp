@@ -2,6 +2,7 @@ using DfoServer.Game.Inventory;
 using DfoServer.Game.ItemUpgrade;
 using DfoServer.Game.SelectCharacter;
 using DfoServer.Network.Builders;
+using DfoServer.Network.Handlers.Pets;
 using System;
 using System.Threading.Tasks;
 
@@ -11,8 +12,6 @@ namespace DfoServer.Network.Handlers
     {
         public async Task Handle_ENUM_CMDPACKET_MOVE_ITEMSPACE(EnhancedClientSession session, GamePacketHeader header, byte[] body)
         {
-
-
             if (body == null || body.Length < 14)
             {
                 if (body != null && body.Length >= 4)
@@ -39,6 +38,8 @@ namespace DfoServer.Network.Handlers
             FileLogger.Log($"[{ProtocolName}] MOVE fields: src=({request.SourceListType},slot{request.SourceSlotIndex},IV=0x{srcIV:X8},stk{srcStack}) dst=({request.DestinationListType},slot{request.DestinationSlotIndex},IV=0x{request.DestinationInstanceValue:X8},stk{dstStack})");
 
             var (cid, aid) = ResolveOwner(session);
+            var petRuntimeMove = PetCreatureRuntimeService.BeginInventoryMoveMutation(session, request);
+
             if (!_inventoryStore.TryMoveItem(cid, aid, request, out var result))
             {
                 FileLogger.Log($"[{ProtocolName}] MOVE_ITEMSPACE: FAILED src=({request.SourceListType},{request.SourceSlotIndex}) dst=({request.DestinationListType},{request.DestinationSlotIndex})");
@@ -46,10 +47,6 @@ namespace DfoServer.Network.Handlers
                     MoveItemSpaceAckBuilder.BuildError(0x04, (byte)request.SourceListType, (byte)request.DestinationListType)));
                 return;
             }
-
-
-
-
 
             if (result.AckError)
             {
@@ -67,6 +64,7 @@ namespace DfoServer.Network.Handlers
             if (InventoryRefreshSender.MapToSortLockListType(request.SourceListType) != InventoryRefreshSender.MapToSortLockListType(request.DestinationListType))
                 await _refresh.SendSortItemLockRefresh(session, request.DestinationListType);
 
+            await PetCreatureRuntimeService.CompleteInventoryMoveMutationAsync(session, result, petRuntimeMove);
             if (result.PetCreatureStateChanged)
             {
                 _refresh.ReloadSubtype0Tail(session);

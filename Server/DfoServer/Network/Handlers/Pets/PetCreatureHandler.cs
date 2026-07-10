@@ -43,6 +43,10 @@ namespace DfoServer.Network.Handlers.Pets
             var itemCode = body.Length >= 11 ? BitConverter.ToInt32(body, 7) : 0;
             var (cid, aid) = SessionOwnerResolver.Resolve(session);
 
+            PetCreatureRuntimeService.PersistDungeonElapsedBeforeMutation(
+                session,
+                "pet_consumable_before",
+                continueTiming: true);
             var consumed = _inventoryStore.TryDeleteItem(cid, aid, listType, slotIndex, 1, out var result);
             var ackBody = consumed || IsPetConsumableSlot(listType, slotIndex)
                 ? UseStackableAckBuilder.BuildSuccess(slotIndex, (byte)listType, instanceValue, itemCode)
@@ -60,6 +64,12 @@ namespace DfoServer.Network.Handlers.Pets
 
             if (result.PetSatietyChanged)
             {
+                PetCreatureRuntimeService.HandlePetSatietyChangedAfterFeed(
+                    session,
+                    result.PetCreatureKey,
+                    result.PetSatietyAfter,
+                    "pet_feed_after");
+
                 var creatureStateBody = BuildCreatureStateRefreshBody(cid, result.PetCreatureKey);
                 if (creatureStateBody != null)
                     await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0067, creatureStateBody));
@@ -105,6 +115,36 @@ namespace DfoServer.Network.Handlers.Pets
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, header.type, CommonPacketBodyBuilder.BuildSuccessAck()));
             await SendCreatureListRefresh(session);
             FileLogger.Log($"[{ProtocolName}] REQUEST_HATCHED_CREATURE: refreshed creature list type=0x{header.type:X4} body({body?.Length ?? 0}B)");
+        }
+
+        public async Task HandleVerifyCreatureQuest(EnhancedClientSession session, GamePacketHeader header, byte[] body)
+        {
+            FileLogger.Log($"[{ProtocolName}] VERIFY_CREATURE_QUEST raw({body?.Length ?? 0}B): {(body != null ? BitConverter.ToString(body) : "null")}");
+            await PetCreatureRuntimeService.VerifyCreatureEvolutionQuestAsync(session);
+        }
+
+        public async Task HandleCreatureScriptMessage(EnhancedClientSession session, GamePacketHeader header, byte[] body)
+        {
+            if (!PetCreatureScript.TryParseMessageRequest(body, out var request))
+            {
+                FileLogger.Log($"[{ProtocolName}] CREATURE_SCRIPT_MESSAGE invalid body({body?.Length ?? 0}B): {(body != null ? BitConverter.ToString(body) : "null")}");
+                return;
+            }
+
+            // 旧服通过 GameWorld::send_chat_msg(..., NOTI 0x0077) 广播。
+            // 当前单机服没有同屏广播集合，先回发给自己。
+            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
+                0x00,
+                0x0077,
+                PetCreatureScript.BuildNotiBody(
+                    request.Mode,
+                    session?.Player?.UserId ?? 0,
+                    serverGroup: 0,
+                    request.MessageBytes)));
+
+            FileLogger.Log(
+                $"[{ProtocolName}] CREATURE_SCRIPT_MESSAGE mode={request.Mode} target={request.TargetUniqueId} " +
+                $"char={request.CharacterId} len={request.MessageBytes.Length} text={DecodePetCreatureNameForLog(request.MessageBytes)}");
         }
 
         public async Task HandleRenameCreature(EnhancedClientSession session, GamePacketHeader header, byte[] body)

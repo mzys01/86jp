@@ -10,6 +10,8 @@ namespace DfoServer.GameWorld
         public uint Gold;
         public int ChainType;
         public int GrowNumber;
+        public int CreatureKind;
+        public int CreatureLevel;
         public List<QuestRewardItem> Items;
         public List<QuestRewardItem> ConsumeItems;
     }
@@ -248,6 +250,15 @@ namespace DfoServer.GameWorld
         }
 
         public static List<ushort> ComputeAcceptableQuests(int characterLevel, int characterJob, int growType, HashSet<int> clearedQuestIds, Dictionary<int, int> clearedFlags)
+            => ComputeAcceptableQuests(characterLevel, characterJob, growType, clearedQuestIds, clearedFlags, null);
+
+        public static List<ushort> ComputeAcceptableQuests(
+            int characterLevel,
+            int characterJob,
+            int growType,
+            HashSet<int> clearedQuestIds,
+            Dictionary<int, int> clearedFlags,
+            ISet<int> allowedCreatureKinds)
         {
             var result = new List<ushort>();
             foreach (var questId in Index.Value.OrderedIds)
@@ -263,7 +274,9 @@ namespace DfoServer.GameWorld
 
                 if (qst.IsEvent) continue;
 
-                if (qst.CreatureKind >= 0) continue;
+                if (qst.CreatureKind >= 0
+                    && (allowedCreatureKinds == null || !allowedCreatureKinds.Contains(qst.CreatureKind)))
+                    continue;
 
                 if (qst.ExpertJobType >= 0 && qst.ExpertJobLevel >= 0)
                     continue;
@@ -697,14 +710,29 @@ namespace DfoServer.GameWorld
                 var consumeItems = new List<QuestRewardItem>();
 
                 int growNumber = 0;
-                if (chainType == 1 || chainType == 2 || chainType == 20 || chainType == ChainTypeSlotExpansion)
+                if (chainType == 1
+                    || chainType == 2
+                    || chainType == 10
+                    || chainType == 20
+                    || chainType == 25
+                    || chainType == ChainTypeSlotExpansion)
                 {
                     var rewardValues = ParseIntList(qst.RewardIntData);
                     if (rewardValues.Count > 0)
                         growNumber = rewardValues[0];
                 }
 
-                return new QuestReward { Exp = exp, Gold = gold, ChainType = chainType, GrowNumber = growNumber, Items = items, ConsumeItems = consumeItems };
+                return new QuestReward
+                {
+                    Exp = exp,
+                    Gold = gold,
+                    ChainType = chainType,
+                    GrowNumber = growNumber,
+                    CreatureKind = qst.CreatureKind,
+                    CreatureLevel = qst.CreatureLevel,
+                    Items = items,
+                    ConsumeItems = consumeItems
+                };
             }
             catch (Exception ex)
             {

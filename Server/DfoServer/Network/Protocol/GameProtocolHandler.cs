@@ -95,6 +95,7 @@ namespace DfoServer.Network
             _collectionBoxHandler = new CollectionBoxHandler(inventoryStore, collectBoxProgressRepository);
             _shopCoinEventHandler = new ShopCoinEventHandler(reviveCoinService, _inventoryRefreshSender);
             _mercenaryHandler = new MercenaryHandler(characterRepository, getUserInfoTemplate);
+            PetCreatureRuntimeService.EnsureClockRegistered();
 
             _cmdDispatch = new Dictionary<ushort, Func<EnhancedClientSession, GamePacketHeader, byte[], Task>>();
             RegisterLoginHandlers(_cmdDispatch);
@@ -122,6 +123,7 @@ namespace DfoServer.Network
         public override async Task OnClientConnected(EnhancedClientSession session)
         {
             FileLogger.Log($"[{ProtocolName}] Admin client connected: {session.SessionId}");
+            PetCreatureRuntimeService.RegisterSession(session);
             await _loginHandler.Handle_ClientFirstConnected(session);
         }
 
@@ -132,6 +134,7 @@ namespace DfoServer.Network
             if (charId > 0) await _sessionDirectory.UnregisterAsync(charId);
             Handlers.Dungeon.DungeonRunLifecycle.EndRunOnTeardown(session, "disconnect");
             _townHandler.PersistPosition(session, forceImmediate: true, source: "disconnect");
+            PetCreatureRuntimeService.UnregisterSession(session);
         }
 
         public override async Task OnPacketReceived(EnhancedClientSession session, FlexiblePacket packet)
@@ -191,6 +194,7 @@ namespace DfoServer.Network
                     s.GameSession = new Game.Session.GameSession(s, gsConnStr, _assetService);
                     await _inventoryRefreshSender.SendAllSortItemLockRefresh(s);
                     await _inventoryRefreshSender.SendAllEquipmentItemLockListRefresh(s);
+                    await PetCreatureRuntimeService.BeginTownAsync(s, "select_character");
                 }
             };
             d[0x0005] = _characterSelectHandler.Handle_ENUM_CMDPACKET_CREATE_CHARACTER;
@@ -199,7 +203,6 @@ namespace DfoServer.Network
             {
                 var charId = s.Player?.CharacterId ?? 0;
                 if (charId > 0) await _sessionDirectory.UnregisterAsync(charId);
-                Handlers.Dungeon.DungeonRunLifecycle.EndRunOnTeardown(s, "return_select");
                 _townHandler.PersistPosition(s, forceImmediate: true, source: "return_select");
                 s.GameSession = null;
                 await _characterSelectHandler.Handle_ENUM_CMDPACKET_RETURN_SELECT_CHARACTER(s, h, b);
@@ -253,8 +256,10 @@ namespace DfoServer.Network
             };
             d[0x0064] = _petCreatureHandler.HandleRenameCreature;
             d[0x0066] = _petCreatureHandler.HandleHatchCreatureEgg;
+            d[0x007A] = _petCreatureHandler.HandleCreatureScriptMessage;
             d[0x00AD] = _petCreatureHandler.HandleHatchCreatureEgg;
             d[0x00AE] = _petCreatureHandler.HandleRequestHatchedCreature;
+            d[0x01E0] = _petCreatureHandler.HandleVerifyCreatureQuest;
         }
 
         private void RegisterSortItemLockHandlers(Dictionary<ushort, Func<EnhancedClientSession, GamePacketHeader, byte[], Task>> d)
@@ -393,8 +398,7 @@ namespace DfoServer.Network
                 s.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0003, CommonPacketBodyBuilder.BuildSuccessAck()));
             d[0x0040] = _ceraShopHandler.HandleCeraShopPurchase;                   //64
             d[0x01A1] = _inventoryHandler.Handle_ACHIEVEMENT_TRIGGER;              //417
-            d[0x01DE] = (s, h, b) =>                                               //478
-                s.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x01DE, CommonPacketBodyBuilder.BuildSuccessAck()));
+            d[0x01DE] = _dungeonHandler.HandleDungeonSceneUniqueIdReport;           //478
             d[0x02A8] = (s, h, b) =>
                 s.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x02A8, new byte[] { 0x00, 0x00 }));
             d[0x0372] = _rentalHandler.HandleRentWeapon;

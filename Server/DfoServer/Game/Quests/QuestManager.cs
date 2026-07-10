@@ -11,6 +11,7 @@ using DfoServer.Game.Session;
 using DfoServer.Game.Skills;
 using DfoServer.Infrastructure;
 using DfoServer.Network.Builders;
+using DfoServer.Network.Handlers.Pets;
 
 namespace DfoServer.Game.Quests
 {
@@ -184,6 +185,10 @@ namespace DfoServer.Game.Quests
                 // The ACK completes the quest, but the client opens the visual slot from refreshed subtype1 data.
                 await SendUserInfoBroadcast(cid, honorLevel);
             }
+            else if ((result.ChainType == 10 || result.ChainType == 25) && result.PetCreatureEvolution.Changed)
+            {
+                await PetCreatureRuntimeService.SendPetCreatureEvolutionAsync(_sender, result.PetCreatureEvolution);
+            }
 
             var noti = BuildAcceptedQuestNoti(cid);
             await _sender.SendNotiAsync(0x023F, noti);
@@ -303,7 +308,7 @@ namespace DfoServer.Game.Quests
             return GameWorld.QuestData.MatchesClearMapTarget(qst, dungeonId: 0, mapId: mazeStartMapId);
         }
 
-        private async Task SendAcceptableQuestListAsync()
+        public async Task SendAcceptableQuestListAsync()
         {
             int cid = _sender.CharacterId;
             if (cid <= 0) return;
@@ -313,7 +318,13 @@ namespace DfoServer.Game.Quests
             int growType = character != null ? character.GrowType : -1;
 
             var clearedFlags = new QuestRepository(_connStr).LoadClearedFlags(cid);
-            await _sender.SendNotiAsync(0x0015, QuestListBodyBuilder.BuildBody(level, job, growType, clearedFlags));
+            var allowedCreatureKinds = SqliteInventoryStore.LoadEligiblePetCreatureEvolutionQuestKinds(
+                ServerPaths.DatabasePath,
+                ServerPaths.SchemaFilePath,
+                cid);
+            await _sender.SendNotiAsync(
+                0x0015,
+                QuestListBodyBuilder.BuildBody(level, job, growType, clearedFlags, allowedCreatureKinds));
         }
 
         private async Task SendUserInfoBroadcast(int characterId, HonorLevelSummary honorLevel = null)

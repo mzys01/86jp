@@ -145,9 +145,13 @@ namespace DfoServer.Network.Handlers.Dungeon
                 var clearedFlags = new Game.Quests.QuestRepository(
                     SqliteDatabaseBootstrap.BuildConnectionString(ServerPaths.DatabasePath))
                     .LoadClearedFlags(session.Player.CharacterId);
+                var allowedCreatureKinds = SqliteInventoryStore.LoadEligiblePetCreatureEvolutionQuestKinds(
+                    ServerPaths.DatabasePath,
+                    ServerPaths.SchemaFilePath,
+                    session.Player.CharacterId);
 
                 var body = Builders.QuestListBodyBuilder.BuildBody(
-                    session.Player.Level, rec.Job, rec.GrowType, clearedFlags);
+                    session.Player.Level, rec.Job, rec.GrowType, clearedFlags, allowedCreatureKinds);
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0015, body));
             }
             catch (Exception ex)

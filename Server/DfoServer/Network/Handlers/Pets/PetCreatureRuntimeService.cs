@@ -1,0 +1,764 @@
+using DfoServer.Game.Inventory;
+using DfoServer.Game.SelectCharacter;
+using DfoServer.Game.Session;
+using DfoServer.Infrastructure;
+using DfoServer.Network.Builders;
+using System;
+using System.Collections.Concurrent;
+using System.Threading;
+using System.Threading.Tasks;
+
+namespace DfoServer.Network.Handlers.Pets
+{
+    internal static class PetCreatureRuntimeService
+    {
+        private const string ProtocolName = "GameProtocol";
+        private const string ClockTickName = "pet-creature-runtime";
+        private const string DeathTimerNamePrefix = "pet-creature-death:";
+        private const double TownSatietyRecoveryIntervalSeconds = 360.0;
+        private static readonly ConcurrentDictionary<Guid, EnhancedClientSession> Sessions =
+            new ConcurrentDictionary<Guid, EnhancedClientSession>();
+        private static int _clockRegistered;
+        private static int _tickRunning;
+
+        internal static void EnsureClockRegistered()
+        {
+            if (Interlocked.Exchange(ref _clockRegistered, 1) != 0)
+                return;
+
+            ClockService.Instance.RegisterMinuteTick(ClockTickName, TickOnlineSessions);
+        }
+
+        internal static void RegisterSession(EnhancedClientSession session)
+        {
+            if (session == null)
+                return;
+
+            Sessions[session.SessionId] = session;
+        }
+
+        internal static void UnregisterSession(EnhancedClientSession session)
+        {
+            if (session == null)
+                return;
+
+            CancelDeathCheck(session);
+            Sessions.TryRemove(session.SessionId, out _);
+        }
+
+        internal static Task BeginTownAsync(EnhancedClientSession session, string source)
+        {
+            if (!HasCharacter(session))
+                return Task.CompletedTask;
+
+            ClearDungeonAnchor(session);
+            return BeginTownCoreAsync(session, source, DateTime.UtcNow);
+        }
+
+        internal static void BeginDungeon(EnhancedClientSession session, int dungeonId, string source)
+        {
+            if (!HasCharacter(session))
+                return;
+
+            var now = DateTime.UtcNow;
+            PersistTownRecovery(session, source, now, continueTiming: false);
+            session.Player.PetCreatureSatietyDungeonStartUtc = now;
+            session.Player.PetCreatureSatietyDungeonId = (short)Math.Max(0, Math.Min(short.MaxValue, dungeonId));
+            session.Player.PetCreatureSatietyTownStartUtc = DateTime.MinValue;
+            session.Player.PetCreatureLastDeathCreatureKey = 0;
+
+            try
+            {
+                var current = PetCreatureSatietyService.LoadEquippedCreatureSatiety(
+                    ServerPaths.DatabasePath,
+                    ServerPaths.SchemaFilePath,
+                    session.Player.CharacterId);
+                SetSessionCreatureAliveState(session, current.CreatureKey > 0 && current.Before > 0 ? (byte)1 : (byte)0);
+                FileLogger.Log($"[{ProtocolName}] PetCreatureSatiety: begin dungeon source={source} cid={session.Player.CharacterId} dungeon={dungeonId} key={current.CreatureKey} satiety={current.Before} foodRate={current.FoodConsumeRatePercent}% multiplier={current.FoodConsumeMultiplier:0.###}");
+                ScheduleDungeonDeathCheck(session, $"{source}:begin", now);
+            }
+            catch (Exception ex)
+            {
+                FileLogger.Log($"[{ProtocolName}] PetCreatureSatiety: begin dungeon failed source={source} cid={session.Player.CharacterId}: {ex.Message}");
+            }
+        }
+
+        internal static async Task EndDungeonToTownAsync(EnhancedClientSession session, string source)
+        {
+            if (!HasCharacter(session))
+                return;
+
+            var now = DateTime.UtcNow;
+            await CheckDungeonDeathAsync(session, $"{source}:before-town", now);
+            PersistDungeonElapsed(session, source, now, continueTiming: false);
+            CancelDeathCheck(session);
+            await BeginTownCoreAsync(session, source, now);
+        }
+
+        internal static void EndCharacterSession(EnhancedClientSession session, string source)
+        {
+            if (!HasCharacter(session))
+                return;
+
+            var now = DateTime.UtcNow;
+            CancelDeathCheck(session);
+            PersistDungeonElapsed(session, source, now, continueTiming: false);
+            PersistTownRecovery(session, source, now, continueTiming: false);
+            session.Player.PetCreatureSatietyDungeonStartUtc = DateTime.MinValue;
+            session.Player.PetCreatureSatietyDungeonId = 0;
+            session.Player.PetCreatureLastDeathCreatureKey = 0;
+            session.Player.PetCreatureSatietyTownStartUtc = DateTime.MinValue;
+        }
+
+        internal static void PersistDungeonElapsedBeforeMutation(
+            EnhancedClientSession session,
+            string source,
+            bool continueTiming = false)
+        {
+            if (!HasCharacter(session))
+                return;
+
+            PersistDungeonElapsed(session, source, DateTime.UtcNow, continueTiming);
+        }
+
+        internal static bool BeginInventoryMoveMutation(EnhancedClientSession session, InventoryMoveRequest request)
+        {
+            if (!HasCharacter(session)
+                || session.Player.CurrentRun == null
+                || !IsPetRuntimeAffectingMoveRequest(request))
+            {
+                return false;
+            }
+
+            PersistDungeonElapsedBeforeMutation(
+                session,
+                "pet_runtime_move_before",
+                continueTiming: true);
+            return true;
+        }
+
+        internal static Task CompleteInventoryMoveMutationAsync(
+            EnhancedClientSession session,
+            InventoryMoveResult result,
+            bool trackedPetRuntimeMove)
+        {
+            if (!HasCharacter(session) || result == null)
+                return Task.CompletedTask;
+
+            if (result.PetCreatureStateChanged)
+                return HandlePetCreatureChangedInDungeonAsync(session, "pet_creature_move_after");
+
+            if (result.PetItemStateChanged && trackedPetRuntimeMove)
+                return HandlePetCreatureChangedInDungeonAsync(session, "pet_artifact_move_after");
+
+            return Task.CompletedTask;
+        }
+
+        internal static async Task HandlePetCreatureChangedInDungeonAsync(EnhancedClientSession session, string source)
+        {
+            if (!HasCharacter(session) || session.Player.CurrentRun == null)
+                return;
+
+            var now = DateTime.UtcNow;
+            session.Player.PetCreatureSatietyDungeonStartUtc = now;
+            session.Player.PetCreatureSatietyDungeonId = session.Player.CurrentRun.DungeonId;
+            session.Player.PetCreatureLastDeathCreatureKey = 0;
+
+            var current = PetCreatureSatietyService.LoadEquippedCreatureSatiety(
+                ServerPaths.DatabasePath,
+                ServerPaths.SchemaFilePath,
+                session.Player.CharacterId);
+            if (current.CreatureKey <= 0)
+            {
+                ClearDungeonAnchor(session);
+                SetSessionCreatureAliveState(session, 0);
+                FileLogger.Log($"[{ProtocolName}] PetCreatureSatiety: pet changed no active creature source={source} cid={session.Player.CharacterId}");
+                return;
+            }
+
+            SetSessionCreatureAliveState(session, current.Before > 0 ? (byte)1 : (byte)0);
+            FileLogger.Log($"[{ProtocolName}] PetCreatureSatiety: pet changed source={source} cid={session.Player.CharacterId} dungeon={session.Player.CurrentRun.DungeonId} key={current.CreatureKey} satiety={current.Before} foodRate={current.FoodConsumeRatePercent}% multiplier={current.FoodConsumeMultiplier:0.###}");
+            ScheduleDungeonDeathCheck(session, source, now);
+        }
+
+        internal static void HandlePetSatietyChangedAfterFeed(EnhancedClientSession session, int creatureKey, int satietyAfter, string source)
+        {
+            if (!HasCharacter(session))
+                return;
+
+            SetSessionCreatureAliveState(session, creatureKey > 0 && satietyAfter > 0 ? (byte)1 : (byte)0);
+            if (session.Player.CurrentRun != null && creatureKey > 0 && satietyAfter > 0)
+            {
+                session.Player.PetCreatureSatietyDungeonStartUtc = DateTime.UtcNow;
+                session.Player.PetCreatureSatietyDungeonId = session.Player.CurrentRun.DungeonId;
+                session.Player.PetCreatureLastDeathCreatureKey = 0;
+                ScheduleDungeonDeathCheck(session, source, session.Player.PetCreatureSatietyDungeonStartUtc);
+            }
+
+            FileLogger.Log($"[{ProtocolName}] PetCreatureSatiety: feed applied source={source} cid={session.Player.CharacterId} key={creatureKey} satiety={satietyAfter}");
+        }
+
+        internal static async Task GrantRoomClearExperienceOnceAsync(
+            EnhancedClientSession session,
+            Game.Dungeon.RoomState roomState,
+            int consumedFatigue)
+        {
+            if (roomState == null || roomState.PetExperienceGranted)
+                return;
+
+            roomState.PetExperienceGranted = true;
+            await SendPetCreatureClearExperienceAsync(session, consumedFatigue);
+        }
+
+        internal static async Task VerifyCreatureEvolutionQuestAsync(EnhancedClientSession session)
+        {
+            var questManager = session?.GameSession?.QuestManager;
+            if (questManager == null)
+            {
+                FileLogger.Log($"[{ProtocolName}] VERIFY_CREATURE_QUEST skipped: quest manager unavailable");
+                return;
+            }
+
+            var characterId = session.Player?.CharacterId ?? 0;
+            var allowedCreatureKinds = SqliteInventoryStore.LoadEligiblePetCreatureEvolutionQuestKinds(
+                ServerPaths.DatabasePath,
+                ServerPaths.SchemaFilePath,
+                characterId);
+            if (allowedCreatureKinds.Count == 0)
+            {
+                FileLogger.Log($"[{ProtocolName}] VERIFY_CREATURE_QUEST skipped: equipped creature has no pending evolution quest cid={characterId}");
+                return;
+            }
+
+            // 旧服 Dispatcher_VerifyCreatureQuest::read() 不消费包体。
+            // 只有当前装备宠物存在进化任务时才会发送任务列表；自动进化宠物不回包。
+            await questManager.SendAcceptableQuestListAsync();
+        }
+
+        internal static async Task SendPetCreatureClearExperienceAsync(
+            EnhancedClientSession session,
+            int consumedFatigue)
+        {
+            if (!HasCharacter(session) || consumedFatigue <= 0)
+                return;
+
+            PetCreatureExperienceUpdate update;
+            try
+            {
+                update = PetCreatureExperienceService.ApplyDungeonClearExperience(
+                    ServerPaths.DatabasePath,
+                    ServerPaths.SchemaFilePath,
+                    session.Player.CharacterId,
+                    consumedFatigue);
+            }
+            catch (Exception ex)
+            {
+                FileLogger.Log($"[{ProtocolName}] PetCreatureExp: failed cid={session.Player.CharacterId} fatigue={consumedFatigue}: {ex.Message}");
+                return;
+            }
+
+            if (!update.Changed)
+            {
+                FileLogger.Log($"[{ProtocolName}] PetCreatureExp: skipped cid={session.Player.CharacterId} key={update.CreatureKey} fatigue={consumedFatigue}");
+                return;
+            }
+
+            var writer = new GamePacketWriter();
+            writer.WriteByte((byte)Math.Max(1, Math.Min(255, update.AfterLevel)));
+            writer.WriteByte(0);
+            writer.WriteInt32(update.AfterExperience);
+            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0066, writer.ToArray()));
+
+            if (update.Evolution.Changed)
+            {
+                await SendPetCreatureEvolutionAsync(session, update.Evolution);
+            }
+            else if (update.AfterLevel > update.BeforeLevel && session.GameSession?.QuestManager != null)
+            {
+                await session.GameSession.QuestManager.SendAcceptableQuestListAsync();
+            }
+
+            FileLogger.Log($"[{ProtocolName}] PetCreatureExp: GAIN_EXP_CREATURE cid={session.Player.CharacterId} key={update.CreatureKey} fatigue={consumedFatigue} exp={update.BeforeExperience}->{update.AfterExperience} gained={update.GainedExperience} level={update.BeforeLevel}->{update.AfterLevel}");
+        }
+
+        private static void TickOnlineSessions(DateTime utcNow)
+        {
+            if (Interlocked.CompareExchange(ref _tickRunning, 1, 0) != 0)
+                return;
+
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    foreach (var pair in Sessions.ToArray())
+                    {
+                        var session = pair.Value;
+                        if (session == null)
+                        {
+                            Sessions.TryRemove(pair.Key, out _);
+                            continue;
+                        }
+
+                        await TickSessionAsync(session, utcNow);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    FileLogger.Log($"[{ProtocolName}] PetCreatureRuntime: tick loop failed: {ex.Message}");
+                }
+                finally
+                {
+                    Interlocked.Exchange(ref _tickRunning, 0);
+                }
+            });
+        }
+
+        private static async Task TickSessionAsync(EnhancedClientSession session, DateTime utcNow)
+        {
+            if (!HasCharacter(session))
+                return;
+
+            try
+            {
+                if (session.Player.CurrentRun != null)
+                {
+                    var died = await CheckDungeonDeathAsync(session, "clock", utcNow);
+                    if (!died)
+                        PersistDungeonElapsed(session, "clock", utcNow, continueTiming: true);
+                    return;
+                }
+
+                await BeginTownCoreAsync(session, "clock", utcNow);
+                PersistTownRecovery(session, "clock", utcNow, continueTiming: true);
+            }
+            catch (Exception ex)
+            {
+                FileLogger.Log($"[{ProtocolName}] PetCreatureRuntime: tick failed cid={session.Player.CharacterId}: {ex.Message}");
+            }
+        }
+
+        private static void ScheduleDungeonDeathCheck(
+            EnhancedClientSession session,
+            string source,
+            DateTime now)
+        {
+            if (!HasCharacter(session) || session.Player.CurrentRun == null)
+            {
+                CancelDeathCheck(session);
+                return;
+            }
+
+            PetCreatureSatietyUpdate current;
+            try
+            {
+                current = PetCreatureSatietyService.LoadEquippedCreatureSatiety(
+                    ServerPaths.DatabasePath,
+                    ServerPaths.SchemaFilePath,
+                    session.Player.CharacterId);
+            }
+            catch (Exception ex)
+            {
+                CancelDeathCheck(session);
+                FileLogger.Log($"[{ProtocolName}] PetCreatureDeathTimer: schedule failed source={source} cid={session.Player.CharacterId}: {ex.Message}");
+                return;
+            }
+
+            if (current.CreatureKey <= 0)
+            {
+                CancelDeathCheck(session);
+                return;
+            }
+
+            if (current.Before <= 0)
+            {
+                var immediateVersion = AdvanceDeathTimerVersion(session);
+                ScheduleDeathCheck(session, now, immediateVersion, $"{source}:zero");
+                FileLogger.Log($"[{ProtocolName}] PetCreatureDeathTimer: schedule immediate source={source} cid={session.Player.CharacterId} key={current.CreatureKey} satiety={current.Before} version={immediateVersion}");
+                return;
+            }
+
+            var multiplier = current.FoodConsumeMultiplier;
+            var delaySeconds = current.Before <= 1
+                ? 0.0
+                : (current.Before - 1) * 60.0 / Math.Max(0.01, multiplier);
+            var dueUtc = now.AddSeconds(delaySeconds);
+            var version = AdvanceDeathTimerVersion(session);
+            ScheduleDeathCheck(session, dueUtc, version, source);
+            FileLogger.Log($"[{ProtocolName}] PetCreatureDeathTimer: schedule source={source} cid={session.Player.CharacterId} dungeon={session.Player.CurrentRun.DungeonId} key={current.CreatureKey} satiety={current.Before} foodRate={current.FoodConsumeRatePercent}% multiplier={multiplier:0.###} dueIn={delaySeconds:0.0}s version={version}");
+        }
+
+        private static void ScheduleDeathCheck(
+            EnhancedClientSession session,
+            DateTime dueUtc,
+            int version,
+            string source)
+        {
+            var name = BuildDeathTimerName(session);
+            ClockService.Instance.ScheduleOneShot(name, dueUtc, utcNow =>
+            {
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        if (!HasCharacter(session) || session.Player.CurrentRun == null)
+                            return;
+
+                        if (session.Player.PetCreatureDeathTimerVersion != version)
+                        {
+                            FileLogger.Log($"[{ProtocolName}] PetCreatureDeathTimer: skip stale source={source} cid={session.Player.CharacterId} expected={version} actual={session.Player.PetCreatureDeathTimerVersion}");
+                            return;
+                        }
+
+                        var died = await CheckDungeonDeathAsync(session, $"{source}:timer", utcNow);
+                        if (!died)
+                            ScheduleDungeonDeathCheck(session, $"{source}:timer-reschedule", utcNow);
+                    }
+                    catch (Exception ex)
+                    {
+                        FileLogger.Log($"[{ProtocolName}] PetCreatureDeathTimer: callback failed source={source}: {ex.Message}");
+                    }
+                });
+            });
+        }
+
+        private static void CancelDeathCheck(EnhancedClientSession session)
+        {
+            if (session == null)
+                return;
+
+            ClockService.Instance.CancelOneShot(BuildDeathTimerName(session));
+            AdvanceDeathTimerVersion(session);
+        }
+
+        private static int AdvanceDeathTimerVersion(EnhancedClientSession session)
+        {
+            if (session?.Player == null)
+                return 0;
+
+            unchecked
+            {
+                session.Player.PetCreatureDeathTimerVersion++;
+                if (session.Player.PetCreatureDeathTimerVersion == 0)
+                    session.Player.PetCreatureDeathTimerVersion = 1;
+            }
+
+            return session.Player.PetCreatureDeathTimerVersion;
+        }
+
+        private static string BuildDeathTimerName(EnhancedClientSession session)
+            => DeathTimerNamePrefix + session.SessionId.ToString("N");
+
+        private static async Task BeginTownCoreAsync(EnhancedClientSession session, string source, DateTime now)
+        {
+            await TryRevivePetCreatureOnTownReturnAsync(session, source);
+            if (session.Player.PetCreatureSatietyTownStartUtc == DateTime.MinValue)
+            {
+                session.Player.PetCreatureSatietyTownStartUtc = now;
+                FileLogger.Log($"[{ProtocolName}] PetCreatureSatiety: town begin source={source} cid={session.Player.CharacterId}");
+            }
+        }
+
+        private static void PersistDungeonElapsed(
+            EnhancedClientSession session,
+            string source,
+            DateTime now,
+            bool continueTiming)
+        {
+            var startUtc = session.Player.PetCreatureSatietyDungeonStartUtc;
+            if (startUtc == DateTime.MinValue)
+                return;
+
+            var dungeonId = session.Player.PetCreatureSatietyDungeonId;
+            session.Player.PetCreatureSatietyDungeonStartUtc = continueTiming ? now : DateTime.MinValue;
+            if (!continueTiming)
+                session.Player.PetCreatureSatietyDungeonId = 0;
+
+            try
+            {
+                var update = PetCreatureSatietyService.ApplyDungeonElapsed(
+                    ServerPaths.DatabasePath,
+                    ServerPaths.SchemaFilePath,
+                    session.Player.CharacterId,
+                    startUtc,
+                    now);
+                SetSessionCreatureAliveState(session, update.CreatureKey > 0 && update.After > 0 ? (byte)1 : (byte)0);
+
+                FileLogger.Log($"[{ProtocolName}] PetCreatureSatiety: dungeon persist source={source} cid={session.Player.CharacterId} dungeon={dungeonId} key={update.CreatureKey} elapsed={update.ElapsedSeconds:0.0}s foodRate={update.FoodConsumeRatePercent}% multiplier={update.FoodConsumeMultiplier:0.###} consumed={update.ConsumedSatiety} satiety={update.Before}->{update.After} changed={update.Changed}");
+            }
+            catch (Exception ex)
+            {
+                FileLogger.Log($"[{ProtocolName}] PetCreatureSatiety: dungeon persist failed source={source} cid={session.Player.CharacterId} dungeon={dungeonId}: {ex.Message}");
+            }
+        }
+
+        private static void PersistTownRecovery(
+            EnhancedClientSession session,
+            string source,
+            DateTime now,
+            bool continueTiming)
+        {
+            var startUtc = session.Player.PetCreatureSatietyTownStartUtc;
+            if (startUtc == DateTime.MinValue)
+                return;
+
+            if (continueTiming
+                && Math.Max(0, (now - startUtc).TotalSeconds) < TownSatietyRecoveryIntervalSeconds)
+            {
+                return;
+            }
+
+            try
+            {
+                var update = PetCreatureSatietyService.ApplyTownElapsed(
+                    ServerPaths.DatabasePath,
+                    ServerPaths.SchemaFilePath,
+                    session.Player.CharacterId,
+                    startUtc,
+                    now);
+                SetSessionCreatureAliveState(session, update.CreatureKey > 0 && update.After > 0 ? (byte)1 : (byte)0);
+                session.Player.PetCreatureSatietyTownStartUtc = continueTiming
+                    ? CalculateNextTownRecoveryAnchor(startUtc, now, update)
+                    : DateTime.MinValue;
+
+                FileLogger.Log($"[{ProtocolName}] PetCreatureSatiety: town persist source={source} cid={session.Player.CharacterId} key={update.CreatureKey} elapsed={update.ElapsedSeconds:0.0}s recovered={update.RecoveredSatiety} satiety={update.Before}->{update.After} changed={update.Changed}");
+            }
+            catch (Exception ex)
+            {
+                FileLogger.Log($"[{ProtocolName}] PetCreatureSatiety: town persist failed source={source} cid={session.Player.CharacterId}: {ex.Message}");
+            }
+        }
+
+        private static async Task<bool> CheckDungeonDeathAsync(
+            EnhancedClientSession session,
+            string source,
+            DateTime now)
+        {
+            var startUtc = session.Player.PetCreatureSatietyDungeonStartUtc;
+            if (startUtc == DateTime.MinValue)
+                return false;
+
+            try
+            {
+                var update = PetCreatureSatietyService.ApplyDungeonDeathIfExpired(
+                    ServerPaths.DatabasePath,
+                    ServerPaths.SchemaFilePath,
+                    session.Player.CharacterId,
+                    startUtc,
+                    now);
+
+                if (update.CreatureKey <= 0 || update.After > 0)
+                    return false;
+
+                if (session.Player.PetCreatureLastDeathCreatureKey == update.CreatureKey)
+                    return true;
+
+                CancelDeathCheck(session);
+                session.Player.PetCreatureSatietyDungeonStartUtc = DateTime.MinValue;
+                session.Player.PetCreatureSatietyDungeonId = 0;
+                session.Player.PetCreatureLastDeathCreatureKey = update.CreatureKey;
+                SetSessionCreatureAliveState(session, 0);
+
+                var writer = new GamePacketWriter();
+                writer.WriteUInt16(session.Player.UserId);
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0064, writer.ToArray()));
+
+                FileLogger.Log($"[{ProtocolName}] PetCreatureDeath: DIED_CREATURE source={source} uid={session.Player.UserId} cid={session.Player.CharacterId} key={update.CreatureKey} elapsed={update.ElapsedSeconds:0.0}s foodRate={update.FoodConsumeRatePercent}% multiplier={update.FoodConsumeMultiplier:0.###} satiety={update.Before}->0");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                FileLogger.Log($"[{ProtocolName}] PetCreatureDeath: check failed source={source} cid={session.Player.CharacterId}: {ex.Message}");
+                return false;
+            }
+        }
+
+        private static async Task TryRevivePetCreatureOnTownReturnAsync(
+            EnhancedClientSession session,
+            string source)
+        {
+            PetCreatureRevivalUpdate update;
+            try
+            {
+                update = PetCreatureSatietyService.ReviveEquippedCreatureIfDead(
+                    ServerPaths.DatabasePath,
+                    ServerPaths.SchemaFilePath,
+                    session.Player.CharacterId);
+            }
+            catch (Exception ex)
+            {
+                FileLogger.Log($"[{ProtocolName}] PetCreatureRevival: failed source={source} cid={session.Player.CharacterId}: {ex.Message}");
+                return;
+            }
+
+            if (update.CreatureKey <= 0)
+                return;
+
+            if (!update.Revived)
+            {
+                SetSessionCreatureAliveState(session, update.After > 0 ? (byte)1 : (byte)0);
+                return;
+            }
+
+            var revival = new GamePacketWriter();
+            revival.WriteUInt16(session.Player.UserId);
+            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x006B, revival.ToArray()));
+            SetSessionCreatureAliveState(session, update.After > 0 ? (byte)1 : (byte)0);
+            session.Player.PetCreatureLastDeathCreatureKey = 0;
+
+            await SendPetCreatureStateAsync(session, update.CreatureKey, update.After);
+            FileLogger.Log($"[{ProtocolName}] PetCreatureRevival: REVIVAL_CREATURE source={source} uid={session.Player.UserId} cid={session.Player.CharacterId} key={update.CreatureKey} satiety={update.Before}->{update.After}");
+        }
+
+        internal static async Task SendPetCreatureEvolutionAsync(
+            EnhancedClientSession session,
+            PetCreatureEvolutionResult evolution)
+        {
+            if (session == null || session.Player == null || !evolution.Changed)
+                return;
+
+            var writer = new GamePacketWriter();
+            writer.WriteUInt16(NormalizeCreatureEventParam(evolution.EvolvedCreatureParam));
+            var eventUniqueId = GetPetCreatureEventUniqueId(session.Player);
+            writer.WriteUInt16(eventUniqueId);
+            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x006A, writer.ToArray()));
+
+            try
+            {
+                var store = new SqliteInventoryStore(ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
+                var item = store.LoadEquipmentCommonItemForRefresh(session.Player.CharacterId, evolution.EquipmentSlot);
+                if (item != null)
+                {
+                    var updateBody = BuildPetEvolutionEquipmentUpdate(item);
+                    await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
+                        0x00,
+                        0x000E,
+                        updateBody));
+                }
+            }
+            catch (Exception ex)
+            {
+                FileLogger.Log($"[{ProtocolName}] PetCreatureEvolution: refresh failed cid={session.Player.CharacterId} slot={evolution.EquipmentSlot}: {ex.Message}");
+            }
+
+            FileLogger.Log($"[{ProtocolName}] PetCreatureEvolution: EVOLUTE_CREATURE cid={session.Player.CharacterId} uid={eventUniqueId} baseUid={session.Player.UserId} sceneUid={session.Player.DungeonSceneUniqueId} creature={evolution.CurrentCreatureId}->{evolution.EvolvedCreatureId} param={evolution.EvolvedCreatureParam} item=0x{evolution.PreviousItemTemplateId:X8}->0x{evolution.EvolvedItemTemplateId:X8}");
+        }
+
+        internal static async Task SendPetCreatureEvolutionAsync(
+            ISessionPacketSender sender,
+            PetCreatureEvolutionResult evolution)
+        {
+            if (sender == null || sender.Player == null || !evolution.Changed)
+                return;
+
+            var writer = new GamePacketWriter();
+            writer.WriteUInt16(NormalizeCreatureEventParam(evolution.EvolvedCreatureParam));
+            var eventUniqueId = GetPetCreatureEventUniqueId(sender.Player);
+            writer.WriteUInt16(eventUniqueId);
+            await sender.SendNotiAsync(0x006A, writer.ToArray());
+
+            try
+            {
+                var store = new SqliteInventoryStore(ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
+                var item = store.LoadEquipmentCommonItemForRefresh(sender.CharacterId, evolution.EquipmentSlot);
+                if (item != null)
+                {
+                    var updateBody = BuildPetEvolutionEquipmentUpdate(item);
+                    await sender.SendNotiAsync(
+                        0x000E,
+                        updateBody);
+                }
+            }
+            catch (Exception ex)
+            {
+                FileLogger.Log($"[{ProtocolName}] PetCreatureEvolution: refresh failed cid={sender.CharacterId} slot={evolution.EquipmentSlot}: {ex.Message}");
+            }
+
+            FileLogger.Log($"[{ProtocolName}] PetCreatureEvolution: EVOLUTE_CREATURE cid={sender.CharacterId} uid={eventUniqueId} baseUid={sender.Player.UserId} sceneUid={sender.Player.DungeonSceneUniqueId} creature={evolution.CurrentCreatureId}->{evolution.EvolvedCreatureId} param={evolution.EvolvedCreatureParam} item=0x{evolution.PreviousItemTemplateId:X8}->0x{evolution.EvolvedItemTemplateId:X8}");
+        }
+
+        private static Task SendPetCreatureStateAsync(
+            EnhancedClientSession session,
+            int creatureKey,
+            int stateValue)
+        {
+            var state = new GamePacketWriter();
+            state.WriteInt32(creatureKey);
+            state.WriteInt32(stateValue);
+            return session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0067, state.ToArray()));
+        }
+
+        private static void SetSessionCreatureAliveState(EnhancedClientSession session, byte value)
+        {
+            if (session?.Player == null)
+                return;
+
+            var tail = session.Player.Subtype0Tail ?? new UserInfoMinimumTailSnapshot();
+            tail.EquippedCreatureAliveState = value;
+            session.Player.Subtype0Tail = tail;
+        }
+
+        private static ushort GetPetCreatureEventUniqueId(PlayerContext player)
+        {
+            if (player == null)
+                return 0;
+
+            return player.CurrentRun != null && player.DungeonSceneUniqueId != 0
+                ? player.DungeonSceneUniqueId
+                : player.UserId;
+        }
+
+        private static ushort NormalizeCreatureEventParam(int value)
+            => (ushort)Math.Max(0, Math.Min(ushort.MaxValue, value));
+
+        private static byte[] BuildPetEvolutionEquipmentUpdate(CommonInventoryItem item)
+        {
+            if (item == null) throw new ArgumentNullException(nameof(item));
+
+            return ItemListUpdateBuilder.BuildEquipmentUpdates(new[] { item });
+        }
+
+        private static void ClearDungeonAnchor(EnhancedClientSession session)
+        {
+            if (session?.Player == null)
+                return;
+
+            CancelDeathCheck(session);
+            session.Player.PetCreatureSatietyDungeonStartUtc = DateTime.MinValue;
+            session.Player.PetCreatureSatietyDungeonId = 0;
+            session.Player.PetCreatureLastDeathCreatureKey = 0;
+        }
+
+        private static DateTime CalculateNextTownRecoveryAnchor(
+            DateTime startUtc,
+            DateTime now,
+            PetCreatureSatietyUpdate update)
+        {
+            if (update.Changed && update.RecoveredSatiety > 0 && update.After < 100)
+            {
+                var next = startUtc.AddSeconds(update.RecoveredSatiety * TownSatietyRecoveryIntervalSeconds);
+                return next > now ? now : next;
+            }
+
+            return now;
+        }
+
+        private static bool HasCharacter(EnhancedClientSession session)
+            => session?.Player != null && session.Player.CharacterId > 0;
+
+        private static bool IsPetRuntimeAffectingMoveRequest(InventoryMoveRequest request)
+        {
+            if (request == null)
+                return false;
+
+            return (request.SourceListType == InventoryListType.Pet
+                    && request.DestinationListType == InventoryListType.Equipment
+                    && IsPetRuntimeEquipmentSlot(request.DestinationSlotIndex))
+                || (request.SourceListType == InventoryListType.Equipment
+                    && IsPetRuntimeEquipmentSlot(request.SourceSlotIndex)
+                    && request.DestinationListType == InventoryListType.Pet);
+        }
+
+        private static bool IsPetRuntimeEquipmentSlot(short slot)
+            => slot >= 24 && slot <= 27;
+    }
+}

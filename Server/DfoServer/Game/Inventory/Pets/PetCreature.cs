@@ -444,9 +444,8 @@ namespace DfoServer.Game.Inventory
 
         private static InventoryMoveResult CreatePetCreatureMoveResult(InventoryMoveRequest request, int moveValue32, bool mutated = true)
         {
-            // Pet body moves must preserve the client's original Pet <-> Equipment
-            // direction. Rewriting the ACK to Pet -> Pet makes unequip look like a
-            // newly acquired creature entry on the client.
+            // 宠物本体移动必须保留客户端原始 Pet <-> Equipment 方向。
+            // 如果把 ACK 改写成 Pet -> Pet，卸下宠物时客户端会误判为新获得宠物。
             return CreateMoveResult(request, moveValue32, mutated);
         }
 
@@ -602,6 +601,7 @@ WHERE character_id = @cid
             }
 
             RepairOutOfRangePetStorage(connection, transaction, characterId);
+            RepairPetCreatureItemListSlotConflict(connection, transaction, characterId);
 
             var equippedEntry = LoadPetCreatureEquippedEntry(connection, transaction, characterId);
             if (equippedEntry.HasValue)
@@ -673,6 +673,96 @@ WHERE character_id = @cid
             }
 
             RepairPetArtifactEntries(connection, transaction, characterId);
+        }
+
+        private void RepairPetCreatureItemListSlotConflict(SqliteConnection connection, SqliteTransaction transaction, int characterId)
+        {
+            var equippedEntry = LoadPetCreatureEquippedEntry(connection, transaction, characterId);
+            if (!equippedEntry.HasValue
+                || !IsCreatureItem(equippedEntry.Value.ItemId)
+                || !IsPersistentPetCreatureSerial(equippedEntry.Value.Serial))
+                return;
+
+            var item = LoadPetCreatureVisibleEquipSlotRecord(connection, transaction, characterId);
+            if (item == null || !IsCreatureItem(item.ItemTemplateId))
+                return;
+
+            if (item.PetSerialOrHandle == equippedEntry.Value.Serial)
+            {
+                _db.DeleteItem(connection, transaction, item.ItemUid);
+                FileLogger.Log($"  [PetCreatureMove] repair: removed stale pet item-list slot24 duplicate uid={item.ItemUid} item=0x{item.ItemTemplateId:X8} serial=0x{item.PetSerialOrHandle:X8}");
+                return;
+            }
+
+            var targetSlot = FindEmptyVisiblePetCreatureSlotExceptEquipSlot(connection, transaction, characterId);
+            if (targetSlot < 0)
+            {
+                FileLogger.Log($"  [PetCreatureMove] repair: pet item-list slot24 conflict kept, no empty visible slot uid={item.ItemUid} item=0x{item.ItemTemplateId:X8} serial=0x{item.PetSerialOrHandle:X8}");
+                return;
+            }
+
+            _db.UpdateItemPosition(connection, transaction, item.ItemUid, InventoryListType.Pet, (short)targetSlot);
+            FileLogger.Log($"  [PetCreatureMove] repair: moved pet item-list slot24 conflict uid={item.ItemUid} item=0x{item.ItemTemplateId:X8} serial=0x{item.PetSerialOrHandle:X8} -> slot {targetSlot}");
+        }
+
+        private ItemRecord LoadPetCreatureVisibleEquipSlotRecord(SqliteConnection connection, SqliteTransaction transaction, int characterId)
+        {
+            using (var cmd = connection.CreateCommand())
+            {
+                cmd.Transaction = transaction;
+                cmd.CommandText = @"
+SELECT item_uid, list_type, slot_index, item_template_id, item_kind, stack_count, instance_value,
+       durability, seal_flag, option_value, expire_time, marker_16, pet_serial_or_handle, extra_json
+FROM character_items
+WHERE character_id = @cid
+  AND list_type = @lt
+  AND slot_index = @slot
+  AND item_kind = 'pet'
+ORDER BY item_uid
+LIMIT 1;";
+                cmd.Parameters.AddWithValue("@cid", characterId);
+                cmd.Parameters.AddWithValue("@lt", (int)InventoryListType.Pet);
+                cmd.Parameters.AddWithValue("@slot", (int)PetCreatureEquipSlot);
+                using (var reader = cmd.ExecuteReader())
+                {
+                    return reader.Read() ? ReadItemRecord(reader) : null;
+                }
+            }
+        }
+
+        private static int FindEmptyVisiblePetCreatureSlotExceptEquipSlot(SqliteConnection connection, SqliteTransaction transaction, int characterId)
+        {
+            using (var cmd = connection.CreateCommand())
+            {
+                cmd.Transaction = transaction;
+                cmd.CommandText = @"
+WITH RECURSIVE slots(slot_index) AS (
+    SELECT @start
+    UNION ALL
+    SELECT slot_index + 1 FROM slots WHERE slot_index < @end
+)
+SELECT slot_index
+FROM slots
+WHERE slot_index <> @excluded
+  AND NOT EXISTS (
+      SELECT 1
+      FROM character_items
+      WHERE character_id = @cid
+        AND list_type = @lt
+        AND slot_index = slots.slot_index
+  )
+ORDER BY slot_index
+LIMIT 1;";
+                cmd.Parameters.AddWithValue("@cid", characterId);
+                cmd.Parameters.AddWithValue("@lt", (int)InventoryListType.Pet);
+                cmd.Parameters.AddWithValue("@start", PetInventorySlotStart);
+                cmd.Parameters.AddWithValue("@end", PetInventorySlotEnd);
+                cmd.Parameters.AddWithValue("@excluded", (int)PetCreatureEquipSlot);
+                var value = cmd.ExecuteScalar();
+                return value == null || value == DBNull.Value
+                    ? -1
+                    : Convert.ToInt32(value, CultureInfo.InvariantCulture);
+            }
         }
 
         private void RepairPetArtifactEntries(SqliteConnection connection, SqliteTransaction transaction, int characterId)
@@ -1447,7 +1537,8 @@ LIMIT 1;";
                 CountOrInstanceValue = unchecked((int)fields.InstanceValue),
                 ExtData0 = fields.Reinforce,
                 Durability = fields.Durability,
-                SealFlag = 0,
+                // 0x000E 装备条目这里保留原始 Inven_Item 槽位字节。
+                SealFlag = raw != null && raw.Length > 0 ? raw[0] : unchecked((byte)slot),
                 PrefixData0E = prefix,
                 Marker16 = -1,
                 MiddleData1A = new byte[17],
@@ -1578,6 +1669,7 @@ DO UPDATE SET equipped_creature_level = @level;";
             }
 
             EnsureCreatureListEntry(connection, transaction, characterId, petSerial, defaults);
+            PetCreatureScript.UpsertWelcomeCache(connection, transaction, characterId, itemTemplateId);
         }
 
         private static void EnsureSubtype0CreatureDefaults(SqliteConnection connection, SqliteTransaction transaction, int characterId)
@@ -1640,6 +1732,7 @@ DO UPDATE SET equipped_creature_level = 0;";
                 cmd.ExecuteNonQuery();
             }
 
+            PetCreatureScript.UpsertWelcomeCache(connection, transaction, characterId, 0);
         }
 
         private static Subtype0PetRuntime LoadSubtype0PetRuntime(SqliteConnection connection, SqliteTransaction transaction, int characterId)

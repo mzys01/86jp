@@ -44,7 +44,7 @@ namespace DfoServer.Game.Inventory
                         0,
                         0,
                         0,
-                        0,
+                        source.ExpireTime,
                         0,
                         petSerial,
                         "{}");
