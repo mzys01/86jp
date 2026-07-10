@@ -142,9 +142,11 @@ namespace DfoServer.Network.Handlers.Dungeon
             FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] TUTORIAL_LEVEL_UP: {1}->{target} exp={targetExp}");
 
             var (remainSp, remainTp) = _svc.GetRemainingSpTp(session, persist: true, logTag: "TUTORIAL_LEVEL_UP");
+            var honorLevel = _svc.ResolveHonorLevelForExp(session);
 
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0025,
-                ExpNotificationBuilder.Build(session.Player.Level, session.Player.Exp, remainSp, remainTp)));
+                ExpNotificationBuilder.Build(
+                    session.Player.Level, session.Player.Exp, remainSp, remainTp, honorLevel)));
 
             await _svc.SendInDungeonLevelUpFollowups(session);
 
@@ -173,9 +175,8 @@ namespace DfoServer.Network.Handlers.Dungeon
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x00CA,
                 new byte[] { 0x00 }));
             await _svc.SendUserInfoSubtype0Broadcast(session);
-            await _svc.SendHonorLevelInfoAsync(session, "tutorial-back-to-village");
 
-            FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] ReturnToVillage: 4 town packets + subtype0 honor + honor info sent");
+            FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] ReturnToVillage: 4 town packets + subtype0 honor sent");
         }
 
         private bool TryPickupItemToInventory(int characterId, int accountId, int itemTemplateId, int stackCount, out short assignedSlot)

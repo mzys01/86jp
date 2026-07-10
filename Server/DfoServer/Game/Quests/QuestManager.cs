@@ -18,15 +18,24 @@ namespace DfoServer.Game.Quests
     {
         private readonly ISessionPacketSender _sender;
         private readonly string _connStr;
+        private readonly string _databasePath;
         private readonly IAssetService _assetService;
         private readonly QuestService _service;
+        private readonly SqliteCharacterRepository _characterRepository;
+        private readonly HonorLevelSyncService _honorLevel;
 
         public QuestManager(ISessionPacketSender sender, string connStr, IAssetService assetService)
         {
             _sender = sender;
             _connStr = connStr;
+            _databasePath = new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder(connStr).DataSource;
             _assetService = assetService;
             _service = new QuestService(connStr, assetService);
+            _characterRepository = new SqliteCharacterRepository(_databasePath, ServerPaths.SchemaFilePath);
+            _honorLevel = new HonorLevelSyncService(
+                _characterRepository,
+                _databasePath,
+                ServerPaths.SchemaFilePath);
         }
 
         private static byte[] StripEcho(byte[] body)
@@ -119,39 +128,61 @@ namespace DfoServer.Game.Quests
 
             var leveledUp = player.Level > prevLevel;
             var inDungeon = player.CurrentRun != null;
+            var sentExpNotification = result.Exp > 0 || leveledUp;
+            var refreshesCharacterState = leveledUp
+                || result.ChainType == 1
+                || result.ChainType == 2
+                || result.ChainType == 20
+                || result.ChainType == GameWorld.QuestData.ChainTypeSlotExpansion;
+            HonorLevelSummary honorLevel = null;
+            if (result.HonorExp > 0)
+                honorLevel = HonorLevelDataProvider.CalculateFromHonorExp(result.TotalHonorExp, 0);
+            else if (sentExpNotification || refreshesCharacterState)
+                honorLevel = ResolveHonorLevelForExp();
+            if (result.HonorExp > 0 && player.Subtype0Tail != null)
+                HonorLevelDataProvider.ApplyToSubtype0Tail(player.Subtype0Tail, honorLevel);
             // 城镇内升级: 先推角色状态(subtype0)+属性(subtype1)再发经验包, 面板即时刷新。
             // 副本内升级绝不能发角色状态包(subtype0) -- 它会打乱客户端的副本内角色状态,
             // 实测导致清房后无法进下一个门; 副本内沿用旧时序(经验包之后只补属性)。
             if (leveledUp && !inDungeon)
             {
-                await SendUserInfoSubtype0Broadcast(cid, "LevelUp");
-                await SendUserInfoBroadcast(cid);
+                await SendUserInfoSubtype0Broadcast(cid, "LevelUp", honorLevel);
+                await SendUserInfoBroadcast(cid, honorLevel);
             }
 
-            await _sender.SendNotiAsync(0x0025,
-                ExpNotificationBuilder.Build(player.Level, player.Exp, remainSp, remainTp));
+            if (sentExpNotification)
+            {
+                await _sender.SendNotiAsync(0x0025,
+                    ExpNotificationBuilder.Build(
+                        player.Level, player.Exp, remainSp, remainTp, honorLevel));
+            }
 
             if (leveledUp)
             {
                 FileLogger.Log($"[QuestManager] LEVEL UP from quest: cid={cid} {prevLevel}->{player.Level} exp={player.Exp} inDungeon={inDungeon}");
                 if (inDungeon)
-                    await SendUserInfoBroadcast(cid);
+                    await SendUserInfoBroadcast(cid, honorLevel);
+            }
+
+            if (result.HonorExp > 0)
+            {
+                FileLogger.Log($"[QuestManager] HONOR_EXP_GAIN quest: account={_sender.AccountId} cid={cid} gain={result.HonorExp} total={result.TotalHonorExp}");
             }
 
             if (result.ChainType == 1 || result.ChainType == 2)
             {
-                await SendJobChangeNotification(cid);
-                await SendUserInfoBroadcast(cid);
+                await SendJobChangeNotification(cid, honorLevel);
+                await SendUserInfoBroadcast(cid, honorLevel);
             }
             else if (result.ChainType == 20)
             {
-                await SendExpertJobChangeNotification(cid, result.GrowNumber);
-                await SendUserInfoBroadcast(cid);
+                await SendExpertJobChangeNotification(cid, result.GrowNumber, honorLevel);
+                await SendUserInfoBroadcast(cid, honorLevel);
             }
             else if (result.ChainType == GameWorld.QuestData.ChainTypeSlotExpansion)
             {
                 // The ACK completes the quest, but the client opens the visual slot from refreshed subtype1 data.
-                await SendUserInfoBroadcast(cid);
+                await SendUserInfoBroadcast(cid, honorLevel);
             }
 
             var noti = BuildAcceptedQuestNoti(cid);
@@ -285,7 +316,7 @@ namespace DfoServer.Game.Quests
             await _sender.SendNotiAsync(0x0015, QuestListBodyBuilder.BuildBody(level, job, growType, clearedFlags));
         }
 
-        private async Task SendUserInfoBroadcast(int characterId)
+        private async Task SendUserInfoBroadcast(int characterId, HonorLevelSummary honorLevel = null)
         {
             try
             {
@@ -300,9 +331,9 @@ namespace DfoServer.Game.Quests
 
                 if (record != null && addition != null)
                 {
-                    var characterRepository = new SqliteCharacterRepository(ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
-                    var accountCharacters = characterRepository.ListByAccount(record.AccountId);
-                    var honorLevel = CreateHonorLevelSyncService(characterRepository).LoadSummary(record.AccountId, accountCharacters);
+                    var accountCharacters = _characterRepository.ListByAccount(record.AccountId);
+                    honorLevel = honorLevel
+                        ?? _honorLevel.LoadSummary(record.AccountId, accountCharacters);
                     AdventureGroupUserInfoSynchronizer.ApplyToUserInfoAddition(
                         addition,
                         accountCharacters);
@@ -323,7 +354,10 @@ namespace DfoServer.Game.Quests
             }
         }
 
-        private async Task SendUserInfoSubtype0Broadcast(int characterId, string reason)
+        private async Task SendUserInfoSubtype0Broadcast(
+            int characterId,
+            string reason,
+            HonorLevelSummary honorLevel = null)
         {
             try
             {
@@ -333,9 +367,17 @@ namespace DfoServer.Game.Quests
                     conn.Open();
                     var record = SqliteCharacterRepository.LoadById(conn, characterId);
                     if (record == null) return;
-                    record.Subtype0Tail = SqliteSubtype0FieldsRepository.Load(conn, characterId);
-                    var characterRepository = new SqliteCharacterRepository(ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
-                    CreateHonorLevelSyncService(characterRepository).ApplyToSubtype0Tail(record.Subtype0Tail, record.AccountId, null);
+                    record.Subtype0Tail = SqliteSubtype0FieldsRepository.Load(conn, characterId)
+                        ?? new UserInfoMinimumTailSnapshot();
+                    if (honorLevel != null)
+                    {
+                        HonorLevelDataProvider.ApplyToSubtype0Tail(record.Subtype0Tail, honorLevel);
+                    }
+                    else
+                    {
+                        _honorLevel.ApplyToSubtype0Tail(
+                            record.Subtype0Tail, record.AccountId, null);
+                    }
                     body = UserInfoSubtype0Builder.BuildNotificationBody(record);
                 }
 
@@ -348,16 +390,19 @@ namespace DfoServer.Game.Quests
             }
         }
 
-        private async Task SendJobChangeNotification(int characterId)
+        private async Task SendJobChangeNotification(
+            int characterId,
+            HonorLevelSummary honorLevel = null)
         {
             try
             {
-                var charRepo = new SqliteCharacterRepository(ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
-                var record = charRepo.GetById(characterId);
+                var record = _characterRepository.GetById(characterId);
                 if (record == null) return;
-                record.Subtype0Tail = new SqliteSubtype0FieldsRepository(ServerPaths.DatabasePath, ServerPaths.SchemaFilePath)
-                    .Load(characterId);
-                var honorLevel = CreateHonorLevelSyncService(charRepo).LoadSummary(record.AccountId);
+                record.Subtype0Tail = new SqliteSubtype0FieldsRepository(_databasePath, ServerPaths.SchemaFilePath)
+                    .Load(characterId)
+                    ?? new UserInfoMinimumTailSnapshot();
+                honorLevel = honorLevel
+                    ?? _honorLevel.LoadSummary(record.AccountId);
                 HonorLevelDataProvider.ApplyToSubtype0Tail(record.Subtype0Tail, honorLevel);
 
                 _sender.Player.GrowType = record.GrowType;
@@ -372,21 +417,24 @@ namespace DfoServer.Game.Quests
             }
         }
 
-        private async Task SendExpertJobChangeNotification(int characterId, int expertJobType)
+        private async Task SendExpertJobChangeNotification(
+            int characterId,
+            int expertJobType,
+            HonorLevelSummary honorLevel = null)
         {
             try
             {
-                var charRepo = new SqliteCharacterRepository(ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
-                var record = charRepo.GetById(characterId);
+                var record = _characterRepository.GetById(characterId);
                 if (record == null || _sender.Player == null) return;
 
-                var tail = new SqliteSubtype0FieldsRepository(ServerPaths.DatabasePath, ServerPaths.SchemaFilePath)
+                var tail = new SqliteSubtype0FieldsRepository(_databasePath, ServerPaths.SchemaFilePath)
                     .Load(characterId)
                     ?? _sender.Player.Subtype0Tail
                     ?? new UserInfoMinimumTailSnapshot();
                 tail.ExpertJobType = (byte)expertJobType;
                 _sender.Player.Subtype0Tail = tail;
-                var honorLevel = CreateHonorLevelSyncService(charRepo).LoadSummary(record.AccountId);
+                honorLevel = honorLevel
+                    ?? _honorLevel.LoadSummary(record.AccountId);
                 HonorLevelDataProvider.ApplyToSubtype0Tail(tail, honorLevel);
                 record.Subtype0Tail = tail;
 
@@ -415,9 +463,19 @@ namespace DfoServer.Game.Quests
             }
         }
 
-        private static HonorLevelSyncService CreateHonorLevelSyncService(ICharacterRepository characterRepository)
+        private HonorLevelSummary ResolveHonorLevelForExp()
         {
-            return new HonorLevelSyncService(characterRepository);
+            var tail = _sender.Player?.Subtype0Tail;
+            if (tail != null)
+            {
+                return new HonorLevelSummary
+                {
+                    HonorLevel = (byte)Math.Min(byte.MaxValue, tail.ProgressA),
+                    HonorExp = tail.ProgressB,
+                };
+            }
+
+            return _honorLevel.LoadSummary(_sender.AccountId);
         }
 
         private byte[] BuildAcceptedQuestNoti(int characterId)

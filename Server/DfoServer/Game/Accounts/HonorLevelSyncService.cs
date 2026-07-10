@@ -13,10 +13,18 @@ namespace DfoServer.Game.Accounts
         private readonly HonorLevelProgressRepository _repository;
 
         public HonorLevelSyncService(ICharacterRepository characterRepository)
+            : this(characterRepository, ServerPaths.DatabasePath, ServerPaths.SchemaFilePath)
+        {
+        }
+
+        public HonorLevelSyncService(
+            ICharacterRepository characterRepository,
+            string databasePath,
+            string schemaFilePath)
         {
             _repository = new HonorLevelProgressRepository(
-                ServerPaths.DatabasePath,
-                ServerPaths.SchemaFilePath,
+                databasePath,
+                schemaFilePath,
                 characterRepository);
         }
 
@@ -33,11 +41,6 @@ namespace DfoServer.Game.Accounts
         public HonorLevelSummary AddExp(int accountId, uint delta)
         {
             return _repository.AddHonorExp(accountId, delta);
-        }
-
-        public HonorLevelSummary AddExp(int accountId, uint delta, IEnumerable<CharacterRecord> accountCharacters)
-        {
-            return _repository.AddHonorExp(accountId, delta, accountCharacters);
         }
 
         public async Task SendInfoAsync(EnhancedClientSession session, string protocolName, string reason, HonorLevelSummary summary = null)

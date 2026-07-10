@@ -50,8 +50,10 @@ namespace DfoServer.Game.Quests
     {
         public byte ErrorCode;
         public ushort QuestId;
-        // 经验/金币已含倍率。
+        // Exp 为任务面板/ACK 的原始奖励，HonorExp 为其中转入账号荣誉的部分。
         public uint Exp;
+        public uint HonorExp;
+        public ulong TotalHonorExp;
         public uint Gold;
         // 经验结算后的等级与总经验(与奖励同一事务已落库; Exp 为 0 时等于结算前取值)。
         public byte NewLevel;

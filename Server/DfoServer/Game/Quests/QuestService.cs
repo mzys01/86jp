@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using DfoServer.Game.Accounts;
 using DfoServer.Game.Inventory;
 using Microsoft.Data.Sqlite;
 
@@ -573,6 +574,9 @@ namespace DfoServer.Game.Quests
 
             uint goldReward;
             uint expReward = reward.Exp * multiplier;
+            uint normalExpReward = expReward;
+            uint honorExpReward = 0;
+            ulong totalHonorExp = 0;
             byte newLevel;
             uint newExp;
             int accountId = GetAccountIdByConnStr(characterId);
@@ -674,10 +678,23 @@ namespace DfoServer.Game.Quests
                 newExp = currentExp ?? GetCharacterExp(scope.Connection, scope.Transaction, characterId);
                 if (expReward > 0)
                 {
-                    newExp += expReward;
-                    newLevel = Dungeon.ExpTableProvider.ApplyLevelUps(newLevel, newExp);
-                    Characters.CharacterProgressService.PersistLevelAndExp(
-                        scope.Connection, scope.Transaction, characterId, newLevel, newExp);
+                    honorExpReward = HonorLevelDataProvider.CalculateHonorExpGain(newLevel, newExp, expReward);
+                    normalExpReward = expReward > honorExpReward ? expReward - honorExpReward : 0;
+                    if (normalExpReward > 0)
+                    {
+                        newExp = newExp > uint.MaxValue - normalExpReward
+                            ? uint.MaxValue
+                            : newExp + normalExpReward;
+                        newLevel = Dungeon.ExpTableProvider.ApplyLevelUps(newLevel, newExp);
+                        Characters.CharacterProgressService.PersistLevelAndExp(
+                            scope.Connection, scope.Transaction, characterId, newLevel, newExp);
+                    }
+
+                    if (honorExpReward > 0)
+                    {
+                        totalHonorExp = HonorLevelProgressRepository.AddHonorExpInTransaction(
+                            scope.Connection, scope.Transaction, accountId, honorExpReward);
+                    }
                 }
 
                 scope.Commit();
@@ -688,6 +705,8 @@ namespace DfoServer.Game.Quests
             {
                 QuestId = questId,
                 Exp = expReward,
+                HonorExp = honorExpReward,
+                TotalHonorExp = totalHonorExp,
                 Gold = goldReward,
                 NewLevel = newLevel,
                 NewExp = newExp,

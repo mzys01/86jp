@@ -136,6 +136,7 @@ namespace DfoServer.Network.Handlers.Dungeon
                 var prevExp = session.Player.Exp;
                 var honorExpGain = HonorLevelDataProvider.CalculateHonorExpGain(prevLevel, prevExp, totalGainedExp);
                 var normalExpGain = totalGainedExp > honorExpGain ? totalGainedExp - honorExpGain : 0u;
+                HonorLevelSummary honorSummary = null;
                 var normalizedMaxExp = false;
                 if (prevLevel >= ExpTableProvider.MaxLevel)
                 {
@@ -152,11 +153,8 @@ namespace DfoServer.Network.Handlers.Dungeon
                 }
                 if (honorExpGain > 0 && (session.Account?.AccountId ?? 0) > 0)
                 {
-                    var accountCharacters = _svc.CharacterRepository.ListByAccount(session.Account.AccountId);
-                    var honorSummary = _svc.HonorLevel.AddExp(session.Account.AccountId, honorExpGain, accountCharacters);
+                    honorSummary = _svc.HonorLevel.AddExp(session.Account.AccountId, honorExpGain);
                     FileLogger.Log($"[DungeonHandler] HONOR_EXP_GAIN monster: account={session.Account.AccountId} cid={session.Player.CharacterId} gain={honorExpGain}");
-                    await _svc.SendUserInfoBroadcast(session, honorSummary, accountCharacters);
-                    await _svc.SendHonorLevelInfoAsync(session, "monster-exp-gain", honorSummary);
                 }
                 run.TotalExp += gainedExp;
                 run.MonsterGrowthContractBonusExp =
@@ -189,10 +187,11 @@ namespace DfoServer.Network.Handlers.Dungeon
 
                 var (remainSp, remainTp) = _svc.GetRemainingSpTp(session, persist: leveledUp, logTag: "DIE_MONSTER");
 
-                if (normalExpGain > 0 || leveledUp)
+                if (normalExpGain > 0 || leveledUp || honorExpGain > 0)
                 {
+                    honorSummary = _svc.ResolveHonorLevelForExp(session, honorSummary);
                     await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0025,
-                        ExpNotificationBuilder.Build(session.Player.Level, session.Player.Exp, remainSp, remainTp,
+                        ExpNotificationBuilder.Build(session.Player.Level, session.Player.Exp, remainSp, remainTp, honorSummary,
                             premiumBonusExp: growthContractBonusExp)));
                 }
 

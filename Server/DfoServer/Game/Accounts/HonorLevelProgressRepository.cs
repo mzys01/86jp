@@ -48,14 +48,29 @@ namespace DfoServer.Game.Accounts
                 conn.Open();
                 using (var tx = conn.BeginTransaction())
                 {
-                    var current = LoadAccountHonorExp(conn, tx, accountId);
-                    var max = HonorLevelDataProvider.MaxTotalHonorExp;
-                    var next = (ulong)delta >= max - current ? max : current + delta;
-                    UpdateAccountHonorExp(conn, tx, accountId, next);
+                    var next = AddHonorExpInTransaction(conn, tx, accountId, delta);
                     tx.Commit();
                     return next;
                 }
             }
+        }
+
+        internal static ulong AddHonorExpInTransaction(
+            SqliteConnection conn,
+            SqliteTransaction tx,
+            int accountId,
+            uint delta)
+        {
+            if (conn == null)
+                throw new ArgumentNullException(nameof(conn));
+            if (accountId <= 0)
+                return 0;
+
+            var current = LoadAccountHonorExp(conn, tx, accountId);
+            var max = HonorLevelDataProvider.MaxTotalHonorExp;
+            var next = (ulong)delta >= max - current ? max : current + delta;
+            UpdateAccountHonorExp(conn, tx, accountId, next);
+            return next;
         }
 
         private ulong LoadAccountHonorExp(int accountId)
@@ -70,7 +85,7 @@ namespace DfoServer.Game.Accounts
             }
         }
 
-        private ulong LoadAccountHonorExp(SqliteConnection conn, SqliteTransaction tx, int accountId)
+        private static ulong LoadAccountHonorExp(SqliteConnection conn, SqliteTransaction tx, int accountId)
         {
             if (accountId <= 0)
                 return 0;
@@ -78,7 +93,7 @@ namespace DfoServer.Game.Accounts
             return TryLoadAccountHonorExp(conn, tx, accountId).GetValueOrDefault();
         }
 
-        private ulong? TryLoadAccountHonorExp(SqliteConnection conn, SqliteTransaction tx, int accountId)
+        private static ulong? TryLoadAccountHonorExp(SqliteConnection conn, SqliteTransaction tx, int accountId)
         {
             using (var cmd = conn.CreateCommand())
             {
@@ -96,7 +111,7 @@ namespace DfoServer.Game.Accounts
             }
         }
 
-        private void UpdateAccountHonorExp(SqliteConnection conn, SqliteTransaction tx, int accountId, ulong totalExp)
+        private static void UpdateAccountHonorExp(SqliteConnection conn, SqliteTransaction tx, int accountId, ulong totalExp)
         {
             var capped = Math.Min(totalExp, HonorLevelDataProvider.MaxTotalHonorExp);
             using (var cmd = conn.CreateCommand())
