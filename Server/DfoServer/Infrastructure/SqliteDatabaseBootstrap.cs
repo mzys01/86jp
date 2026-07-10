@@ -33,6 +33,13 @@ namespace DfoServer.Infrastructure
                         cmd.ExecuteNonQuery();
                     }
 
+                    // WAL 持久生效: 读写不互锁, 消除快速切角色时 database is locked
+                    using (var walCmd = conn.CreateCommand())
+                    {
+                        walCmd.CommandText = "PRAGMA journal_mode=WAL;";
+                        walCmd.ExecuteScalar();
+                    }
+
                     // 旧库升级: 编号迁移每库只跑一次(见 SqliteMigrations 头注释)
                     DfoServer.Sqlite.SqliteMigrations.Apply(conn);
                 }

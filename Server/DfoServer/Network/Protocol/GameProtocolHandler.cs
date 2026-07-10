@@ -199,6 +199,9 @@ namespace DfoServer.Network
             {
                 var charId = s.Player?.CharacterId ?? 0;
                 if (charId > 0) await _sessionDirectory.UnregisterAsync(charId);
+                Handlers.Dungeon.DungeonRunLifecycle.EndRunOnTeardown(s, "return_select");
+                _townHandler.PersistPosition(s, forceImmediate: true, source: "return_select");
+                s.GameSession = null;
                 await _characterSelectHandler.Handle_ENUM_CMDPACKET_RETURN_SELECT_CHARACTER(s, h, b);
             };
             d[0x0008] = _characterSelectHandler.Handle_ENUM_CMDPACKET_GET_USERINFO;
