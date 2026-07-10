@@ -59,7 +59,7 @@ namespace DfoServer.SelfTests
             {
                 var tower = new DeathTowerSession(config);
                 DungeonRunLifecycle.BeginTowerRun(fixture.Session, DeathTowerDungeonId, tower);
-                Check("test advances formal tower to floor 30",
+                Check("test advances tower to floor 30",
                     AdvanceToFloor30(tower) && tower.GetCurrentMapId() == Floor30MapId,
                     ref failures);
 
@@ -69,10 +69,10 @@ namespace DfoServer.SelfTests
                     .GetAwaiter()
                     .GetResult();
 
-                Check("formal tower stage clear syncs clear-map quest trigger",
+                Check("tower stage clear syncs clear-map quest trigger",
                     LoadTrigger(connStr, AwakeningQuestId) == 0,
                     ref failures);
-                Check("formal tower stage clear records floor sync marker",
+                Check("tower stage clear records floor sync marker",
                     fixture.Session.Player.CurrentRun != null
                     && !fixture.Session.Player.CurrentRun.TryMarkClearMapQuestSynced(0, Floor30MapId),
                     ref failures);
@@ -103,7 +103,7 @@ namespace DfoServer.SelfTests
                     .GetAwaiter()
                     .GetResult();
 
-                Check("formal tower move-map from fighting state syncs skipped stage clear",
+                Check("tower move-map from fighting state syncs skipped stage clear",
                     LoadTrigger(connStr, AwakeningQuestId) == 0,
                     ref failures);
             }

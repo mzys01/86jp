@@ -30,7 +30,8 @@ namespace DfoServer.Game.Dungeon
         public short DungeonId;
         public byte Difficulty;
         public DungeonRunPhase Phase;
-        private readonly HashSet<string> _syncedClearMapQuestTargets = new HashSet<string>();
+        private readonly HashSet<(int DungeonId, int MapId)> _syncedClearMapQuestTargets =
+            new HashSet<(int DungeonId, int MapId)>();
 
         // 迷宫选择与任务连接
         public int MazeIndex = -1;
@@ -95,10 +96,9 @@ namespace DfoServer.Game.Dungeon
         // 防止残留回调污染下一局。
         public CancellationTokenSource AutoFlipCts;
 
-        public bool TryMarkClearMapQuestSynced(int dungeonId, int mapId)
+        internal bool TryMarkClearMapQuestSynced(int dungeonId, int mapId)
         {
-            var key = $"{dungeonId}:{mapId}";
-            return _syncedClearMapQuestTargets.Add(key);
+            return _syncedClearMapQuestTargets.Add((dungeonId, mapId));
         }
     }
 }

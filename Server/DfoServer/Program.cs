@@ -30,6 +30,7 @@ namespace DfoServer
             ("--selftest-character-slot-policy", SelfTests.CharacterSlotPolicySelfTest.Run),
             ("--selftest-clear-map-quest", SelfTests.ClearMapQuestSelfTest.Run),
             ("--selftest-death-tower-entry", SelfTests.DeathTowerEntrySelfTest.Run),
+            ("--selftest-death-tower-map-loader", SelfTests.DeathTowerMapLoaderSelfTest.Run),
             ("--selftest-death-tower-quest-routing", SelfTests.DeathTowerQuestRoutingSelfTest.Run),
             ("--selftest-quest-clear", SelfTests.QuestClearSelfTest.Run),
             ("--selftest-quest-trigger-counts", SelfTests.QuestTriggerCountSelfTest.Run),

@@ -26,7 +26,7 @@ namespace DfoServer.Game.DeathTower
 
             var dungeonInfoBody = DeathTowerPacketBuilder.BuildTowerDungeonInfo(dungeonId, difficulty);
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x001C, dungeonInfoBody));
-            FileLogger.Log($"[DeathTower] SENT 0x001C DUNGEON_INFO(formal tower): bodyLen={dungeonInfoBody.Length}");
+            FileLogger.Log($"[DeathTower] SENT 0x001C DUNGEON_INFO(tower): bodyLen={dungeonInfoBody.Length}");
 
             // NOTI 142 DEATH_TOWER_INFO (8B)
             var infoBody = DeathTowerPacketBuilder.BuildTowerInfo(dungeonId, (ushort)tower.Config.TotalStages);
@@ -128,10 +128,6 @@ namespace DfoServer.Game.DeathTower
         {
             var cid = session.Player.CharacterId;
             FileLogger.Log($"[DeathTower] SETTLEMENT begin: cid={cid} dungeon={tower.Config.DungeonId} stages={tower.Config.TotalStages}");
-
-            // NOTI 0x05 DUNGEON_PERMISSION
-            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0005, new byte[0]));
-            FileLogger.Log($"[DeathTower] SENT 0x0005 DUNGEON_PERMISSION (empty)");
 
             // NOTI 144 排行(空安全版)
             var rankingBody = DeathTowerPacketBuilder.BuildEmptyRanking(tower.Config.DungeonId);

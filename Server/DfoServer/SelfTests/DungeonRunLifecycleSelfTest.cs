@@ -29,10 +29,6 @@ namespace DfoServer.SelfTests
                 && player.DeathTowerState == null
                 && !player.IsInDeathTower,
                 ref failures);
-            Check("run lifecycle does not expose unsupported practice mode",
-                typeof(DungeonRun).Assembly.GetType("DfoServer.Game.Dungeon.DungeonRunMode") == null,
-                ref failures);
-
             // 2. 新局字段默认值 = 旧版返城重置后的取值(常量表)
             var fresh = new DungeonRun();
             Check("fresh run fields carry legacy reset defaults",

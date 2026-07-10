@@ -10,10 +10,7 @@ namespace DfoServer.Network.Handlers.Dungeon
     internal static class DungeonRunLifecycle
     {
         // 进本: 掐掉旧局残留定时器 -> 换新局。
-        internal static void BeginRun(
-            EnhancedClientSession session,
-            int dungeonId,
-            byte difficulty)
+        internal static void BeginRun(EnhancedClientSession session, int dungeonId, byte difficulty)
         {
             CancelAutoFlip(session);
             Game.DeathTower.DeathTowerHandler.ClearTowerState(session);

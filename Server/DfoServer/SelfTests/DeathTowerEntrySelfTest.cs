@@ -11,6 +11,7 @@ using DfoServer.Game.ReviveCoin;
 using DfoServer.Infrastructure;
 using DfoServer.Network;
 using DfoServer.Network.Handlers;
+using DfoServer.Network.Handlers.Dungeon;
 
 namespace DfoServer.SelfTests
 {
@@ -30,7 +31,7 @@ namespace DfoServer.SelfTests
             };
 
             var tower = new DeathTowerSession(config);
-            Check("tower session carries stage state but not quest-counting mode",
+            Check("tower session starts on the first configured floor",
                 tower.CurrentStage == 0
                 && tower.State == 0
                 && tower.GetCurrentMapId() == 33060,
@@ -92,6 +93,32 @@ namespace DfoServer.SelfTests
                     ref failures);
             }
 
+            using (var fixture = SelectDungeonFixture.Create())
+            {
+                var settlementTower = new DeathTowerSession(config);
+                while (settlementTower.CurrentStage < settlementTower.EndStage)
+                {
+                    settlementTower.SetFighting();
+                    if (!settlementTower.TryAdvanceStage())
+                        throw new InvalidOperationException("Unable to advance settlement test to final floor.");
+                }
+
+                DungeonRunLifecycle.BeginTowerRun(fixture.Session, config.DungeonId, settlementTower);
+                settlementTower.SetFighting();
+                new DeathTowerHandler()
+                    .HandleStageCommand(fixture.Session, new GamePacketHeader(), new byte[] { 2 })
+                    .GetAwaiter()
+                    .GetResult();
+
+                var sentTypes = fixture.ReadSentTypes(expectedPackets: 3);
+                Check("tower settlement sends only ranking reward and EPLP packets",
+                    sentTypes.Count == 3
+                    && sentTypes[0] == 0x0090
+                    && sentTypes[1] == 0x0091
+                    && sentTypes[2] == 0x0092,
+                    ref failures);
+            }
+
             Console.WriteLine(failures == 0 ? "PASS" : $"FAIL: {failures}");
             return failures == 0 ? 0 : 1;
         }
@@ -150,9 +177,9 @@ namespace DfoServer.SelfTests
             {
                 var tempDir = Path.Combine(Path.GetTempPath(), "DfoServerSelfTests");
                 Directory.CreateDirectory(tempDir);
-                var dbPath = Path.Combine(tempDir, "death-tower-entry.db");
-                if (File.Exists(dbPath))
-                    File.Delete(dbPath);
+                var dbPath = Path.Combine(
+                    tempDir,
+                    $"death-tower-entry-{Guid.NewGuid():N}.db");
 
                 SqliteDatabaseBootstrap.Initialize(dbPath, ServerPaths.SchemaFilePath);
                 SeedAccountAndCharacter(dbPath);
