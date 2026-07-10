@@ -1,4 +1,5 @@
 using DfoServer.Game.Appearance;
+using DfoServer.Game.Accounts;
 using DfoServer.Game.CharacterData;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory;
@@ -23,6 +24,7 @@ namespace DfoServer.Network.Handlers
         private readonly IInventoryStore _inventoryStore;
         private readonly SqliteSelectCharacterDataSource _dataSource;   // 仅外观重建(AppearanceService)使用
         private readonly ICharacterRepository _characterRepository;
+        private readonly HonorLevelSyncService _honorLevel;
 
         public InventoryRefreshSender(
             IInventoryStore inventoryStore,
@@ -32,6 +34,7 @@ namespace DfoServer.Network.Handlers
             _inventoryStore = inventoryStore ?? throw new ArgumentNullException(nameof(inventoryStore));
             _dataSource = dataSource ?? throw new ArgumentNullException(nameof(dataSource));
             _characterRepository = characterRepository ?? throw new ArgumentNullException(nameof(characterRepository));
+            _honorLevel = new HonorLevelSyncService(characterRepository);
         }
 
         public async Task SendNoti2AppearanceUpdate(EnhancedClientSession session)
@@ -45,11 +48,16 @@ namespace DfoServer.Network.Handlers
 
         public void ReloadSubtype0Tail(EnhancedClientSession session)
         {
-            var (cid, _) = SessionOwnerResolver.Resolve(session);
+            if (session?.Player == null)
+                return;
+
+            var (cid, aid) = SessionOwnerResolver.Resolve(session);
             var tail = new SqliteSubtype0FieldsRepository(ServerPaths.DatabasePath, ServerPaths.SchemaFilePath)
-                .Load(cid);
-            if (tail != null && session?.Player != null)
-                session.Player.Subtype0Tail = tail;
+                .Load(cid)
+                ?? session.Player.Subtype0Tail
+                ?? new UserInfoMinimumTailSnapshot();
+            HonorLevelDataProvider.ApplyToSubtype0Tail(tail, _honorLevel.LoadSummary(aid));
+            session.Player.Subtype0Tail = tail;
         }
 
         public async Task SendCreatureItemListRefresh(EnhancedClientSession session)

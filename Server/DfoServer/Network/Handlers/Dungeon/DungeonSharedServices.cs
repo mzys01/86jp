@@ -60,9 +60,29 @@ namespace DfoServer.Network.Handlers.Dungeon
             EntryCost = new Game.Dungeon.DungeonEntryCostService(assetService);
         }
 
-        internal Task SendHonorLevelInfoAsync(EnhancedClientSession session, string reason, HonorLevelSummary summary = null)
+        internal HonorLevelSummary ResolveHonorLevelForExp(
+            EnhancedClientSession session,
+            HonorLevelSummary summary = null)
         {
-            return HonorLevel.SendInfoAsync(session, ProtocolLogName, reason, summary);
+            var tail = session?.Player?.Subtype0Tail;
+            if (summary == null && tail != null)
+            {
+                return new HonorLevelSummary
+                {
+                    HonorLevel = (byte)Math.Min(byte.MaxValue, tail.ProgressA),
+                    HonorExp = tail.ProgressB,
+                };
+            }
+
+            summary = summary ?? HonorLevel.LoadSummary(session?.Account?.AccountId ?? 0);
+            if (session?.Player != null)
+            {
+                tail = tail ?? new UserInfoMinimumTailSnapshot();
+                HonorLevelDataProvider.ApplyToSubtype0Tail(tail, summary);
+                session.Player.Subtype0Tail = tail;
+            }
+
+            return summary;
         }
 
         internal Game.Dungeon.CardRewardService CardRewards { get; }
@@ -137,9 +157,7 @@ namespace DfoServer.Network.Handlers.Dungeon
         }
 
         internal async Task SendUserInfoBroadcast(
-            EnhancedClientSession session,
-            HonorLevelSummary honorSummary = null,
-            IReadOnlyList<CharacterRecord> accountCharacters = null)
+            EnhancedClientSession session)
         {
             try
             {
@@ -149,9 +167,9 @@ namespace DfoServer.Network.Handlers.Dungeon
                 if (record != null && addition != null)
                 {
                     var accountId = session.Account?.AccountId ?? record.AccountId;
-                    accountCharacters = accountCharacters ?? CharacterRepository.ListByAccount(accountId);
+                    var accountCharacters = CharacterRepository.ListByAccount(accountId);
                     AdventureGroupUserInfoSynchronizer.ApplyToUserInfoAddition(addition, accountCharacters);
-                    HonorLevel.ApplyToUserInfoAddition(addition, accountId, accountCharacters, honorSummary);
+                    HonorLevel.ApplyToUserInfoAddition(addition, accountId, accountCharacters);
                     var skillSnap = LoadSyncedSkillState(cid, session.Player.Level).Skills;
                     var w = new GamePacketWriter();
                     w.WriteByte(1);

@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Text;
 using System.Threading.Tasks;
+using DfoServer.Game.Accounts;
 using DfoServer.Game.CharacterData;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Dungeon;
@@ -11,6 +12,7 @@ using DfoServer.Game.Quests;
 using DfoServer.Game.Session;
 using DfoServer.GameWorld;
 using DfoServer.Infrastructure;
+using DfoServer.Network.Builders;
 using Microsoft.Data.Sqlite;
 
 namespace DfoServer.SelfTests
@@ -19,6 +21,8 @@ namespace DfoServer.SelfTests
     {
         private const int CharacterId = 135001;
         private const int LevelUpCharacterId = 135002;
+        private const int MaxLevelCharacterId = 135003;
+        private const int MaxLevelOverflowCharacterId = 135004;
         private const int AccountId = 135001;
         private const ushort GiveLetterQuestId = 2042;
         private const ushort UseLetterQuestId = 2043;
@@ -61,6 +65,26 @@ namespace DfoServer.SelfTests
                 GrowType = 0,
                 Level = 1,
             });
+            characterRepository.Create(new CharacterRecord
+            {
+                CharacterId = MaxLevelCharacterId,
+                AccountId = AccountId,
+                Name = Encoding.UTF8.GetBytes("quest-honor-exp-test"),
+                Job = 0,
+                GrowType = 0,
+                Level = ExpTableProvider.MaxLevel,
+            });
+            characterRepository.Create(new CharacterRecord
+            {
+                CharacterId = MaxLevelOverflowCharacterId,
+                AccountId = AccountId,
+                Name = Encoding.UTF8.GetBytes("quest-honor-overflow-test"),
+                Job = 0,
+                GrowType = 0,
+                Level = ExpTableProvider.MaxLevel - 1,
+            });
+            SeedSubtype1Stats(dbPath, schemaPath, MaxLevelCharacterId, job: 0, level: ExpTableProvider.MaxLevel);
+            SeedSubtype1Stats(dbPath, schemaPath, MaxLevelOverflowCharacterId, job: 0, level: ExpTableProvider.MaxLevel - 1);
 
             var assetService = new SqliteAssetService(dbPath, schemaPath);
             var connStr = SqliteDatabaseBootstrap.BuildConnectionString(dbPath);
@@ -182,6 +206,8 @@ namespace DfoServer.SelfTests
             Check("non-carry event item is consumed on finish", CountItem(assetService, NonCarryEventItemId) == 0, ref failures);
 
             RunQuestLevelUpStatsChecks(connStr, dbPath, schemaPath, characterRepository, assetService, ref failures);
+            RunMaxLevelQuestHonorChecks(connStr, characterRepository, assetService, ref failures);
+            RunMaxLevelOverflowQuestChecks(connStr, characterRepository, assetService, ref failures);
 
             Console.WriteLine(failures == 0 ? "PASS" : $"FAIL: {failures}");
             return failures == 0 ? 0 : 1;
@@ -339,6 +365,150 @@ namespace DfoServer.SelfTests
             Check("quest reward sends subtype1 stats before exp notification",
                 SendsSubtype1StatsBeforeExp(sender, expectedHp, expectedPhysicalAttack), ref failures);
             Check("quest reward sends exp notification", sender.NotiTypes.Contains(0x0025), ref failures);
+            Check("quest reward exp notification carries account honor",
+                ExpNotificationCarriesHonor(sender, expectedHonorLevel: 1, expectedHonorExp: 0), ref failures);
+            Check("quest reward does not reload subtype1 after exp notification",
+                !SendsSubtype1AfterExp(sender), ref failures);
+        }
+
+        private static void RunMaxLevelQuestHonorChecks(
+            string connStr,
+            SqliteCharacterRepository characterRepository,
+            IAssetService assetService,
+            ref int failures)
+        {
+            var questId = SelectPlainExpQuest();
+            Check("max-level honor reward quest found", questId > 0, ref failures);
+            if (questId <= 0)
+                return;
+
+            var reward = GameWorld.QuestData.GetRewardExp(
+                questId, playerLevel: ExpTableProvider.MaxLevel, playerJob: 0, playerGrowType: 0);
+            var maxLevelEntryExp = (uint)Math.Max(0,
+                ExpTableProvider.GetLevelThreshold(ExpTableProvider.MaxLevel - 1));
+            var existingMaxLevelExp = maxLevelEntryExp + 123u;
+            characterRepository.UpdateLevelAndExp(
+                MaxLevelCharacterId, ExpTableProvider.MaxLevel, existingMaxLevelExp);
+            QuestService.SaveActiveQuests(connStr, MaxLevelCharacterId, new List<ActiveQuest>
+            {
+                new ActiveQuest { Slot = 0, QuestId = questId, TriggerValue = 0 },
+            });
+
+            var player = new PlayerContext
+            {
+                CharacterId = MaxLevelCharacterId,
+                Job = 0,
+                GrowType = 0,
+                Level = ExpTableProvider.MaxLevel,
+                Exp = existingMaxLevelExp,
+            };
+            var sender = new RecordingQuestSender(MaxLevelCharacterId, AccountId, player);
+            var questManager = new QuestManager(sender, connStr, assetService);
+            questManager.HandleFinishQuestAsync(0x003C, BuildQuestBody(questId)).GetAwaiter().GetResult();
+
+            var record = characterRepository.GetById(MaxLevelCharacterId);
+            Check("max-level quest keeps normal exp fixed",
+                record != null && record.Exp == existingMaxLevelExp && player.Exp == existingMaxLevelExp,
+                ref failures);
+            Check("max-level quest stores reward in account honor exp",
+                LoadHonorExp(connStr) == reward.Exp,
+                ref failures);
+            Check("max-level quest sends honor through exp notification",
+                ExpNotificationCarriesHonor(sender, expectedHonorLevel: 1, expectedHonorExp: reward.Exp),
+                ref failures);
+            Check("max-level quest does not send repeated honor init notification",
+                !sender.NotiTypes.Contains(0x0289),
+                ref failures);
+            Check("max-level quest does not reload subtype1",
+                !sender.NotiTypes.Contains(0x0002),
+                ref failures);
+        }
+
+        private static void RunMaxLevelOverflowQuestChecks(
+            string connStr,
+            SqliteCharacterRepository characterRepository,
+            IAssetService assetService,
+            ref int failures)
+        {
+            var questId = SelectPlainExpQuest();
+            var reward = GameWorld.QuestData.GetRewardExp(
+                questId, playerLevel: ExpTableProvider.MaxLevel - 1, playerJob: 0, playerGrowType: 0);
+            Check("max-level overflow quest has splittable exp reward", reward.Exp >= 2, ref failures);
+            if (questId <= 0 || reward.Exp < 2)
+                return;
+
+            var maxLevelEntryExp = (uint)Math.Max(0,
+                ExpTableProvider.GetLevelThreshold(ExpTableProvider.MaxLevel - 1));
+            var normalExp = Math.Min(100u, reward.Exp / 2u);
+            var overflowHonorExp = reward.Exp - normalExp;
+            var startExp = maxLevelEntryExp - normalExp;
+            var previousHonorExp = LoadHonorExp(connStr);
+            characterRepository.UpdateLevelAndExp(
+                MaxLevelOverflowCharacterId, ExpTableProvider.MaxLevel - 1, startExp);
+            QuestService.SaveActiveQuests(connStr, MaxLevelOverflowCharacterId, new List<ActiveQuest>
+            {
+                new ActiveQuest { Slot = 0, QuestId = questId, TriggerValue = 0 },
+            });
+
+            var player = new PlayerContext
+            {
+                CharacterId = MaxLevelOverflowCharacterId,
+                Job = 0,
+                GrowType = 0,
+                Level = ExpTableProvider.MaxLevel - 1,
+                Exp = startExp,
+            };
+            var sender = new RecordingQuestSender(MaxLevelOverflowCharacterId, AccountId, player);
+            var questManager = new QuestManager(sender, connStr, assetService);
+            questManager.HandleFinishQuestAsync(0x003C, BuildQuestBody(questId)).GetAwaiter().GetResult();
+
+            var record = characterRepository.GetById(MaxLevelOverflowCharacterId);
+            Check("quest exp before max level reaches max with normal portion",
+                record != null
+                    && record.Level == ExpTableProvider.MaxLevel
+                    && record.Exp == maxLevelEntryExp
+                    && player.Level == ExpTableProvider.MaxLevel
+                    && player.Exp == maxLevelEntryExp,
+                ref failures);
+            Check("quest exp overflow is stored as account honor exp",
+                LoadHonorExp(connStr) == previousHonorExp + overflowHonorExp,
+                ref failures);
+            Check("mixed max-level quest sends normal exp notification",
+                sender.NotiTypes.Contains(0x0025),
+                ref failures);
+            var expectedHonor = HonorLevelDataProvider.CalculateFromHonorExp(
+                previousHonorExp + overflowHonorExp, 0);
+            Check("mixed max-level quest exp notification carries honor",
+                ExpNotificationCarriesHonor(
+                    sender, expectedHonor.HonorLevel, expectedHonor.HonorExp),
+                ref failures);
+            Check("mixed max-level quest does not send repeated honor init notification",
+                !sender.NotiTypes.Contains(0x0289),
+                ref failures);
+            Check("mixed max-level quest does not reload subtype1 after exp notification",
+                !SendsSubtype1AfterExp(sender),
+                ref failures);
+        }
+
+        private static bool ExpNotificationCarriesHonor(
+            RecordingQuestSender sender,
+            uint expectedHonorLevel,
+            uint expectedHonorExp)
+        {
+            var exp = sender.Notis.FindLast(n => n.Item1 == 0x0025);
+            return exp != null
+                && exp.Item2 != null
+                && exp.Item2.Length >= ExpNotificationBuilder.HonorExpOffset + sizeof(uint)
+                && BitConverter.ToUInt32(exp.Item2, ExpNotificationBuilder.HonorLevelOffset) == expectedHonorLevel
+                && BitConverter.ToUInt32(exp.Item2, ExpNotificationBuilder.HonorExpOffset) == expectedHonorExp;
+        }
+
+        private static bool SendsSubtype1AfterExp(RecordingQuestSender sender)
+        {
+            var expIndex = sender.Notis.FindLastIndex(n => n.Item1 == 0x0025);
+            return expIndex >= 0 && sender.Notis.FindIndex(
+                expIndex + 1,
+                n => n.Item1 == 0x0002 && n.Item2 != null && n.Item2.Length > 0 && n.Item2[0] == 1) >= 0;
         }
 
         private static bool SendsSubtype0BeforeExp(RecordingQuestSender sender, byte expectedLevel)
@@ -445,6 +615,20 @@ VALUES (@aid, @mid, '');";
                     cmd.Parameters.AddWithValue("@aid", AccountId);
                     cmd.Parameters.AddWithValue("@mid", "quest-item-flow-test");
                     cmd.ExecuteNonQuery();
+                }
+            }
+        }
+
+        private static ulong LoadHonorExp(string connStr)
+        {
+            using (var conn = new SqliteConnection(connStr))
+            {
+                conn.Open();
+                using (var cmd = conn.CreateCommand())
+                {
+                    cmd.CommandText = "SELECT honor_exp FROM accounts WHERE account_id=@aid;";
+                    cmd.Parameters.AddWithValue("@aid", AccountId);
+                    return (ulong)Math.Max(0L, Convert.ToInt64(cmd.ExecuteScalar()));
                 }
             }
         }

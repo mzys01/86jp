@@ -44,7 +44,7 @@ namespace DfoServer.SelfTests
                 Check("honor exp gained while already max level",
                     HonorLevelDataProvider.CalculateHonorExpGain(86, 123456u, 1000u) == 1000u);
                 var maxEntryExp = (uint)DfoServer.Game.Dungeon.ExpTableProvider.GetLevelThreshold(DfoServer.Game.Dungeon.ExpTableProvider.MaxLevel - 1);
-                Check("honor exp gained only for overflow when reaching max level",
+                Check("only overflow becomes honor exp when reaching max level",
                     HonorLevelDataProvider.CalculateHonorExpGain(85, maxEntryExp - 100u, 250u) == 150u);
 
 
@@ -89,6 +89,30 @@ INSERT INTO character_subtype1_fields(character_id, progress1, progress2) VALUES
                 Check("HONOR_LEVEL_INFO body is 8 bytes", body.Length == 8);
                 Check("HONOR_LEVEL_INFO first u32 is honor level", BitConverter.ToUInt32(body, 0) == mixed.HonorLevel);
                 Check("HONOR_LEVEL_INFO second u32 is honor exp", BitConverter.ToUInt32(body, 4) == mixed.HonorExp);
+
+                var expBody = ExpNotificationBuilder.Build(
+                    86, 0x11223344u, 0x5566, 0x7788,
+                    mixed,
+                    partyBonusExp: 0x01020304u,
+                    memberBonusExp: 0x11121314u,
+                    fatigueBuffBonusExp: 0x21222324u,
+                    seriaBufBonusExp: 0x31323334u,
+                    growthContractBonusExp: 0x41424344u,
+                    weekendBonusExp: 0x51525354u,
+                    premiumBonusExp: 0x61626364u,
+                    growthCapsuleExp: 0x71727374u);
+                Check("EXP notification keeps the 86JP 95-byte body", expBody.Length == ExpNotificationBuilder.BodyLength);
+                Check("EXP notification writes level and total exp", expBody[0] == 86 && BitConverter.ToUInt32(expBody, 1) == 0x11223344u);
+                Check("EXP notification writes SP and TP fields", BitConverter.ToUInt16(expBody, 13) == 0x5566 && BitConverter.ToUInt16(expBody, 17) == 0x7788);
+                Check("EXP notification writes fixed bonus offsets", BitConverter.ToUInt32(expBody, 25) == 0x21222324u && BitConverter.ToUInt32(expBody, 30) == 0x31323334u && BitConverter.ToUInt32(expBody, 34) == 0x61626364u);
+                Check("EXP notification writes zero variable-entry count", expBody[50] == 0);
+                Check("EXP notification writes post-count bonus offsets", BitConverter.ToUInt32(expBody, 51) == 0x41424344u && BitConverter.ToUInt32(expBody, 55) == 0x51525354u);
+                Check("EXP notification writes growth capsule exp at client offset 59",
+                    BitConverter.ToUInt32(expBody, ExpNotificationBuilder.GrowthCapsuleExpOffset) == 0x71727374u);
+                Check("EXP notification writes honor level at client offset 63",
+                    BitConverter.ToUInt32(expBody, ExpNotificationBuilder.HonorLevelOffset) == mixed.HonorLevel);
+                Check("EXP notification writes honor exp at client offset 67",
+                    BitConverter.ToUInt32(expBody, ExpNotificationBuilder.HonorExpOffset) == mixed.HonorExp);
 
                 var addition = new UserInfoAdditionSnapshot { ManageLevel = 4, FlagByte = 4 };
                 HonorLevelDataProvider.ApplyToUserInfoAddition(addition, capped);
