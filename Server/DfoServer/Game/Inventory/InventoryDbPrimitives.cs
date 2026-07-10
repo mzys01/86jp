@@ -897,10 +897,10 @@ WHERE character_id = @characterId AND list_type = @listType;";
 
             if (metadata.IsStackable && !isAvatarReward)
             {
-                var preferQuickSlotStack = insertListType == InventoryListType.Main &&
-                    IsQuickSlotConsumable(metadata);
-                var existing = preferQuickSlotStack
-                    ? FindStackableItemByTemplateIdAndExpireTime(
+                var remaining = effectiveCount;
+                if (insertListType == InventoryListType.Main)
+                {
+                    remaining = FillBoosterRewardExistingStacks(
                         connection,
                         transaction,
                         characterId,
@@ -910,38 +910,66 @@ WHERE character_id = @characterId AND list_type = @listType;";
                         metadata.StackLimit,
                         SqliteInventoryStore.QuickSlotStart,
                         SqliteInventoryStore.QuickSlotEnd,
-                        effectiveCount)
-                    : null;
+                        false,
+                        remaining,
+                        results);
+                }
 
-                if (existing == null)
-                    existing = FindStackableItemByTemplateIdAndExpireTime(
+                remaining = FillBoosterRewardExistingStacks(
+                    connection,
+                    transaction,
+                    characterId,
+                    insertListType,
+                    itemTemplateId,
+                    expireTime,
+                    metadata.StackLimit,
+                    slotStart,
+                    slotEnd,
+                    isPetConsumable,
+                    remaining,
+                    results);
+
+                while (remaining > 0)
+                {
+                    var insertCount = metadata.StackLimit > 0
+                        ? Math.Min(metadata.StackLimit, remaining)
+                        : remaining;
+                    var targetSlot = FindEmptySlot(connection, transaction, characterId, insertListType, slotStart, slotEnd);
+                    if (targetSlot < 0)
+                    {
+                        FileLogger.Log($"  [Booster] no empty slot item=0x{itemTemplateId:X8} list={insertListType} range={slotStart}-{slotEnd}");
+                        return false;
+                    }
+
+                    InsertCharacterItem(
                         connection,
                         transaction,
                         characterId,
                         insertListType,
+                        (short)targetSlot,
                         itemTemplateId,
+                        insertKind,
+                        insertCount,
+                        insertCount,
+                        insertListType == InventoryListType.Pet ? (ushort)0 : metadata.Durability,
+                        metadata.IsSealed ? (byte)1 : (byte)0,
+                        0,
                         expireTime,
-                        metadata.StackLimit,
-                        slotStart,
-                        slotEnd,
-                        effectiveCount);
-                if (existing != null && (metadata.StackLimit <= 0 || existing.StackCount + effectiveCount <= metadata.StackLimit))
-                {
-                    var newStackCount = existing.StackCount + effectiveCount;
-                    if (isPetConsumable)
-                        UpdatePetStackCount(connection, transaction, existing.ItemUid, newStackCount);
-                    else
-                        UpdateStackCount(connection, transaction, existing.ItemUid, newStackCount);
+                        marker16,
+                        isPetConsumable ? insertCount : 0,
+                        "{}");
                     results.Add(new BoosterRewardResult
                     {
                         ListType = insertListType,
-                        SlotIndex = existing.SlotIndex,
+                        SlotIndex = (short)targetSlot,
                         ItemTemplateId = itemTemplateId,
-                        StackCount = newStackCount,
-                        GrantedCount = effectiveCount,
+                        StackCount = insertCount,
+                        GrantedCount = insertCount,
                     });
-                    return true;
+                    remaining -= insertCount;
                 }
+
+                return results.Count > 0;
             }
 
             var insertRows = metadata.IsStackable && !isAvatarReward ? 1 : effectiveCount;
@@ -1009,12 +1037,59 @@ WHERE character_id = @characterId AND list_type = @listType;";
             return results.Count > 0;
         }
 
-        private static bool IsQuickSlotConsumable(ItemMetadata metadata)
+        private int FillBoosterRewardExistingStacks(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            int characterId,
+            InventoryListType listType,
+            int itemTemplateId,
+            int expireTime,
+            int stackLimit,
+            int slotStart,
+            int slotEnd,
+            bool isPetConsumable,
+            int remaining,
+            List<BoosterRewardResult> results)
         {
-            return metadata != null &&
-                metadata.IsStackable &&
-                metadata.StackableType != null &&
-                metadata.StackableType.IndexOf("[waste]", StringComparison.OrdinalIgnoreCase) >= 0;
+            while (remaining > 0)
+            {
+                var existing = FindStackableItemByTemplateIdAndExpireTime(
+                    connection,
+                    transaction,
+                    characterId,
+                    listType,
+                    itemTemplateId,
+                    expireTime,
+                    stackLimit,
+                    slotStart,
+                    slotEnd);
+                if (existing == null)
+                    break;
+
+                var capacity = stackLimit > 0
+                    ? Math.Max(0, stackLimit - existing.StackCount)
+                    : remaining;
+                var addCount = Math.Min(remaining, capacity);
+                if (addCount <= 0)
+                    break;
+
+                var newStackCount = existing.StackCount + addCount;
+                if (isPetConsumable)
+                    UpdatePetStackCount(connection, transaction, existing.ItemUid, newStackCount);
+                else
+                    UpdateStackCount(connection, transaction, existing.ItemUid, newStackCount);
+                results.Add(new BoosterRewardResult
+                {
+                    ListType = listType,
+                    SlotIndex = existing.SlotIndex,
+                    ItemTemplateId = itemTemplateId,
+                    StackCount = newStackCount,
+                    GrantedCount = addCount,
+                });
+                remaining -= addCount;
+            }
+
+            return remaining;
         }
 
         private static int ResolveBoosterRewardExpireTime(int itemTemplateId, ItemMetadata metadata)

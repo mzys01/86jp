@@ -55,6 +55,11 @@ namespace DfoServer.SelfTests
         private const short StackableRewardPackageSlot = 72;
         private const int PackageQuickConsumableInitialCount = 7;
         private const int PackageBagConsumableInitialCount = 20;
+        private const short RewardStackQuickSlot = 3;
+        private const short RewardStackSecondQuickSlot = 4;
+        private const short RewardStackPackageQuickSlot = 5;
+        private const short RewardStackSeriaLuckSlot = 90;
+        private const int PetFoodItemTemplateId = 24;
         private const int SampleSelectedTitleRewardId = 400330051;
         private const int SampleCrossJobAuraRewardId = 112590011;
         private const int InvalidRewardItemTemplateId = 1;
@@ -218,6 +223,8 @@ namespace DfoServer.SelfTests
                 for (var i = 0; i < CapturedContextAvatarItemTemplateIds.Length && i < contextAvatarRequest.AvatarChoices.Count; i++)
                     Check($"context avatar choice[{i}] item={contextAvatarRequest.AvatarChoices[i].ItemTemplateId}", contextAvatarRequest.AvatarChoices[i].ItemTemplateId == CapturedContextAvatarItemTemplateIds[i]);
             }
+
+            RunRewardStackingRegressionTests();
 
             var tempDb = Path.Combine(Path.GetTempPath(), "selectable_package_selftest.db");
             DeleteTempDatabase(tempDb);
@@ -849,6 +856,301 @@ namespace DfoServer.SelfTests
             return _fail == 0 ? 0 : 1;
         }
 
+        private static void RunRewardStackingRegressionTests()
+        {
+            var databasePath = Path.Combine(Path.GetTempPath(), "selectable_package_reward_stacking_selftest.db");
+            DeleteTempDatabase(databasePath);
+
+            var store = new SqliteInventoryStore(databasePath, ServerPaths.SchemaFilePath);
+            SeedRewardStackingCharacter(databasePath);
+
+            var teleportMetadata = ItemMetadataResolver.Resolve(InstantTeleportPotionItemTemplateId);
+            Check("instant teleport potion is stackable", teleportMetadata.IsStackable);
+            if (teleportMetadata.IsStackable)
+            {
+                const int initialCount = 7;
+                const int rewardCount = 2;
+                InsertStackableItem(databasePath, InstantTeleportPotionItemTemplateId, RewardStackQuickSlot, initialCount);
+                Check("booster teleport reward with quick-slot stack succeeds",
+                    TryAddBoosterRewardItems(databasePath, InstantTeleportPotionItemTemplateId, rewardCount, out var results));
+
+                var item = store.LoadCharacterItemListSnapshot(CharacterId, AccountId).MainItems.Find(x =>
+                    x.SlotIndex == RewardStackQuickSlot &&
+                    x.ItemTemplateId == InstantTeleportPotionItemTemplateId);
+                Check("booster teleport reward merges into quick-slot stack",
+                    item != null && item.CountOrInstanceValue == initialCount + rewardCount);
+                Check("booster teleport reward reports quick-slot refresh",
+                    results != null &&
+                    results.Count == 1 &&
+                    results[0].SlotIndex == RewardStackQuickSlot &&
+                    results[0].GrantedCount == rewardCount);
+                DeleteItemsByTemplateId(databasePath, InstantTeleportPotionItemTemplateId);
+            }
+
+            var seriaLuckMetadata = ItemMetadataResolver.Resolve(SeriaLuckItemConstants.ItemTemplateId);
+            seriaLuckMetadata.GetSlotRange(out var seriaSlotStart, out var seriaSlotEnd);
+            Check("Seria luck is a stackable main-inventory item",
+                seriaLuckMetadata.IsStackable &&
+                RewardStackSeriaLuckSlot >= seriaSlotStart &&
+                RewardStackSeriaLuckSlot <= seriaSlotEnd);
+            if (seriaLuckMetadata.IsStackable &&
+                RewardStackSeriaLuckSlot >= seriaSlotStart &&
+                RewardStackSeriaLuckSlot <= seriaSlotEnd)
+            {
+                const int initialCount = 5;
+                const int rewardCount = 2;
+                InsertStackableItem(databasePath, SeriaLuckItemConstants.ItemTemplateId, RewardStackSeriaLuckSlot, initialCount);
+                Check("booster Seria luck reward with bag stack succeeds",
+                    TryAddBoosterRewardItems(databasePath, SeriaLuckItemConstants.ItemTemplateId, rewardCount, out var results));
+
+                var items = store.LoadCharacterItemListSnapshot(CharacterId, AccountId).MainItems.FindAll(x =>
+                    x.ItemTemplateId == SeriaLuckItemConstants.ItemTemplateId);
+                Check("booster Seria luck reward merges into existing bag stack",
+                    items.Count == 1 &&
+                    items[0].SlotIndex == RewardStackSeriaLuckSlot &&
+                    items[0].CountOrInstanceValue == initialCount + rewardCount);
+                Check("booster Seria luck reward reports existing bag slot",
+                    results != null &&
+                    results.Count == 1 &&
+                    results[0].SlotIndex == RewardStackSeriaLuckSlot &&
+                    results[0].GrantedCount == rewardCount);
+                DeleteItemsByTemplateId(databasePath, SeriaLuckItemConstants.ItemTemplateId);
+            }
+
+            var materialRewardId = FindNoExpireMaterialStackableItem();
+            Check("PVF contains finite no-expire material stackable sample", materialRewardId > 0);
+            if (materialRewardId > 0)
+            {
+                var materialMetadata = ItemMetadataResolver.Resolve(materialRewardId);
+                materialMetadata.GetSlotRange(out var materialSlotStart, out var materialSlotEnd);
+                Check("material sample supports partial-fill regression", materialMetadata.StackLimit > 2);
+                if (materialMetadata.StackLimit > 2)
+                {
+                    var materialBagSlot = (short)materialSlotStart;
+                    var bagRewardCount = Math.Min(2, materialMetadata.StackLimit - 1);
+                    var bagInitialCount = materialMetadata.StackLimit - bagRewardCount;
+                    InsertStackableItem(databasePath, materialRewardId, materialBagSlot, bagInitialCount);
+                    Check("booster material reward with natural-page stack succeeds",
+                        TryAddBoosterRewardItems(databasePath, materialRewardId, bagRewardCount, out var bagResults));
+
+                    var bagItems = store.LoadCharacterItemListSnapshot(CharacterId, AccountId).MainItems.FindAll(x =>
+                        x.ItemTemplateId == materialRewardId);
+                    Check("booster material reward merges into existing natural-page stack",
+                        bagItems.Count == 1 &&
+                        bagItems[0].SlotIndex == materialBagSlot &&
+                        bagItems[0].CountOrInstanceValue == bagInitialCount + bagRewardCount);
+                    Check("booster material reward reports existing natural-page slot",
+                        bagResults != null &&
+                        bagResults.Count == 1 &&
+                        bagResults[0].SlotIndex == materialBagSlot &&
+                        bagResults[0].GrantedCount == bagRewardCount);
+                    DeleteItemsByTemplateId(databasePath, materialRewardId);
+
+                    const int overflowRewardCount = 5;
+                    var quickInitialCount = materialMetadata.StackLimit - 1;
+                    var naturalInitialCount = materialMetadata.StackLimit - 2;
+                    InsertStackableItem(databasePath, materialRewardId, RewardStackSecondQuickSlot, quickInitialCount);
+                    InsertStackableItem(databasePath, materialRewardId, materialBagSlot, naturalInitialCount);
+                    Check("booster material reward spanning quick slot, natural page, and overflow succeeds",
+                        TryAddBoosterRewardItems(databasePath, materialRewardId, overflowRewardCount, out var overflowResults));
+
+                    var overflowItems = store.LoadCharacterItemListSnapshot(CharacterId, AccountId).MainItems.FindAll(x =>
+                        x.ItemTemplateId == materialRewardId);
+                    var quickItem = overflowItems.Find(x => x.SlotIndex == RewardStackSecondQuickSlot);
+                    var naturalItem = overflowItems.Find(x => x.SlotIndex == materialBagSlot);
+                    var overflowItem = overflowItems.Find(x =>
+                        x.SlotIndex != RewardStackSecondQuickSlot &&
+                        x.SlotIndex != materialBagSlot);
+                    Check("booster material reward fills quick-slot stack first",
+                        quickItem != null && quickItem.CountOrInstanceValue == materialMetadata.StackLimit);
+                    Check("booster material reward continues into natural-page stack",
+                        naturalItem != null && naturalItem.CountOrInstanceValue == materialMetadata.StackLimit);
+                    Check("booster material reward creates only bounded overflow stack",
+                        overflowItems.Count == 3 &&
+                        overflowItem != null &&
+                        overflowItem.CountOrInstanceValue == 2 &&
+                        overflowItems.TrueForAll(x => x.CountOrInstanceValue <= materialMetadata.StackLimit));
+                    Check("booster material reward reports every changed slot",
+                        overflowResults != null &&
+                        overflowResults.Count == 3 &&
+                        SumGrantedCount(overflowResults) == overflowRewardCount &&
+                        overflowResults.Exists(x => x.SlotIndex == RewardStackSecondQuickSlot && x.GrantedCount == 1) &&
+                        overflowResults.Exists(x => x.SlotIndex == materialBagSlot && x.GrantedCount == 2) &&
+                        overflowResults.Exists(x => overflowItem != null && x.SlotIndex == overflowItem.SlotIndex && x.GrantedCount == 2));
+                    DeleteItemsByTemplateId(databasePath, materialRewardId);
+
+                    InsertStackableItem(databasePath, materialRewardId, RewardStackSecondQuickSlot, quickInitialCount);
+                    InsertStackableItem(databasePath, materialRewardId, materialBagSlot, naturalInitialCount);
+                    Check("booster compatibility wrapper accepts multi-slot material reward",
+                        TryAddBoosterRewardItem(databasePath, materialRewardId, overflowRewardCount, out var wrapperResult));
+                    Check("booster compatibility wrapper returns first slot and total granted count",
+                        wrapperResult != null &&
+                        wrapperResult.SlotIndex == RewardStackSecondQuickSlot &&
+                        wrapperResult.StackCount == materialMetadata.StackLimit &&
+                        wrapperResult.GrantedCount == overflowRewardCount);
+                    DeleteItemsByTemplateId(databasePath, materialRewardId);
+
+                    var pickupInitialCount = materialMetadata.StackLimit - 1;
+                    InsertStackableItem(databasePath, materialRewardId, materialBagSlot, pickupInitialCount);
+                    Check("ordinary pickup with insufficient existing capacity succeeds",
+                        store.TryPickupItem(CharacterId, AccountId, materialRewardId, 2, out var pickupSlot));
+                    var pickupItems = store.LoadCharacterItemListSnapshot(CharacterId, AccountId).MainItems.FindAll(x =>
+                        x.ItemTemplateId == materialRewardId);
+                    Check("ordinary pickup keeps main baseline all-or-new-stack behavior",
+                        pickupItems.Count == 2 &&
+                        pickupItems.Exists(x => x.SlotIndex == materialBagSlot && x.CountOrInstanceValue == pickupInitialCount) &&
+                        pickupItems.Exists(x => x.SlotIndex == pickupSlot && x.CountOrInstanceValue == 2));
+                    DeleteItemsByTemplateId(databasePath, materialRewardId);
+
+                    InsertStackableItem(databasePath, materialRewardId, RewardStackSecondQuickSlot, quickInitialCount);
+                    InsertStackableItem(databasePath, materialRewardId, materialBagSlot, quickInitialCount);
+                    FillMainInventorySlotsExcept(
+                        databasePath,
+                        materialSlotStart,
+                        materialSlotEnd,
+                        materialBagSlot,
+                        InvalidRewardItemTemplateId);
+                    Check("booster material reward fails when overflow has no natural-page slot",
+                        !TryAddBoosterRewardItems(databasePath, materialRewardId, 3, out _));
+                    Check("failed booster material reward rolls back partial quick and natural fills",
+                        LoadStackCount(databasePath, InventoryListType.Main, RewardStackSecondQuickSlot) == quickInitialCount &&
+                        LoadStackCount(databasePath, InventoryListType.Main, materialBagSlot) == quickInitialCount &&
+                        CountCharacterItemsByTemplateId(databasePath, InventoryListType.Main, materialRewardId) == 2);
+                    DeleteItemsByTemplateId(databasePath, materialRewardId);
+                    DeleteItemsByTemplateId(databasePath, InvalidRewardItemTemplateId);
+                }
+            }
+
+            var unlimitedRewardId = FindNoExpireUnlimitedMaterialStackableItem();
+            Check("PVF contains no-expire unlimited material stackable sample", unlimitedRewardId > 0);
+            if (unlimitedRewardId > 0)
+            {
+                var unlimitedMetadata = ItemMetadataResolver.Resolve(unlimitedRewardId);
+                unlimitedMetadata.GetSlotRange(out var unlimitedSlotStart, out _);
+                var unlimitedSlot = (short)unlimitedSlotStart;
+                const int unlimitedInitialCount = 100000;
+                const int unlimitedRewardCount = 1234;
+                InsertStackableItem(databasePath, unlimitedRewardId, unlimitedSlot, unlimitedInitialCount);
+                Check("booster unlimited material reward succeeds",
+                    TryAddBoosterRewardItems(databasePath, unlimitedRewardId, unlimitedRewardCount, out var unlimitedResults));
+                var unlimitedItems = store.LoadCharacterItemListSnapshot(CharacterId, AccountId).MainItems.FindAll(x =>
+                    x.ItemTemplateId == unlimitedRewardId);
+                Check("booster unlimited material reward stays in one existing stack",
+                    unlimitedItems.Count == 1 &&
+                    unlimitedItems[0].SlotIndex == unlimitedSlot &&
+                    unlimitedItems[0].CountOrInstanceValue == unlimitedInitialCount + unlimitedRewardCount &&
+                    unlimitedResults != null &&
+                    unlimitedResults.Count == 1 &&
+                    unlimitedResults[0].GrantedCount == unlimitedRewardCount);
+                DeleteItemsByTemplateId(databasePath, unlimitedRewardId);
+
+                Check("booster unlimited material reward without existing stack succeeds",
+                    TryAddBoosterRewardItems(databasePath, unlimitedRewardId, unlimitedRewardCount, out var unlimitedInsertResults));
+                var insertedUnlimitedItems = store.LoadCharacterItemListSnapshot(CharacterId, AccountId).MainItems.FindAll(x =>
+                    x.ItemTemplateId == unlimitedRewardId);
+                Check("booster unlimited material reward creates one complete natural-page stack",
+                    insertedUnlimitedItems.Count == 1 &&
+                    insertedUnlimitedItems[0].CountOrInstanceValue == unlimitedRewardCount &&
+                    unlimitedInsertResults != null &&
+                    unlimitedInsertResults.Count == 1 &&
+                    unlimitedInsertResults[0].SlotIndex == insertedUnlimitedItems[0].SlotIndex &&
+                    unlimitedInsertResults[0].GrantedCount == unlimitedRewardCount);
+                DeleteItemsByTemplateId(databasePath, unlimitedRewardId);
+            }
+
+            var petFoodMetadata = ItemMetadataResolver.Resolve(PetFoodItemTemplateId);
+            Check("pet food sample is a pet consumable", ItemMetadataResolver.IsPetConsumableItem(petFoodMetadata));
+            if (ItemMetadataResolver.IsPetConsumableItem(petFoodMetadata))
+            {
+                const int initialCount = 5;
+                const int rewardCount = 2;
+                var petSlot = (short)SqliteInventoryStore.PetConsumableSlotStart;
+                var petInterferenceSlot = (short)SqliteInventoryStore.PetInventorySlotStart;
+                InsertStackableItem(
+                    databasePath,
+                    PetFoodItemTemplateId,
+                    petSlot,
+                    initialCount,
+                    InventoryListType.Pet,
+                    "pet");
+                InsertStackableItem(
+                    databasePath,
+                    PetFoodItemTemplateId,
+                    petInterferenceSlot,
+                    20,
+                    InventoryListType.Pet,
+                    "pet");
+                Check("booster pet consumable reward with existing stack succeeds",
+                    TryAddBoosterRewardItems(databasePath, PetFoodItemTemplateId, rewardCount, out var petResults));
+                var petValues = LoadPetStackValues(databasePath, petSlot);
+                var petInterferenceValues = LoadPetStackValues(databasePath, petInterferenceSlot);
+                Check("booster pet consumable reward merges into pet consumable page",
+                    petValues.StackCount == initialCount + rewardCount &&
+                    petValues.InstanceValue == initialCount + rewardCount &&
+                    petValues.PetSerialOrHandle == initialCount + rewardCount);
+                Check("booster pet consumable reward ignores same-template stack outside consumable page",
+                    petInterferenceValues.StackCount == 20 &&
+                    petInterferenceValues.InstanceValue == 20 &&
+                    petInterferenceValues.PetSerialOrHandle == 20 &&
+                    CountCharacterItemsByTemplateId(databasePath, InventoryListType.Pet, PetFoodItemTemplateId) == 2);
+                Check("booster pet consumable reward reports pet slot",
+                    petResults != null &&
+                    petResults.Count == 1 &&
+                    petResults[0].ListType == InventoryListType.Pet &&
+                    petResults[0].SlotIndex == petSlot &&
+                    petResults[0].GrantedCount == rewardCount);
+                DeleteItemsByTemplateId(databasePath, PetFoodItemTemplateId, InventoryListType.Pet);
+            }
+
+            var packageMaterialReward = FindSelectablePackageMaterialStackReward();
+            Check("PVF contains selectable package material stackable reward",
+                packageMaterialReward.PackageItemTemplateId > 0 &&
+                packageMaterialReward.RewardItemTemplateId > 0);
+            if (packageMaterialReward.PackageItemTemplateId > 0 && packageMaterialReward.RewardItemTemplateId > 0)
+            {
+                var rewardMetadata = ItemMetadataResolver.Resolve(packageMaterialReward.RewardItemTemplateId);
+                rewardMetadata.GetSlotRange(out var rewardSlotStart, out _);
+                var rewardBagSlot = (short)rewardSlotStart;
+                const int quickInitialCount = 1;
+                const int bagInitialCount = 2;
+
+                InsertStackableItem(databasePath, packageMaterialReward.PackageItemTemplateId, StackableRewardPackageSlot, 1);
+                InsertStackableItem(databasePath, packageMaterialReward.RewardItemTemplateId, RewardStackPackageQuickSlot, quickInitialCount);
+                InsertStackableItem(databasePath, packageMaterialReward.RewardItemTemplateId, rewardBagSlot, bagInitialCount);
+
+                Check("open selectable package material reward succeeds",
+                    store.TryOpenSelectablePackage(
+                        CharacterId,
+                        AccountId,
+                        new SelectablePackageOpenRequest
+                        {
+                            SlotIndex = StackableRewardPackageSlot,
+                            SelectedItemTemplateId = packageMaterialReward.RewardItemTemplateId,
+                        },
+                        out var packageResult));
+
+                var packageItems = store.LoadCharacterItemListSnapshot(CharacterId, AccountId).MainItems.FindAll(x =>
+                    x.ItemTemplateId == packageMaterialReward.RewardItemTemplateId);
+                Check("selectable package material reward prefers compatible quick-slot stack",
+                    packageItems.Exists(x =>
+                        x.SlotIndex == RewardStackPackageQuickSlot &&
+                        x.CountOrInstanceValue == quickInitialCount + packageMaterialReward.RewardCount));
+                Check("selectable package material reward leaves larger natural-page stack unchanged",
+                    packageItems.Exists(x =>
+                        x.SlotIndex == rewardBagSlot &&
+                        x.CountOrInstanceValue == bagInitialCount));
+                Check("selectable package material reward reports quick-slot refresh",
+                    packageResult != null &&
+                    packageResult.GrantedItems.Exists(x =>
+                        x.ListType == InventoryListType.Main &&
+                        x.SlotIndex == RewardStackPackageQuickSlot &&
+                        x.ItemTemplateId == packageMaterialReward.RewardItemTemplateId &&
+                        x.DisplayCount == packageMaterialReward.RewardCount));
+            }
+
+            DeleteTempDatabase(databasePath);
+        }
+
         private static void DeleteTempDatabase(string path)
         {
             foreach (var suffix in new[] { "", "-wal", "-shm" })
@@ -924,6 +1226,94 @@ VALUES
                     command.ExecuteNonQuery();
                 }
             }
+        }
+
+        private static void SeedRewardStackingCharacter(string databasePath)
+        {
+            using (var connection = new SqliteConnection(SqliteDatabaseBootstrap.BuildConnectionString(databasePath)))
+            {
+                connection.Open();
+                using (var command = connection.CreateCommand())
+                {
+                    command.CommandText = @"
+INSERT OR IGNORE INTO accounts (account_id, m_id, password_hash)
+VALUES (@accountId, 'reward-stacking-selftest', '');
+
+INSERT OR IGNORE INTO characters (character_id, account_id, name)
+VALUES (@characterId, @accountId, 'reward-stacking-selftest');
+
+INSERT OR REPLACE INTO character_container_state (character_id, list_type, list_param16)
+VALUES (@characterId, 0, 24);";
+                    command.Parameters.AddWithValue("@accountId", AccountId);
+                    command.Parameters.AddWithValue("@characterId", CharacterId);
+                    command.ExecuteNonQuery();
+                }
+            }
+        }
+
+        private static bool TryAddBoosterRewardItems(
+            string databasePath,
+            int itemTemplateId,
+            int stackCount,
+            out List<BoosterRewardResult> results)
+        {
+            using (var connection = new SqliteConnection(SqliteDatabaseBootstrap.BuildConnectionString(databasePath)))
+            {
+                connection.Open();
+                using (var transaction = connection.BeginTransaction())
+                {
+                    var db = new InventoryDbPrimitives();
+                    var success = db.TryAddBoosterRewardItems(
+                        connection,
+                        transaction,
+                        CharacterId,
+                        AccountId,
+                        itemTemplateId,
+                        stackCount,
+                        out results);
+                    if (success)
+                        transaction.Commit();
+                    return success;
+                }
+            }
+        }
+
+        private static bool TryAddBoosterRewardItem(
+            string databasePath,
+            int itemTemplateId,
+            int stackCount,
+            out BoosterRewardResult result)
+        {
+            using (var connection = new SqliteConnection(SqliteDatabaseBootstrap.BuildConnectionString(databasePath)))
+            {
+                connection.Open();
+                using (var transaction = connection.BeginTransaction())
+                {
+                    var db = new InventoryDbPrimitives();
+                    var success = db.TryAddBoosterRewardItem(
+                        connection,
+                        transaction,
+                        CharacterId,
+                        AccountId,
+                        itemTemplateId,
+                        stackCount,
+                        out result);
+                    if (success)
+                        transaction.Commit();
+                    return success;
+                }
+            }
+        }
+
+        private static int SumGrantedCount(List<BoosterRewardResult> results)
+        {
+            var total = 0;
+            if (results == null)
+                return total;
+
+            foreach (var result in results)
+                total += result.GrantedCount;
+            return total;
         }
 
         private static int ToUnixLocal(string expirationDate)
@@ -1090,6 +1480,101 @@ VALUES
             return new PackageQuickslotRewardSample();
         }
 
+        private static PackageQuickslotRewardSample FindSelectablePackageMaterialStackReward()
+        {
+            var stackableList = LstFile.Parse(PvfArchiveAccessor.ReadText("stackable/stackable.lst"));
+            foreach (var entry in stackableList.Entries)
+            {
+                if (!SelectablePackageDefinitionResolver.TryResolve(entry.Id, out var definition))
+                    continue;
+
+                foreach (var reward in definition.Rewards)
+                {
+                    if (reward == null || reward.ItemTemplateId <= 0 || reward.ExpireTime != 0)
+                        continue;
+
+                    var metadata = ItemMetadataResolver.Resolve(reward.ItemTemplateId);
+                    if (!metadata.IsStackable || metadata.StackLimit <= 2 || string.IsNullOrWhiteSpace(metadata.StackableType))
+                        continue;
+
+                    var stackableType = metadata.StackableType.Replace("`", "").Trim();
+                    if (!stackableType.StartsWith("[material]", StringComparison.OrdinalIgnoreCase))
+                        continue;
+
+                    var stackable = InventoryDbPrimitives.LoadStackableItem(reward.ItemTemplateId);
+                    if (stackable == null || stackable.UsablePeriod > 0)
+                        continue;
+
+                    var rewardCount = Math.Max(1, reward.Count);
+                    if (2 + rewardCount > metadata.StackLimit)
+                        continue;
+
+                    return new PackageQuickslotRewardSample
+                    {
+                        PackageItemTemplateId = entry.Id,
+                        RewardItemTemplateId = reward.ItemTemplateId,
+                        RewardCount = rewardCount,
+                    };
+                }
+            }
+
+            return new PackageQuickslotRewardSample();
+        }
+
+        private static int FindNoExpireMaterialStackableItem()
+        {
+            var stackableList = LstFile.Parse(PvfArchiveAccessor.ReadText("stackable/stackable.lst"));
+            foreach (var entry in stackableList.Entries)
+            {
+                if (DfoServer.Game.Currency.CurrencyService.IsCubeFragment(entry.Id))
+                    continue;
+
+                var stackable = InventoryDbPrimitives.LoadStackableItem(entry.Id);
+                if (stackable == null ||
+                    stackable.UsablePeriod > 0 ||
+                    stackable.ExpirationDate > 0 ||
+                    !string.IsNullOrWhiteSpace(stackable.GetStringValue("expiration date")))
+                    continue;
+
+                var metadata = ItemMetadataResolver.Resolve(entry.Id);
+                if (!metadata.IsStackable || metadata.StackLimit <= 2 || string.IsNullOrWhiteSpace(metadata.StackableType))
+                    continue;
+
+                var stackableType = metadata.StackableType.Replace("`", "").Trim();
+                if (stackableType.StartsWith("[material]", StringComparison.OrdinalIgnoreCase))
+                    return entry.Id;
+            }
+
+            return 0;
+        }
+
+        private static int FindNoExpireUnlimitedMaterialStackableItem()
+        {
+            var stackableList = LstFile.Parse(PvfArchiveAccessor.ReadText("stackable/stackable.lst"));
+            foreach (var entry in stackableList.Entries)
+            {
+                if (DfoServer.Game.Currency.CurrencyService.IsCubeFragment(entry.Id))
+                    continue;
+
+                var stackable = InventoryDbPrimitives.LoadStackableItem(entry.Id);
+                if (stackable == null ||
+                    stackable.UsablePeriod > 0 ||
+                    stackable.ExpirationDate > 0 ||
+                    !string.IsNullOrWhiteSpace(stackable.GetStringValue("expiration date")))
+                    continue;
+
+                var metadata = ItemMetadataResolver.Resolve(entry.Id);
+                if (!metadata.IsStackable || metadata.StackLimit > 0 || string.IsNullOrWhiteSpace(metadata.StackableType))
+                    continue;
+
+                var stackableType = metadata.StackableType.Replace("`", "").Trim();
+                if (stackableType.StartsWith("[material]", StringComparison.OrdinalIgnoreCase))
+                    return entry.Id;
+            }
+
+            return 0;
+        }
+
         private static bool IsQuickSlotConsumable(ItemMetadata metadata)
         {
             return metadata != null &&
@@ -1112,6 +1597,23 @@ VALUES
 
         private static void InsertStackableItem(string databasePath, int itemTemplateId, short slotIndex, int stackCount)
         {
+            InsertStackableItem(
+                databasePath,
+                itemTemplateId,
+                slotIndex,
+                stackCount,
+                InventoryListType.Main,
+                "stackable");
+        }
+
+        private static void InsertStackableItem(
+            string databasePath,
+            int itemTemplateId,
+            short slotIndex,
+            int stackCount,
+            InventoryListType listType,
+            string itemKind)
+        {
             using (var connection = new SqliteConnection(SqliteDatabaseBootstrap.BuildConnectionString(databasePath)))
             {
                 connection.Open();
@@ -1123,12 +1625,15 @@ INSERT OR REPLACE INTO character_items (
     stack_count, instance_value, durability, seal_flag, option_value, expire_time, marker_16,
     pet_serial_or_handle, extra_json)
 VALUES (
-    'character', @characterId, @characterId, 0, @slotIndex, @itemTemplateId, 'stackable',
-    @stackCount, @stackCount, 0, 0, 0, 0, 0, 0, '{}');";
+    'character', @characterId, @characterId, @listType, @slotIndex, @itemTemplateId, @itemKind,
+    @stackCount, @stackCount, 0, 0, 0, 0, 0, @petSerialOrHandle, '{}');";
                     command.Parameters.AddWithValue("@characterId", CharacterId);
+                    command.Parameters.AddWithValue("@listType", (int)listType);
                     command.Parameters.AddWithValue("@slotIndex", slotIndex);
                     command.Parameters.AddWithValue("@itemTemplateId", itemTemplateId);
+                    command.Parameters.AddWithValue("@itemKind", itemKind);
                     command.Parameters.AddWithValue("@stackCount", stackCount);
+                    command.Parameters.AddWithValue("@petSerialOrHandle", listType == InventoryListType.Pet ? stackCount : 0);
                     command.ExecuteNonQuery();
                 }
             }
@@ -1184,6 +1689,139 @@ WHERE character_id=@characterId AND item_template_id=@itemTemplateId;";
                     command.Parameters.AddWithValue("@characterId", CharacterId);
                     command.Parameters.AddWithValue("@itemTemplateId", itemTemplateId);
                     return Convert.ToInt32(command.ExecuteScalar(), CultureInfo.InvariantCulture);
+                }
+            }
+        }
+
+        private static int CountCharacterItemsByTemplateId(
+            string databasePath,
+            InventoryListType listType,
+            int itemTemplateId)
+        {
+            using (var connection = new SqliteConnection(SqliteDatabaseBootstrap.BuildConnectionString(databasePath)))
+            {
+                connection.Open();
+                using (var command = connection.CreateCommand())
+                {
+                    command.CommandText = @"
+SELECT COUNT(*)
+FROM character_items
+WHERE character_id=@characterId AND list_type=@listType AND item_template_id=@itemTemplateId;";
+                    command.Parameters.AddWithValue("@characterId", CharacterId);
+                    command.Parameters.AddWithValue("@listType", (int)listType);
+                    command.Parameters.AddWithValue("@itemTemplateId", itemTemplateId);
+                    return Convert.ToInt32(command.ExecuteScalar(), CultureInfo.InvariantCulture);
+                }
+            }
+        }
+
+        private static int LoadStackCount(
+            string databasePath,
+            InventoryListType listType,
+            short slotIndex)
+        {
+            using (var connection = new SqliteConnection(SqliteDatabaseBootstrap.BuildConnectionString(databasePath)))
+            {
+                connection.Open();
+                using (var command = connection.CreateCommand())
+                {
+                    command.CommandText = @"
+SELECT stack_count
+FROM character_items
+WHERE character_id=@characterId AND list_type=@listType AND slot_index=@slotIndex;";
+                    command.Parameters.AddWithValue("@characterId", CharacterId);
+                    command.Parameters.AddWithValue("@listType", (int)listType);
+                    command.Parameters.AddWithValue("@slotIndex", slotIndex);
+                    var value = command.ExecuteScalar();
+                    return value == null || value == DBNull.Value
+                        ? -1
+                        : Convert.ToInt32(value, CultureInfo.InvariantCulture);
+                }
+            }
+        }
+
+        private static void DeleteItemsByTemplateId(
+            string databasePath,
+            int itemTemplateId,
+            InventoryListType listType = InventoryListType.Main)
+        {
+            using (var connection = new SqliteConnection(SqliteDatabaseBootstrap.BuildConnectionString(databasePath)))
+            {
+                connection.Open();
+                using (var command = connection.CreateCommand())
+                {
+                    command.CommandText = @"
+DELETE FROM character_items
+WHERE character_id=@characterId AND list_type=@listType AND item_template_id=@itemTemplateId;";
+                    command.Parameters.AddWithValue("@characterId", CharacterId);
+                    command.Parameters.AddWithValue("@listType", (int)listType);
+                    command.Parameters.AddWithValue("@itemTemplateId", itemTemplateId);
+                    command.ExecuteNonQuery();
+                }
+            }
+        }
+
+        private static void FillMainInventorySlotsExcept(
+            string databasePath,
+            int slotStart,
+            int slotEnd,
+            short excludedSlot,
+            int blockerItemTemplateId)
+        {
+            using (var connection = new SqliteConnection(SqliteDatabaseBootstrap.BuildConnectionString(databasePath)))
+            {
+                connection.Open();
+                using (var transaction = connection.BeginTransaction())
+                using (var command = connection.CreateCommand())
+                {
+                    command.Transaction = transaction;
+                    command.CommandText = @"
+INSERT OR REPLACE INTO character_items (
+    owner_scope, owner_id, character_id, list_type, slot_index, item_template_id, item_kind,
+    stack_count, instance_value, durability, seal_flag, option_value, expire_time, marker_16,
+    pet_serial_or_handle, extra_json)
+VALUES (
+    'character', @characterId, @characterId, 0, @slotIndex, @itemTemplateId, 'stackable',
+    1, 1, 0, 0, 0, 0, 0, 0, '{}');";
+                    command.Parameters.AddWithValue("@characterId", CharacterId);
+                    var slotParameter = command.Parameters.Add("@slotIndex", SqliteType.Integer);
+                    command.Parameters.AddWithValue("@itemTemplateId", blockerItemTemplateId);
+                    for (var slotIndex = slotStart; slotIndex <= slotEnd; slotIndex++)
+                    {
+                        if (slotIndex == excludedSlot)
+                            continue;
+
+                        slotParameter.Value = slotIndex;
+                        command.ExecuteNonQuery();
+                    }
+
+                    transaction.Commit();
+                }
+            }
+        }
+
+        private static (int StackCount, int InstanceValue, int PetSerialOrHandle) LoadPetStackValues(
+            string databasePath,
+            short slotIndex)
+        {
+            using (var connection = new SqliteConnection(SqliteDatabaseBootstrap.BuildConnectionString(databasePath)))
+            {
+                connection.Open();
+                using (var command = connection.CreateCommand())
+                {
+                    command.CommandText = @"
+SELECT stack_count, instance_value, pet_serial_or_handle
+FROM character_items
+WHERE character_id=@characterId AND list_type=@listType AND slot_index=@slotIndex;";
+                    command.Parameters.AddWithValue("@characterId", CharacterId);
+                    command.Parameters.AddWithValue("@listType", (int)InventoryListType.Pet);
+                    command.Parameters.AddWithValue("@slotIndex", slotIndex);
+                    using (var reader = command.ExecuteReader())
+                    {
+                        return reader.Read()
+                            ? (reader.GetInt32(0), reader.GetInt32(1), reader.GetInt32(2))
+                            : (-1, -1, -1);
+                    }
                 }
             }
         }
