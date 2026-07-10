@@ -3,6 +3,7 @@ using DfoServer.Game.Appearance;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory;
 using DfoServer.Game.SelectCharacter;
+using DfoServer.Game.Session;
 using DfoServer.Infrastructure;
 using DfoServer.GameWorld;
 using DfoServer.Network.Builders;
@@ -36,11 +37,12 @@ namespace DfoServer.Network
         private readonly ICharacterRepository _characterRepository;
         private readonly SqliteSelectCharacterDataSource _selectCharacterDataSource;
         private readonly SqliteAssetService _assetService;
+        private readonly ISessionDirectory _sessionDirectory;
         private readonly Dictionary<ushort, Func<EnhancedClientSession, GamePacketHeader, byte[], Task>> _cmdDispatch;
 
         public override string ProtocolName => "GameProtocol";
 
-        public GameProtocolHandler(Func<byte[], Task> broadcastGamePacket = null)
+        public GameProtocolHandler(ISessionDirectory sessionDirectory, Func<byte[], Task> broadcastGamePacket = null)
         {
             var databasePath = ServerPaths.DatabasePath;
             var schemaFilePath = ServerPaths.SchemaFilePath;
@@ -67,6 +69,7 @@ namespace DfoServer.Network
 
             _characterRepository = characterRepository;
             _selectCharacterDataSource = sqliteSelectCharacterDataSource;
+            _sessionDirectory = sessionDirectory;
             _loginHandler = new LoginHandler(accountRepository, characterRepository);
             _characterSelectHandler = new CharacterSelectHandler(sqliteSelectCharacterDataSource, characterRepository, getUserInfoTemplate);
             _inventoryRefreshSender = new InventoryRefreshSender(inventoryStore, sqliteSelectCharacterDataSource, characterRepository);
@@ -122,12 +125,13 @@ namespace DfoServer.Network
             await _loginHandler.Handle_ClientFirstConnected(session);
         }
 
-        public override Task OnClientDisconnected(EnhancedClientSession session)
+        public override async Task OnClientDisconnected(EnhancedClientSession session)
         {
             FileLogger.Log($"[{ProtocolName}] Admin client disconnected: {session.SessionId}");
+            var charId = session.Player?.CharacterId ?? 0;
+            if (charId > 0) await _sessionDirectory.UnregisterAsync(charId);
             Handlers.Dungeon.DungeonRunLifecycle.EndRunOnTeardown(session, "disconnect");
             _townHandler.PersistPosition(session, forceImmediate: true, source: "disconnect");
-            return Task.CompletedTask;
         }
 
         public override async Task OnPacketReceived(EnhancedClientSession session, FlexiblePacket packet)
@@ -175,9 +179,13 @@ namespace DfoServer.Network
         {
             d[0x0004] = async (s, h, b) =>
             {
+                var prevCharId = s.Player?.CharacterId ?? 0;
                 await _characterSelectHandler.Handle_ENUM_CMDPACKET_SELECT_CHARACTER(s, h, b);
                 if (s.Player != null && s.Player.CharacterId > 0)
                 {
+                    if (prevCharId > 0 && prevCharId != s.Player.CharacterId)
+                        await _sessionDirectory.UnregisterAsync(prevCharId);
+                    _sessionDirectory.Register(s.Player.CharacterId, s);
                     var gsConnStr = SqliteDatabaseBootstrap.Initialize(
                         ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
                     s.GameSession = new Game.Session.GameSession(s, gsConnStr, _assetService);
@@ -187,7 +195,12 @@ namespace DfoServer.Network
             };
             d[0x0005] = _characterSelectHandler.Handle_ENUM_CMDPACKET_CREATE_CHARACTER;
             d[0x0006] = _characterSelectHandler.Handle_ENUM_CMDPACKET_DELETE_CHARACTER;
-            d[0x0007] = _characterSelectHandler.Handle_ENUM_CMDPACKET_RETURN_SELECT_CHARACTER;
+            d[0x0007] = async (s, h, b) =>
+            {
+                var charId = s.Player?.CharacterId ?? 0;
+                if (charId > 0) await _sessionDirectory.UnregisterAsync(charId);
+                await _characterSelectHandler.Handle_ENUM_CMDPACKET_RETURN_SELECT_CHARACTER(s, h, b);
+            };
             d[0x0008] = _characterSelectHandler.Handle_ENUM_CMDPACKET_GET_USERINFO;
             d[0x0009] = _staminaHandler.Handle_ENUM_CMDPACKET_RECOVER_STAMINA;
             d[0x02B5] = _characterSelectHandler.Handle_ENUM_CMDPACKET_CHECK_DOUBLE_CHARACTER_NAME;

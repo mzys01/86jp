@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Net.Sockets;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using DfoServer.Game.Session;
 using DfoServer.Game.Accounts;
@@ -36,6 +37,8 @@ namespace DfoServer.Network
 
         public DateTime PendingDarkKnightAutoComboUtc { get; set; }
 
+        private readonly SemaphoreSlim _sendLock = new SemaphoreSlim(1, 1);
+
         public EnhancedClientSession(TcpClient client, IPacketHeader packetStructure)
         {
             TcpClient = client;
@@ -46,12 +49,21 @@ namespace DfoServer.Network
         public async Task SendPacketAsync(byte[] data)
         {
             PacketFileLogger.Log("SEND", data);
-            await Stream.WriteAsync(data, 0, data.Length);
+            await _sendLock.WaitAsync();
+            try
+            {
+                await Stream.WriteAsync(data, 0, data.Length);
+            }
+            finally
+            {
+                _sendLock.Release();
+            }
         }
 
         public void Close()
         {
             TcpClient?.Close();
+            _sendLock.Dispose();
         }
     }
 }

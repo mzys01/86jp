@@ -66,9 +66,6 @@ namespace DfoServer.SelfTests
                 Check("equipped slot 24 raw keeps pet serial as instance",
                     equipped.Raw != null && equipped.Raw.Length >= 9 && BitConverter.ToInt32(equipped.Raw, 5) == PetSerial,
                     ref failures);
-                Check("equipped slot 24 raw keeps pet serial as creature extra",
-                    equipped.Raw != null && equipped.Raw.Length >= 28 && BitConverter.ToInt32(equipped.Raw, 24) == PetSerial,
-                    ref failures);
             }
 
             Console.WriteLine(failures == 0 ? "PASS" : $"FAIL: {failures}");

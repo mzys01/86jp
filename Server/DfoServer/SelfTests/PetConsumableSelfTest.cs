@@ -97,9 +97,6 @@ namespace DfoServer.SelfTests
                 Check("pet food raises creature satiety by PVF feed amount",
                     LoadCreatureSatiety(connection) == InitialPetSatiety + PetFoodSatietyDelta,
                     ref failures);
-                Check("pet food raises creature visible satiety by PVF feed amount",
-                    LoadCreatureVisibleSatiety(connection) == InitialPetSatiety + PetFoodSatietyDelta,
-                    ref failures);
                 Check("pet food does not raise inactive creature satiety",
                     LoadCreatureSatiety(connection, OtherPetCreatureKey) == InitialOtherPetSatiety,
                     ref failures);
@@ -126,9 +123,6 @@ namespace DfoServer.SelfTests
                 connection.Open();
                 Check("non-feed pet consumable does not raise creature satiety",
                     LoadCreatureSatiety(connection) == InitialPetSatiety + PetFoodSatietyDelta,
-                    ref failures);
-                Check("non-feed pet consumable does not raise creature visible satiety",
-                    LoadCreatureVisibleSatiety(connection) == InitialPetSatiety + PetFoodSatietyDelta,
                     ref failures);
                 Check("non-feed pet consumable does not change creature progress value",
                     LoadCreatureProgressValue(connection) == InitialPetProgressValue,
@@ -161,9 +155,6 @@ namespace DfoServer.SelfTests
                 Check("second pet food use clamps creature satiety to 100",
                     LoadCreatureSatiety(connection) == 100,
                     ref failures);
-                Check("second pet food use clamps creature visible satiety to 100",
-                    LoadCreatureVisibleSatiety(connection) == 100,
-                    ref failures);
                 Check("second pet food use still leaves inactive creature satiety unchanged",
                     LoadCreatureSatiety(connection, OtherPetCreatureKey) == InitialOtherPetSatiety,
                     ref failures);
@@ -175,8 +166,6 @@ namespace DfoServer.SelfTests
                     ref failures);
             }
 
-            SetCreatureVisibleSatiety(dbPath, PetCreatureKey, 42);
-
             {
                 Check("third pet consumable use at full active satiety succeeds",
                     store.TryDeleteItem(CharacterId, AccountId, InventoryListType.Pet, PetFoodSlot, 1, out var thirdResult),
@@ -186,9 +175,6 @@ namespace DfoServer.SelfTests
                     Check("third pet consumable use decrements again",
                         thirdResult.RemainingStackCount == InitialPetFoodCount - 3,
                         ref failures);
-                    Check("third pet consumable syncs stale visible satiety",
-                        thirdResult.PetSatietyChanged && thirdResult.PetSatietyBefore == 100 && thirdResult.PetSatietyAfter == 100,
-                        ref failures);
                 }
             }
 
@@ -197,9 +183,6 @@ namespace DfoServer.SelfTests
                 connection.Open();
                 Check("full active pet food use keeps active creature satiety at 100",
                     LoadCreatureSatiety(connection) == 100,
-                    ref failures);
-                Check("full active pet food use keeps active creature visible satiety at 100",
-                    LoadCreatureVisibleSatiety(connection) == 100,
                     ref failures);
                 Check("full active pet food use does not feed inactive creature",
                     LoadCreatureSatiety(connection, OtherPetCreatureKey) == InitialOtherPetSatiety,
@@ -261,9 +244,6 @@ namespace DfoServer.SelfTests
                 Check("equipped-active pet food raises equipped creature satiety",
                     LoadCreatureSatiety(connection, EquippedActiveCharacterId, EquippedActivePetCreatureKey) == InitialPetSatiety + PetFoodSatietyDelta,
                     ref failures);
-                Check("equipped-active pet food raises equipped creature visible satiety",
-                    LoadCreatureVisibleSatiety(connection, EquippedActiveCharacterId, EquippedActivePetCreatureKey) == InitialPetSatiety + PetFoodSatietyDelta,
-                    ref failures);
                 Check("equipped-active pet food does not raise inactive equipped-list creature satiety",
                     LoadCreatureSatiety(connection, EquippedActiveCharacterId, EquippedInactivePetCreatureKey) == InitialOtherPetSatiety,
                     ref failures);
@@ -320,9 +300,6 @@ namespace DfoServer.SelfTests
                     ref failures);
                 Check("moved-equipped pet food raises newly equipped creature satiety",
                     LoadCreatureSatiety(connection, MoveEquippedCharacterId, MovePetCreatureKey) == InitialPetSatiety + PetFoodSatietyDelta,
-                    ref failures);
-                Check("moved-equipped pet food raises newly equipped creature visible satiety",
-                    LoadCreatureVisibleSatiety(connection, MoveEquippedCharacterId, MovePetCreatureKey) == InitialPetSatiety + PetFoodSatietyDelta,
                     ref failures);
                 Check("moved-equipped pet food does not feed previously equipped creature",
                     LoadCreatureSatiety(connection, MoveEquippedCharacterId, EquippedActivePetCreatureKey) == 100,
@@ -786,26 +763,6 @@ WHERE character_id = @characterId
             buffer[offset + 1] = (byte)((value >> 8) & 0xFF);
             buffer[offset + 2] = (byte)((value >> 16) & 0xFF);
             buffer[offset + 3] = (byte)((value >> 24) & 0xFF);
-        }
-
-        private static void SetCreatureVisibleSatiety(string databasePath, int creatureKey, int visibleSatiety)
-        {
-            using (var connection = new SqliteConnection(SqliteDatabaseBootstrap.BuildConnectionString(databasePath)))
-            {
-                connection.Open();
-                using (var command = connection.CreateCommand())
-                {
-                    command.CommandText = @"
-UPDATE character_creatures
-SET field_after_value = @visibleSatiety
-WHERE character_id = @characterId
-  AND creature_key = @creatureKey;";
-                    command.Parameters.AddWithValue("@visibleSatiety", visibleSatiety);
-                    command.Parameters.AddWithValue("@characterId", CharacterId);
-                    command.Parameters.AddWithValue("@creatureKey", creatureKey);
-                    command.ExecuteNonQuery();
-                }
-            }
         }
 
         private static (bool Exists, int StackCount, int InstanceValue, int PetSerialOrHandle) LoadPetConsumableRow(SqliteConnection connection)

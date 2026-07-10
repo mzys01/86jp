@@ -144,6 +144,7 @@ namespace DfoServer
             }
 
             var server = new MultiStructureTcpServer();
+            var sessionDirectory = new Game.Session.SessionDirectory();
 
             int channelPort = GameNetworkConfig.ProxyMode ? 7002 : 7001;
             int gamePort = GameNetworkConfig.ProxyMode ? 10012 : 10011;
@@ -151,7 +152,7 @@ namespace DfoServer
             var portConfigs = new Dictionary<int, (IProtocolHandler handler, IPacketHeader structure)>
             {
                 { channelPort, (new ChannelProtocolHandler(), new ChannelPacketHeader()) },
-                { gamePort, (new GameProtocolHandler(packet => server.BroadcastToPortAsync(gamePort, packet)), new GamePacketHeader()) }
+                { gamePort, (new GameProtocolHandler(sessionDirectory, packet => server.BroadcastToPortAsync(gamePort, packet)), new GamePacketHeader()) }
             };
 
             server.Start(portConfigs);

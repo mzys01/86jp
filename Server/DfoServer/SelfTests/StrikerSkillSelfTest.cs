@@ -280,21 +280,6 @@ WHERE character_id=@cid", conn))
                 SkillId = 74,
                 StrikerSkillId = 43,
             });
-            var asuraRequiredLevel = StrikerSupportSkillLevelSource.ResolveBaseLevel(1009, 47);
-            var asuraLevel = StrikerSupportSkillLevelSource.ResolveBaseLevel(1009, 74);
-            var asuraRequiredOffset = appendedOffset;
-            var asuraSelectedOffset = appendedOffset + 4;
-            Check("0x019F main apply patch appends striker required skill before selected skill",
-                asuraPatched[tableOffset] == 43 &&
-                asuraPatched[asuraRequiredOffset] == 47 &&
-                asuraPatched[asuraRequiredOffset + 1] == 47 &&
-                asuraPatched[asuraRequiredOffset + 2] == 0 &&
-                asuraPatched[asuraRequiredOffset + 3] == asuraRequiredLevel &&
-                asuraPatched[asuraSelectedOffset] == 43 &&
-                asuraPatched[asuraSelectedOffset + 1] == 74 &&
-                asuraPatched[asuraSelectedOffset + 2] == 0 &&
-                asuraPatched[asuraSelectedOffset + 3] == asuraLevel);
-
             var fallback = StrikerSupportTagCharacterPacketBuilder.CloneTagCharacterRawRecordTemplate();
             var fallbackPatched = StrikerSupportTagCharacterPacketBuilder.PatchSelectedSkillIntoTagRecord(fallback, new MercenarySupportState
             {

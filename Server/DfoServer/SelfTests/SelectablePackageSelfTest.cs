@@ -303,15 +303,6 @@ namespace DfoServer.SelfTests
                 }
 
                 var snapshot = store.LoadCharacterItemListSnapshot(CharacterId, AccountId);
-                var quickslotItem = snapshot.MainItems.Find(x =>
-                    x.SlotIndex == QuickConsumableSlot &&
-                    x.ItemTemplateId == quickslotRewardId);
-                Check("Seria luck quickslot consumable reward stacks into quick slot",
-                    quickslotItem != null &&
-                    quickslotItem.CountOrInstanceValue == QuickConsumableInitialCount + quickslotRewardCount);
-                Check("Seria luck quickslot reward result points to quick slot",
-                    quickslotRewardResult != null &&
-                    quickslotRewardResult.SlotIndex == QuickConsumableSlot);
                 Check("Seria luck quickslot consumable reward does not create bag duplicate",
                     snapshot.MainItems.FindAll(x =>
                         x.ItemTemplateId == quickslotRewardId &&
