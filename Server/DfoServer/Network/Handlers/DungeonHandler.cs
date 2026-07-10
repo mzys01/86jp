@@ -23,14 +23,18 @@ namespace DfoServer.Network.Handlers
             Game.ReviveCoin.ReviveCoinService reviveCoinService,
             Game.Characters.SqliteCharacterRepository characterRepository,
             SqliteSelectCharacterDataSource selectCharacterDataSource,
-            IRentalTimeProvider rentalTimeProvider)
+            IRentalTimeProvider rentalTimeProvider,
+            Game.Party.PartyManager partyManager = null,
+            Game.Session.ISessionDirectory sessionDirectory = null)
         {
             _services = new DungeonSharedServices(
                 assetService,
                 reviveCoinService,
                 characterRepository,
                 selectCharacterDataSource,
-                rentalTimeProvider);
+                rentalTimeProvider,
+                partyManager,
+                sessionDirectory);
             _settlement = new DungeonSettlementHandler(_services);
             _map = new DungeonMapHandler(_services);
             _entry = new DungeonEntryHandler(_services, _map);

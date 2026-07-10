@@ -53,7 +53,9 @@ namespace DfoServer.Network.Handlers.Dungeon
                 return;
             }
 
-            if (!run.RoomKilledSeqIds.Add(req.LocalIndex))
+            bool firstKillThisRoom;
+            lock (run.SyncRoot) { firstKillThisRoom = run.RoomKilledSeqIds.Add(req.LocalIndex); } // 与队友击杀 relay 的 Add 互斥
+            if (!firstKillThisRoom)
             {
                 FileLogger.Log($"[DungeonHandler] DIE_MONSTER: duplicate seqId={req.LocalIndex}, ignored");
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0026,
@@ -102,8 +104,13 @@ namespace DfoServer.Network.Handlers.Dungeon
                     run.Difficulty,
                     rewardMonsterType,
                     isNamedMonster);
-                var growthContractBonusExp = CalculateGrowthContractMonsterBonus(session, gainedExp);
-                var totalGainedExp = AddSaturating(gainedExp, growthContractBonusExp);
+                // 经验按【击杀者自身等级 vs 怪物等级差】缩放。IDA df_game_r kill_monster(0x85A3AED)证实
+                // 真机对每个成员(含单人)无条件应用 BaseExpPenalty —— 越级高7级→5%、低怪1-3级→112%甜点。
+                // gainedExp 保持"纯怪物量"用于 run 统计(df monster-total 口径); 玩家实得 = 缩放后。
+                float killerExpRate = MonsterRewardTable.BaseExpPenalty(session.Player.Level, monsterLevel);
+                uint killerScaledExp = (uint)(gainedExp * killerExpRate);
+                var growthContractBonusExp = CalculateGrowthContractMonsterBonus(session, killerScaledExp);
+                var totalGainedExp = AddSaturating(killerScaledExp, growthContractBonusExp);
 
                 int dungeonBasisLevel = monsterLevel;
                 try { dungeonBasisLevel = DungeonData.GetDungeonBasicLv(run.DungeonId); } catch (Exception ex) { FileLogger.Log($"[DungeonHandler] DIE_MONSTER ERROR: basic level fallback dungeon={run.DungeonId} default={dungeonBasisLevel}: {ex.Message}"); }
@@ -202,28 +209,29 @@ namespace DfoServer.Network.Handlers.Dungeon
                     await _svc.SendInDungeonLevelUpFollowups(session);
                 }
 
+                // 组队副本联机: 把这次击杀经验发给同队【在副本里】的成员; 传 raw gainedExp + monsterLevel,
+                // 每个队友用【自己等级】各自缩放(df BaseExpPenalty)→ 不同等级同副本得不同经验。
+                await GrantKillExpToPartyAsync(session, gainedExp, monsterLevel);
             }
 
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0026,
                 DungeonNotificationBuilder.BuildMonsterDie(req.LocalIndex, drops, session.Player.UserId)));
 
+            // 组队副本联机: 把杀怪广播给同队其他在副本的成员(视觉死亡, 修"怪假死"; 掉落各自独立),
+            // 并把击杀计入队友 run 重跑通关检测(PropagateKillForClearAsync)。
+            await BroadcastMonsterDieToPartyAsync(session, req.LocalIndex);
+
             // Quest item drop (IDA: CUser::CheckQuestMonster, after DIE_MONSTER NOTI)
             await _svc.QuestDrops.CheckMonsterDrop(session, killedMonsterCode);
 
             // check_grid_clear (IDA 0x830A0E8): spawnType==100 && spawnFlag==0 blocks passage
-            int blockingCount = 0;
-            int killedBlockingCount = 0;
-            for (var i = 0; i < monsters.Count; i++)
+            // 判定唯一实现在 DungeonRoomTopology.ComputeRoomClearedLocked(主路径与组队 relay 共用)。
+            int blockingCount, killedBlockingCount;
+            bool roomCleared;
+            lock (run.SyncRoot) // 读击杀集与队友击杀 relay 的写互斥
             {
-                if (!monsters[i].IsBlocking)
-                    continue;
-
-                blockingCount++;
-                var seqId = (ushort)(run.RoomStartSequence + i);
-                if (run.RoomKilledSeqIds.Contains(seqId))
-                    killedBlockingCount++;
+                roomCleared = DungeonRoomTopology.ComputeRoomClearedLocked(run, out blockingCount, out killedBlockingCount);
             }
-            bool roomCleared = killedBlockingCount >= blockingCount;
 
             // Old server kill_monster execution order (IDA 0x85A3AED):
             //   1. prepare_dungeon_clear (path B)
@@ -286,6 +294,158 @@ namespace DfoServer.Network.Handlers.Dungeon
                 int ccType = IsBossActorType(killedMonsterType) ? 4 : (killedMonsterType >= 5 ? 3 : 2);
                 if (run.ClearCondition.Check(ccType, killedMonsterCode))
                     await _settlement.TryClearDungeon(session, $"ClearCondition type={ccType} target={killedMonsterCode}", killedMonsterCode);
+            }
+
+            // 诊断(组队通关排查): boss 类怪被杀却仍未 Cleared 时, 打印全量决策输入。
+            // 只读 IsCleared, 不调 Check —— Check 有副作用(递增计数器), 诊断路径绝不允许污染进度。
+            if (IsBossActorType(killedMonsterType) && run.Phase < DungeonRunPhase.Cleared)
+            {
+                TryGetCurrentRoomState(session, out var diagRoom);
+                int diagRoomX = diagRoom != null ? diagRoom.Maze.X : -999;
+                int diagRoomY = diagRoom != null ? diagRoom.Maze.Y : -999;
+                int diagBossX = run.BossMapPos != null && run.BossMapPos.Length >= 2 ? run.BossMapPos[0] : -1;
+                int diagBossY = run.BossMapPos != null && run.BossMapPos.Length >= 2 ? run.BossMapPos[1] : -1;
+                FileLogger.Log($"[DungeonHandler] CLEAR_DIAG boss killed but NOT cleared: cid={session.Player.CharacterId} seqId={req.LocalIndex} code={killedMonsterCode} type={killedMonsterType} roomCleared={roomCleared} blocking={killedBlockingCount}/{blockingCount} ccNull={run.ClearCondition == null} ccCleared={run.ClearCondition?.IsCleared} roomPos=({diagRoomX},{diagRoomY}) bossPos=({diagBossX},{diagBossY}) phase={run.Phase}");
+            }
+        }
+
+        // 组队副本联机: 把 MonsterDie(SC 0x0026, 只发视觉死亡, 不带drops)广播给同队【在副本里】的其他成员,
+        // 修"怪假死"; 并把击杀计入队友 run 重跑通关检测。掉落各自独立(86版本特性)。
+        // 队友副本=队长迷宫精确拷贝→seqId 一致→广播即对得上。
+        private async Task BroadcastMonsterDieToPartyAsync(EnhancedClientSession killer, ushort seqId)
+        {
+            var pm = _svc.PartyManager;
+            var sessions = _svc.Sessions;
+            if (pm == null || sessions == null || killer?.Player == null) return;
+            var killerUid = (ushort)killer.Player.CharacterId;
+            var party = pm.GetPartyByUser(killerUid);
+            if (party == null || party.Count <= 1) return;
+
+            var killerRun = killer.Player.CurrentRun;
+            var killerRoomKey = killerRun != null ? killerRun.RoomKey : default;
+
+            var packet = GamePacketEnvelopeBuilder.Build(0x00, 0x0026,
+                DungeonNotificationBuilder.BuildMonsterDie(seqId, null, killer.Player.UserId));
+            foreach (var m in party.MembersBySlot())
+            {
+                if (m.UserId == killerUid) continue;
+                sessions.TryGet(m.CharacterId, out var bs);
+                if (bs?.Player?.CurrentRun == null || bs.TcpClient == null || !bs.TcpClient.Connected) continue;
+                await bs.SendPacketAsync(packet);                       // 1) 视觉死亡(修队友"怪假死")
+                await PropagateKillForClearAsync(bs, seqId, killerRoomKey);  // 2) 登记击杀+重跑该队友的通关检测
+            }
+        }
+
+        // 组队通关传播: 把队友(或队长)杀的怪计入本成员 run 的击杀集, 并按与 HandleDieMonster 完全相同的判据
+        // (ComputeRoomClearedLocked + endPoint/ClearCondition)重跑通关检测。每个成员 run 各自累计全队击杀并集
+        // → 各自独立触发 ClearDungeon → 各自收到 ENABLE_CLEAR → 各自结算翻牌。
+        // ⚠️ 本方法跑在【击杀者线程】却读写【队友 bs 的 run】, 所有集合读写在 run.SyncRoot 下完成;
+        //    TryClearDungeon(含 await)一律在锁外调用(锁内绝不 await)。TryClearDungeon 幂等, 两条路径重复调无害。
+        private async Task PropagateKillForClearAsync(EnhancedClientSession bs, ushort seqId, RoomKey killerRoomKey)
+        {
+            var run = bs.Player?.CurrentRun;
+            if (run == null || run.Phase != DungeonRunPhase.InProgress) return;
+
+            bool doPrepareClear = false, doCondClear = false;
+            bool endPoint = false; bool ccType1 = false; int ccType = 0; int kCode = 0;
+            lock (run.SyncRoot)
+            {
+                // 同房判据: 本成员当前房与杀怪者当前房一致(此时 run.RoomKilledSeqIds 正指向该房集合)
+                if (!run.RoomKey.Equals(killerRoomKey)) return;
+                if (!run.RoomKilledSeqIds.Add(seqId)) return; // 已计过, 幂等
+
+                var monsters = run.RoomMonsters;
+                if (monsters == null) return;
+
+                bool roomCleared = DungeonRoomTopology.ComputeRoomClearedLocked(run, out var blockingCount, out var killedBlockingCount);
+
+                var roomLocalIndex = seqId - run.RoomStartSequence;
+                byte kType = 0;
+                if (roomLocalIndex >= 0 && roomLocalIndex < monsters.Count)
+                {
+                    kType = monsters[roomLocalIndex].Type;
+                    kCode = monsters[roomLocalIndex].Code;
+                }
+
+                if (roomCleared)
+                {
+                    TryGetCurrentRoomState(bs, out var roomState);   // 读 run.RoomStates, 必须在锁内(与 bs 换房写互斥)
+                    if (roomState != null && run.BossMapPos != null && run.BossMapPos.Length >= 2)
+                        endPoint = roomState.Maze.X == run.BossMapPos[0] && roomState.Maze.Y == run.BossMapPos[1];
+                    int currentMapId = roomState != null ? roomState.Maze.Index : 0;
+                    ccType1 = run.ClearCondition != null && run.ClearCondition.Check(1, currentMapId);
+                    doPrepareClear = ccType1 || endPoint;
+                    FileLogger.Log($"[DungeonHandler] PARTY_RELAY_CLEAR cid={bs.Player.CharacterId} seqId={seqId} roomCleared={roomCleared} blocking={killedBlockingCount}/{blockingCount} endPoint={endPoint} ccType1={ccType1} phase={run.Phase}");
+                }
+
+                if (run.ClearCondition != null && run.Phase == DungeonRunPhase.InProgress)
+                {
+                    ccType = IsBossActorType(kType) ? 4 : (kType >= 5 ? 3 : 2);
+                    doCondClear = run.ClearCondition.Check(ccType, kCode);
+                }
+            }
+
+            // ---- await 均在锁外 ----
+            if (doPrepareClear)
+                await _settlement.TryClearDungeon(bs, $"party-relayed roomCleared endPoint={endPoint} ccType1={ccType1}", kCode);
+            if (doCondClear)
+                await _settlement.TryClearDungeon(bs, $"party-relayed ClearCondition type={ccType} target={kCode}", kCode);
+        }
+
+        // 组队击杀经验: exp=raw gainedExp(纯怪物量), 每个队友用【自己等级 vs monsterLevel】各自缩放
+        // (df BaseExpPenalty), 并按荣誉经验模型拆分(满级队友经验转入账号荣誉, 与击杀者本人同一规则)。
+        private async Task GrantKillExpToPartyAsync(EnhancedClientSession killer, uint exp, int monsterLevel)
+        {
+            if (exp == 0) return;
+            var pm = _svc.PartyManager;
+            var sessions = _svc.Sessions;
+            if (pm == null || sessions == null || killer?.Player == null) return;
+            var killerUid = (ushort)killer.Player.CharacterId;
+            var party = pm.GetPartyByUser(killerUid);
+            if (party == null || party.Count <= 1) return;
+
+            foreach (var m in party.MembersBySlot())
+            {
+                if (m.UserId == killerUid) continue;
+                sessions.TryGet(m.CharacterId, out var bs);
+                if (bs?.Player?.CurrentRun == null || bs.TcpClient == null || !bs.TcpClient.Connected) continue;
+                try
+                {
+                    var prevLevel = bs.Player.Level;
+                    var prevExp = bs.Player.Exp;
+                    // 队友按【自己等级】缩放同一份怪物经验(不是照搬击杀者的量)。
+                    float memberRate = MonsterRewardTable.BaseExpPenalty(bs.Player.Level, monsterLevel);
+                    uint memberExp = (uint)(exp * memberRate);
+                    if (memberExp == 0) continue;
+
+                    // 与击杀者本人相同的荣誉拆分: 满级溢出部分转入账号荣誉经验。
+                    var memberHonorGain = HonorLevelDataProvider.CalculateHonorExpGain(prevLevel, prevExp, memberExp);
+                    var memberNormalGain = memberExp > memberHonorGain ? memberExp - memberHonorGain : 0u;
+                    HonorLevelSummary memberHonor = null;
+                    if (memberNormalGain > 0)
+                    {
+                        bs.Player.Exp = AddSaturating(bs.Player.Exp, memberNormalGain);
+                        bs.Player.Level = ExpTableProvider.ApplyLevelUps(bs.Player.Level, bs.Player.Exp);
+                    }
+                    if (memberHonorGain > 0 && (bs.Account?.AccountId ?? 0) > 0)
+                    {
+                        memberHonor = _svc.HonorLevel.AddExp(bs.Account.AccountId, memberHonorGain);
+                        FileLogger.Log($"[DungeonHandler] HONOR_EXP_GAIN party-kill: account={bs.Account.AccountId} cid={bs.Player.CharacterId} gain={memberHonorGain}");
+                    }
+                    var leveledUp = bs.Player.Level > prevLevel;
+                    if (leveledUp)
+                        CharacterProgressService.PersistLevelAndExp(bs.Player.CharacterId, bs.Player.Level, bs.Player.Exp);
+                    var (remainSp, remainTp) = _svc.GetRemainingSpTp(bs, persist: leveledUp, logTag: "PARTY_KILL_EXP");
+                    memberHonor = _svc.ResolveHonorLevelForExp(bs, memberHonor);
+                    await bs.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0025,
+                        ExpNotificationBuilder.Build(bs.Player.Level, bs.Player.Exp, remainSp, remainTp, memberHonor)));
+                    if (leveledUp)
+                        await _svc.SendInDungeonLevelUpFollowups(bs);
+                }
+                catch (System.Exception ex)
+                {
+                    FileLogger.Log($"[DungeonHandler] PARTY_KILL_EXP ERROR: member uid={m.UserId}: {ex.Message}");
+                }
             }
         }
 

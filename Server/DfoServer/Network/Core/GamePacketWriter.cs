@@ -70,6 +70,14 @@ namespace DfoServer.Network
             WriteBytes(bytes);
         }
 
+        // 直接写已经是原始字节的 dstr(= int32 len + 原始字节)。组队队名等场景使用。
+        public void WriteRawDstr(byte[] rawBytes)
+        {
+            var bytes = rawBytes ?? System.Array.Empty<byte>();
+            WriteInt32(bytes.Length);
+            WriteBytes(bytes);
+        }
+
         public byte[] ToArray()
         {
             return _buffer.ToArray();

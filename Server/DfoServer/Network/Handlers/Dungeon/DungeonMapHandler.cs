@@ -81,6 +81,37 @@ namespace DfoServer.Network.Handlers.Dungeon
             }
 
             await SendStartMapAsync(session, moveTarget.X, moveTarget.Y, overrideMapId);
+
+            // ★组队副本联机: 队长移动到下一房间时, 带同队队员一起换图(队员是follower、不自发MOVE_MAP)。
+            await BroadcastMoveMapToPartyAsync(session, moveTarget.X, moveTarget.Y, overrideMapId);
+        }
+
+        // 队长换图时把同队【在副本里】的成员也移到同一房间(服务端驱动, 队员副本=队长迷宫拷贝)。⚠️待真机验证。
+        private async Task BroadcastMoveMapToPartyAsync(EnhancedClientSession leader, int nextX, int nextY, int overrideMapId)
+        {
+            var pm = _svc.PartyManager;
+            var sessions = _svc.Sessions;
+            if (pm == null || sessions == null || leader?.Player == null) return;
+            var leaderUid = (ushort)leader.Player.CharacterId;
+            var party = pm.GetPartyByUser(leaderUid);
+            if (party == null || party.Count <= 1 || !party.IsLeader(leaderUid)) return;   // 只有队长换图带全队
+
+            foreach (var m in party.MembersBySlot())
+            {
+                if (m.UserId == leaderUid) continue;
+                sessions.TryGet(m.CharacterId, out var bs);
+                if (bs?.Player?.CurrentRun == null || bs.TcpClient == null || !bs.TcpClient.Connected) continue;
+                try
+                {
+                    bs.Player.CurrentRun.LayeredMapIndex = leader.Player.CurrentRun.LayeredMapIndex;
+                    await SendStartMapAsync(bs, nextX, nextY, overrideMapId);
+                    FileLogger.Log($"[DungeonHandler] PARTY_MOVE_MAP: 带队员 cid={bs.Player.CharacterId} 到 ({nextX},{nextY})");
+                }
+                catch (System.Exception ex)
+                {
+                    FileLogger.Log($"[DungeonHandler] PARTY_MOVE_MAP ERROR: member uid={m.UserId}: {ex.Message}");
+                }
+            }
         }
 
         internal async Task SendStartMapAsync(EnhancedClientSession session, int nextX, int nextY, int overrideMapId)
@@ -104,12 +135,17 @@ namespace DfoServer.Network.Handlers.Dungeon
             }
 
             var roomKey = new RoomKey(maze.X, maze.Y, effectiveOverrideMapId);
-            run.RoomKey = roomKey;
             CacheQuestConnectedStartMapId(session, maze);
 
             byte[] startMapBody;
             List<KeyValuePair<int, int>> hellPartyMonsterInfoAfterStartMap = null;
 
+            // 锁内绝不 await: 把 START_MAP 对 run 房间态(RoomKey/RoomStates/RoomKilledSeqIds/RoomMonsters/
+            // MonsterCount)的整段读改写与队友击杀 relay(PropagateKillForClearAsync 在别的线程读这些结构)互斥,
+            // 防 Dict/HashSet 跨线程并发改崩。此块 138-241 全为同步逻辑, 所有 await 发包都在 lock 之外。
+            lock (run.SyncRoot)
+            {
+            run.RoomKey = roomKey;
             if (run.RoomStates.TryGetValue(roomKey, out var cached))
             {
                 run.RoomMonsters = cached.Maze.Monsters;
@@ -208,6 +244,7 @@ namespace DfoServer.Network.Handlers.Dungeon
                     ridableEntries: ridableForRoom);
                 run.MonsterCount += (ushort)startMapMaze.Monsters.Count;
             }
+            } // end lock(run.SyncRoot)
 
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x001D, startMapBody));
 

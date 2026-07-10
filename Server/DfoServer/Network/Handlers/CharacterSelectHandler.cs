@@ -18,18 +18,31 @@ namespace DfoServer.Network.Handlers
         private readonly ICharacterRepository _characterRepository;
         private readonly GetUserInfoTemplate _getUserInfoTemplate;
         private readonly HonorLevelSyncService _honorLevel;
+        private readonly Game.Session.ISessionDirectory _sessions;   // 他人外观 PULL: 按 uid 找目标在线会话; 可空(上游注册表)
 
         public string ProtocolName => "GameProtocol";
 
         public CharacterSelectHandler(
             ISelectCharacterDataSource selectCharacterDataSource,
             ICharacterRepository characterRepository,
-            GetUserInfoTemplate getUserInfoTemplate)
+            GetUserInfoTemplate getUserInfoTemplate,
+            Game.Session.ISessionDirectory sessions = null)
         {
             _selectCharacterDataSource = selectCharacterDataSource ?? throw new ArgumentNullException(nameof(selectCharacterDataSource));
             _characterRepository = characterRepository ?? throw new ArgumentNullException(nameof(characterRepository));
             _getUserInfoTemplate = getUserInfoTemplate;
             _honorLevel = new HonorLevelSyncService(_characterRepository);
+            _sessions = sessions;
+        }
+
+        // 按 UserId 找在线会话(他人外观拉取用)。
+        private EnhancedClientSession FindOnlineByUserId(ushort uid)
+        {
+            if (_sessions == null) return null;
+            foreach (var s in _sessions.GetAllGameSessions())
+                if (s?.Player != null && s.Player.CharacterId > 0 && s.Player.UserId == uid)
+                    return s;
+            return null;
         }
 
         public async Task Handle_ENUM_CMDPACKET_SELECT_CHARACTER(EnhancedClientSession session, GamePacketHeader header, byte[] body)
@@ -151,6 +164,35 @@ namespace DfoServer.Network.Handlers
         {
             try
             {
+                // 他人外观(同屏 PULL 模型): body = {u16 uid, byte mode}(见 docs/df_game_r/06-otheruser-appearance.md)。
+                // mode!=2 且 uid 有效且目标在线 → 回目标 USERINFO(0x0002, 复用自身版 BuildNoti2Body 换数据源)。
+                // 自身/选角 roster(mode==2 或 body<3B)走下面既有分支。⚠️ 真机需确认客户端是否用 0x0008 发他人请求 + mode 取值。
+                // 诊断: 查看信息(inspect)真机排查用。记录客户端发的完整 body, 好核对 reqUid 映射。
+                FileLogger.Log($"[{ProtocolName}] GET_USERINFO body={(body != null ? BitConverter.ToString(body) : "null")} selfUid={session.Player?.UserId} selfCid={session.Player?.CharacterId}");
+                if (_sessions != null && body != null && body.Length >= 3)
+                {
+                    ushort reqUid = BitConverter.ToUInt16(body, 0);
+                    byte mode = body[2];
+                    if (mode != 0x02 && reqUid != 0xFFFF && reqUid != session.Player.UserId)
+                    {
+                        var target = FindOnlineByUserId(reqUid);
+                        if (target != null)
+                        {
+                            // ⚠️ 待真机验证: inspect(mode=3)可能需要【完整明细 subtype-1】而不只精简外观 subtype-0。
+                            //    先发 subtype-0(与同屏他人外观同源, 已验证能渲染外观); 若信息窗仍空, 晨间加发 subtype-1。
+                            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0002, Game.Appearance.AppearanceService.BuildNoti2Body(target.Player)));
+                            FileLogger.Log($"[{ProtocolName}] GET_USERINFO other MATCH reqUid={reqUid} mode={mode} -> USERINFO(0x0002 subtype0) sent (targetCid={target.Player.CharacterId})");
+                            return;
+                        }
+                        // 未匹配 → 枚举在线 uid, 让真机日志直接显示 reqUid 是否=某在线目标的 UserId(诊断 uid 映射)
+                        var sb = new System.Text.StringBuilder();
+                        foreach (var s in _sessions.GetAllGameSessions())
+                            if (s?.Player != null && s.Player.CharacterId > 0)
+                                sb.Append($"uid{s.Player.UserId}/cid{s.Player.CharacterId} ");
+                        FileLogger.Log($"[{ProtocolName}] GET_USERINFO other reqUid={reqUid} mode={mode} 未匹配在线目标, 回退 roster(⚠️信息窗无反应根因候选=uid映射). 在线=[{sb.ToString().Trim()}]");
+                    }
+                }
+
                 var accountId = session.Account?.AccountId ?? 1;
                 var rosterBody = BuildCharacterListBody(accountId);
                 byte routingByte = _getUserInfoTemplate != null ? _getUserInfoTemplate.Pkt0RoutingByte7 : (byte)0;

@@ -6,6 +6,7 @@ using DfoServer.Game.Quests;
 using DfoServer.GameWorld;
 using DfoServer.Infrastructure;
 using DfoServer.Network.Builders;
+using DfoServer.Network.Builders.Party;
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
@@ -132,10 +133,25 @@ namespace DfoServer.Network.Handlers.Dungeon
                 FileLogger.Log($"[DungeonHandler] ClearCondition init: {selection.Maze.ClearConditions.Count} conditions, totalRequired={run.ClearCondition.TotalRequired}");
             else
                 FileLogger.Log($"[DungeonHandler] WARNING: dungeon={req.DungeonId} maze={selection.Index} has no [clear condition]");
-            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x001C, DungeonNotificationBuilder.BuildDungeonInfo(
+            await SendDungeonSelectPacketsTo(session, req, bossPos, (byte)selection.Index);
+
+            // ★组队副本联机: 队长进本时把整队队员也驱动进【同一实例】。⚠️待真机验证(见 DFO_PARTY_DUNGEON_COOP)。
+            await TryFanOutDungeonEntryToPartyAsync(session, header, req, bossPos, (byte)selection.Index);
+        }
+
+        // 给指定会话发一份 SELECT_DUNGEON 出站序列(0x1C DUNGEON_INFO / START_MAP / 0x117 / 0x19F)。
+        // Hell 等参数从该会话自己的 CurrentRun 读(队员的 run 已拷贝队长 selection)。
+        private async Task SendDungeonSelectPacketsTo(
+            EnhancedClientSession s,
+            Network.Parsers.Dungeon.SelectDungeonRequest req,
+            int[] bossPos,
+            byte mazeModeFlag)
+        {
+            var run = s.Player.CurrentRun;
+            await s.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x001C, DungeonNotificationBuilder.BuildDungeonInfo(
                 dungeonId: req.DungeonId,
                 difficulty: req.Difficulty,
-                modeFlag: (byte)selection.Index,
+                modeFlag: mazeModeFlag,
                 bossX: bossPos != null ? (byte)bossPos[0] : (byte)0,
                 bossY: bossPos != null ? (byte)bossPos[1] : (byte)0,
                 hellPartyRoomX: run.HellMode ? run.HellMapX : (byte)0xFF,
@@ -144,16 +160,80 @@ namespace DfoServer.Network.Handlers.Dungeon
                 hellPartyEnabled: run.HellMode ? (ushort)1 : (ushort)0,
                 value2: run.HellMode ? (byte)0x0B : (byte)0)));
 
-            await _mapHandler.SendStartMapAsync(session, 0xFF, 0xFF, overrideMapId: -1);
+            await _mapHandler.SendStartMapAsync(s, 0xFF, 0xFF, overrideMapId: -1);
 
-            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0117, BitConverter.GetBytes(session.Player.CharacterId)));
-            if (StrikerSupportTagCharacterPacketBuilder.TryBuildDungeonOwnerMappedSupportBody(session.Player.CharacterId, out var strikerBody))
-            {
-                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x019F, strikerBody));
-            }
+            await s.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0117, BitConverter.GetBytes(s.Player.CharacterId)));
+            if (StrikerSupportTagCharacterPacketBuilder.TryBuildDungeonOwnerMappedSupportBody(s.Player.CharacterId, out var strikerBody))
+                await s.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x019F, strikerBody));
             else
+                await s.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x019F, new byte[] { 0x00, 0x00 }));
+        }
+
+        // ★组队副本联机 fan-out(⚠️协议+客户端渲染, 待真机验证; DFO_PARTY_DUNGEON_COOP=0 可隔离):
+        // df 模型=队长进本调 CParty::dungeon_start, 建【一个共享实例】广播全队、goto_dungeon 把每个队员推进去。
+        // 队员是【服务端驱动】换图、不走传送门→不触发本地"该地下城已锁定"门。这里复刻: 拷队长迷宫 selection
+        // 到每个队员 run(同一实例) → 给队员重放 SELECT 序列 → 全队进入同一副本实例。
+        private async Task TryFanOutDungeonEntryToPartyAsync(
+            EnhancedClientSession leader,
+            GamePacketHeader header,
+            Network.Parsers.Dungeon.SelectDungeonRequest req,
+            int[] bossPos,
+            byte mazeModeFlag)
+        {
+            if (System.Environment.GetEnvironmentVariable("DFO_PARTY_DUNGEON_COOP") == "0") return;
+            var pm = _svc.PartyManager;
+            var sessions = _svc.Sessions;
+            if (pm == null || sessions == null) return;
+
+            var leaderUid = (ushort)leader.Player.CharacterId;   // 队伍成员 UserId==(ushort)CharacterId(见 BuildMember)
+            var party = pm.GetPartyByUser(leaderUid);
+            if (party == null || party.Count <= 1 || !party.IsLeader(leaderUid)) return;
+
+            var lr = leader.Player.CurrentRun;
+            FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] PARTY_DUNGEON_COOP: leader={leader.Player.CharacterId} party={party.PartyId} members={party.Count} dungeon={req.DungeonId} → fan-out");
+            foreach (var m in party.MembersBySlot())
             {
-                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x019F, new byte[] { 0x00, 0x00 }));
+                if (m.UserId == leaderUid) continue;
+                sessions.TryGet(m.CharacterId, out var bs);
+                if (bs?.Player == null || bs.TcpClient == null || !bs.TcpClient.Connected)
+                {
+                    FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] PARTY_DUNGEON_COOP: member uid={m.UserId} 不在线/无会话, 跳过");
+                    continue;
+                }
+                try
+                {
+                    // ★前奏: 队员从没"打开副本选择页", 直接收 SELECT 会半悬空(显示进房间但不真换图)。
+                    //   先给队员补发 ENTER_SELECT(0x17/0x02/0x03/0x1A/0x1B, =A 发 0x000F 时收到的),
+                    //   让其客户端进入"进副本"状态, 再重放 SELECT 才能真换图。
+                    await HandleEnterSelectDungeon(bs, header, System.Array.Empty<byte>());
+
+                    DungeonRunLifecycle.BeginRun(bs, req.DungeonId, req.Difficulty);
+                    var br = bs.Player.CurrentRun;
+                    // 拷贝队长的迷宫 selection → 队员 run(解析出【同一】实例, 不重掷)
+                    br.MazeIndex = lr.MazeIndex;
+                    br.MazeQuestConnected = lr.MazeQuestConnected;
+                    br.MazeStartMapId = lr.MazeStartMapId;
+                    br.MazeStartX = lr.MazeStartX;
+                    br.MazeStartY = lr.MazeStartY;
+                    br.BossMapPos = lr.BossMapPos;
+                    br.RidableObjects = lr.RidableObjects;
+                    // 每成员独立的通关条件实例(计数器归零): 引用共享会让多人并发 Check 互相污染计数。
+                    // 击杀经 relay 逐成员登记, 各自的计数器独立收敛到同一结论。
+                    br.ClearCondition = lr.ClearCondition != null ? lr.ClearCondition.CloneFresh() : null;
+                    br.HellMode = lr.HellMode;
+                    br.HellPartyMode = lr.HellPartyMode;
+                    br.HellMapId = lr.HellMapId;
+                    br.HellMapX = lr.HellMapX;
+                    br.HellMapY = lr.HellMapY;
+                    br.HellRoomInfo = lr.HellRoomInfo;
+                    bs.Player.UserState = 0x01;
+                    await SendDungeonSelectPacketsTo(bs, req, bossPos, mazeModeFlag);
+                    FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] PARTY_DUNGEON_COOP: member cid={bs.Player.CharacterId} 驱动进副本 maze={br.MazeIndex}");
+                }
+                catch (Exception ex)
+                {
+                    FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] PARTY_DUNGEON_COOP: member uid={m.UserId} 驱动异常: {ex.Message}");
+                }
             }
         }
 

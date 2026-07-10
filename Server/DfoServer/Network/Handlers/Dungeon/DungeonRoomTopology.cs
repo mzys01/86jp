@@ -317,6 +317,30 @@ namespace DfoServer.Network.Handlers.Dungeon
 
         // ShouldClearAfterApcDialog 已删除: df_game_r 没有"对话触发通关"路径,
         // 通关判定完全由 kill_monster 内的 check_grid_clear + check_end_point/ClearCondition 驱动。
+
+        /// <summary>
+        /// 房间通关判定的唯一实现 —— 击杀主路径与组队击杀 relay 共用, 逻辑绝不允许写两份
+        /// (曾因两份逻辑一份修了一份漏, 出过 blockingCount>0 门控劈叉)。
+        /// 真机 check_grid_clear(0x830A0E8): 所有 spawnType==100 的 blocking 怪死光即通过; 空房间(0 blocking)也算通过。
+        /// 调用方必须已持有 run.SyncRoot(读 RoomMonsters/RoomKilledSeqIds)。
+        /// </summary>
+        internal static bool ComputeRoomClearedLocked(Game.Dungeon.DungeonRun run, out int blockingCount, out int killedBlockingCount)
+        {
+            blockingCount = 0;
+            killedBlockingCount = 0;
+            var monsters = run.RoomMonsters;
+            if (monsters == null)
+                return true;
+            for (var i = 0; i < monsters.Count; i++)
+            {
+                if (!monsters[i].IsBlocking) continue;
+                blockingCount++;
+                var sid = (ushort)(run.RoomStartSequence + i);
+                if (run.RoomKilledSeqIds.Contains(sid))
+                    killedBlockingCount++;
+            }
+            return killedBlockingCount >= blockingCount;
+        }
     }
 
     internal readonly struct DungeonRoomProgress

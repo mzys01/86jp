@@ -38,6 +38,9 @@ namespace DfoServer.Network
         private readonly SqliteSelectCharacterDataSource _selectCharacterDataSource;
         private readonly SqliteAssetService _assetService;
         private readonly ISessionDirectory _sessionDirectory;
+        // 组队与城镇/副本共享同一个 PartyManager 实例: 副本 fan-out 与跟随退出都要看到同一份队伍状态。
+        private readonly Game.Party.PartyManager _partyManager;
+        private readonly PartyHandler _partyHandler;
         private readonly Dictionary<ushort, Func<EnhancedClientSession, GamePacketHeader, byte[], Task>> _cmdDispatch;
 
         public override string ProtocolName => "GameProtocol";
@@ -71,11 +74,13 @@ namespace DfoServer.Network
             _selectCharacterDataSource = sqliteSelectCharacterDataSource;
             _sessionDirectory = sessionDirectory;
             _loginHandler = new LoginHandler(accountRepository, characterRepository);
-            _characterSelectHandler = new CharacterSelectHandler(sqliteSelectCharacterDataSource, characterRepository, getUserInfoTemplate);
+            _characterSelectHandler = new CharacterSelectHandler(sqliteSelectCharacterDataSource, characterRepository, getUserInfoTemplate, sessionDirectory);
             _inventoryRefreshSender = new InventoryRefreshSender(inventoryStore, sqliteSelectCharacterDataSource, characterRepository);
             _inventoryHandler = new InventoryHandler(inventoryStore, sqliteSelectCharacterDataSource, characterRepository, _inventoryRefreshSender, broadcastGamePacket);
             _petCreatureHandler = new PetCreatureHandler(inventoryStore, sqliteSelectCharacterDataSource, _inventoryRefreshSender);
-            _townHandler = new TownHandler(characterRepository, inventoryStore);
+            // 组队与城镇/副本共享同一个 PartyManager 实例: 跟随退出/副本 fan-out 都要看到同一份队伍状态。
+            _partyManager = new Game.Party.PartyManager();
+            _townHandler = new TownHandler(characterRepository, inventoryStore, sqliteSelectCharacterDataSource, _partyManager, sessionDirectory);
             var dailyResetService = new Game.DailyReset.DailyResetService(databasePath, schemaFilePath);
             var reviveCoinService = new Game.ReviveCoin.ReviveCoinService(inventoryStore, _assetService, dailyResetService);
             _dungeonHandler = new DungeonHandler(
@@ -83,7 +88,9 @@ namespace DfoServer.Network
                 reviveCoinService,
                 characterRepository,
                 sqliteSelectCharacterDataSource,
-                rentalTimeProvider);
+                rentalTimeProvider,
+                _partyManager,
+                sessionDirectory);
             _staminaHandler = new StaminaHandler(_assetService);
             _settingsHandler = new SettingsHandler();
             _ceraShopHandler = new CeraShopHandler(inventoryStore, sqliteSelectCharacterDataSource, _inventoryRefreshSender);
@@ -95,6 +102,7 @@ namespace DfoServer.Network
             _collectionBoxHandler = new CollectionBoxHandler(inventoryStore, collectBoxProgressRepository);
             _shopCoinEventHandler = new ShopCoinEventHandler(reviveCoinService, _inventoryRefreshSender);
             _mercenaryHandler = new MercenaryHandler(characterRepository, getUserInfoTemplate);
+            _partyHandler = new PartyHandler(_partyManager, characterRepository, sessionDirectory);
             PetCreatureRuntimeService.EnsureClockRegistered();
 
             _cmdDispatch = new Dictionary<ushort, Func<EnhancedClientSession, GamePacketHeader, byte[], Task>>();
@@ -116,6 +124,7 @@ namespace DfoServer.Network
             RegisterMailboxHandlers(_cmdDispatch);
             RegisterCollectionBoxHandlers(_cmdDispatch);
             RegisterMercenaryHandlers(_cmdDispatch);
+            RegisterPartyHandlers(_cmdDispatch);
             RegisterMiscHandlers(_cmdDispatch);
             _cmdDispatch[0x00CF] = _shopCoinEventHandler.HandleShopCoinEvent;   // 207 SHOP_COIN_EVENT 每日免费复活币
         }
@@ -130,6 +139,8 @@ namespace DfoServer.Network
         public override async Task OnClientDisconnected(EnhancedClientSession session)
         {
             FileLogger.Log($"[{ProtocolName}] Admin client disconnected: {session.SessionId}");
+            // 联机同屏: 通知同区域其它玩家移除该玩家分身(USER_LEAVE 0x0006)。须在状态清理前发。
+            await _townHandler.NotifyLeaveAsync(session);
             var charId = session.Player?.CharacterId ?? 0;
             if (charId > 0) await _sessionDirectory.UnregisterAsync(charId);
             Handlers.Dungeon.DungeonRunLifecycle.EndRunOnTeardown(session, "disconnect");
@@ -210,6 +221,23 @@ namespace DfoServer.Network
             d[0x0008] = _characterSelectHandler.Handle_ENUM_CMDPACKET_GET_USERINFO;
             d[0x0009] = _staminaHandler.Handle_ENUM_CMDPACKET_RECOVER_STAMINA;
             d[0x02B5] = _characterSelectHandler.Handle_ENUM_CMDPACKET_CHECK_DOUBLE_CHARACTER_NAME;
+        }
+
+        private void RegisterPartyHandlers(Dictionary<ushort, Func<EnhancedClientSession, GamePacketHeader, byte[], Task>> d)
+        {
+            d[0x000C] = _partyHandler.Handle_SET_PARTY_INFO;        // 12 创建/更新队伍
+            d[0x000D] = _partyHandler.Handle_LEAVE_PARTY;           // 13 退队
+            d[0x000E] = _partyHandler.Handle_WALKOUT_PARTY_MEMBER;  // 14 踢人
+            d[0x000A] = _partyHandler.Handle_REQUEST_PEER;          // 10 右键同屏玩家→组队/交易邀请(按uid)→给目标发 SC 0x0007 弹框
+            d[0x000B] = _partyHandler.Handle_RES_PEER;              // 11 被邀请者应答(body=邀请者uid+reqType)→组队并广播 PARTY_INFO
+            d[0x01A3] = _partyHandler.Handle_CREATE_GROUP;          // 419 组队邀请(按名)
+            d[0x00A6] = _partyHandler.Handle_CALL_PARTY_MEMBER_REALTIME_INFO;  // 166 请求成员实时信息(HP%)
+            d[0x0079] = _partyHandler.Handle_CHANGE_HOST;           // 121 委托队长(body=1字节槽位)
+            // P2P 上报类: df 只喂统计计数器, 不回包不转发。收下即忽略, 消掉 Unhandled 日志。
+            d[0x0351] = (s, h, b) => Task.CompletedTask;            // P2P_HOLE_PUNCHING_SUCCESS_RATE
+            d[0x0061] = (s, h, b) => Task.CompletedTask;            // PEER_CONNECT_RESULT
+            d[0x0031] = (s, h, b) => Task.CompletedTask;            // REPORT_BAD_P2P_USER
+            d[0x01DF] = (s, h, b) => Task.CompletedTask;            // P2P_STATISTICS
         }
 
         private void RegisterInventoryHandlers(Dictionary<ushort, Func<EnhancedClientSession, GamePacketHeader, byte[], Task>> d)

@@ -36,16 +36,24 @@ namespace DfoServer.Network.Handlers.Dungeon
         internal SqliteSubtype0FieldsRepository Subtype0FieldsRepository { get; }
         internal HonorLevelSyncService HonorLevel { get; }
 
+        // 组队副本联机用: 检测队伍 + 定位队员会话(可空; 未接线时副本 fan-out 优雅跳过=单人不回归)。
+        internal Game.Party.PartyManager PartyManager { get; }
+        internal Game.Session.ISessionDirectory Sessions { get; }
+
         internal DungeonSharedServices(
             IAssetService assetService,
             Game.ReviveCoin.ReviveCoinService reviveCoin,
             SqliteCharacterRepository characterRepository,
             SqliteSelectCharacterDataSource selectCharacterDataSource,
-            IRentalTimeProvider rentalTimeProvider)
+            IRentalTimeProvider rentalTimeProvider,
+            Game.Party.PartyManager partyManager = null,
+            Game.Session.ISessionDirectory sessions = null)
         {
             _assetService = assetService ?? throw new ArgumentNullException(nameof(assetService));
             ReviveCoin = reviveCoin ?? throw new ArgumentNullException(nameof(reviveCoin));
             CharacterRepository = characterRepository ?? throw new ArgumentNullException(nameof(characterRepository));
+            PartyManager = partyManager;
+            Sessions = sessions;
             SelectCharacterDataSource = selectCharacterDataSource ?? throw new ArgumentNullException(nameof(selectCharacterDataSource));
             RentalTimeProvider = rentalTimeProvider ?? SystemRentalTimeProvider.Instance;
             DeathTower = new Game.DeathTower.DeathTowerHandler();

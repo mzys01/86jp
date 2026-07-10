@@ -54,6 +54,30 @@ namespace DfoServer.Game.Dungeon
             return (int)(baseExp * diffRate * typeRate);
         }
 
+        // 角色自身等级 vs 怪物等级差 的经验缩放率。照抄 df_game_r CDataManager::BaseExpPenalty @0x08360914
+        // (调用点 CParty::kill_monster @0x085A3538 = BaseExpPenalty(charLevel, monsterLevel), diff = monsterLevel - charLevel)。
+        // 语义: 自己远高于怪(diff≤-7)→5% 防越级刷小号; 比怪低 1~3 级(diff+1..+3)→1.12 甜点加成; 比怪低 10 级以上→5%。
+        // 用途: 组队副本每个成员用【各自等级】各算一次 → 不同等级同副本得到不同经验(修 A/B 同额)。
+        public static float BaseExpPenalty(int charLevel, int monsterLevel)
+        {
+            int diff = monsterLevel - charLevel;
+            if (diff <= -7) return 0.05f;
+            switch (diff)
+            {
+                case -6: return 0.20f;
+                case -5: return 0.50f;
+                case -4: return 0.75f;
+                case -3: case -2: case -1: case 0: return 1.00f;
+                case 1: case 2: case 3: return 1.12f;
+                case 4: case 5: return 1.00f;
+                case 6: return 0.75f;
+                case 7: return 0.70f;
+                case 8: return 0.60f;
+                case 9: return 0.50f;
+                default: return 0.05f; // diff >= 10
+            }
+        }
+
         public static float GetMonsterExpBonusRate(int monsterType)
         {
             EnsureMonsterExpBonusRatesLoaded();

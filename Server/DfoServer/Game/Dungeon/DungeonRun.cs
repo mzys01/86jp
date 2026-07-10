@@ -15,6 +15,12 @@ namespace DfoServer.Game.Dungeon
     // - 宠物死亡定时器版本号(单调递增, 用于让过期的延迟回调失效, 归零会让旧回调复活)。
     public sealed class DungeonRun
     {
+        // 组队副本联机: 击杀 relay(BroadcastMonsterDieToPartyAsync→PropagateKillForClearAsync)在【击杀者线程】
+        // 写/读【队友 run】的 RoomKilledSeqIds(HashSet)与 RoomStates(Dict), 而队友自己线程也在改同一结构 →
+        // 跨线程并发改集合会崩/CPU 空转/丢结算。所有对 RoomKilledSeqIds / RoomStates 的读改写都必须在此锁下,
+        // 且【锁内绝不 await】(只护同步的集合访问, await 一律在锁外)。单人副本无 relay, 锁基本无竞争、开销可忽略。
+        public readonly object SyncRoot = new object();
+
         public DungeonRun(short dungeonId, byte difficulty)
         {
             DungeonId = dungeonId;
