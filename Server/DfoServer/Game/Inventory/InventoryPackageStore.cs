@@ -801,7 +801,7 @@ namespace DfoServer.Game.Inventory
             PackageRewardEntry reward,
             ItemMetadata metadata)
         {
-            if (stackListType == InventoryListType.Main && IsQuickSlotConsumable(metadata))
+            if (stackListType == InventoryListType.Main && metadata != null && metadata.IsStackable)
             {
                 var quickSlotItem = _db.FindStackableItemByTemplateIdAndExpireTime(
                     connection,
@@ -825,14 +825,6 @@ namespace DfoServer.Game.Inventory
                 reward.ItemTemplateId,
                 reward.ExpireTime,
                 metadata.StackLimit);
-        }
-
-        private static bool IsQuickSlotConsumable(ItemMetadata metadata)
-        {
-            return metadata != null &&
-                metadata.IsStackable &&
-                metadata.StackableType != null &&
-                metadata.StackableType.IndexOf("[waste]", StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
         private static bool ValidateAvatarPackageChoices(
