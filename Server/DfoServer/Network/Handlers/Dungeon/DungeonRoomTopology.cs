@@ -315,10 +315,8 @@ namespace DfoServer.Network.Handlers.Dungeon
                 apc, normal, killedNormal);
         }
 
-        internal static bool ShouldClearAfterApcDialog(DungeonRoomProgress progress)
-            => progress.ApcCount > 0
-                && progress.KilledNormalCount >= progress.NormalCount
-                && progress.BlockingRemainingCount == 0;
+        // ShouldClearAfterApcDialog 已删除: df_game_r 没有"对话触发通关"路径,
+        // 通关判定完全由 kill_monster 内的 check_grid_clear + check_end_point/ClearCondition 驱动。
     }
 
     internal readonly struct DungeonRoomProgress

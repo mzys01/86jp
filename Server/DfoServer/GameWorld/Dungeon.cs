@@ -1059,9 +1059,11 @@ namespace DfoServer.GameWorld
             return list;
         }
 
+        // IDA check_grid_clear (0x830A0E8): spawnType==100 && spawnFlag==0 blocks passage.
+        // APC 的 spawnType 不是 100, 不参与房间通关判定 — 无论敌我阵营。
         private static bool IsBlockingAICharacter(AICharacterInfo apc)
         {
-            return apc != null && apc.Faction == ApcFaction.Monster;
+            return false;
         }
 
         private static void AppendSpecialPassiveObjects(

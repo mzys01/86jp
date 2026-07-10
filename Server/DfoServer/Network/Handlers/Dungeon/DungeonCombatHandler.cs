@@ -223,7 +223,7 @@ namespace DfoServer.Network.Handlers.Dungeon
                 if (run.RoomKilledSeqIds.Contains(seqId))
                     killedBlockingCount++;
             }
-            bool roomCleared = killedBlockingCount >= blockingCount && blockingCount > 0;
+            bool roomCleared = killedBlockingCount >= blockingCount;
 
             // Old server kill_monster execution order (IDA 0x85A3AED):
             //   1. prepare_dungeon_clear (path B)

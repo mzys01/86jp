@@ -19,30 +19,31 @@ namespace DfoServer.SelfTests
             var run = new Game.Dungeon.DungeonRun(1000, 0);
             session.Player.CurrentRun = run;
 
+            // 房间有 1 个普通怪(blocking) + 1 个 APC(not blocking)
             run.RoomStartSequence = 10;
             run.RoomMonsters = new List<DungeonData.MonsterSumInfo>
             {
                 new DungeonData.MonsterSumInfo { Code = 200, Type = 0, Level = 1, IsBlocking = true },
-                new DungeonData.MonsterSumInfo { Code = 56408, Type = 8, Level = 25, IsBlocking = true },
+                new DungeonData.MonsterSumInfo { Code = 56408, Type = 8, Level = 25, IsBlocking = false },
             };
-            run.RoomKilledSeqIds = new HashSet<ushort> { 10 };
+            run.RoomKilledSeqIds = new HashSet<ushort>();
 
             var progress = DungeonRoomTopology.GetCurrentRoomProgress(session);
-            Check("enemy apc remains blocking after normal monster kill",
-                !DungeonRoomTopology.ShouldClearAfterApcDialog(progress)
-                && progress.KilledNormalCount == 1
+            Check("room with live blocking monster is not passable",
+                progress.BlockingCount == 1
                 && progress.BlockingRemainingCount == 1
                 && !progress.RoomPassable,
                 ref failures);
 
-            run.RoomKilledSeqIds.Add(11);
+            run.RoomKilledSeqIds.Add(10);
             progress = DungeonRoomTopology.GetCurrentRoomProgress(session);
-            Check("apc dialog may clear after blocking apc is defeated",
-                DungeonRoomTopology.ShouldClearAfterApcDialog(progress)
-                && progress.BlockingRemainingCount == 0
+            Check("room passable after killing blocking monster, apc still alive",
+                progress.BlockingRemainingCount == 0
+                && progress.RemainingCount == 1
                 && progress.RoomPassable,
                 ref failures);
 
+            // 房间只有 APC(not blocking) — 教程 BOSS 房场景
             run.RoomStartSequence = 20;
             run.RoomMonsters = new List<DungeonData.MonsterSumInfo>
             {
@@ -50,11 +51,13 @@ namespace DfoServer.SelfTests
             };
             run.RoomKilledSeqIds = new HashSet<ushort>();
             progress = DungeonRoomTopology.GetCurrentRoomProgress(session);
-            Check("non-blocking apc dialog room can clear",
-                DungeonRoomTopology.ShouldClearAfterApcDialog(progress)
-                && progress.BlockingRemainingCount == 0,
+            Check("room with only non-blocking apc is immediately passable",
+                progress.BlockingCount == 0
+                && progress.BlockingRemainingCount == 0
+                && progress.RoomPassable,
                 ref failures);
 
+            // 房间有普通怪(blocking) + APC(not blocking)，普通怪未杀
             run.RoomStartSequence = 30;
             run.RoomMonsters = new List<DungeonData.MonsterSumInfo>
             {
@@ -63,10 +66,10 @@ namespace DfoServer.SelfTests
             };
             run.RoomKilledSeqIds = new HashSet<ushort>();
             progress = DungeonRoomTopology.GetCurrentRoomProgress(session);
-            Check("apc dialog does not clear while normal monster remains",
-                !DungeonRoomTopology.ShouldClearAfterApcDialog(progress)
-                && progress.KilledNormalCount == 0
-                && progress.NormalCount == 1,
+            Check("room not passable while blocking normal monster alive",
+                progress.BlockingCount == 1
+                && progress.BlockingRemainingCount == 1
+                && !progress.RoomPassable,
                 ref failures);
 
             Console.WriteLine(failures == 0 ? "PASS" : $"FAIL: {failures}");

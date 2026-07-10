@@ -40,20 +40,11 @@ namespace DfoServer.Network.Handlers.Dungeon
             w.WriteByte(requestType);
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x00AA, w.ToArray()));
 
-            // After APC dialog ends: only non-blocking APC rooms may clear from dialog flow.
-            // Enemy APC/BOSS actors still block the room until their DIE_MONSTER is received.
-            if (pauseFlag == 1 && (session.Player.CurrentRun?.DungeonId ?? 0) > 0)
-            {
-                var progress = DungeonRoomTopology.GetCurrentRoomProgress(session);
-                if (DungeonRoomTopology.ShouldClearAfterApcDialog(progress))
-                {
-                    await _settlement.TryClearDungeon(session, "APC dialog + all normals dead");
-                }
-                else if (progress.ApcCount > 0 && progress.KilledNormalCount >= progress.NormalCount)
-                {
-                    FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] STORY_PAUSE clear skipped: blockingRemaining={progress.BlockingRemainingCount} remaining={progress.RemainingCount}");
-                }
-            }
+            // df_game_r 没有"对话触发通关"路径。通关判定完全在 kill_monster 的
+            // prepare_dungeon_clear (check_grid_clear + check_end_point/ClearCondition)
+            // 和 ClearCondition(monsterType, monsterCode) 两条路径里。
+            // 教程副本 BOSS 房没有 blocking 怪(APC 的 spawnType!=100),
+            // check_grid_clear 直接返回 true → check_end_point 匹配 → ClearDungeon。
         }
 
         // CMD 0x008F (wire 143) CHANGE_TUTORIAL_FLAG

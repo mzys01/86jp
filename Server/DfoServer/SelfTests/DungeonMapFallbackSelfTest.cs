@@ -402,8 +402,8 @@ namespace DfoServer.SelfTests
                 Check("issue 167 gent defense final room uses AI boss map",
                     issue167Boss.Index == 21314 && ContainsMonster(issue167Boss, 10409),
                     ref failures);
-                Check("issue 167 hostile AI boss blocks room clear",
-                    ContainsBlockingMonster(issue167Boss, 10409),
+                Check("issue 167 hostile AI boss is APC and does not block room clear",
+                    !ContainsBlockingMonster(issue167Boss, 10409),
                     ref failures);
                 Check("issue 167 final room includes special passive wave monster templates",
                     CountMonster(issue167Boss, 61801) > 0 && CountMonster(issue167Boss, 61803) > 0,
