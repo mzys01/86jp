@@ -65,6 +65,11 @@ namespace DfoServer.Game.Shop
             // 缺此解析会导致该段商品在 TryResolve 时"product not found in cerashop.etc",
             // 购买直接失败并被客户端显示为通用"物品栏空间不足"错误。
             ParseStandardSection(content, "regular package", 11, entries);
+            // [community package]: 与 [package] 同为 stride=11(价格在 col4), 收录婚庆/社区礼包
+            // (如 结婚戒指礼包 102317/102318)。缺此解析同 [regular package] 老 bug: TryResolve product not found → 购买失败。
+            // 注: [charac premium package](魔王契约30/60天套餐)刻意不解析 —— 其礼盒自动开出的
+            // 8 个契约子物品没有激活链(死道具), 在激活链补全前保持"不可购买"以免玩家花点券买废品。
+            ParseStandardSection(content, "community package", 11, entries);
             ParseAvatarSection(content, entries);
 
             var data = new CatalogData
@@ -114,7 +119,7 @@ namespace DfoServer.Game.Shop
                 if (!TryParseInt(tokens[i + 2], out var count) || count <= 0)
                     count = 1;
 
-                var priceIndex = (section == "package" || section == "regular package") ? i + 4 : i + 5;
+                var priceIndex = (section == "package" || section == "regular package" || section == "community package") ? i + 4 : i + 5;
                 if (!TryParseInt(tokens[priceIndex], out var coinPrice) || coinPrice < 0)
                     coinPrice = 0;
 

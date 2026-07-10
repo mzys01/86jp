@@ -49,6 +49,9 @@ namespace DfoServer.SelfTests
             // 回归: 已解析的 [regular package] 段样本商品(Lv80~84 专用礼包)也应正确读到 col4 价格。
             CheckProduct("Lv80~84专用礼包", 102290, 2683268, 2860);
 
+            // [community package] 段(stride=11, 价格 col4) —— 修复前未解析, 婚庆/社区礼包购买必失败。
+            CheckProduct("社区礼包(结婚戒指-男)", 102317, 2683326, 18888);
+
             Console.WriteLine($"=== result: {pass} PASS, {fail} FAIL ===");
             return fail == 0 ? 0 : 1;
         }
