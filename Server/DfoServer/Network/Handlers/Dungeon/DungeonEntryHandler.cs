@@ -148,6 +148,7 @@ namespace DfoServer.Network.Handlers.Dungeon
             byte mazeModeFlag)
         {
             var run = s.Player.CurrentRun;
+            var extraPairGroups = BuildMinimapIconGroups(req.DungeonId, mazeModeFlag);
             await s.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x001C, DungeonNotificationBuilder.BuildDungeonInfo(
                 dungeonId: req.DungeonId,
                 difficulty: req.Difficulty,
@@ -157,8 +158,10 @@ namespace DfoServer.Network.Handlers.Dungeon
                 hellPartyRoomX: run.HellMode ? run.HellMapX : (byte)0xFF,
                 hellPartyRoomY: run.HellMode ? run.HellMapY : (byte)0xFF,
                 dungeonMode: 0,
+                extraPairGroups: extraPairGroups,
                 hellPartyEnabled: run.HellMode ? (ushort)1 : (ushort)0,
-                value2: run.HellMode ? (byte)0x0B : (byte)0)));
+                value2: run.HellMode ? (byte)0x0B : (byte)0,
+                flagA: extraPairGroups != null ? (byte)1 : (byte)0)));
 
             await _mapHandler.SendStartMapAsync(s, 0xFF, 0xFF, overrideMapId: -1);
 
@@ -448,6 +451,46 @@ namespace DfoServer.Network.Handlers.Dungeon
                 FileLogger.Log($"[DungeonEntry] TrySpendGold ERROR: {ex.Message}");
                 return false;
             }
+        }
+
+        // 小地图特殊图标坐标。两种来源:
+        // 1. [randomized object creation] → 已有 [map] 坐标(根特系列)
+        // 2. [boss room entrance condition] → [hunt monster] 条件怪需随机分配房间(陷落的村庄)
+        //    照 df_game_r SetGridPath: 从非起点/非BOSS房的有效房间里随机选。
+        private static IReadOnlyList<IReadOnlyList<(byte, byte)>> BuildMinimapIconGroups(int dungeonId, int mazeIndex)
+        {
+            PvfLib.MazeInfo maze;
+            try { maze = DungeonData.GetDungeonMaze(dungeonId, mazeIndex); }
+            catch { return null; }
+
+            // 来源1: [randomized object creation]
+            if (maze?.RidableScript != null && maze.RidableScript.Objects.Count > 0)
+            {
+                var groups = new List<IReadOnlyList<(byte, byte)>>();
+                var pairs = new List<(byte, byte)>();
+                foreach (var obj in maze.RidableScript.Objects)
+                    pairs.Add(((byte)obj.MapX, (byte)obj.MapY));
+                groups.Add(pairs);
+                return groups;
+            }
+
+            // 来源2: [dungeon minimap icon setting] + [boss room entrance condition]
+            // 的人质/标记怪图标是另一套机制，不走 extraPairGroups。待独立调查。
+            // 去掉反引号
+            afterHunt = afterHunt.Replace("`", "");
+            var tokens = afterHunt.Split(new[] { ' ', '\t', '\r', '\n' }, System.StringSplitOptions.RemoveEmptyEntries);
+            if (tokens.Length < 1) return result;
+
+            // 第一个 token = 总条件数 N, 之后每 3 个 token = monsterCode roomCount killCount
+            if (!int.TryParse(tokens[0], out var n) || n <= 0) return result;
+            for (int i = 0; i < n && 1 + i * 3 + 2 < tokens.Length; i++)
+            {
+                if (int.TryParse(tokens[1 + i * 3 + 1], out var roomCount) && roomCount > 0)
+                    result.Add(roomCount);
+                else
+                    result.Add(1);
+            }
+            return result;
         }
     }
 }
