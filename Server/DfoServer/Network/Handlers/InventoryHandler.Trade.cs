@@ -122,7 +122,7 @@ namespace DfoServer.Network.Handlers
 
         private async Task SendPurchasedMainItemRefresh(EnhancedClientSession session, int characterId, int accountId, InventoryMutationResult result)
         {
-            var snapshot = _sqliteSelectCharacterDataSource.LoadItemListSnapshot(characterId, accountId);
+            var snapshot = _inventoryStore.LoadCharacterItemListSnapshot(characterId, accountId);
             var item = snapshot?.MainItems?.FirstOrDefault(x =>
                 x.SlotIndex == result.SlotIndex && x.ItemTemplateId == result.ItemTemplateId);
             if (item == null)

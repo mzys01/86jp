@@ -413,7 +413,7 @@ namespace DfoServer.Game.Inventory
                 return false;
             }
 
-            var goldCostPerUse = ResolveBoosterOpenGoldCost(source.ItemTemplateId, stackable);
+            var goldCostPerUse = ResolveBoosterOpenGoldCost(stackable);
             var totalGoldCostLong = (long)goldCostPerUse * requestedCount;
             if (totalGoldCostLong > int.MaxValue)
                 return false;
@@ -595,7 +595,7 @@ namespace DfoServer.Game.Inventory
                 }
             }
 
-            var totalGoldCost = (long)ResolveBoosterOpenGoldCost(source.ItemTemplateId, stackable) * requestedCount;
+            var totalGoldCost = (long)ResolveBoosterOpenGoldCost(stackable) * requestedCount;
             if (totalGoldCost > int.MaxValue)
                 return false;
             if (totalGoldCost > 0 && _db.LoadWallet(connection, transaction, characterId).Gold < totalGoldCost)
@@ -1100,7 +1100,7 @@ namespace DfoServer.Game.Inventory
             int.TryParse(parts[1], out materialCountPerUse);
         }
 
-        private static int ResolveBoosterOpenGoldCost(int sourceItemTemplateId, PvfLib.StackableItemFile stackable)
+        private static int ResolveBoosterOpenGoldCost(PvfLib.StackableItemFile stackable)
         {
             if (stackable == null)
                 return 0;
@@ -1111,16 +1111,12 @@ namespace DfoServer.Game.Inventory
 
             var name = stackable.Name ?? string.Empty;
             if (name.IndexOf("古老的英雄袖珍罐", StringComparison.OrdinalIgnoreCase) >= 0
-                || name.IndexOf("无法交易", StringComparison.OrdinalIgnoreCase) >= 0
-                || (sourceItemTemplateId >= 8213 && sourceItemTemplateId <= 8220)
-                || (sourceItemTemplateId >= 10003110 && sourceItemTemplateId <= 10003117))
+                || name.IndexOf("无法交易", StringComparison.OrdinalIgnoreCase) >= 0)
             {
                 return 5000000;
             }
 
-            if (name.IndexOf("英雄袖珍罐", StringComparison.OrdinalIgnoreCase) >= 0
-                || (sourceItemTemplateId >= 8095 && sourceItemTemplateId <= 8104)
-                || (sourceItemTemplateId >= 10003102 && sourceItemTemplateId <= 10003109))
+            if (name.IndexOf("英雄袖珍罐", StringComparison.OrdinalIgnoreCase) >= 0)
             {
                 return 40000000;
             }

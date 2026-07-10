@@ -130,7 +130,7 @@ namespace DfoServer.Network.Handlers
             openPlan = openPlan ?? LotteryOpenPlan.ConfirmedRegular();
             var (cid, aid) = ResolveOwner(session);
             var boosterRequest = openPlan.CreateBoosterUseRequest(slotIndex);
-            if (!_sqliteSelectCharacterDataSource.TryUseBoosterItem(
+            if (!_inventoryStore.TryUseBoosterItem(
                     cid,
                     aid,
                     boosterRequest,
@@ -149,7 +149,7 @@ namespace DfoServer.Network.Handlers
 
         private async Task SendLotteryItemOpenResult(EnhancedClientSession session, int characterId, int accountId, BoosterUseResult result, bool useDoubleReward)
         {
-            var snapshot = _sqliteSelectCharacterDataSource.LoadItemListSnapshot(characterId, accountId);
+            var snapshot = _inventoryStore.LoadCharacterItemListSnapshot(characterId, accountId);
             var mainRewards = result.Rewards
                 .Where(x => x.ListType == InventoryListType.Main)
                 .ToList();
@@ -331,7 +331,7 @@ namespace DfoServer.Network.Handlers
                 try
                 {
                     await Task.Delay(800);
-                    var snapshot = _sqliteSelectCharacterDataSource.LoadItemListSnapshot(characterId, accountId);
+                    var snapshot = _inventoryStore.LoadCharacterItemListSnapshot(characterId, accountId);
                     await SendAdditionalLotteryRewardUpdates(session, snapshot, additionalMainRewards);
                 }
                 catch (Exception ex)
@@ -434,7 +434,7 @@ namespace DfoServer.Network.Handlers
         private bool CanOpenLotteryItem(EnhancedClientSession session, short slotIndex, int sourceItemTemplateId)
         {
             var (cid, aid) = ResolveOwner(session);
-            return _sqliteSelectCharacterDataSource.CanUseBoosterItem(
+            return _inventoryStore.CanUseBoosterItem(
                 cid,
                 aid,
                 new BoosterUseRequest
@@ -455,7 +455,7 @@ namespace DfoServer.Network.Handlers
             sourceItemTemplateId = 0;
             sourceStackCount = 0;
             var (cid, aid) = ResolveOwner(session);
-            var snapshot = _sqliteSelectCharacterDataSource.LoadItemListSnapshot(cid, aid);
+            var snapshot = _inventoryStore.LoadCharacterItemListSnapshot(cid, aid);
             var item = snapshot?.MainItems?.FirstOrDefault(x => x.SlotIndex == slotIndex);
             if (item == null || item.ItemTemplateId <= 0)
                 return false;

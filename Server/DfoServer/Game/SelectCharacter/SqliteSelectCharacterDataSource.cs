@@ -69,23 +69,6 @@ namespace DfoServer.Game.SelectCharacter
             return dbSeedId > 0 ? dbSeedId : 1000;
         }
 
-        public CharacterItemListSnapshot LoadItemListSnapshot(int characterId, int accountId)
-        {
-            if (_assetService != null)
-            {
-                using (var scope = _assetService.OpenScope(characterId, accountId))
-                    return _assetService.LoadSnapshot(scope);
-            }
-
-            return _inventoryStore.LoadCharacterItemListSnapshot(characterId, accountId);
-        }
-
-        public bool TryUseBoosterItem(int characterId, int accountId, BoosterUseRequest request, out BoosterUseResult result)
-            => _inventoryStore.TryUseBoosterItem(characterId, accountId, request, out result);
-
-        public bool CanUseBoosterItem(int characterId, int accountId, BoosterUseRequest request)
-            => _inventoryStore.CanUseBoosterItem(characterId, accountId, request);
-
         public CreatureItemListSnapshot LoadCreatureItemListSnapshot(int characterId)
         {
             return _initDataRepository.LoadCreatures(characterId);
