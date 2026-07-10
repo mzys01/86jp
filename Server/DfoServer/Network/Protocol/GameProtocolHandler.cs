@@ -34,6 +34,7 @@ namespace DfoServer.Network
         private readonly InventoryRefreshSender _inventoryRefreshSender;
         private readonly PetCreatureHandler _petCreatureHandler;
         private readonly MercenaryHandler _mercenaryHandler;
+        private readonly GrowthCapsuleHandler _growthCapsuleHandler;
         private readonly ICharacterRepository _characterRepository;
         private readonly SqliteSelectCharacterDataSource _selectCharacterDataSource;
         private readonly SqliteAssetService _assetService;
@@ -104,6 +105,8 @@ namespace DfoServer.Network
             _mercenaryHandler = new MercenaryHandler(characterRepository, getUserInfoTemplate);
             _partyHandler = new PartyHandler(_partyManager, characterRepository, sessionDirectory);
             PetCreatureRuntimeService.EnsureClockRegistered();
+            _growthCapsuleHandler = new GrowthCapsuleHandler(
+                _assetService, _inventoryRefreshSender, characterRepository);
 
             _cmdDispatch = new Dictionary<ushort, Func<EnhancedClientSession, GamePacketHeader, byte[], Task>>();
             RegisterLoginHandlers(_cmdDispatch);
@@ -431,6 +434,7 @@ namespace DfoServer.Network
                 s.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x02A8, new byte[] { 0x00, 0x00 }));
             d[0x0372] = _rentalHandler.HandleRentWeapon;
             d[0x0373] = _luckyStarHandler.HandleShopPurchasePacket;
+            d[(ushort)CmdPacketType.GET_EXPAND_EXP_GAGE_REWARD] = _growthCapsuleHandler.HandleClaimAsync;
         }
 
         #endregion

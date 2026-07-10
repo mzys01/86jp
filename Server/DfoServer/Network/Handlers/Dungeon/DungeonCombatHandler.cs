@@ -145,6 +145,7 @@ namespace DfoServer.Network.Handlers.Dungeon
                 var honorExpGain = HonorLevelDataProvider.CalculateHonorExpGain(prevLevel, prevExp, totalGainedExp);
                 var normalExpGain = totalGainedExp > honorExpGain ? totalGainedExp - honorExpGain : 0u;
                 HonorLevelSummary honorSummary = null;
+                GrowthCapsuleSummary growthCapsuleSummary = null;
                 var normalizedMaxExp = false;
                 if (prevLevel >= ExpTableProvider.MaxLevel)
                 {
@@ -161,8 +162,11 @@ namespace DfoServer.Network.Handlers.Dungeon
                 }
                 if (honorExpGain > 0 && (session.Account?.AccountId ?? 0) > 0)
                 {
-                    honorSummary = _svc.HonorLevel.AddExp(session.Account.AccountId, honorExpGain);
-                    FileLogger.Log($"[DungeonHandler] HONOR_EXP_GAIN monster: account={session.Account.AccountId} cid={session.Player.CharacterId} gain={honorExpGain}");
+                    var accountProgress = _svc.AccountExperience.AddHonorAndGrowthCapsuleExp(
+                        session.Account.AccountId, honorExpGain);
+                    honorSummary = accountProgress.Honor;
+                    growthCapsuleSummary = accountProgress.GrowthCapsule;
+                    FileLogger.Log($"[DungeonHandler] ACCOUNT_EXP_GAIN monster: account={session.Account.AccountId} cid={session.Player.CharacterId} honor={honorExpGain} capsule={accountProgress.GrowthCapsuleExpGain} capsuleTotal={growthCapsuleSummary.TotalExp}");
                 }
                 run.TotalExp += gainedExp;
                 run.MonsterGrowthContractBonusExp =
@@ -198,9 +202,12 @@ namespace DfoServer.Network.Handlers.Dungeon
                 if (normalExpGain > 0 || leveledUp || honorExpGain > 0)
                 {
                     honorSummary = _svc.ResolveHonorLevelForExp(session, honorSummary);
+                    growthCapsuleSummary = _svc.ResolveGrowthCapsuleForExp(session, growthCapsuleSummary);
                     await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0025,
                         ExpNotificationBuilder.Build(session.Player.Level, session.Player.Exp, remainSp, remainTp, honorSummary,
-                            premiumBonusExp: growthContractBonusExp)));
+                            premiumBonusExp: growthContractBonusExp,
+                            growthCapsuleExp: GrowthCapsuleDataProvider.GetDisplayProgress(
+                                session.Player.Level, growthCapsuleSummary))));
                 }
 
                 if (leveledUp)

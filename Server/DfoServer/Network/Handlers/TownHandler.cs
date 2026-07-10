@@ -19,6 +19,7 @@ namespace DfoServer.Network.Handlers
 
         private readonly ICharacterRepository _characterRepository;
         private readonly HonorLevelSyncService _honorLevel;
+        private readonly GrowthCapsuleSyncService _growthCapsule;
         private readonly Game.Inventory.IInventoryStore _inventoryStore;
         private readonly Game.SelectCharacter.SqliteSelectCharacterDataSource _selectDataSource;
         private readonly Game.Party.PartyManager _partyManager;   // 可空: 副本退出/回城时把队员一起拉回城(跟随退出)
@@ -31,6 +32,7 @@ namespace DfoServer.Network.Handlers
         {
             _characterRepository = characterRepository ?? throw new ArgumentNullException(nameof(characterRepository));
             _honorLevel = new HonorLevelSyncService(_characterRepository);
+            _growthCapsule = new GrowthCapsuleSyncService(_characterRepository);
             _inventoryStore = inventoryStore ?? throw new ArgumentNullException(nameof(inventoryStore));
             _selectDataSource = selectDataSource;  // 可空: 用于同屏推送他人完整 USERINFO(subtype1, 让客户端认其可组队邀请)
             _partyManager = partyManager;          // 可空: 组队副本收尾 fan-out(跟随退出); 与副本共享同一 PartyManager
@@ -228,7 +230,7 @@ namespace DfoServer.Network.Handlers
         {
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0025, CommonPacketBodyBuilder.BuildSuccessAck()));
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x001E, FinishLoadingBuilder.BuildNotification()));
-
+            await _growthCapsule.SendExpProgressAsync(session, "finish-loading");
         }
 
         public async Task Handle_ENUM_CMDPACKET_TELEPORT(EnhancedClientSession session, GamePacketHeader header, byte[] body)
