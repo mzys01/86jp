@@ -44,9 +44,8 @@ namespace DfoServer.SelfTests
                 BitConverter.ToUInt32(towerInfo, 0) == 11000
                 && BitConverter.ToUInt16(towerInfo, 4) == 3,
                 ref failures);
-            Check("0x008E observed tail stays 01 0B until client evidence changes it",
-                towerInfo[6] == DeathTowerPacketBuilder.ObservedTowerInfoModeByte
-                && towerInfo[6] == 1
+            Check("0x008E normal tower mode tail is 00 0B",
+                towerInfo[6] == 0
                 && towerInfo[7] == DeathTowerPacketBuilder.ObservedRandomBuffType
                 && towerInfo[7] == 11,
                 ref failures);

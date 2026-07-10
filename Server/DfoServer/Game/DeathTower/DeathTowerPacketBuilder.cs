@@ -8,7 +8,7 @@ namespace DfoServer.Game.DeathTower
     // 塔专属包构建(NOTI 142/143/144/145/146)。字段定义全部来自 86JP IDA 汇编定案。
     public static class DeathTowerPacketBuilder
     {
-        public const byte ObservedTowerInfoModeByte = 1;
+        public const byte NormalTowerInfoModeByte = 0;
         public const byte ObservedRandomBuffType = 11;
 
         public static byte[] BuildTowerDungeonInfo(int dungeonId, byte difficulty)
@@ -30,7 +30,7 @@ namespace DfoServer.Game.DeathTower
         public static byte[] BuildTowerInfo(
             int dungeonId,
             ushort endStage,
-            byte towerInfoModeByte = ObservedTowerInfoModeByte,
+            byte towerInfoModeByte = NormalTowerInfoModeByte,
             byte randomBuffType = ObservedRandomBuffType)
         {
             var w = new GamePacketWriter();
