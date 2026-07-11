@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Text.RegularExpressions;
-using PvfLib;
 
 namespace DfoServer.Game.Dungeon
 {
@@ -11,7 +10,7 @@ namespace DfoServer.Game.Dungeon
         private struct DropProb
         {
             public int LevelMin, LevelMax;
-            public int GoldRate, Type1Rate, Type2Rate, Type3Rate, Type4Rate;
+            public int GoldRate, Type1Rate, Type2Rate, Type3Rate;
         }
 
         private static DropProb[] _dropProbs;
@@ -20,9 +19,6 @@ namespace DfoServer.Game.Dungeon
         private static float[,] _monsterTypeBonuses;
         private static Dictionary<long, List<(int Id, int Weight)>> _equipPool;
         private static Dictionary<long, List<int>> _stackablePool;
-        private static Dictionary<long, List<int>> _monsterCardPoolByGradeRarity;
-        private static Dictionary<int, List<int>> _monsterCardPoolByRarity;
-        private static List<int> _monsterCardPool;
 
         private static readonly object _lock = new object();
         private static bool _loaded;
@@ -38,7 +34,6 @@ namespace DfoServer.Game.Dungeon
                     LoadDropInfo();
                     LoadEquipmentPool();
                     LoadStackablePool();
-                    LoadMonsterCardPool();
                 }
                 catch (Exception ex)
                 {
@@ -50,7 +45,7 @@ namespace DfoServer.Game.Dungeon
 
         public static void GetAllDropRates(int monsterLevel, int monsterType,
             out int goldRate, out int type1Rate, out int type2Rate,
-            out int type3Rate, out int type4Rate)
+            out int type3Rate)
         {
             EnsureLoaded();
             var prob = FindDropProb(monsterLevel);
@@ -58,7 +53,6 @@ namespace DfoServer.Game.Dungeon
             type1Rate = (int)(prob.Type1Rate * GetMonsterTypeBonus(1, monsterType));
             type2Rate = (int)(prob.Type2Rate * GetMonsterTypeBonus(2, monsterType));
             type3Rate = (int)(prob.Type3Rate * GetMonsterTypeBonus(3, monsterType));
-            type4Rate = (int)(prob.Type4Rate * GetMonsterTypeBonus(4, monsterType));
         }
 
         public static int RollRarity(DnfLcg lcg)
@@ -117,34 +111,6 @@ namespace DfoServer.Game.Dungeon
 
             if (candidates.Count == 0) return -1;
             return candidates[lcg.Next(candidates.Count)];
-        }
-
-        public static int ChooseMonsterCard(DnfLcg lcg, int monsterLevel, int rarity)
-        {
-            EnsureLoaded();
-            if (_monsterCardPool == null || _monsterCardPool.Count == 0) return -1;
-
-            if (_gradeRanges != null
-                && _monsterCardPoolByGradeRarity != null
-                && monsterLevel >= 1
-                && monsterLevel <= _gradeRanges.Length)
-            {
-                var range = _gradeRanges[monsterLevel - 1];
-                var levelCandidates = CollectFromPool(_monsterCardPoolByGradeRarity, monsterLevel, range, rarity);
-
-                if (levelCandidates.Count == 0 && rarity > 0)
-                    levelCandidates = CollectFromPool(_monsterCardPoolByGradeRarity, monsterLevel, range, 0);
-
-                if (levelCandidates.Count > 0)
-                    return levelCandidates[lcg.Next(levelCandidates.Count)];
-            }
-
-            if (_monsterCardPoolByRarity != null
-                && _monsterCardPoolByRarity.TryGetValue(rarity, out var candidates)
-                && candidates.Count > 0)
-                return candidates[lcg.Next(candidates.Count)];
-
-            return _monsterCardPool[lcg.Next(_monsterCardPool.Count)];
         }
 
         private static List<int> CollectFromPool(Dictionary<long, List<int>> pool,
@@ -262,12 +228,12 @@ namespace DfoServer.Game.Dungeon
             for (int i = 0; i < count; i++)
             {
                 int b = i * 7;
+                // vals[b + 6] is an uninterpreted PVF rate column; its semantics are not established.
                 _dropProbs[i] = new DropProb
                 {
                     LevelMin = vals[b], LevelMax = vals[b + 1],
                     GoldRate = vals[b + 2], Type1Rate = vals[b + 3],
-                    Type2Rate = vals[b + 4], Type3Rate = vals[b + 5],
-                    Type4Rate = vals[b + 6]
+                    Type2Rate = vals[b + 4], Type3Rate = vals[b + 5]
                 };
             }
             FileLogger.Log($"[MonsterDropConfig] [drop prob]: {count} entries, lv1-15 type2={_dropProbs[0].Type2Rate}");
@@ -464,72 +430,5 @@ namespace DfoServer.Game.Dungeon
             FileLogger.Log($"[MonsterDropConfig] Stackable pool: {added} items, {skipped} skipped, {errors} errors, {_stackablePool.Count} buckets");
         }
 
-        private static void LoadMonsterCardPool()
-        {
-            _monsterCardPool = new List<int>();
-            _monsterCardPoolByGradeRarity = new Dictionary<long, List<int>>();
-            _monsterCardPoolByRarity = new Dictionary<int, List<int>>();
-
-            string lstText;
-            try { lstText = GameWorld.PvfArchiveAccessor.ReadText("stackable/stackable.lst"); }
-            catch
-            {
-                FileLogger.Log("[MonsterDropConfig] stackable.lst not found for monster card pool");
-                return;
-            }
-
-            var entries = Regex.Matches(lstText, @"(\d+)\s+`([^`]+)`");
-            int added = 0, skipped = 0, errors = 0;
-
-            foreach (Match entry in entries)
-            {
-                if (!int.TryParse(entry.Groups[1].Value, out var itemId)) continue;
-
-                var path = entry.Groups[2].Value.Replace('\\', '/');
-                if (itemId <= 2 || !path.StartsWith("monsterCard/", StringComparison.OrdinalIgnoreCase))
-                {
-                    skipped++;
-                    continue;
-                }
-
-                string stkText;
-                try { stkText = GameWorld.PvfArchiveAccessor.ReadText("stackable/" + path); }
-                catch { errors++; continue; }
-
-                StackableItemFile stk;
-                try { stk = StackableItemFile.Parse(stkText); }
-                catch { errors++; continue; }
-
-                if (stk.EnchantTable == null || stk.EnchantTable.Count == 0)
-                {
-                    skipped++;
-                    continue;
-                }
-
-                int rarity = Math.Max(0, stk.Rarity);
-                _monsterCardPool.Add(itemId);
-
-                if (stk.Grade > 0)
-                {
-                    long gradeKey = (long)stk.Grade * 10 + rarity;
-                    if (!_monsterCardPoolByGradeRarity.TryGetValue(gradeKey, out var gradePool))
-                    {
-                        gradePool = new List<int>();
-                        _monsterCardPoolByGradeRarity[gradeKey] = gradePool;
-                    }
-                    gradePool.Add(itemId);
-                }
-
-                if (!_monsterCardPoolByRarity.TryGetValue(rarity, out var rarityPool))
-                {
-                    rarityPool = new List<int>();
-                    _monsterCardPoolByRarity[rarity] = rarityPool;
-                }
-                rarityPool.Add(itemId);
-                added++;
-            }
-
-            FileLogger.Log($"[MonsterDropConfig] Monster card pool: {added} items, {skipped} skipped, {errors} errors, {_monsterCardPoolByRarity.Count} rarity buckets");
-        }
     }
 }
