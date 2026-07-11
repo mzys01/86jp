@@ -473,24 +473,7 @@ namespace DfoServer.Network.Handlers.Dungeon
                 groups.Add(pairs);
                 return groups;
             }
-
-            // 来源2: [dungeon minimap icon setting] + [boss room entrance condition]
-            // 的人质/标记怪图标是另一套机制，不走 extraPairGroups。待独立调查。
-            // 去掉反引号
-            afterHunt = afterHunt.Replace("`", "");
-            var tokens = afterHunt.Split(new[] { ' ', '\t', '\r', '\n' }, System.StringSplitOptions.RemoveEmptyEntries);
-            if (tokens.Length < 1) return result;
-
-            // 第一个 token = 总条件数 N, 之后每 3 个 token = monsterCode roomCount killCount
-            if (!int.TryParse(tokens[0], out var n) || n <= 0) return result;
-            for (int i = 0; i < n && 1 + i * 3 + 2 < tokens.Length; i++)
-            {
-                if (int.TryParse(tokens[1 + i * 3 + 1], out var roomCount) && roomCount > 0)
-                    result.Add(roomCount);
-                else
-                    result.Add(1);
-            }
-            return result;
+            return null;
         }
     }
 }
