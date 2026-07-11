@@ -97,21 +97,17 @@ namespace DfoServer.Game.Dungeon
             }
 
             if (cardType > 1 || cardIndex > 3) return;
-            if (cardType == 0) DungeonRunLifecycle.CancelAutoFlip(session);
+            lock (run.SyncRoot)
+            {
+                if (run.CardRewards == null) return;
+                var slots = cardType == 0 ? run.FreeCardSlots : run.PaidCardSlots;
+                if (slots[cardIndex] != 0xFF) return;
 
-            run.CardFlipCount++;
-            if (cardType == 0) run.FreeCardSlots[cardIndex] = 0x00;
-            else run.PaidCardSlots[cardIndex] = 0x00;
+                run.CardFlipCount++;
+                slots[cardIndex] = 0x00;
+            }
 
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0047, BuildCardInfoAck(session)));
-
-            bool allDone = run.FreeCardSlots[0] != 0xFF
-                && (run.PaidCardSlots[0] != 0xFF || !HasPaidCardReward(run.CardRewards));
-            if (allDone)
-            {
-                await DeliverCardRewards(session);
-                run.CardRewards = null;
-            }
         }
 
         internal async Task HandleCardStartRequest(EnhancedClientSession session)
@@ -142,18 +138,9 @@ namespace DfoServer.Game.Dungeon
                 return false;
             }
 
-            DungeonRunLifecycle.CancelAutoFlip(session);
-
-            bool pendingPaidCard = run != null
-                && HasPaidCardReward(run.CardRewards)
-                && run.PaidCardSlots[0] == 0xFF;
-            if (state == 1 && pendingPaidCard)
+            if (state == 1)
             {
-                run.PaidCardSlots[0] = 0x00;
-                run.CardFlipCount++;
-                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0047, BuildCardInfoAck(session)));
-                await DeliverCardRewards(session);
-                run.CardRewards = null;
+                DungeonRunLifecycle.CancelAutoFlip(session);
             }
 
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0048,
@@ -164,55 +151,62 @@ namespace DfoServer.Game.Dungeon
 
         private async Task AutoFlipFreeCard(EnhancedClientSession session, DungeonRun run)
         {
-            if (run.FreeCardSlots[0] != 0xFF) return;
-            run.CardFlipCount++;
-            run.FreeCardSlots[0] = 0x00;
-
-            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0047, BuildCardInfoAck(session)));
-
-            bool hasPaid = HasPaidCardReward(run.CardRewards);
-            bool paidAlreadyFlipped = hasPaid && run.PaidCardSlots[0] != 0xFF;
-            if (!hasPaid || paidAlreadyFlipped)
+            var sendCardInfo = false;
+            lock (run.SyncRoot)
             {
-                await DeliverCardRewards(session);
-                run.CardRewards = null;
+                if (run.CardRewards == null) return;
+                if (run.FreeCardSlots[0] == 0xFF)
+                {
+                    run.CardFlipCount++;
+                    run.FreeCardSlots[0] = 0x00;
+                    sendCardInfo = true;
+                }
             }
-            else
-            {
-                await DeliverFreeCardRewardsOnly(session);
-            }
+
+            if (sendCardInfo)
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0047, BuildCardInfoAck(session)));
+
+            await DeliverCardRewards(session);
         }
 
         private async Task DeliverCardRewards(EnhancedClientSession session)
         {
-            var cards = session.Player.CurrentRun?.CardRewards;
+            var run = session.Player.CurrentRun;
+            if (run == null) return;
+
+            List<ClearRewardGenerator.CardReward> cards;
+            bool freeSelected;
+            bool paidSelected;
+            lock (run.SyncRoot)
+            {
+                cards = run.CardRewards;
+                if (cards == null) return;
+
+                freeSelected = run.FreeCardSlots[0] != 0xFF;
+                paidSelected = run.PaidCardSlots[0] != 0xFF;
+                if (!freeSelected && !paidSelected) return;
+
+                run.CardRewards = null;
+            }
+
             if (cards == null) return;
             var cid = session.Player.CharacterId;
             var aid = session.Account?.AccountId ?? 1;
             var entries = new List<byte[]>();
 
-            CollectGoldReward(cid, aid, cards, 0, entries);
-            CollectItemReward(cid, aid, cards, 1, entries);
-            CollectGoldReward(cid, aid, cards, 4, entries);
-            CollectItemReward(cid, aid, cards, 5, entries);
+            if (freeSelected)
+            {
+                CollectGoldReward(cid, aid, cards, 0, entries);
+                CollectItemReward(cid, aid, cards, 1, entries);
+            }
+            if (paidSelected)
+            {
+                CollectGoldReward(cid, aid, cards, 4, entries);
+                CollectItemReward(cid, aid, cards, 5, entries);
+            }
 
             await SendItemUpdates(session, entries);
             FileLogger.Log($"[CardReward] Rewards delivered: {entries.Count} entries");
-        }
-
-        private async Task DeliverFreeCardRewardsOnly(EnhancedClientSession session)
-        {
-            var cards = session.Player.CurrentRun?.CardRewards;
-            if (cards == null) return;
-            var cid = session.Player.CharacterId;
-            var aid = session.Account?.AccountId ?? 1;
-            var entries = new List<byte[]>();
-
-            CollectGoldReward(cid, aid, cards, 0, entries);
-            CollectItemReward(cid, aid, cards, 1, entries);
-
-            await SendItemUpdates(session, entries);
-            FileLogger.Log($"[CardReward] Free rewards delivered: {entries.Count} entries");
         }
 
         private void CollectGoldReward(int cid, int aid, List<ClearRewardGenerator.CardReward> cards, int index, List<byte[]> entries)
@@ -264,13 +258,6 @@ namespace DfoServer.Game.Dungeon
         {
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0045, new byte[] { 0x01 }));
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0046, BuildCardLayoutAck()));
-        }
-
-        private static bool HasPaidCardReward(List<ClearRewardGenerator.CardReward> cards)
-        {
-            if (cards == null) return false;
-            return (cards.Count > 4 && cards[4].IsGold && cards[4].GoldAmount > 0) ||
-                   (cards.Count > 5 && !cards[5].IsGold && cards[5].ItemId > 0);
         }
 
         private static byte[] BuildCardInfoAck(EnhancedClientSession session)
