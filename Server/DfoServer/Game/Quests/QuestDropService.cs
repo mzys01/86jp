@@ -2,7 +2,7 @@ using DfoServer.Game.Inventory;
 using DfoServer.GameWorld;
 using DfoServer.Infrastructure;
 using DfoServer.Network;
-using DfoServer.Network.Builders;
+using DfoServer.Network.Handlers;
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
@@ -17,10 +17,12 @@ namespace DfoServer.Game.Quests
         private const string ProtocolLogName = "GameProtocol";
 
         private readonly IAssetService _assetService;
+        private readonly InventoryRefreshSender _inventoryRefresh;
 
-        public QuestDropService(IAssetService assetService)
+        public QuestDropService(IAssetService assetService, InventoryRefreshSender inventoryRefresh)
         {
             _assetService = assetService ?? throw new ArgumentNullException(nameof(assetService));
+            _inventoryRefresh = inventoryRefresh ?? throw new ArgumentNullException(nameof(inventoryRefresh));
         }
 
         public async Task CheckMonsterDrop(EnhancedClientSession session, int monsterCode)
@@ -73,6 +75,7 @@ namespace DfoServer.Game.Quests
 
             var accountId = session.Account?.AccountId ?? 1;
             var grantedItemIds = new HashSet<int>();
+            var grantedSlots = new HashSet<short>();
 
             foreach (var candidate in candidates)
             {
@@ -104,14 +107,8 @@ namespace DfoServer.Game.Quests
                     continue;
                 }
 
-                // NOTI 14 UPDATE_ITEM_LIST (independent send, 86JP 84B fixed format)
-                var w = new GamePacketWriter();
-                w.WriteByte(0);                     // updateType = 0
-                w.WriteUInt16(1);                   // count = 1
-                w.WriteBytes(ItemListUpdateBuilder.BuildRawItemEntry(slot, (uint)candidate.ItemId, (uint)(currentHeld + dropCount)));
-                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000E, w.ToArray()));
-
                 grantedItemIds.Add(candidate.ItemId);
+                grantedSlots.Add(slot);
                 FileLogger.Log($"[{ProtocolLogName}] QUEST_DROP: {sourceName}={sourceCode} -> item={candidate.ItemId} x{dropCount} slot={slot} (held={currentHeld}->{currentHeld + dropCount})");
             }
 
@@ -121,10 +118,15 @@ namespace DfoServer.Game.Quests
             if (session.GameSession?.QuestManager == null)
             {
                 FileLogger.Log($"[{ProtocolLogName}] QUEST_DROP: granted {grantedItemIds.Count} item kinds but quest progress sync skipped because QuestManager is missing");
-                return;
+            }
+            else
+            {
+                await session.GameSession.QuestManager.SyncItemSeekingQuestProgressAsync(grantedItemIds);
             }
 
-            await session.GameSession.QuestManager.SyncItemSeekingQuestProgressAsync(grantedItemIds);
+            // During a dungeon, refresh only the changed slots after quest progress has settled.
+            await _inventoryRefresh.SendUpdateItemList(session, InventoryListType.Main, grantedSlots);
+            FileLogger.Log($"[{ProtocolLogName}] QUEST_DROP: UPDATE_ITEM_LIST sent slots={string.Join(",", grantedSlots)}");
         }
 
         private bool TryPickupItemToInventory(int characterId, int accountId, int itemTemplateId, int stackCount, out short assignedSlot)

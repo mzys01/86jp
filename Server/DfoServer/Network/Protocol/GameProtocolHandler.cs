@@ -89,6 +89,7 @@ namespace DfoServer.Network
                 characterRepository,
                 sqliteSelectCharacterDataSource,
                 rentalTimeProvider,
+                _inventoryRefreshSender,
                 _partyManager,
                 sessionDirectory);
             _staminaHandler = new StaminaHandler(_assetService);
