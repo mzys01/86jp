@@ -92,6 +92,7 @@ namespace DfoServer.Game.Inventory
         bool TryBuyCeraShopItem(int characterId, int accountId, int productId, int buyCount, int paymentMode, byte attributeValue, out InventoryMutationResult result);
 
         bool TryDisjointItem(int characterId, int accountId, DisjointItemRequest request, out DisjointItemResult result);
+        bool TryDisjointAvatar(int characterId, int accountId, AvatarDisjointRequest request, out AvatarDisjointResult result);
 
         bool TryEnchantByBead(int characterId, int accountId, EnchantByBeadCommand command, out EnchantByBeadResult result);
 
