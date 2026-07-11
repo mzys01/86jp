@@ -93,6 +93,7 @@ namespace DfoServer.Game.Inventory
 
         bool TryDisjointItem(int characterId, int accountId, DisjointItemRequest request, out DisjointItemResult result);
         bool TryDisjointAvatar(int characterId, int accountId, AvatarDisjointRequest request, out AvatarDisjointResult result);
+        bool TryCompoundEmblems(int characterId, int accountId, EmblemCompoundRequest request, out EmblemCompoundResult result);
 
         bool TryEnchantByBead(int characterId, int accountId, EnchantByBeadCommand command, out EnchantByBeadResult result);
 
