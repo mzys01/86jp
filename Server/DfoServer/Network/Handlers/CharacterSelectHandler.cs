@@ -308,7 +308,10 @@ namespace DfoServer.Network.Handlers
             var existing = _characterRepository.GetByName(name);
             if (existing != null)
             {
-                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x02B5, new byte[] { 0x00 }));
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
+                    0x01,
+                    0x02B5,
+                    CommonPacketBodyBuilder.BuildCmdError(0x00)));
                 return;
             }
 
