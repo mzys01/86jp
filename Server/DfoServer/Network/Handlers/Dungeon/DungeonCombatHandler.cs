@@ -51,7 +51,8 @@ namespace DfoServer.Network.Handlers.Dungeon
                 FileLogger.Log($"[DungeonHandler] DIE_MONSTER: passive object code={req.LocalIndex}");
                 if (run.ClearCondition != null && run.ClearCondition.Check(0, req.LocalIndex))
                     await _settlement.TryClearDungeon(session, $"destroy object {req.LocalIndex}");
-                await _svc.QuestDrops.CheckPassiveObjectDrop(session, req.LocalIndex);
+                if (run.Tower == null)
+                    await _svc.QuestDrops.CheckPassiveObjectDrop(session, req.LocalIndex);
                 return;
             }
 
@@ -68,6 +69,10 @@ namespace DfoServer.Network.Handlers.Dungeon
             var roomLocalIndex = req.LocalIndex - run.RoomStartSequence;
             var monsters = run.RoomMonsters;
 
+            IReadOnlyList<DropInfo> towerDrops = null;
+            if (run.Tower != null)
+                _svc.DeathTower.TryGenerateDropsForMonster(session, req.LocalIndex, out towerDrops);
+
             if (roomLocalIndex < 0 || roomLocalIndex >= monsters.Count)
             {
                 if (TryGetCurrentRoomState(session, out var outOfRangeRoomState) && outOfRangeRoomState.IsHellPartyRoom)
@@ -76,7 +81,7 @@ namespace DfoServer.Network.Handlers.Dungeon
                 }
             }
 
-            List<DropInfo> drops = null;
+            IReadOnlyList<DropInfo> drops = towerDrops;
             byte killedMonsterType = 0;
             int killedMonsterCode = 0;
             if (roomLocalIndex >= 0 && roomLocalIndex < monsters.Count)
@@ -119,8 +124,13 @@ namespace DfoServer.Network.Handlers.Dungeon
                 int dungeonMinimumLevel = dungeonBasisLevel;
                 try { dungeonMinimumLevel = DungeonData.GetDungeonMinimumRequiredLevel(run.DungeonId); } catch (Exception ex) { FileLogger.Log($"[DungeonHandler] DIE_MONSTER ERROR: minimum level fallback dungeon={run.DungeonId} default={dungeonMinimumLevel}: {ex.Message}"); }
                 int goldGained;
-                List<DropInfo> generatedDrops;
-                if (monster.IsHellPartyActor && dieRoomState != null && dieRoomState.IsHellPartyRoom)
+                IReadOnlyList<DropInfo> generatedDrops;
+                if (run.Tower != null)
+                {
+                    generatedDrops = towerDrops ?? Array.Empty<DropInfo>();
+                    goldGained = 0;
+                }
+                else if (monster.IsHellPartyActor && dieRoomState != null && dieRoomState.IsHellPartyRoom)
                 {
                     var abyssRequest = BuildAbyssPartyDropRequest(
                         dieRoomState, monster, dungeonMinimumLevel, dungeonBasisLevel);
@@ -166,7 +176,8 @@ namespace DfoServer.Network.Handlers.Dungeon
                 if (generatedDrops != null && generatedDrops.Count > 0)
                 {
                     drops = generatedDrops;
-                    FileLogger.Log($"[DungeonHandler] DROP: {generatedDrops.Count} items, seqId={req.LocalIndex} seed={run.RoomLcg.Seed:X8}");
+                    var dropSeed = run.RoomLcg?.Seed ?? run.Seed;
+                    FileLogger.Log($"[DungeonHandler] DROP: {generatedDrops.Count} items, seqId={req.LocalIndex} seed={dropSeed:X8}");
                 }
 
                 await _svc.SendExpGrantNotificationAsync(session, grant, "DIE_MONSTER", growthContractBonusExp);
@@ -190,7 +201,10 @@ namespace DfoServer.Network.Handlers.Dungeon
             await BroadcastMonsterDieToPartyAsync(session, req.LocalIndex);
 
             // Quest item drop (IDA: CUser::CheckQuestMonster, after DIE_MONSTER NOTI)
-            await _svc.QuestDrops.CheckMonsterDrop(session, killedMonsterCode);
+            if (run.Tower != null && killedMonsterType >= 5 && killedMonsterType <= 8)
+                await _svc.QuestDrops.CheckAiCharacterDrop(session, killedMonsterCode);
+            else if (run.Tower == null)
+                await _svc.QuestDrops.CheckMonsterDrop(session, killedMonsterCode);
 
             // check_grid_clear (IDA 0x830A0E8): spawnType==100 && spawnFlag==0 blocks passage
             // 判定唯一实现在 DungeonRoomTopology.ComputeRoomClearedLocked(主路径与组队 relay 共用)。
@@ -690,6 +704,12 @@ namespace DfoServer.Network.Handlers.Dungeon
 
             var req = GetItemRequest.Parse(body);
             FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] GET_ITEM: cid={session.Player.CharacterId} srcSlot={req.SrcSlot}");
+
+            if (run.Tower != null
+                && await _svc.DeathTower.TryHandleGetItem(session, req.SrcSlot))
+            {
+                return;
+            }
 
             var accountId = session.Account?.AccountId ?? 1;
             var pickup = _svc.Drops.TryPickup(run, req.SrcSlot, session.Player.CharacterId, accountId);

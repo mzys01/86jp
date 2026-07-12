@@ -19,6 +19,7 @@ namespace DfoServer.Game.DeathTower
             public int TotalStages;
             public int[] StageMapIds;       // index=stageNumber(0-based), value=mapId
             public int BasisLevel;
+            public int MaxClearItemCount;
         }
 
         // PVF [dungeon type] == "tower of death" 判定。
@@ -61,6 +62,7 @@ namespace DfoServer.Game.DeathTower
                     return null;
 
                 var basisLevel = ParseBasisLevel(content);
+                var maxClearItemCount = ParsePositiveIntTag(content, "tower max clear item num", 10);
 
                 var config = new TowerConfig
                 {
@@ -68,8 +70,9 @@ namespace DfoServer.Game.DeathTower
                     TotalStages = mapIds.Length,
                     StageMapIds = mapIds,
                     BasisLevel = basisLevel,
+                    MaxClearItemCount = maxClearItemCount,
                 };
-                FileLogger.Log($"[DeathTower] PVF loaded: dungeon={dungeonId} stages={mapIds.Length} basisLv={basisLevel} firstMap={mapIds[0]} lastMap={mapIds[mapIds.Length - 1]}");
+                FileLogger.Log($"[DeathTower] PVF loaded: dungeon={dungeonId} stages={mapIds.Length} basisLv={basisLevel} maxClearItems={maxClearItemCount} firstMap={mapIds[0]} lastMap={mapIds[mapIds.Length - 1]}");
                 return config;
             }
             catch (Exception ex)
@@ -116,14 +119,19 @@ namespace DfoServer.Game.DeathTower
 
         private static int ParseBasisLevel(string content)
         {
-            var tag = "[basis level]";
+            return ParsePositiveIntTag(content, "basis level", 1);
+        }
+
+        private static int ParsePositiveIntTag(string content, string tagName, int fallback)
+        {
+            var tag = "[" + tagName + "]";
             var idx = content.IndexOf(tag, StringComparison.OrdinalIgnoreCase);
-            if (idx < 0) return 1;
+            if (idx < 0) return fallback;
             var after = content.Substring(idx + tag.Length, Math.Min(20, content.Length - idx - tag.Length));
             var tokens = after.Split(new[] { ' ', '\t', '\r', '\n', '`' }, StringSplitOptions.RemoveEmptyEntries);
-            if (tokens.Length > 0 && int.TryParse(tokens[0], out var level) && level > 0)
-                return level;
-            return 1;
+            if (tokens.Length > 0 && int.TryParse(tokens[0], out var value) && value > 0)
+                return value;
+            return fallback;
         }
     }
 }

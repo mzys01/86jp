@@ -141,6 +141,7 @@ namespace DfoServer.Network
                 characterRepository,
                 sqliteSelectCharacterDataSource,
                 rentalTimeProvider,
+                inventoryStore,
                 _inventoryRefreshSender,
                 _partyManager,
                 sessionDirectory);
@@ -261,6 +262,7 @@ namespace DfoServer.Network
                         ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
                     s.GameSession = new Game.Session.GameSession(s, gsConnStr, _assetService);
                     await _inventoryRefreshSender.SendAllEquipmentItemLockListRefresh(s);
+                    await s.GameSession.QuestManager.SyncItemSeekingQuestProgressAsync(null);
                     await PetCreatureRuntimeService.BeginTownAsync(s, "select_character");
                 }
             };
@@ -302,6 +304,8 @@ namespace DfoServer.Network
             d[0x0012] = _inventoryHandler.Handle_ENUM_CMDPACKET_DELETE_ITEM;       //18
             d[0x0013] = async (s, h, b) =>
             {
+                if (await _dungeonHandler.TryHandleDeathTowerMoveItem(s, h, b))
+                    return;
                 if (await _knightShieldHandler.TryHandleMoveItemSpace(s, h, b))
                     return;
                 await _inventoryHandler.Handle_ENUM_CMDPACKET_MOVE_ITEMSPACE(s, h, b);
@@ -347,6 +351,8 @@ namespace DfoServer.Network
         {
             d[0x002C] = async (s, h, b) =>
             {
+                if (await _dungeonHandler.TryHandleDeathTowerUseStackable(s, h, b))
+                    return;
                 if (await _petCreatureHandler.TryHandleUseStackable(s, h, b))
                     return;
 

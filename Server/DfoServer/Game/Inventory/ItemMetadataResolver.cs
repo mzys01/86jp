@@ -61,7 +61,11 @@ namespace DfoServer.Game.Inventory
                 slotStart = 65; slotEnd = 120; return;
             }
             var st = StackableType.Replace("`", "").Trim().ToLowerInvariant();
-            if (st.StartsWith("[material]"))
+            if (st.StartsWith("[material expert job]"))
+            { slotStart = 233; slotEnd = 288; return; }
+            if (st.StartsWith("[avatar emblem]"))
+            { slotStart = 289; slotEnd = 344; return; }
+            if (st.StartsWith("[material"))
             {
                 if (st.EndsWith("4"))
                 { slotStart = 345; slotEnd = 359; }
@@ -69,12 +73,8 @@ namespace DfoServer.Game.Inventory
                 { slotStart = 121; slotEnd = 176; }
                 return;
             }
-            if (st.StartsWith("[quest]"))
+            if (st.StartsWith("[quest"))
             { slotStart = 177; slotEnd = 232; return; }
-            if (st.StartsWith("[material expert job]"))
-            { slotStart = 233; slotEnd = 288; return; }
-            if (st.StartsWith("[avatar emblem]"))
-            { slotStart = 289; slotEnd = 344; return; }
             slotStart = 65; slotEnd = 120;
         }
     }

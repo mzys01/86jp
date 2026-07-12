@@ -238,17 +238,36 @@ namespace DfoServer.Game.Quests
             await SyncItemSeekingQuestProgressAsync(itemFilter);
         }
 
-        public async Task SyncItemSeekingQuestProgressAsync(ICollection<int> itemFilter)
+        public async Task SyncItemSeekingQuestProgressAsync(
+            ICollection<int> itemFilter,
+            IReadOnlyDictionary<int, int> temporaryHeldCounts = null)
         {
             int cid = _sender.CharacterId;
             if (cid <= 0) return;
 
-            bool matched = _service.SyncItemSeekingQuestProgress(cid, _sender.AccountId, itemFilter);
+            bool matched = _service.SyncItemSeekingQuestProgress(
+                cid,
+                _sender.AccountId,
+                itemFilter,
+                temporaryHeldCounts);
             if (!matched)
                 return;
 
             var noti = BuildAcceptedQuestNoti(cid);
             await _sender.SendNotiAsync(0x023F, noti);
+        }
+
+        public void RecalibrateItemSeekingQuestProgressWithoutNotification(
+            ICollection<int> itemFilter)
+        {
+            var cid = _sender.CharacterId;
+            if (cid <= 0)
+                return;
+
+            _service.SyncItemSeekingQuestProgress(
+                cid,
+                _sender.AccountId,
+                itemFilter);
         }
 
         public async Task SyncClearMapQuestProgressAsync(int dungeonId, int mapId)

@@ -13,6 +13,7 @@ namespace DfoServer.GameWorld
 
     public static class QuestDropProvider
     {
+        public const int EnemyTypeAiCharacter = 2;
         public const int EnemyTypePassiveObject = 3;
 
         

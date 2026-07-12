@@ -201,7 +201,8 @@ namespace DfoServer.Network.Builders
         {
             return itemSpace == InventoryListType.Main
                 || itemSpace == InventoryListType.PersonalCargo
-                || itemSpace == InventoryListType.AccountCargo;
+                || itemSpace == InventoryListType.AccountCargo
+                || itemSpace == InventoryListType.QuickSlot;
         }
 
         private static void EnsureCommonUpdateItemSpace(InventoryListType itemSpace)
@@ -226,6 +227,7 @@ namespace DfoServer.Network.Builders
                 case InventoryListType.Main:
                 case InventoryListType.PersonalCargo:
                 case InventoryListType.AccountCargo:
+                case InventoryListType.QuickSlot:
                 case InventoryListType.Pet:
                     return 0x54;
                 default:

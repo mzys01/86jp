@@ -18,11 +18,19 @@ namespace DfoServer.Game.Quests
 
         private readonly IAssetService _assetService;
         private readonly InventoryRefreshSender _inventoryRefresh;
+        private readonly string _connectionString;
+        private readonly Func<QuestDropCandidate, int, int> _rollDrop;
 
-        public QuestDropService(IAssetService assetService, InventoryRefreshSender inventoryRefresh)
+        public QuestDropService(
+            IAssetService assetService,
+            InventoryRefreshSender inventoryRefresh,
+            string connectionString = null,
+            Func<QuestDropCandidate, int, int> rollDrop = null)
         {
             _assetService = assetService ?? throw new ArgumentNullException(nameof(assetService));
             _inventoryRefresh = inventoryRefresh ?? throw new ArgumentNullException(nameof(inventoryRefresh));
+            _connectionString = connectionString;
+            _rollDrop = rollDrop ?? QuestDropProvider.RollDrop;
         }
 
         public async Task CheckMonsterDrop(EnhancedClientSession session, int monsterCode)
@@ -49,26 +57,30 @@ namespace DfoServer.Game.Quests
                     QuestDropProvider.EnemyTypePassiveObject));
         }
 
+        public Task CheckAiCharacterDrop(EnhancedClientSession session, int aiCharacterCode)
+        {
+            var run = session?.Player?.CurrentRun;
+            if (run == null || run.DungeonId <= 0 || aiCharacterCode <= 0)
+                return Task.CompletedTask;
+
+            return CheckDrop(session, aiCharacterCode, "ai-character", activeQuestIds =>
+                QuestDropProvider.CheckEnemyDrop(
+                    activeQuestIds,
+                    run.DungeonId,
+                    run.Difficulty,
+                    aiCharacterCode,
+                    QuestDropProvider.EnemyTypeAiCharacter));
+        }
+
         private async Task CheckDrop(
             EnhancedClientSession session,
             int sourceCode,
             string sourceName,
             Func<ICollection<int>, List<QuestDropCandidate>> getCandidates)
         {
-            HashSet<int> activeQuestIds = null;
-            try
-            {
-                var connStr = SqliteDatabaseBootstrap.Initialize(
-                    ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
-                var quests = QuestService.LoadActiveQuests(connStr, session.Player.CharacterId);
-                if (quests.Count > 0)
-                    activeQuestIds = new HashSet<int>(quests.ConvertAll(q => (int)q.QuestId));
-            }
-            catch (Exception ex)
-            {
-                FileLogger.Log($"[{ProtocolLogName}] QUEST_DROP ERROR: active quest load failed, drop check skipped: {sourceName}={sourceCode}: {ex.Message}");
+            var activeQuestIds = LoadActiveQuestIds(session, $"{sourceName}={sourceCode}");
+            if (activeQuestIds == null || activeQuestIds.Count == 0)
                 return;
-            }
 
             var candidates = getCandidates(activeQuestIds);
             if (candidates == null) return;
@@ -90,7 +102,7 @@ namespace DfoServer.Game.Quests
                     FileLogger.Log($"[{ProtocolLogName}] QUEST_DROP ERROR: held count read failed, assuming 0: item={candidate.ItemId}: {ex.Message}");
                 }
 
-                int dropCount = QuestDropProvider.RollDrop(candidate, currentHeld);
+                int dropCount = _rollDrop(candidate, currentHeld);
                 if (dropCount <= 0)
                 {
                     if (candidate.MaxStack != -1 && currentHeld >= candidate.MaxStack)
@@ -127,6 +139,28 @@ namespace DfoServer.Game.Quests
             // During a dungeon, refresh only the changed slots after quest progress has settled.
             await _inventoryRefresh.SendUpdateItemList(session, InventoryListType.Main, grantedSlots);
             FileLogger.Log($"[{ProtocolLogName}] QUEST_DROP: UPDATE_ITEM_LIST sent slots={string.Join(",", grantedSlots)}");
+        }
+
+        private HashSet<int> LoadActiveQuestIds(
+            EnhancedClientSession session,
+            string source)
+        {
+            try
+            {
+                var connStr = !string.IsNullOrWhiteSpace(_connectionString)
+                    ? _connectionString
+                    : SqliteDatabaseBootstrap.Initialize(
+                        ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
+                var quests = QuestService.LoadActiveQuests(connStr, session.Player.CharacterId);
+                return quests.Count > 0
+                    ? new HashSet<int>(quests.ConvertAll(q => (int)q.QuestId))
+                    : null;
+            }
+            catch (Exception ex)
+            {
+                FileLogger.Log($"[{ProtocolLogName}] QUEST_DROP ERROR: active quest load failed, drop check skipped: {source}: {ex.Message}");
+                return null;
+            }
         }
 
         private bool TryPickupItemToInventory(int characterId, int accountId, int itemTemplateId, int stackCount, out short assignedSlot)

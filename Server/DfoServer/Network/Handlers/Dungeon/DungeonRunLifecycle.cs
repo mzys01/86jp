@@ -1,5 +1,6 @@
 using DfoServer.Game.Dungeon;
 using DfoServer.Network.Handlers.Pets;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -13,11 +14,13 @@ namespace DfoServer.Network.Handlers.Dungeon
         // 进本: 掐掉旧局残留定时器 -> 换新局。
         internal static void BeginRun(EnhancedClientSession session, int dungeonId, byte difficulty)
         {
+            var towerItemIds = CaptureTowerItemIds(session);
             CancelAutoFlip(session);
             CancelDeathRespawn(session);
             Game.DeathTower.DeathTowerHandler.ClearTowerState(session);
 
             session.Player.CurrentRun = new DungeonRun((short)dungeonId, difficulty);
+            RecalibrateTowerQuestOverlayWithoutNotification(session, towerItemIds);
             PetCreatureRuntimeService.BeginDungeon(session, dungeonId, "begin_run");
         }
 
@@ -28,17 +31,23 @@ namespace DfoServer.Network.Handlers.Dungeon
             Game.DeathTower.DeathTowerSession tower,
             byte difficulty = 0)
         {
+            var towerItemIds = CaptureTowerItemIds(session);
             CancelAutoFlip(session);
             CancelDeathRespawn(session);
 
             session.Player.CurrentRun = new DungeonRun((short)dungeonId, difficulty);
             session.Player.CurrentRun.Tower = tower;
+            RecalibrateTowerQuestOverlayWithoutNotification(session, towerItemIds);
             PetCreatureRuntimeService.BeginDungeon(session, dungeonId, "begin_tower_run");
         }
 
         // 返城(EPLP/回城/放弃): 先掐定时器(残留的翻牌定时器不能对下一局或城镇状态发包), 再丢弃本局。
         internal static async Task EndRunToTownAsync(EnhancedClientSession session)
         {
+            var tower = session?.Player?.CurrentRun?.Tower;
+            var towerItemIds = tower != null
+                ? new List<int>(tower.SeenItemIds)
+                : null;
             CancelAutoFlip(session);
             CancelDeathRespawn(session);
             PersistSessionExp(session, "town");
@@ -47,12 +56,19 @@ namespace DfoServer.Network.Handlers.Dungeon
 
             session.Player.DungeonSceneUniqueId = 0;
             session.Player.CurrentRun = null;
+            if (towerItemIds != null
+                && towerItemIds.Count > 0
+                && session.GameSession?.QuestManager != null)
+            {
+                await session.GameSession.QuestManager.SyncItemSeekingQuestProgressAsync(towerItemIds);
+            }
         }
 
         // 断线/换角色: 同样丢弃本局。
         // 换角色时必须丢弃当前局 -- PlayerContext 实例跨角色复用, 不丢会把上个角色的副本状态带给下个角色。
         internal static void EndRunOnTeardown(EnhancedClientSession session, string source)
         {
+            var towerItemIds = CaptureTowerItemIds(session);
             CancelAutoFlip(session);
             CancelDeathRespawn(session);
             PersistSessionExp(session, source);
@@ -61,6 +77,35 @@ namespace DfoServer.Network.Handlers.Dungeon
 
             session.Player.DungeonSceneUniqueId = 0;
             session.Player.CurrentRun = null;
+            RecalibrateTowerQuestOverlayWithoutNotification(session, towerItemIds);
+        }
+
+        private static List<int> CaptureTowerItemIds(EnhancedClientSession session)
+        {
+            var tower = session?.Player?.CurrentRun?.Tower;
+            return tower == null ? null : new List<int>(tower.SeenItemIds);
+        }
+
+        private static void RecalibrateTowerQuestOverlayWithoutNotification(
+            EnhancedClientSession session,
+            ICollection<int> towerItemIds)
+        {
+            if (towerItemIds == null
+                || towerItemIds.Count == 0
+                || session?.GameSession?.QuestManager == null)
+            {
+                return;
+            }
+
+            try
+            {
+                session.GameSession.QuestManager
+                    .RecalibrateItemSeekingQuestProgressWithoutNotification(towerItemIds);
+            }
+            catch (System.Exception ex)
+            {
+                FileLogger.Log($"[DungeonRunLifecycle] ERROR: tower quest rollback failed: cid={session.Player?.CharacterId ?? 0}: {ex.Message}");
+            }
         }
 
         // 离开一局时把会话内存的等级/经验落库(实现收口在经验系统,

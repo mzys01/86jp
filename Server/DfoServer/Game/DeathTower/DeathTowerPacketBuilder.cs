@@ -27,19 +27,26 @@ namespace DfoServer.Game.DeathTower
         }
 
         // NOTI 143 START_DEATH_TOWER_MAP (变长, 汇编定案: 9B头 + 14B×怪物 + 1B + 18B×物品)
-        public static byte[] BuildStageMap(DeathTowerSession tower, List<StageMonster> monsters)
+        public static byte[] BuildStageMap(
+            DeathTowerSession tower,
+            List<StageMonster> monsters,
+            IReadOnlyList<StageTowerItem> items,
+            uint randomSeed)
         {
             var w = new GamePacketWriter();
+            var monsterCount = Math.Min(monsters?.Count ?? 0, byte.MaxValue);
+            var itemCount = Math.Min(items?.Count ?? 0, byte.MaxValue);
 
             // Header 9B — currentStage 是 1-based(客户端显示层数)
             w.WriteUInt16((ushort)(tower.CurrentStage + 1));
-            w.WriteUInt32((uint)Infrastructure.ServerRandom.Next());   // randomSeed
+            w.WriteUInt32(randomSeed);
             w.WriteUInt16((ushort)tower.GetCurrentMapId());
-            w.WriteByte((byte)monsters.Count);
+            w.WriteByte((byte)monsterCount);
 
             // 怪物条目 14B/条
-            foreach (var m in monsters)
+            for (var index = 0; index < monsterCount; index++)
             {
+                var m = monsters[index];
                 w.WriteUInt32((uint)m.ListIndex);       // ListIndex
                 w.WriteUInt16(m.MonsterUniqueId);       // MonsterUniqueId
                 w.WriteUInt32((uint)m.MonsterIndex);    // MonsterIndex (模板ID)
@@ -49,8 +56,17 @@ namespace DfoServer.Game.DeathTower
                 w.WriteByte(m.BoxIndex);                // boxIndex
             }
 
-            // 物品: 暂时空(物品生成系统不完整, itemCount=0 不影响流程)
-            w.WriteByte(0);  // itemCount = 0
+            // Items: 18-byte rows bound to the APC list index and stable item unique ID.
+            w.WriteByte((byte)itemCount);
+            for (var index = 0; index < itemCount; index++)
+            {
+                var item = items[index];
+                w.WriteUInt32((uint)item.SourceListIndex);
+                w.WriteUInt16(item.ItemUniqueId);
+                w.WriteUInt32((uint)item.ItemId);
+                w.WriteUInt32((uint)item.DropRate);
+                w.WriteUInt32((uint)Math.Max(1, item.StackCount));
+            }
 
             return w.ToArray();
         }
@@ -85,12 +101,31 @@ namespace DfoServer.Game.DeathTower
         // NOTI 145 DEATH_TOWER_STATE_REWARD (变长, 双端闭环: summary + 4组×{count+items})
         public static byte[] BuildEmptyReward()
         {
+            return BuildReward(0, null);
+        }
+
+        // Client handler (86JP DNF.exe RVA 0x008F7230):
+        // u32 summary + 4 * { u8 count + count * { u32 itemId + u32 stackCount } }.
+        public static byte[] BuildReward(
+            uint summaryValue,
+            IReadOnlyList<IReadOnlyList<DeathTowerRewardItem>> groups)
+        {
             var w = new GamePacketWriter();
-            w.WriteUInt32(0);   // summaryValue
-            w.WriteByte(0);     // group0 count
-            w.WriteByte(0);     // group1 count
-            w.WriteByte(0);     // group2 count
-            w.WriteByte(0);     // group3 count
+            w.WriteUInt32(summaryValue);
+            for (var groupIndex = 0; groupIndex < 4; groupIndex++)
+            {
+                var group = groups != null && groupIndex < groups.Count
+                    ? groups[groupIndex]
+                    : null;
+                var count = Math.Min(byte.MaxValue, group?.Count ?? 0);
+                w.WriteByte((byte)count);
+                for (var itemIndex = 0; itemIndex < count; itemIndex++)
+                {
+                    var item = group[itemIndex];
+                    w.WriteUInt32((uint)Math.Max(0, item.ItemId));
+                    w.WriteUInt32((uint)Math.Max(1, item.Count));
+                }
+            }
             return w.ToArray();
         }
 
@@ -110,5 +145,15 @@ namespace DfoServer.Game.DeathTower
         public byte MonsterType;    // 0=普通, 5=APC
         public byte IsBoxMonster;
         public byte BoxIndex;
+    }
+
+    public struct StageTowerItem
+    {
+        public int SourceListIndex;
+        public ushort SourceMonsterUniqueId;
+        public ushort ItemUniqueId;
+        public int ItemId;
+        public int DropRate;
+        public int StackCount;
     }
 }
