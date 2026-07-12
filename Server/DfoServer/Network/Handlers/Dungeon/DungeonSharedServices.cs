@@ -214,24 +214,58 @@ namespace DfoServer.Network.Handlers.Dungeon
 
         internal async Task SendUserInfoSubtype0Broadcast(EnhancedClientSession session)
         {
+            await SendUserInfoSubtype0BroadcastAsync(
+                session,
+                CharacterRepository,
+                Subtype0FieldsRepository,
+                HonorLevel,
+                "SendUserInfoSubtype0Broadcast");
+        }
+
+        internal static async Task<bool> SendUserInfoSubtype0BroadcastAsync(
+            EnhancedClientSession session,
+            ICharacterRepository characterRepository,
+            SqliteSubtype0FieldsRepository subtype0Repository,
+            HonorLevelSyncService honorLevel,
+            string logTag,
+            HonorLevelSummary honorSummary = null)
+        {
             try
             {
-                int cid = session.Player.CharacterId;
-                var record = CharacterRepository.GetById(cid);
-                if (record == null)
-                    return;
+                if (session?.Player == null
+                    || characterRepository == null
+                    || subtype0Repository == null
+                    || honorLevel == null)
+                    return false;
 
-                record.Subtype0Tail = Subtype0FieldsRepository.Load(cid) ?? new UserInfoMinimumTailSnapshot();
+                int cid = session.Player.CharacterId;
+                var record = characterRepository.GetById(cid);
+                if (record == null)
+                    return false;
+
+                record.Subtype0Tail = subtype0Repository.Load(cid) ?? new UserInfoMinimumTailSnapshot();
                 var accountId = session.Account?.AccountId ?? record.AccountId;
-                var accountCharacters = CharacterRepository.ListByAccount(accountId);
-                HonorLevel.ApplyToSubtype0Tail(record.Subtype0Tail, accountId, accountCharacters);
+                var accountCharacters = honorSummary == null
+                    ? characterRepository.ListByAccount(accountId)
+                    : null;
+                honorLevel.ApplyToSubtype0Tail(
+                    record.Subtype0Tail,
+                    accountId,
+                    accountCharacters,
+                    honorSummary);
+
+                // subtype0既是客户端通知，也是服务端会话缓存；复用此广播的生命周期路径
+                // 必须让两端观察到同一份DB快照。
+                session.Player.Subtype0Tail = record.Subtype0Tail;
 
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
                     0x00, 0x0002, UserInfoSubtype0Builder.BuildNotificationBody(record)));
+                return true;
             }
             catch (Exception ex)
             {
-                FileLogger.Log($"[DungeonHandler] SendUserInfoSubtype0Broadcast ERROR: {ex.Message}");
+                FileLogger.Log($"[GameProtocol] {logTag} ERROR: {ex.Message}");
+                return false;
             }
         }
 

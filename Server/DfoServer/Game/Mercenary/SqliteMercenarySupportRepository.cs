@@ -3,16 +3,16 @@ using DfoServer.Game.SelectCharacter;
 using DfoServer.Infrastructure;
 using Microsoft.Data.Sqlite;
 using System;
-using System.Collections.Generic;
 
 namespace DfoServer.Game.Mercenary
 {
     // 保存支援兵选择状态。
     public sealed class SqliteMercenarySupportRepository
     {
-        private const byte ActiveLinkSlotEnabled = 1;
-        private const byte ActiveLinkTypeA = 4;
-        private const byte ActiveLinkTypeB = 1;
+        // 支援兵界面启用时写入 subtype0 兼容字段；opaque 值集中管理。
+        private const byte SupportUiEnabledCompat = 1;
+        private const byte SupportOpaqueStateCompat = 4;
+        private const byte SupportRefreshByteCompat = 1;
 
         private readonly string _connectionString;
 
@@ -24,30 +24,6 @@ namespace DfoServer.Game.Mercenary
                 throw new ArgumentException("schemaFilePath is empty", nameof(schemaFilePath));
 
             _connectionString = SqliteDatabaseBootstrap.Initialize(databasePath, schemaFilePath);
-        }
-
-        public IReadOnlyList<MercenarySupportState> LoadForOwner(int ownerCharacterId)
-        {
-            var result = new List<MercenarySupportState>();
-            using (var conn = new SqliteConnection(_connectionString))
-            {
-                conn.Open();
-                using (var cmd = new SqliteCommand(@"
-SELECT owner_character_id, slot, support_character_id, skill_id, striker_skill_id
-FROM character_mercenary_support
-WHERE owner_character_id = @owner AND slot = 0
-ORDER BY slot", conn))
-                {
-                    cmd.Parameters.AddWithValue("@owner", ownerCharacterId);
-                    using (var reader = cmd.ExecuteReader())
-                    {
-                        while (reader.Read())
-                            result.Add(ReadState(reader));
-                    }
-                }
-            }
-
-            return result;
         }
 
         public MercenarySupportState LoadSlot(int ownerCharacterId, byte slot)
@@ -135,9 +111,10 @@ WHERE owner_character_id = @owner AND slot = @slot", conn))
             using (var cmd = new SqliteCommand(@"
 SELECT COUNT(*)
 FROM character_mercenary_support
-WHERE owner_character_id = @owner AND slot = 0 AND support_character_id > 0 AND skill_id > 0", conn))
+WHERE owner_character_id = @owner AND slot = @slot AND support_character_id > 0 AND skill_id > 0", conn))
             {
                 cmd.Parameters.AddWithValue("@owner", ownerCharacterId);
+                cmd.Parameters.AddWithValue("@slot", (int)MercenarySupportState.SingletonStateKey);
                 return Convert.ToInt32(cmd.ExecuteScalar()) > 0;
             }
         }
@@ -148,9 +125,9 @@ WHERE owner_character_id = @owner AND slot = 0 AND support_character_id > 0 AND 
                 return;
 
             var tail = SqliteSubtype0FieldsRepository.Load(conn, ownerCharacterId) ?? new UserInfoMinimumTailSnapshot();
-            tail.LinkSlotEnabled = enabled ? ActiveLinkSlotEnabled : (byte)0;
-            tail.LinkTypeA = enabled ? ActiveLinkTypeA : (byte)0;
-            tail.LinkTypeB = enabled ? ActiveLinkTypeB : (byte)0;
+            tail.LinkSlotEnabled = enabled ? SupportUiEnabledCompat : (byte)0;
+            tail.LinkTypeA = enabled ? SupportOpaqueStateCompat : (byte)0;
+            tail.LinkTypeB = enabled ? SupportRefreshByteCompat : (byte)0;
             SqliteSubtype0FieldsRepository.Save(conn, ownerCharacterId, tail);
         }
 

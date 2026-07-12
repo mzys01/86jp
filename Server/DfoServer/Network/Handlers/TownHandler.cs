@@ -2,7 +2,6 @@ using DfoServer.Game.Accounts;
 using DfoServer.Game.CharacterData;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory;
-using DfoServer.Game.SelectCharacter;
 using DfoServer.Game.Session;
 using DfoServer.GameWorld;
 using DfoServer.Network;
@@ -20,6 +19,7 @@ namespace DfoServer.Network.Handlers
         private readonly ICharacterRepository _characterRepository;
         private readonly HonorLevelSyncService _honorLevel;
         private readonly GrowthCapsuleSyncService _growthCapsule;
+        private readonly SqliteSubtype0FieldsRepository _subtype0Repository;
         private readonly Game.Inventory.IInventoryStore _inventoryStore;
         private readonly Game.SelectCharacter.SqliteSelectCharacterDataSource _selectDataSource;
         private readonly Game.Party.PartyManager _partyManager;   // 可空: 副本退出/回城时把队员一起拉回城(跟随退出)
@@ -33,6 +33,9 @@ namespace DfoServer.Network.Handlers
             _characterRepository = characterRepository ?? throw new ArgumentNullException(nameof(characterRepository));
             _honorLevel = new HonorLevelSyncService(_characterRepository);
             _growthCapsule = new GrowthCapsuleSyncService(_characterRepository);
+            _subtype0Repository = new SqliteSubtype0FieldsRepository(
+                Infrastructure.ServerPaths.DatabasePath,
+                Infrastructure.ServerPaths.SchemaFilePath);
             _inventoryStore = inventoryStore ?? throw new ArgumentNullException(nameof(inventoryStore));
             _selectDataSource = selectDataSource;  // 可空: 用于同屏推送他人完整 USERINFO(subtype1, 让客户端认其可组队邀请)
             _partyManager = partyManager;          // 可空: 组队副本收尾 fan-out(跟随退出); 与副本共享同一 PartyManager
@@ -285,7 +288,7 @@ namespace DfoServer.Network.Handlers
         public async Task Handle_ENUM_CMDPACKET_GIVEUP_GAME(EnhancedClientSession session, GamePacketHeader header, byte[] body)
         {
             await ReturnSelfToTownAsync(session, header);
-            await SendHonorTownRefreshAsync(session, "giveup-game");
+            await SendTownAccountStateAsync(session, "giveup-game");
             // ★跟随退出(item17)只在【通关回城 BACK_2_VILLAGE 0x84】触发: 副本结束队长回城 → 队员跟随。
             //   ⚠️【放弃 GIVEUP_GAME 0x2A = 未完成中途退出】绝不 fan-out:
             //     放弃者独自回城、【留队】; 其余队员【继续留在副本、留队】(真机确认的正确语义)。
@@ -336,6 +339,7 @@ namespace DfoServer.Network.Handlers
                 try
                 {
                     await ReturnSelfToTownAsync(bs, header);
+                    await SendTownAccountStateAsync(bs, "party-return-village");
                     FileLogger.Log($"[{ProtocolName}] PARTY_RETURN_VILLAGE: member cid={bs.Player.CharacterId} 跟随退出→城镇");
                 }
                 catch (Exception ex)
@@ -345,7 +349,7 @@ namespace DfoServer.Network.Handlers
             }
         }
 
-        private async Task SendHonorTownRefreshAsync(EnhancedClientSession session, string reason)
+        private async Task SendTownAccountStateAsync(EnhancedClientSession session, string reason)
         {
             var accountId = session?.Account?.AccountId ?? 0;
             var characterId = session?.Player?.CharacterId ?? 0;
@@ -353,18 +357,13 @@ namespace DfoServer.Network.Handlers
                 return;
 
             var summary = _honorLevel.LoadSummary(accountId);
-            var record = _characterRepository.GetById(characterId);
-            if (record != null)
-            {
-                record.Appearance = Game.Appearance.AppearanceService.LoadAppearanceFromEquipEntries(characterId);
-                record.Subtype0Tail = new SqliteSubtype0FieldsRepository(
-                    Infrastructure.ServerPaths.DatabasePath,
-                    Infrastructure.ServerPaths.SchemaFilePath).Load(characterId) ?? new UserInfoMinimumTailSnapshot();
-                _honorLevel.ApplyToCharacterRecord(record, summary);
-                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0002,
-                    UserInfoSubtype0Builder.BuildNotificationBody(record)));
-                session.Player.Subtype0Tail = record.Subtype0Tail;
-            }
+            await Dungeon.DungeonSharedServices.SendUserInfoSubtype0BroadcastAsync(
+                session,
+                _characterRepository,
+                _subtype0Repository,
+                _honorLevel,
+                $"{reason} subtype0",
+                summary);
 
             await _honorLevel.SendInfoAsync(session, ProtocolName, reason, summary);
         }
