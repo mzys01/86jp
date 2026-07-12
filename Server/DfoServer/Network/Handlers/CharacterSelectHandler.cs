@@ -19,6 +19,7 @@ namespace DfoServer.Network.Handlers
         private readonly GetUserInfoTemplate _getUserInfoTemplate;
         private readonly HonorLevelSyncService _honorLevel;
         private readonly Game.Session.ISessionDirectory _sessions;   // 他人外观 PULL: 按 uid 找目标在线会话; 可空(上游注册表)
+        private readonly GrowthCapsuleSyncService _growthCapsule;
 
         public string ProtocolName => "GameProtocol";
 
@@ -33,6 +34,7 @@ namespace DfoServer.Network.Handlers
             _getUserInfoTemplate = getUserInfoTemplate;
             _honorLevel = new HonorLevelSyncService(_characterRepository);
             _sessions = sessions;
+            _growthCapsule = new GrowthCapsuleSyncService(_characterRepository);
         }
 
         // 按 UserId 找在线会话(他人外观拉取用)。
@@ -142,7 +144,7 @@ namespace DfoServer.Network.Handlers
 
             var ownerCharId = session.Player.CharacterId > 0 ? session.Player.CharacterId : _selectCharacterDataSource.GetSeedCharacterId();
             var ownerAcctId = session.Account?.AccountId ?? 1;
-            var adventureBody = BuildCharacterListBody(ownerAcctId);
+            var characterList = BuildCharacterList(ownerAcctId);
             var routingByte = _getUserInfoTemplate != null ? _getUserInfoTemplate.Pkt0RoutingByte7 : (byte)0;
 
             foreach (var packet in SelectCharacterPacketBuilder.BuildPacketStream(_selectCharacterDataSource, ownerCharId, ownerAcctId))
@@ -156,8 +158,10 @@ namespace DfoServer.Network.Handlers
             FileLogger.Log($"[{ProtocolName}] SELECT_CHARACTER clone title restore: char={ownerCharId} cloneTitle=0x{cloneTitle:X8}");
 
             // 切角色可能跳过 GET_USERINFO，主选角流后补发账号 subtype2。
-            await session.SendPacketAsync(BuildPacketWithRouting(0x00, 0x0002, adventureBody, routingByte));
-            await SendHonorLevelInfoAsync(session, "select-character-ready");
+            await session.SendPacketAsync(BuildPacketWithRouting(0x00, 0x0002, characterList.Body, routingByte));
+            await SendHonorLevelInfoAsync(session, "select-character-ready", characterList.Honor);
+            await _growthCapsule.SendExpProgressAsync(
+                session, "select-character-ready", honor: characterList.Honor);
         }
 
         public async Task Handle_ENUM_CMDPACKET_GET_USERINFO(EnhancedClientSession session, GamePacketHeader header, byte[] body)
@@ -194,11 +198,13 @@ namespace DfoServer.Network.Handlers
                 }
 
                 var accountId = session.Account?.AccountId ?? 1;
-                var rosterBody = BuildCharacterListBody(accountId);
+                var characterList = BuildCharacterList(accountId);
                 byte routingByte = _getUserInfoTemplate != null ? _getUserInfoTemplate.Pkt0RoutingByte7 : (byte)0;
-                await session.SendPacketAsync(BuildPacketWithRouting(0x00, 0x0002, rosterBody, routingByte));
+                await session.SendPacketAsync(BuildPacketWithRouting(0x00, 0x0002, characterList.Body, routingByte));
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0286, new byte[] { 0x00, 0x04 }));
-                await SendHonorLevelInfoAsync(session, "get-userinfo-ready");
+                await SendHonorLevelInfoAsync(session, "get-userinfo-ready", characterList.Honor);
+                await _growthCapsule.SendExpProgressAsync(
+                    session, "get-userinfo-ready", honor: characterList.Honor);
             }
             catch (Exception ex)
             {
@@ -308,7 +314,10 @@ namespace DfoServer.Network.Handlers
             var existing = _characterRepository.GetByName(name);
             if (existing != null)
             {
-                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x02B5, new byte[] { 0x00 }));
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
+                    0x01,
+                    0x02B5,
+                    CommonPacketBodyBuilder.BuildCmdError(0x00)));
                 return;
             }
 
@@ -393,8 +402,9 @@ namespace DfoServer.Network.Handlers
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0005, CommonPacketBodyBuilder.BuildSuccessAck()));
 
                 // 2. NOTI 2 subtype 2 — character list refresh
-                var charListBody = BuildCharacterListBody(accountId);
-                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0002, charListBody));
+                var characterList = BuildCharacterList(accountId);
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
+                    0x00, 0x0002, characterList.Body));
             }
             catch (Exception ex)
             {
@@ -465,22 +475,27 @@ namespace DfoServer.Network.Handlers
         public async Task SendCharacterListAsync(EnhancedClientSession session)
         {
             var accountId = session.Account?.AccountId ?? 1;
-            var body = BuildCharacterListBody(accountId);
-            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0002, body));
-            await SendHonorLevelInfoAsync(session, "character-list-ready");
+            var characterList = BuildCharacterList(accountId);
+            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0002, characterList.Body));
+            await SendHonorLevelInfoAsync(session, "character-list-ready", characterList.Honor);
             FileLogger.Log($"[{ProtocolName}] Sent character list for account_id={accountId}");
         }
 
-        private Task SendHonorLevelInfoAsync(EnhancedClientSession session, string reason)
+        private Task SendHonorLevelInfoAsync(
+            EnhancedClientSession session,
+            string reason,
+            HonorLevelSummary summary)
         {
-            return _honorLevel.SendInfoAsync(session, ProtocolName, reason);
+            return _honorLevel.SendInfoAsync(session, ProtocolName, reason, summary);
         }
 
-        private byte[] BuildCharacterListBody(int accountId)
+        private (byte[] Body, HonorLevelSummary Honor) BuildCharacterList(int accountId)
         {
             var characters = _characterRepository.ListByAccount(accountId);
             var honorLevel = _honorLevel.LoadSummary(accountId, characters);
-            return AccountCharacterListBodyBuilder.Build(characters, _getUserInfoTemplate, out _, honorLevel);
+            var body = AccountCharacterListBodyBuilder.Build(
+                characters, _getUserInfoTemplate, out _, honorLevel);
+            return (body, honorLevel);
         }
     }
 }

@@ -43,6 +43,8 @@ namespace DfoServer.Game.Inventory
 
         public bool AckError { get; set; }
 
+        public InventoryMoveFailureReason FailureReason { get; set; }
+
         public short AffectedEquipmentSlot { get; set; } = -1;
 
         public Subtype0TailMoveMutation Subtype0TailMutation { get; set; }
@@ -56,6 +58,12 @@ namespace DfoServer.Game.Inventory
         public List<short> PetCreatureRefreshSlots { get; } = new List<short>();
 
         public List<short> EquipmentRefreshSlots { get; } = new List<short>();
+    }
+
+    public enum InventoryMoveFailureReason
+    {
+        None = 0,
+        CharmCarryLimit = 1,
     }
 
     public sealed class Subtype0TailMoveMutation

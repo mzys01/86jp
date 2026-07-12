@@ -7,13 +7,21 @@ namespace DfoServer.Game.DeathTower
     // 塔专属包构建(NOTI 142/143/144/145/146)。字段定义全部来自 86JP IDA 汇编定案。
     public static class DeathTowerPacketBuilder
     {
+        public const byte NormalTowerInfoModeByte = 0;
+        public const byte ObservedRandomBuffType = 11;
+
         // NOTI 142 DEATH_TOWER_INFO (8B 固定, 双端闭环)
-        public static byte[] BuildTowerInfo(int dungeonId, ushort endStage, byte partyPlayMode = 1, byte randomBuffType = 11)
+
+        public static byte[] BuildTowerInfo(
+            int dungeonId,
+            ushort endStage,
+            byte towerInfoModeByte = NormalTowerInfoModeByte,
+            byte randomBuffType = ObservedRandomBuffType)
         {
             var w = new GamePacketWriter();
             w.WriteUInt32((uint)dungeonId);
             w.WriteUInt16(endStage);
-            w.WriteByte(partyPlayMode);
+            w.WriteByte(towerInfoModeByte);
             w.WriteByte(randomBuffType);
             return w.ToArray();
         }

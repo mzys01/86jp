@@ -13,100 +13,96 @@ namespace DfoServer.SelfTests
             Console.WriteLine("=== MONSTER_CARD_DROP selftest ===");
             var failures = 0;
 
+            Check("drop rate API exposes only consumed categories",
+                DropRateApiExposesOnlyConsumedCategories(), ref failures);
+
             Check("independent drop PVF entry mob=907 can produce card 3610",
-                IndependentDropCanProduceKnownCard(), ref failures);
+                IndependentDropCanProduceKnownCard(907, 3610, 1, 37), ref failures);
+
+            Check("independent drop PVF entry mob=61236 can produce its card 3726",
+                IndependentDropCanProduceKnownCard(61236, 3726, 61, 421), ref failures);
+
+            Check("mapped mob=61236 card 3726 respects PVF probability when seed 0 misses",
+                !IndependentDropCanProduceKnownCard(61236, 3726, 61, 0), ref failures);
 
             Check("world drop PVF table does not contain monster cards",
                 !WorldDropContainsMonsterCards(), ref failures);
 
-            Check("type4 monster drop rate can produce monster cards",
-                Type4DropRateCanProduceMonsterCard(), ref failures);
+            Check("monster without independent drop mapping cannot produce monster cards",
+                MonsterWithoutIndependentDropCannotProduceMonsterCard(), ref failures);
 
             Console.WriteLine(failures == 0 ? "PASS" : $"FAIL: {failures}");
             return failures == 0 ? 0 : 1;
         }
 
-        private static bool IndependentDropCanProduceKnownCard()
+        private static bool DropRateApiExposesOnlyConsumedCategories()
+        {
+            var method = typeof(MonsterDropConfig).GetMethod(nameof(MonsterDropConfig.GetAllDropRates));
+            if (method == null) return false;
+
+            var parameters = method.GetParameters();
+            if (parameters.Length != 6) return false;
+
+            string[] expectedNames =
+            {
+                "monsterLevel", "monsterType", "goldRate",
+                "type1Rate", "type2Rate", "type3Rate"
+            };
+            for (int i = 0; i < parameters.Length; i++)
+            {
+                if (!string.Equals(parameters[i].Name, expectedNames[i], StringComparison.Ordinal))
+                    return false;
+                if (i >= 2 && (!parameters[i].IsOut
+                    || parameters[i].ParameterType != typeof(int).MakeByRefType()))
+                    return false;
+            }
+            return true;
+        }
+
+        private static bool IndependentDropCanProduceKnownCard(
+            int monsterCode, int cardItemId, int dungeonLevel, uint seed)
         {
             ushort slotCounter = 0;
             var drops = IndependentDropSystem.GenerateDrops(
-                monsterCode: 907,
+                monsterCode: monsterCode,
                 difficulty: 0,
-                dungeonLevel: 1,
-                lcg: new DnfLcg(37),
+                dungeonLevel: dungeonLevel,
+                lcg: new DnfLcg(seed),
                 slotCounter: ref slotCounter);
 
             for (int i = 0; i < drops.Count; i++)
             {
-                if (drops[i].TemplateId == 3610 && IsMonsterCard((int)drops[i].TemplateId))
+                if (drops[i].TemplateId == cardItemId && IsMonsterCard((int)drops[i].TemplateId))
                     return true;
             }
             return false;
         }
 
-        private static bool Type4DropRateCanProduceMonsterCard()
+        private static bool MonsterWithoutIndependentDropCannotProduceMonsterCard()
         {
-            const int MonsterLevelWithType4 = 16;
+            const int MonsterLevel = 16;
             const int MonsterTypeNormal = 0;
             const int NoIndependentDropMonsterCode = -392000;
             const int DifficultyNormal = 0;
-            const int DungeonLevel = MonsterLevelWithType4;
+            const int DungeonLevel = MonsterLevel;
+            const uint LegacyGlobalCardRegressionSeed = 3939;
 
-            uint seed = FindType4OnlySeed(MonsterLevelWithType4, MonsterTypeNormal, DifficultyNormal);
             ushort slotCounter = 0;
-            var generator = new DropGenerator(new DnfLcg(seed));
+            var generator = new DropGenerator(new DnfLcg(LegacyGlobalCardRegressionSeed));
             var (_, drops) = generator.GenerateMonsterDrops(
-                monsterLevel: MonsterLevelWithType4,
+                monsterLevel: MonsterLevel,
                 monsterType: MonsterTypeNormal,
                 monsterCode: NoIndependentDropMonsterCode,
                 difficulty: DifficultyNormal,
                 dungeonLevel: DungeonLevel,
                 slotCounter: ref slotCounter);
 
-            return drops.Count > 0
-                && drops[0].SceneSlot == 1
-                && drops[0].TemplateId > 0
-                && IsMonsterCard((int)drops[0].TemplateId);
-        }
-
-        private static uint FindType4OnlySeed(int monsterLevel, int monsterType, int difficulty)
-        {
-            const int DropDenominator = 10000;
-            const int SeedProbeCount = 200000;
-
-            var diffBonus = difficulty >= 0 && difficulty < 5
-                ? 1.0f + 0.2f * difficulty
-                : 1.0f;
-
-            MonsterDropConfig.GetAllDropRates(monsterLevel, monsterType,
-                out var goldRate, out var type1Rate, out var type2Rate,
-                out var type3Rate, out var type4Rate);
-
-            goldRate = Math.Min((int)(goldRate * diffBonus), DropDenominator);
-            type1Rate = Math.Min((int)(type1Rate * diffBonus), DropDenominator);
-            type2Rate = Math.Min((int)(type2Rate * diffBonus), DropDenominator);
-            type3Rate = Math.Min((int)(type3Rate * diffBonus), DropDenominator);
-            type4Rate = Math.Min((int)(type4Rate * diffBonus), DropDenominator);
-
-            ExpTableProvider.GetMonsterGold(monsterLevel, out int variancePct);
-
-            for (uint seed = 0; seed < SeedProbeCount; seed++)
+            for (int i = 0; i < drops.Count; i++)
             {
-                var lcg = new DnfLcg(seed);
-                if (variancePct > 0)
-                    lcg.Next(2 * variancePct + 1);
-
-                bool goldHit = goldRate > lcg.Next(DropDenominator);
-                bool type1Hit = type1Rate > lcg.Next(DropDenominator);
-                bool type2Hit = type2Rate > lcg.Next(DropDenominator);
-                bool type3Hit = type3Rate > lcg.Next(DropDenominator);
-                bool type4Hit = type4Rate > lcg.Next(DropDenominator);
-
-                if (!goldHit && !type1Hit && !type2Hit && !type3Hit && type4Hit)
-                    return seed;
+                if (IsMonsterCard((int)drops[i].TemplateId))
+                    return false;
             }
-
-            throw new InvalidOperationException("Could not find a deterministic type4-only seed for monster card drop selftest.");
+            return true;
         }
 
         private static bool WorldDropContainsMonsterCards()

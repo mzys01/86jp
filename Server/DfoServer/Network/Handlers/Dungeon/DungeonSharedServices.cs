@@ -35,6 +35,8 @@ namespace DfoServer.Network.Handlers.Dungeon
         internal SqliteCharacterProgressRepository ProgressRepository { get; }
         internal SqliteSubtype0FieldsRepository Subtype0FieldsRepository { get; }
         internal HonorLevelSyncService HonorLevel { get; }
+        internal AccountExperienceProgressService AccountExperience { get; }
+        internal GrowthCapsuleSyncService GrowthCapsuleSync { get; }
 
         // 组队副本联机用: 检测队伍 + 定位队员会话(可空; 未接线时副本 fan-out 优雅跳过=单人不回归)。
         internal Game.Party.PartyManager PartyManager { get; }
@@ -46,6 +48,7 @@ namespace DfoServer.Network.Handlers.Dungeon
             SqliteCharacterRepository characterRepository,
             SqliteSelectCharacterDataSource selectCharacterDataSource,
             IRentalTimeProvider rentalTimeProvider,
+            InventoryRefreshSender inventoryRefresh,
             Game.Party.PartyManager partyManager = null,
             Game.Session.ISessionDirectory sessions = null)
         {
@@ -57,12 +60,14 @@ namespace DfoServer.Network.Handlers.Dungeon
             SelectCharacterDataSource = selectCharacterDataSource ?? throw new ArgumentNullException(nameof(selectCharacterDataSource));
             RentalTimeProvider = rentalTimeProvider ?? SystemRentalTimeProvider.Instance;
             DeathTower = new Game.DeathTower.DeathTowerHandler();
-            QuestDrops = new Game.Quests.QuestDropService(assetService);
+            QuestDrops = new Game.Quests.QuestDropService(assetService, inventoryRefresh);
             Subtype1Repository = new SqliteSubtype1Repository(ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
             CharacterStateRepository = new SqliteCharacterStateRepository(ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
             ProgressRepository = new SqliteCharacterProgressRepository(ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
             Subtype0FieldsRepository = new SqliteSubtype0FieldsRepository(ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
             HonorLevel = new HonorLevelSyncService(CharacterRepository);
+            AccountExperience = new AccountExperienceProgressService(CharacterRepository);
+            GrowthCapsuleSync = new GrowthCapsuleSyncService(CharacterRepository);
             CardRewards = new Game.Dungeon.CardRewardService(this, assetService);
             Drops = new Game.Dungeon.DropService(assetService);
             EntryCost = new Game.Dungeon.DungeonEntryCostService(assetService);
@@ -91,6 +96,16 @@ namespace DfoServer.Network.Handlers.Dungeon
             }
 
             return summary;
+        }
+
+        internal GrowthCapsuleSummary ResolveGrowthCapsuleForExp(
+            EnhancedClientSession session,
+            GrowthCapsuleSummary summary = null)
+        {
+            if ((session?.Player?.Level ?? 0) < Game.Dungeon.ExpTableProvider.MaxLevel)
+                return summary ?? GrowthCapsuleDataProvider.Calculate(0);
+
+            return summary ?? AccountExperience.LoadGrowthCapsule(session?.Account?.AccountId ?? 0);
         }
 
         internal Game.Dungeon.CardRewardService CardRewards { get; }

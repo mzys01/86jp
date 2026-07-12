@@ -31,13 +31,12 @@ namespace DfoServer.Game.Dungeon
 
             MonsterDropConfig.GetAllDropRates(monsterLevel, monsterType,
                 out var goldRate, out var type1Rate, out var type2Rate,
-                out var type3Rate, out var type4Rate);
+                out var type3Rate);
 
             goldRate = Math.Min((int)(goldRate * diffBonus), DropDenominator);
             type1Rate = Math.Min((int)(type1Rate * diffBonus), DropDenominator);
             type2Rate = Math.Min((int)(type2Rate * diffBonus), DropDenominator);
             type3Rate = Math.Min((int)(type3Rate * diffBonus), DropDenominator);
-            type4Rate = Math.Min((int)(type4Rate * diffBonus), DropDenominator);
 
             
             
@@ -114,23 +113,6 @@ namespace DfoServer.Game.Dungeon
                 }
             }
 
-            if (type4Rate > _lcg.Next(DropDenominator))
-            {
-                int rarity = MonsterDropConfig.RollRarity(_lcg);
-                int itemId = MonsterDropConfig.ChooseMonsterCard(_lcg, monsterLevel, rarity);
-                if (itemId > 0)
-                {
-                    slotCounter++;
-                    drops.Add(new DropInfo
-                    {
-                        SceneSlot = slotCounter,
-                        TemplateId = (uint)itemId,
-                        StackCount = 1
-                    });
-                }
-            }
-
-            
             if (dropPool != null && dropPool.Count > 0
                 && MobItemDropRate > _lcg.Next(DropDenominator))
             {

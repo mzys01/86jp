@@ -40,6 +40,7 @@ namespace DfoServer.Network.Handlers.Dungeon
 
                 // NOTI 0x0002 subtype1 (ADDITION): dynamically built from structured table (same path as init flow)
                 int cid = session.Player.CharacterId;
+                HonorLevelSummary honorSummary = null;
                 if (cid <= 0)
                 {
                     FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] ENTER_SELECT_DUNGEON ERROR: CharacterId<=0, USERINFO not sent");
@@ -52,8 +53,10 @@ namespace DfoServer.Network.Handlers.Dungeon
                     {
                         var accountId = session.Account?.AccountId ?? record.AccountId;
                         var accountCharacters = _svc.CharacterRepository.ListByAccount(accountId);
+                        honorSummary = _svc.HonorLevel.LoadSummary(accountId, accountCharacters);
                         AdventureGroupUserInfoSynchronizer.ApplyToUserInfoAddition(addition, accountCharacters);
-                        _svc.HonorLevel.ApplyToUserInfoAddition(addition, accountId, accountCharacters);
+                        _svc.HonorLevel.ApplyToUserInfoAddition(
+                            addition, accountId, accountCharacters, honorSummary);
                         var skillSnap = _svc.LoadSyncedSkillState(cid, record.Level).Skills;
                         var w = new GamePacketWriter();
                         w.WriteByte(1); // subtype 1 ADDITION
@@ -71,7 +74,9 @@ namespace DfoServer.Network.Handlers.Dungeon
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0003, EnterSelectDungeonStateBuilder.BuildUserState(session.Player)));
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x001A, UdpHostBuilder.BuildUnavailable()));
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x001B, EnterSelectDungeonStateBuilder.BuildEnterSelectDungeon(session.Player)));
-                FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] ENTER_SELECT_DUNGEON: 5 packets sent OK");
+                await _svc.GrowthCapsuleSync.SendExpProgressAsync(
+                    session, "enter-select-dungeon", honor: honorSummary);
+                FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] ENTER_SELECT_DUNGEON: state packets and account EXP progress sent OK");
             }
             catch (Exception ex)
             {
@@ -84,8 +89,12 @@ namespace DfoServer.Network.Handlers.Dungeon
             var req = Network.Parsers.Dungeon.SelectDungeonRequest.Parse(body);
 
             // 塔类副本分流: dungeonKind==1 走专属流程(NOTI 142+143, 非普通副本的 START_MAP)
-            if (await _svc.DeathTower.TryHandleSelectDungeon(session, req.DungeonId))
+            if (_svc.DeathTower.TryCreateSession(req.DungeonId, out var tower))
+            {
+                DungeonRunLifecycle.BeginTowerRun(session, req.DungeonId, tower, req.Difficulty);
+                await _svc.DeathTower.SendEntryPacketsAsync(session, tower, req.Difficulty);
                 return;
+            }
 
             DungeonRunLifecycle.BeginRun(session, req.DungeonId, req.Difficulty);
             var run = session.Player.CurrentRun;

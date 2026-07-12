@@ -29,7 +29,6 @@ namespace DfoServer.SelfTests
                 && player.DeathTowerState == null
                 && !player.IsInDeathTower,
                 ref failures);
-
             // 2. 新局字段默认值 = 旧版返城重置后的取值(常量表)
             var fresh = new DungeonRun();
             Check("fresh run fields carry legacy reset defaults",
@@ -61,6 +60,14 @@ namespace DfoServer.SelfTests
                 && run.DungeonId == 1002
                 && run.Difficulty == 1
                 && run.Phase == DungeonRunPhase.InProgress,
+                ref failures);
+
+            var markerRun = new DungeonRun(1002, 0);
+            Check("clear-map quest sync marker deduplicates by dungeon and map",
+                markerRun.TryMarkClearMapQuestSynced(0, 33060)
+                && !markerRun.TryMarkClearMapQuestSynced(0, 33060)
+                && markerRun.TryMarkClearMapQuestSynced(0, 33061)
+                && markerRun.TryMarkClearMapQuestSynced(1002, 33060),
                 ref failures);
 
             // 4. 跨局字段不随 run 重建

@@ -154,6 +154,9 @@ namespace DfoServer.Game.Dungeon
         {
             lock (run.SyncRoot)
             {
+                if (run.CardRewards == null)
+                    return false;
+
                 var slots = cardType == 0 ? run.FreeCardSlots : run.PaidCardSlots;
                 if (slots[cardIndex] != 0xFF)
                     return false;
@@ -282,6 +285,15 @@ namespace DfoServer.Game.Dungeon
             }
         }
 
+        private static bool HasPaidCardReward(List<ClearRewardGenerator.CardReward> cards)
+        {
+            if (cards == null)
+                return false;
+
+            return (cards.Count > 4 && cards[4].IsGold && cards[4].GoldAmount > 0) ||
+                   (cards.Count > 5 && !cards[5].IsGold && cards[5].ItemId > 0);
+        }
+
         private static void ClearCardRewardsIfFinished(DungeonRun run)
         {
             lock (run.SyncRoot)
@@ -345,13 +357,6 @@ namespace DfoServer.Game.Dungeon
         {
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0045, new byte[] { 0x01 }));
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0046, BuildCardLayoutAck()));
-        }
-
-        private static bool HasPaidCardReward(List<ClearRewardGenerator.CardReward> cards)
-        {
-            if (cards == null) return false;
-            return (cards.Count > 4 && cards[4].IsGold && cards[4].GoldAmount > 0) ||
-                   (cards.Count > 5 && !cards[5].IsGold && cards[5].ItemId > 0);
         }
 
         private static byte[] BuildCardInfoAck(EnhancedClientSession session)

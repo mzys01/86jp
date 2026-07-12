@@ -19,6 +19,7 @@ namespace DfoServer
             ("--selftest-inventory-extra-view", SelfTests.InventoryExtraViewSelfTest.Run),
             ("--selftest-titlebook-item-codec", SelfTests.TitleBookInventoryItemCodecSelfTest.Run),
             ("--selftest-inventory-sale", SelfTests.InventorySaleSelfTest.Run),
+            ("--selftest-charm-equipment-slot", SelfTests.CharmEquipmentSlotSelfTest.Run),
             ("--selftest-personal-cargo", SelfTests.PersonalCargoSelfTest.Run),
             ("--selftest-dungeon-map-fallback", SelfTests.DungeonMapFallbackSelfTest.Run),
             ("--selftest-dungeon-room-progress", SelfTests.DungeonRoomProgressSelfTest.Run),
@@ -30,6 +31,9 @@ namespace DfoServer
             ("--selftest-slot-expansion-quest", SelfTests.SlotExpansionQuestSelfTest.Run),
             ("--selftest-character-slot-policy", SelfTests.CharacterSlotPolicySelfTest.Run),
             ("--selftest-clear-map-quest", SelfTests.ClearMapQuestSelfTest.Run),
+            ("--selftest-death-tower-entry", SelfTests.DeathTowerEntrySelfTest.Run),
+            ("--selftest-death-tower-map-loader", SelfTests.DeathTowerMapLoaderSelfTest.Run),
+            ("--selftest-death-tower-quest-routing", SelfTests.DeathTowerQuestRoutingSelfTest.Run),
             ("--selftest-quest-clear", SelfTests.QuestClearSelfTest.Run),
             ("--selftest-quest-trigger-counts", SelfTests.QuestTriggerCountSelfTest.Run),
             ("--selftest-quest-item-flow", SelfTests.QuestItemFlowSelfTest.Run),
@@ -46,6 +50,7 @@ namespace DfoServer
             ("--selftest-honor-level", SelfTests.HonorLevelSelfTest.Run),
             ("--selftest-party", SelfTests.PartySelfTest.Run),
             ("--selftest-udp-relay", SelfTests.UdpRelaySelfTest.Run),
+            ("--selftest-growth-capsule", SelfTests.GrowthCapsuleSelfTest.Run),
         };
 
         // 顺序跑全部自测, 输出汇总表; 任一失败(或抛异常)退出码为 1。

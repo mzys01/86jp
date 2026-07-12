@@ -1,28 +1,37 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Text.RegularExpressions;
 using DfoServer.GameWorld;
 using PvfLib;
-using Dungeon = DfoServer.GameWorld.Dungeon;
 
 namespace DfoServer.Game.DeathTower
 {
-    // 从 PVF 地图文件加载当层怪物列表(构建 NOTI 143 怪物段)。
-    // 读取 [monster] + [ai character] 标签, 按老服 consistMap 逻辑填充 StageMonster。
     public static class DeathTowerMapLoader
     {
-        // 随机 APC 池的默认 APC 编号(AICharacter.lst 20002 = 阿拉德初阶圣职者)
-        private const int FallbackApcCode = 20002;
         private const int ApcRandomListIndexStart = 64;
+
+        private static readonly Regex FirstIntegerRegex =
+            new Regex(@"-?\d+", RegexOptions.Compiled);
+        private static readonly Regex ApcLevelRegex =
+            new Regex(@"`[^`]*`\s+\d+\s+\d+\s+\d+\s+\d+\s+(\d+)", RegexOptions.Compiled);
+        private static readonly object ApcCacheLock = new object();
+        private static readonly Dictionary<int, ApcDefinition> ApcDefinitions =
+            new Dictionary<int, ApcDefinition>();
+        private static readonly HashSet<int> InvalidApcCodes = new HashSet<int>();
+
+        private static LstFile _aiCharacterList;
+        private static List<ApcDefinition> _randomApcCandidates;
 
         public static List<StageMonster> LoadStageMonsters(DeathTowerSession tower)
         {
             var mapId = tower.GetCurrentMapId();
-            var monsters = new List<StageMonster>();
-
+            var result = new List<StageMonster>();
             if (mapId <= 0)
             {
                 FileLogger.Log($"[DeathTower] LoadStageMonsters: invalid mapId={mapId} for stage={tower.CurrentStage}");
-                return monsters;
+                return result;
             }
 
             try
@@ -31,193 +40,274 @@ namespace DfoServer.Game.DeathTower
                 if (mapContent == null)
                 {
                     FileLogger.Log($"[DeathTower] LoadStageMonsters: map file not found for mapId={mapId}");
-                    return monsters;
+                    return result;
                 }
 
-                var basisLevel = tower.Config.BasisLevel;
-                int normalIndex = 0;
-                int apcIndex = 0;
-
-                // [monster] 标签: 普通怪物
-                var monsterEntries = ParseMonsterTag(mapContent);
-                foreach (var entry in monsterEntries)
-                {
-                    var level = entry.AutoLv != 0
-                        ? basisLevel + entry.LevelOffset
-                        : entry.LevelOffset;
-                    if (level <= 0) level = 1;
-                    if (level > 200) level = 200;
-
-                    monsters.Add(new StageMonster
-                    {
-                        ListIndex = normalIndex++,
-                        MonsterUniqueId = tower.NextMonsterSeq(),
-                        MonsterIndex = entry.MonsterCode,
-                        MonsterLevel = (byte)level,
-                        MonsterType = 0,
-                        IsBoxMonster = 0,
-                        BoxIndex = 0,
-                    });
-                }
-
-                // [ai character]: 固定 APC, type=5, 独立 apcIndex 计数(不与普通怪共用)
-                var apcEntries = ParseAiCharacterTag(mapContent);
-                foreach (var apc in apcEntries)
-                {
-                    monsters.Add(new StageMonster
-                    {
-                        ListIndex = apcIndex++,
-                        MonsterUniqueId = tower.NextMonsterSeq(),
-                        MonsterIndex = apc.CharacterId,
-                        MonsterLevel = (byte)Math.Max(1, Math.Min(200, basisLevel)),
-                        MonsterType = 5,
-                        IsBoxMonster = 0,
-                        BoxIndex = 0,
-                    });
-                }
-
-                // [apc random point]: 随机 APC 池, type=5, ListIndex 从 64 开始(老服硬编码)
-                if (monsters.Count == 0)
-                {
-                    var spawnCount = ParseApcRandomSpawnCount(mapContent);
-                    var randomApcIdx = ApcRandomListIndexStart;
-                    for (int s = 0; s < spawnCount; s++)
-                    {
-                        monsters.Add(new StageMonster
-                        {
-                            ListIndex = randomApcIdx++,
-                            MonsterUniqueId = tower.NextMonsterSeq(),
-                            MonsterIndex = FallbackApcCode,
-                            MonsterLevel = (byte)Math.Max(1, Math.Min(200, basisLevel)),
-                            MonsterType = 5,
-                            IsBoxMonster = 0,
-                            BoxIndex = 0,
-                        });
-                    }
-                }
+                var map = MapFile.Parse(mapContent);
+                AppendOrdinaryMonsters(result, tower, map, mapId);
+                AppendFixedApcs(result, tower, map, mapId);
+                AppendRandomApcs(result, tower, map, mapId);
             }
             catch (Exception ex)
             {
                 FileLogger.Log($"[DeathTower] LoadStageMonsters failed mapId={mapId}: {ex.Message}");
             }
 
-            return monsters;
+            return result;
+        }
+
+        private static void AppendOrdinaryMonsters(
+            ICollection<StageMonster> result,
+            DeathTowerSession tower,
+            MapFile map,
+            int mapId)
+        {
+            var listIndex = 0;
+            foreach (var monster in map.Monsters)
+            {
+                var monsterCode = monster.MonsterId.GetValueOrDefault();
+                if (monsterCode <= 0)
+                {
+                    FileLogger.Log($"[DeathTower] Skip invalid monster code={monsterCode} map={mapId}");
+                    continue;
+                }
+
+                var rawLevel = monster.Lv.GetValueOrDefault() != 0
+                    ? tower.Config.BasisLevel + monster.AutoLv.GetValueOrDefault()
+                    : monster.AutoLv.GetValueOrDefault();
+                var level = rawLevel > 0 ? rawLevel : tower.Config.BasisLevel;
+                var type = (byte)monster.Type;
+                if (type > 3)
+                {
+                    FileLogger.Log($"[DeathTower] Clamp monster type={type} to 0 code={monsterCode} map={mapId}");
+                    type = 0;
+                }
+
+                result.Add(new StageMonster
+                {
+                    ListIndex = listIndex++,
+                    MonsterUniqueId = tower.NextMonsterSeq(),
+                    MonsterIndex = monsterCode,
+                    MonsterLevel = ClampLevel(level),
+                    MonsterType = type,
+                    IsBoxMonster = 0,
+                    BoxIndex = 0,
+                });
+            }
+        }
+
+        private static void AppendFixedApcs(
+            ICollection<StageMonster> result,
+            DeathTowerSession tower,
+            MapFile map,
+            int mapId)
+        {
+            var listIndex = 0;
+            foreach (var apc in map.AICharacters)
+            {
+                if (apc.Code <= 0 || !TryGetApcDefinition(apc.Code, out var definition))
+                {
+                    FileLogger.Log($"[DeathTower] Skip APC code={apc.Code} without valid AIC map={mapId}");
+                    continue;
+                }
+
+                var type = (byte)apc.AIType;
+                if (type < 5 || type > 8)
+                {
+                    FileLogger.Log($"[DeathTower] Clamp APC type={type} to 5 code={apc.Code} map={mapId}");
+                    type = 5;
+                }
+
+                result.Add(new StageMonster
+                {
+                    ListIndex = listIndex++,
+                    MonsterUniqueId = tower.NextMonsterSeq(),
+                    MonsterIndex = apc.Code,
+                    MonsterLevel = definition.Level,
+                    MonsterType = type,
+                    IsBoxMonster = 0,
+                    BoxIndex = 0,
+                });
+            }
+        }
+
+        private static void AppendRandomApcs(
+            ICollection<StageMonster> result,
+            DeathTowerSession tower,
+            MapFile map,
+            int mapId)
+        {
+            var pointBudget = ReadNodeFirstInteger(map, "apc random point");
+            if (pointBudget <= 0)
+                return;
+
+            var spawnSlots = ReadNodeFirstInteger(map, "monster spawn pos");
+            if (spawnSlots <= 0)
+            {
+                FileLogger.Log($"[DeathTower] Random APC budget has no spawn slots map={mapId} budget={pointBudget}");
+                return;
+            }
+
+            var remainingPoints = pointBudget;
+            var available = new List<ApcDefinition>(GetRandomApcCandidates());
+            var selectedCount = 0;
+
+            while (selectedCount < spawnSlots)
+            {
+                var eligible = available
+                    .Where(candidate => candidate.AppearancePoint <= remainingPoints)
+                    .ToList();
+                if (eligible.Count == 0)
+                    break;
+
+                var selected = eligible[Infrastructure.ServerRandom.Next(eligible.Count)];
+                available.Remove(selected);
+                remainingPoints -= selected.AppearancePoint;
+
+                result.Add(new StageMonster
+                {
+                    ListIndex = ApcRandomListIndexStart + selectedCount,
+                    MonsterUniqueId = tower.NextMonsterSeq(),
+                    MonsterIndex = selected.Code,
+                    MonsterLevel = selected.Level,
+                    MonsterType = 5,
+                    IsBoxMonster = 0,
+                    BoxIndex = 0,
+                });
+                selectedCount++;
+            }
+
+            FileLogger.Log($"[DeathTower] Random APC map={mapId} selected={selectedCount}/{spawnSlots} points={pointBudget - remainingPoints}/{pointBudget}");
+        }
+
+        private static int ReadNodeFirstInteger(MapFile map, string tag)
+        {
+            var node = map.Root?.GetChild(tag);
+            if (node == null || node.DataItems.Count == 0)
+                return 0;
+
+            var match = FirstIntegerRegex.Match(node.GetFirstDataContent(map.Content) ?? string.Empty);
+            return match.Success && int.TryParse(match.Value, out var value) ? value : 0;
+        }
+
+        private static IReadOnlyList<ApcDefinition> GetRandomApcCandidates()
+        {
+            lock (ApcCacheLock)
+            {
+                if (_randomApcCandidates != null)
+                    return _randomApcCandidates;
+
+                EnsureAiCharacterList();
+                var candidates = new List<ApcDefinition>();
+                foreach (var entry in _aiCharacterList.Entries)
+                {
+                    if (TryLoadApcDefinitionLocked(entry.Id, out var definition)
+                        && definition.AppearancePoint > 0)
+                    {
+                        candidates.Add(definition);
+                    }
+                }
+
+                _randomApcCandidates = candidates;
+                FileLogger.Log($"[DeathTower] Loaded random APC candidates={candidates.Count}");
+                return _randomApcCandidates;
+            }
+        }
+
+        private static bool TryGetApcDefinition(int code, out ApcDefinition definition)
+        {
+            lock (ApcCacheLock)
+            {
+                return TryLoadApcDefinitionLocked(code, out definition);
+            }
+        }
+
+        private static bool TryLoadApcDefinitionLocked(int code, out ApcDefinition definition)
+        {
+            if (ApcDefinitions.TryGetValue(code, out definition))
+                return true;
+            if (InvalidApcCodes.Contains(code))
+                return false;
+
+            try
+            {
+                EnsureAiCharacterList();
+                var entry = _aiCharacterList.GetById(code);
+                if (entry == null || string.IsNullOrEmpty(entry.FilePath))
+                {
+                    InvalidApcCodes.Add(code);
+                    return false;
+                }
+
+                var content = PvfArchiveAccessor.ReadText(Path.Combine("AICharacter", entry.FilePath));
+                var aic = AiConfigFile.Parse(content);
+                var levelMatch = ApcLevelRegex.Match(aic.MinimumInfo ?? string.Empty);
+                if (!levelMatch.Success
+                    || !int.TryParse(levelMatch.Groups[1].Value, out var parsedLevel)
+                    || parsedLevel <= 0
+                    || parsedLevel > byte.MaxValue)
+                {
+                    InvalidApcCodes.Add(code);
+                    return false;
+                }
+
+                definition = new ApcDefinition(
+                    code,
+                    (byte)parsedLevel,
+                    ParseFirstInteger(aic.AppearancePoint));
+                ApcDefinitions[code] = definition;
+                return true;
+            }
+            catch (Exception ex)
+            {
+                InvalidApcCodes.Add(code);
+                FileLogger.Log($"[DeathTower] Failed to load AIC code={code}: {ex.Message}");
+                definition = null;
+                return false;
+            }
+        }
+
+        private static void EnsureAiCharacterList()
+        {
+            if (_aiCharacterList == null)
+            {
+                _aiCharacterList = LstFile.Parse(
+                    PvfArchiveAccessor.ReadText(Path.Combine("AICharacter", "AICharacter.lst")));
+            }
+        }
+
+        private static int ParseFirstInteger(string value)
+        {
+            var match = FirstIntegerRegex.Match(value ?? string.Empty);
+            return match.Success && int.TryParse(match.Value, out var parsed) ? parsed : 0;
+        }
+
+        private static byte ClampLevel(int level)
+        {
+            return (byte)Math.Max(1, Math.Min(byte.MaxValue, level));
         }
 
         private static string ReadMapContent(int mapId)
         {
-            var lstFile = LstFile.Parse(PvfArchiveAccessor.ReadText(System.IO.Path.Combine("map", "map.lst")));
-            var entry = lstFile.GetById(mapId);
+            var list = LstFile.Parse(PvfArchiveAccessor.ReadText(Path.Combine("map", "map.lst")));
+            var entry = list.GetById(mapId);
             if (entry == null || string.IsNullOrEmpty(entry.FilePath))
                 return null;
-            return PvfArchiveAccessor.ReadText(System.IO.Path.Combine("map", entry.FilePath));
+            return PvfArchiveAccessor.ReadText(Path.Combine("map", entry.FilePath));
         }
 
-        private struct MonsterEntry
+        private sealed class ApcDefinition
         {
-            public int MonsterCode;
-            public int AutoLv;
-            public int LevelOffset;
-        }
-
-        private struct ApcEntry
-        {
-            public int CharacterId;
-        }
-
-        private static List<MonsterEntry> ParseMonsterTag(string content)
-        {
-            var result = new List<MonsterEntry>();
-            var tag = "[monster]";
-            var idx = content.IndexOf(tag, StringComparison.OrdinalIgnoreCase);
-            if (idx < 0) return result;
-
-            var endTag = "[/monster]";
-            var endIdx = content.IndexOf(endTag, idx, StringComparison.OrdinalIgnoreCase);
-            if (endIdx < 0) endIdx = content.Length;
-
-            var section = content.Substring(idx + tag.Length, endIdx - idx - tag.Length);
-
-            // PVF 格式: 所有怪物条目在一行内空格分隔, 每条 10 个 token:
-            // monsterCode autoLv levelOffset x y z count spawnInterval `[spawnType]` `[aiType]`
-            // 含反引号包裹的标签(如 `[fixed]`), 分割时去掉反引号
-            var tokens = section.Split(new[] { ' ', '\t', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
-
-            const int tokensPerEntry = 10;
-            int i = 0;
-            while (i + tokensPerEntry <= tokens.Length)
+            public ApcDefinition(int code, byte level, int appearancePoint)
             {
-                var codeStr = tokens[i].Trim('`', '[', ']');
-                if (!int.TryParse(codeStr, out var code))
-                {
-                    i++;
-                    continue;
-                }
-
-                int.TryParse(tokens[i + 1], out var autoLv);
-                int.TryParse(tokens[i + 2], out var levelOffset);
-
-                result.Add(new MonsterEntry
-                {
-                    MonsterCode = code,
-                    AutoLv = autoLv,
-                    LevelOffset = levelOffset,
-                });
-
-                i += tokensPerEntry;
-            }
-            return result;
-        }
-
-        private static int ParseApcRandomSpawnCount(string content)
-        {
-            // [monster spawn pos] 首 token = 怪物位置数量; 没有则默认 1
-            var tag = "[monster spawn pos]";
-            var idx = content.IndexOf(tag, StringComparison.OrdinalIgnoreCase);
-            if (idx < 0) return 1;
-            var after = content.Substring(idx + tag.Length, Math.Min(40, content.Length - idx - tag.Length));
-            var tokens = after.Split(new[] { ' ', '\t', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
-            if (tokens.Length > 0 && int.TryParse(tokens[0], out var count) && count > 0)
-                return count;
-            return 1;
-        }
-
-        private static List<ApcEntry> ParseAiCharacterTag(string content)
-        {
-            var result = new List<ApcEntry>();
-            var tag = "[ai character]";
-            var idx = content.IndexOf(tag, StringComparison.OrdinalIgnoreCase);
-            if (idx < 0) return result;
-
-            var endTag = "[/ai character]";
-            var endIdx = content.IndexOf(endTag, idx, StringComparison.OrdinalIgnoreCase);
-            if (endIdx < 0) endIdx = content.Length;
-
-            var section = content.Substring(idx + tag.Length, endIdx - idx - tag.Length);
-
-            // PVF 格式: 同一行内空格分隔, 每条 8 个 token:
-            // characterId x y z `[type]` `[ai]` flag1 flag2
-            var tokens = section.Split(new[] { ' ', '\t', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
-
-            const int tokensPerEntry = 8;
-            int i = 0;
-            while (i + tokensPerEntry <= tokens.Length)
-            {
-                var idStr = tokens[i].Trim('`', '[', ']');
-                if (int.TryParse(idStr, out var charId) && charId > 0)
-                    result.Add(new ApcEntry { CharacterId = charId });
-                i += tokensPerEntry;
+                Code = code;
+                Level = level;
+                AppearancePoint = appearancePoint;
             }
 
-            // 如果 token 数不是 8 的整倍数但至少有 4 个(最小: id x y z), 尝试宽松解析
-            if (result.Count == 0 && tokens.Length >= 4)
-            {
-                var idStr = tokens[0].Trim('`', '[', ']');
-                if (int.TryParse(idStr, out var charId) && charId > 0)
-                    result.Add(new ApcEntry { CharacterId = charId });
-            }
-
-            return result;
+            public int Code { get; }
+            public byte Level { get; }
+            public int AppearancePoint { get; }
         }
     }
 }

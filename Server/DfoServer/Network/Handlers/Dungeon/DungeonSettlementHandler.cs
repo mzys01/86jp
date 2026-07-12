@@ -50,6 +50,7 @@ namespace DfoServer.Network.Handlers.Dungeon
             var clearHonorExpGain = 0u;
             var clearNormalExpGain = clearExp.Total;
             HonorLevelSummary honorSummary = null;
+            GrowthCapsuleSummary growthCapsuleSummary = null;
             var normalizedMaxExp = false;
             if (clearExp.Total > 0)
             {
@@ -70,8 +71,11 @@ namespace DfoServer.Network.Handlers.Dungeon
                 }
                 if (clearHonorExpGain > 0 && (session.Account?.AccountId ?? 0) > 0)
                 {
-                    honorSummary = _svc.HonorLevel.AddExp(session.Account.AccountId, clearHonorExpGain);
-                    FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] HONOR_EXP_GAIN clear: account={session.Account.AccountId} cid={session.Player.CharacterId} gain={clearHonorExpGain}");
+                    var accountProgress = _svc.AccountExperience.AddHonorAndGrowthCapsuleExp(
+                        session.Account.AccountId, clearHonorExpGain);
+                    honorSummary = accountProgress.Honor;
+                    growthCapsuleSummary = accountProgress.GrowthCapsule;
+                    FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] ACCOUNT_EXP_GAIN clear: account={session.Account.AccountId} cid={session.Player.CharacterId} honor={clearHonorExpGain} capsule={accountProgress.GrowthCapsuleExpGain} capsuleTotal={growthCapsuleSummary.TotalExp}");
                 }
                 session.Player.Level = ExpTableProvider.ApplyLevelUps(session.Player.Level, session.Player.Exp);
             }
@@ -118,9 +122,12 @@ namespace DfoServer.Network.Handlers.Dungeon
             if (clearNormalExpGain > 0 || leveledUp || clearHonorExpGain > 0)
             {
                 honorSummary = _svc.ResolveHonorLevelForExp(session, honorSummary);
+                growthCapsuleSummary = _svc.ResolveGrowthCapsuleForExp(session, growthCapsuleSummary);
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0025,
                     DungeonNotificationBuilder.BuildExp(
-                        session.Player.Level, session.Player.Exp, remainSp, remainTp, honorSummary)));
+                        session.Player.Level, session.Player.Exp, remainSp, remainTp, honorSummary,
+                        growthCapsuleExp: GrowthCapsuleDataProvider.GetDisplayProgress(
+                            session.Player.Level, growthCapsuleSummary))));
             }
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0023,
                 DungeonNotificationBuilder.BuildClearDungeonReward(
@@ -359,19 +366,20 @@ namespace DfoServer.Network.Handlers.Dungeon
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x001F, DungeonNotificationBuilder.BuildEnableClearDungeon()));
             var npcId = SecretShopNpcIds[ServerRandom.Next(SecretShopNpcIds.Length)];
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0117, BitConverter.GetBytes(npcId)));
-            if (session.GameSession?.QuestManager != null)
+            var currentMapId = ResolveCurrentMapId(session);
+            await DungeonClearMapQuestSync.SyncAsync(
+                session,
+                run.DungeonId,
+                currentMapId,
+                "dungeon_clear");
+            if (ShouldSyncQuestConnectedStartMapOnDungeonClear(session, currentMapId))
             {
-                var currentMapId = ResolveCurrentMapId(session);
-                await session.GameSession.QuestManager.SyncClearMapQuestProgressAsync(
-                    run.DungeonId,
-                    currentMapId);
-                if (ShouldSyncQuestConnectedStartMapOnDungeonClear(session, currentMapId))
-                {
-                    FileLogger.Log($"[DungeonHandler] CLEAR_MAP sync deferred quest-connected start map: dungeon={run.DungeonId} maze={run.MazeIndex} map={run.MazeStartMapId}");
-                    await session.GameSession.QuestManager.SyncClearMapQuestProgressAsync(
-                        0,
-                        run.MazeStartMapId);
-                }
+                FileLogger.Log($"[DungeonHandler] CLEAR_MAP sync deferred quest-connected start map: dungeon={run.DungeonId} maze={run.MazeIndex} map={run.MazeStartMapId}");
+                await DungeonClearMapQuestSync.SyncAsync(
+                    session,
+                    0,
+                    run.MazeStartMapId,
+                    "dungeon_clear_deferred_start_map");
             }
             FileLogger.Log($"[DungeonHandler] ClearDungeon: {reason} secretShopNpc={npcId}");
         }

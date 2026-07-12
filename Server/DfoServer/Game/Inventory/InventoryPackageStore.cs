@@ -616,6 +616,10 @@ namespace DfoServer.Game.Inventory
                 return true;
             }
 
+            if ((CharmInventoryPolicy.IsCharmItem(reward.ItemTemplateId) && Math.Max(1, reward.Count) > 1)
+                || !CharmInventoryPolicy.CanEnterMain(connection, transaction, characterId, reward.ItemTemplateId))
+                return false;
+
             var isPetConsumable = ItemMetadataResolver.IsPetConsumableItem(metadata);
             var stackListType = isPetConsumable ? InventoryListType.Pet : InventoryListType.Main;
             if (metadata.IsStackable)

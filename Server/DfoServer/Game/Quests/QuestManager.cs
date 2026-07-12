@@ -24,6 +24,7 @@ namespace DfoServer.Game.Quests
         private readonly QuestService _service;
         private readonly SqliteCharacterRepository _characterRepository;
         private readonly HonorLevelSyncService _honorLevel;
+        private readonly GrowthCapsuleProgressRepository _growthCapsuleRepository;
 
         public QuestManager(ISessionPacketSender sender, string connStr, IAssetService assetService)
         {
@@ -37,6 +38,8 @@ namespace DfoServer.Game.Quests
                 _characterRepository,
                 _databasePath,
                 ServerPaths.SchemaFilePath);
+            _growthCapsuleRepository = new GrowthCapsuleProgressRepository(
+                _databasePath, ServerPaths.SchemaFilePath);
         }
 
         private static byte[] StripEcho(byte[] body)
@@ -136,10 +139,16 @@ namespace DfoServer.Game.Quests
                 || result.ChainType == 20
                 || result.ChainType == GameWorld.QuestData.ChainTypeSlotExpansion;
             HonorLevelSummary honorLevel = null;
+            GrowthCapsuleSummary growthCapsule = null;
             if (result.HonorExp > 0)
+            {
                 honorLevel = HonorLevelDataProvider.CalculateFromHonorExp(result.TotalHonorExp, 0);
+                growthCapsule = GrowthCapsuleDataProvider.Calculate(result.TotalGrowthCapsuleExp);
+            }
             else if (sentExpNotification || refreshesCharacterState)
                 honorLevel = ResolveHonorLevelForExp();
+            if (sentExpNotification && player.Level >= ExpTableProvider.MaxLevel && growthCapsule == null)
+                growthCapsule = _growthCapsuleRepository.LoadSummary(_sender.AccountId);
             if (result.HonorExp > 0 && player.Subtype0Tail != null)
                 HonorLevelDataProvider.ApplyToSubtype0Tail(player.Subtype0Tail, honorLevel);
             // 城镇内升级: 先推角色状态(subtype0)+属性(subtype1)再发经验包, 面板即时刷新。
@@ -155,7 +164,9 @@ namespace DfoServer.Game.Quests
             {
                 await _sender.SendNotiAsync(0x0025,
                     ExpNotificationBuilder.Build(
-                        player.Level, player.Exp, remainSp, remainTp, honorLevel));
+                        player.Level, player.Exp, remainSp, remainTp, honorLevel,
+                        growthCapsuleExp: GrowthCapsuleDataProvider.GetDisplayProgress(
+                            player.Level, growthCapsule)));
             }
 
             if (leveledUp)
@@ -168,6 +179,7 @@ namespace DfoServer.Game.Quests
             if (result.HonorExp > 0)
             {
                 FileLogger.Log($"[QuestManager] HONOR_EXP_GAIN quest: account={_sender.AccountId} cid={cid} gain={result.HonorExp} total={result.TotalHonorExp}");
+                FileLogger.Log($"[QuestManager] GROWTH_CAPSULE_EXP_GAIN quest: account={_sender.AccountId} cid={cid} gain={result.GrowthCapsuleExp} total={result.TotalGrowthCapsuleExp}");
             }
 
             if (result.ChainType == 1 || result.ChainType == 2)

@@ -243,6 +243,10 @@ namespace DfoServer.Game.Inventory
                 : InventoryListType.Main;
             var targetItemKind = targetListType == InventoryListType.Pet ? "pet" : metadata.ItemKind;
 
+            if (targetListType == InventoryListType.Main
+                && !CharmInventoryPolicy.CanEnterMain(connection, transaction, characterId, itemTemplateId))
+                return false;
+
             if (CurrencyService.IsCubeFragment(itemTemplateId))
             {
                 var wallet = _db.LoadWallet(connection, transaction, characterId);
@@ -611,6 +615,12 @@ namespace DfoServer.Game.Inventory
                 && string.Equals(itemKind, "equipment", StringComparison.Ordinal)
                 && ItemMetadataResolver.IsNameTagItem(itemTemplateId);
             var stackListType = isPetConsumable ? InventoryListType.Pet : InventoryListType.Main;
+            if (!isAvatar && stackListType == InventoryListType.Main
+                && !CharmInventoryPolicy.CanEnterMain(connection, transaction, characterId, itemTemplateId))
+            {
+                FileLogger.Log($"  [CeraShopBuy] REJECT: main inventory already contains a charm item=0x{itemTemplateId:X8}");
+                return false;
+            }
             var avatarDurationDays = 0;
             // 发货数量 = 份数 × 每份数量(cerashop count); 价格 = 每份价 × 份数 (avatar 恒为 1)
             var ceraShopStackLimit = ResolveCeraShopStackLimit(product.Count, metadata.StackLimit);

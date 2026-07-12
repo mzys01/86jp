@@ -577,6 +577,8 @@ namespace DfoServer.Game.Quests
             uint normalExpReward = expReward;
             uint honorExpReward = 0;
             ulong totalHonorExp = 0;
+            uint growthCapsuleExpReward = 0;
+            uint totalGrowthCapsuleExp = 0;
             byte newLevel;
             uint newExp;
             var petEvolution = PetCreatureEvolutionResult.Noop;
@@ -705,8 +707,11 @@ namespace DfoServer.Game.Quests
 
                     if (honorExpReward > 0)
                     {
-                        totalHonorExp = HonorLevelProgressRepository.AddHonorExpInTransaction(
+                        var accountProgress = AccountExperienceProgressService.AddInTransaction(
                             scope.Connection, scope.Transaction, accountId, honorExpReward);
+                        totalHonorExp = accountProgress.TotalHonorExp;
+                        growthCapsuleExpReward = accountProgress.GrowthCapsuleExpGain;
+                        totalGrowthCapsuleExp = accountProgress.TotalGrowthCapsuleExp;
                     }
                 }
 
@@ -720,6 +725,8 @@ namespace DfoServer.Game.Quests
                 Exp = expReward,
                 HonorExp = honorExpReward,
                 TotalHonorExp = totalHonorExp,
+                GrowthCapsuleExp = growthCapsuleExpReward,
+                TotalGrowthCapsuleExp = totalGrowthCapsuleExp,
                 Gold = goldReward,
                 NewLevel = newLevel,
                 NewExp = newExp,

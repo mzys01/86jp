@@ -34,6 +34,7 @@ namespace DfoServer.Network
         private readonly InventoryRefreshSender _inventoryRefreshSender;
         private readonly PetCreatureHandler _petCreatureHandler;
         private readonly MercenaryHandler _mercenaryHandler;
+        private readonly GrowthCapsuleHandler _growthCapsuleHandler;
         private readonly ICharacterRepository _characterRepository;
         private readonly SqliteSelectCharacterDataSource _selectCharacterDataSource;
         private readonly SqliteAssetService _assetService;
@@ -89,6 +90,7 @@ namespace DfoServer.Network
                 characterRepository,
                 sqliteSelectCharacterDataSource,
                 rentalTimeProvider,
+                _inventoryRefreshSender,
                 _partyManager,
                 sessionDirectory);
             _staminaHandler = new StaminaHandler(_assetService);
@@ -104,6 +106,8 @@ namespace DfoServer.Network
             _mercenaryHandler = new MercenaryHandler(characterRepository, getUserInfoTemplate);
             _partyHandler = new PartyHandler(_partyManager, characterRepository, sessionDirectory);
             PetCreatureRuntimeService.EnsureClockRegistered();
+            _growthCapsuleHandler = new GrowthCapsuleHandler(
+                _assetService, _inventoryRefreshSender, characterRepository);
 
             _cmdDispatch = new Dictionary<ushort, Func<EnhancedClientSession, GamePacketHeader, byte[], Task>>();
             RegisterLoginHandlers(_cmdDispatch);
@@ -249,6 +253,7 @@ namespace DfoServer.Network
             d[0x0016] = _inventoryHandler.Handle_ENUM_CMDPACKET_SELL_ITEM;         //22
             d[0x0017] = _inventoryHandler.Handle_ENUM_CMDPACKET_REPAIR_EQUIPMENT;  //23 装备修理
             d[0x001A] = _inventoryHandler.Handle_ENUM_CMDPACKET_DISJOINT_ITEM;     //26 系统分解
+            d[0x00CA] = _inventoryHandler.Handle_DISJOINT_AVATAR;                  //202 时装分解
             d[0x001B] = _inventoryHandler.Handle_USE_LOTTERY_ITEM;                  //27
             d[0x002C] = _inventoryHandler.Handle_ENUM_CMDPACKET_USE_STACKABLE;
             d[0x00D0] = _inventoryHandler.Handle_OPEN_MAGIC_BOX_SINGLE;
@@ -264,6 +269,7 @@ namespace DfoServer.Network
             d[0x0239] = _inventoryHandler.Handle_SET_CLONE_TITLE;                  //569
             d[0x03F3] = _inventoryHandler.Handle_OPEN_MAGIC_BOX;
             d[0x0063] = _inventoryHandler.Handle_COMPOUND_AVATAR;                  //99 合并装扮(时装合成)
+            d[0x0100] = _inventoryHandler.Handle_COMPOUND_EMBLEM;                  //256 徽章合成
             d[0x03EA] = _inventoryHandler.Handle_COMPOUND_AVATAR_SET;              //1002 8件高级装扮100%合成稀有装扮(克隆装扮合成器)
             d[0x0342] = _inventoryHandler.Handle_ADD_EQUIPMENT_EFFECT;             //834 武器特效符文添加
             d[0x0131] = _inventoryHandler.Handle_CREATE_ACCOUNT_CARGO;               //305 开通金库
@@ -431,6 +437,7 @@ namespace DfoServer.Network
                 s.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x02A8, new byte[] { 0x00, 0x00 }));
             d[0x0372] = _rentalHandler.HandleRentWeapon;
             d[0x0373] = _luckyStarHandler.HandleShopPurchasePacket;
+            d[(ushort)CmdPacketType.GET_EXPAND_EXP_GAGE_REWARD] = _growthCapsuleHandler.HandleClaimAsync;
         }
 
         #endregion

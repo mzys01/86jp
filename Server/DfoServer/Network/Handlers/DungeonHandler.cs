@@ -24,6 +24,7 @@ namespace DfoServer.Network.Handlers
             Game.Characters.SqliteCharacterRepository characterRepository,
             SqliteSelectCharacterDataSource selectCharacterDataSource,
             IRentalTimeProvider rentalTimeProvider,
+            InventoryRefreshSender inventoryRefresh,
             Game.Party.PartyManager partyManager = null,
             Game.Session.ISessionDirectory sessionDirectory = null)
         {
@@ -33,6 +34,7 @@ namespace DfoServer.Network.Handlers
                 characterRepository,
                 selectCharacterDataSource,
                 rentalTimeProvider,
+                inventoryRefresh,
                 partyManager,
                 sessionDirectory);
             _settlement = new DungeonSettlementHandler(_services);

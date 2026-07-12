@@ -55,6 +55,8 @@ namespace DfoServer.Game.Quests
         public uint Exp;
         public uint HonorExp;
         public ulong TotalHonorExp;
+        public uint GrowthCapsuleExp;
+        public uint TotalGrowthCapsuleExp;
         public uint Gold;
         // 经验结算后的等级与总经验(与奖励同一事务已落库; Exp 为 0 时等于结算前取值)。
         public byte NewLevel;
