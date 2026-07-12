@@ -413,8 +413,16 @@ namespace DfoServer.SelfTests
             Check("max-level quest stores reward in account honor exp",
                 LoadHonorExp(connStr) == reward.Exp,
                 ref failures);
+            Check("max-level quest stores reward in account growth capsule exp",
+                LoadGrowthCapsuleExp(connStr) == GrowthCapsuleDataProvider.CalculateExpGain(reward.Exp),
+                ref failures);
             Check("max-level quest sends honor through exp notification",
                 ExpNotificationCarriesHonor(sender, expectedHonorLevel: 1, expectedHonorExp: reward.Exp),
+                ref failures);
+            Check("max-level quest sends growth capsule through exp notification",
+                ExpNotificationCarriesGrowthCapsule(
+                    sender,
+                    GrowthCapsuleDataProvider.CalculateExpGain(reward.Exp)),
                 ref failures);
             Check("max-level quest does not send repeated honor init notification",
                 !sender.NotiTypes.Contains(0x0289),
@@ -443,6 +451,7 @@ namespace DfoServer.SelfTests
             var overflowHonorExp = reward.Exp - normalExp;
             var startExp = maxLevelEntryExp - normalExp;
             var previousHonorExp = LoadHonorExp(connStr);
+            var previousGrowthCapsuleExp = LoadGrowthCapsuleExp(connStr);
             characterRepository.UpdateLevelAndExp(
                 MaxLevelOverflowCharacterId, ExpTableProvider.MaxLevel - 1, startExp);
             QuestService.SaveActiveQuests(connStr, MaxLevelOverflowCharacterId, new List<ActiveQuest>
@@ -473,6 +482,11 @@ namespace DfoServer.SelfTests
             Check("quest exp overflow is stored as account honor exp",
                 LoadHonorExp(connStr) == previousHonorExp + overflowHonorExp,
                 ref failures);
+            var expectedGrowthCapsuleExp = previousGrowthCapsuleExp
+                + GrowthCapsuleDataProvider.CalculateExpGain(overflowHonorExp);
+            Check("quest exp overflow is stored as account growth capsule exp",
+                LoadGrowthCapsuleExp(connStr) == expectedGrowthCapsuleExp,
+                ref failures);
             Check("mixed max-level quest sends normal exp notification",
                 sender.NotiTypes.Contains(0x0025),
                 ref failures);
@@ -481,6 +495,9 @@ namespace DfoServer.SelfTests
             Check("mixed max-level quest exp notification carries honor",
                 ExpNotificationCarriesHonor(
                     sender, expectedHonor.HonorLevel, expectedHonor.HonorExp),
+                ref failures);
+            Check("mixed max-level quest exp notification carries growth capsule",
+                ExpNotificationCarriesGrowthCapsule(sender, expectedGrowthCapsuleExp),
                 ref failures);
             Check("mixed max-level quest does not send repeated honor init notification",
                 !sender.NotiTypes.Contains(0x0289),
@@ -501,6 +518,20 @@ namespace DfoServer.SelfTests
                 && exp.Item2.Length >= ExpNotificationBuilder.HonorExpOffset + sizeof(uint)
                 && BitConverter.ToUInt32(exp.Item2, ExpNotificationBuilder.HonorLevelOffset) == expectedHonorLevel
                 && BitConverter.ToUInt32(exp.Item2, ExpNotificationBuilder.HonorExpOffset) == expectedHonorExp;
+        }
+
+        private static bool ExpNotificationCarriesGrowthCapsule(
+            RecordingQuestSender sender,
+            uint totalGrowthCapsuleExp)
+        {
+            var exp = sender.Notis.FindLast(n => n.Item1 == 0x0025);
+            var summary = GrowthCapsuleDataProvider.Calculate(totalGrowthCapsuleExp);
+            var expected = summary.TotalExp;
+            return exp != null
+                && exp.Item2 != null
+                && exp.Item2.Length >= ExpNotificationBuilder.GrowthCapsuleExpOffset + sizeof(uint)
+                && BitConverter.ToUInt32(
+                    exp.Item2, ExpNotificationBuilder.GrowthCapsuleExpOffset) == expected;
         }
 
         private static bool SendsSubtype1AfterExp(RecordingQuestSender sender)
@@ -629,6 +660,20 @@ VALUES (@aid, @mid, '');";
                     cmd.CommandText = "SELECT honor_exp FROM accounts WHERE account_id=@aid;";
                     cmd.Parameters.AddWithValue("@aid", AccountId);
                     return (ulong)Math.Max(0L, Convert.ToInt64(cmd.ExecuteScalar()));
+                }
+            }
+        }
+
+        private static uint LoadGrowthCapsuleExp(string connStr)
+        {
+            using (var conn = new SqliteConnection(connStr))
+            {
+                conn.Open();
+                using (var cmd = conn.CreateCommand())
+                {
+                    cmd.CommandText = "SELECT growth_capsule_exp FROM accounts WHERE account_id=@aid;";
+                    cmd.Parameters.AddWithValue("@aid", AccountId);
+                    return (uint)Math.Max(0L, Convert.ToInt64(cmd.ExecuteScalar()));
                 }
             }
         }

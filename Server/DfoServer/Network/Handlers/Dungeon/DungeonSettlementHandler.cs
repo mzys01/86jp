@@ -50,6 +50,7 @@ namespace DfoServer.Network.Handlers.Dungeon
             var clearHonorExpGain = 0u;
             var clearNormalExpGain = clearExp.Total;
             HonorLevelSummary honorSummary = null;
+            GrowthCapsuleSummary growthCapsuleSummary = null;
             var normalizedMaxExp = false;
             if (clearExp.Total > 0)
             {
@@ -70,8 +71,11 @@ namespace DfoServer.Network.Handlers.Dungeon
                 }
                 if (clearHonorExpGain > 0 && (session.Account?.AccountId ?? 0) > 0)
                 {
-                    honorSummary = _svc.HonorLevel.AddExp(session.Account.AccountId, clearHonorExpGain);
-                    FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] HONOR_EXP_GAIN clear: account={session.Account.AccountId} cid={session.Player.CharacterId} gain={clearHonorExpGain}");
+                    var accountProgress = _svc.AccountExperience.AddHonorAndGrowthCapsuleExp(
+                        session.Account.AccountId, clearHonorExpGain);
+                    honorSummary = accountProgress.Honor;
+                    growthCapsuleSummary = accountProgress.GrowthCapsule;
+                    FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] ACCOUNT_EXP_GAIN clear: account={session.Account.AccountId} cid={session.Player.CharacterId} honor={clearHonorExpGain} capsule={accountProgress.GrowthCapsuleExpGain} capsuleTotal={growthCapsuleSummary.TotalExp}");
                 }
                 session.Player.Level = ExpTableProvider.ApplyLevelUps(session.Player.Level, session.Player.Exp);
             }
@@ -114,9 +118,12 @@ namespace DfoServer.Network.Handlers.Dungeon
             if (clearNormalExpGain > 0 || leveledUp || clearHonorExpGain > 0)
             {
                 honorSummary = _svc.ResolveHonorLevelForExp(session, honorSummary);
+                growthCapsuleSummary = _svc.ResolveGrowthCapsuleForExp(session, growthCapsuleSummary);
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0025,
                     DungeonNotificationBuilder.BuildExp(
-                        session.Player.Level, session.Player.Exp, remainSp, remainTp, honorSummary)));
+                        session.Player.Level, session.Player.Exp, remainSp, remainTp, honorSummary,
+                        growthCapsuleExp: GrowthCapsuleDataProvider.GetDisplayProgress(
+                            session.Player.Level, growthCapsuleSummary))));
             }
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0023,
                 DungeonNotificationBuilder.BuildClearDungeonReward(
