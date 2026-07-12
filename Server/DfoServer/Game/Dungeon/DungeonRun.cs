@@ -36,6 +36,8 @@ namespace DfoServer.Game.Dungeon
         public short DungeonId;
         public byte Difficulty;
         public DungeonRunPhase Phase;
+        private readonly HashSet<(int DungeonId, int MapId)> _syncedClearMapQuestTargets =
+            new HashSet<(int DungeonId, int MapId)>();
 
         // 迷宫选择与任务连接
         public int MazeIndex = -1;
@@ -99,5 +101,10 @@ namespace DfoServer.Game.Dungeon
         // 定时器回调必须捕获所属的 DungeonRun 实例并在动作前校验它仍是当前局,
         // 防止残留回调污染下一局。
         public CancellationTokenSource AutoFlipCts;
+
+        internal bool TryMarkClearMapQuestSynced(int dungeonId, int mapId)
+        {
+            return _syncedClearMapQuestTargets.Add((dungeonId, mapId));
+        }
     }
 }
