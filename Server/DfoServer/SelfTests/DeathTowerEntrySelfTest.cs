@@ -51,22 +51,6 @@ namespace DfoServer.SelfTests
                 && towerInfo[7] == 11,
                 ref failures);
 
-            var dungeonInfo = DeathTowerPacketBuilder.BuildTowerDungeonInfo(11000, difficulty: 2);
-            Check("tower 0x001C encodes dungeon id and difficulty",
-                dungeonInfo.Length >= 12
-                && BitConverter.ToInt16(dungeonInfo, 0) == 11000
-                && dungeonInfo[2] == 2,
-                ref failures);
-            Check("tower 0x001C uses non-hell neutral map fields",
-                dungeonInfo[3] == 0
-                && dungeonInfo[4] == 0
-                && dungeonInfo[5] == 0
-                && dungeonInfo[6] == 0xFF
-                && dungeonInfo[7] == 0xFF
-                && dungeonInfo[8] == 0
-                && dungeonInfo[9] == 0,
-                ref failures);
-
             using (var fixture = SelectDungeonFixture.Create())
             {
                 var handler = fixture.CreateDungeonHandler();
@@ -78,18 +62,17 @@ namespace DfoServer.SelfTests
                     .GetAwaiter()
                     .GetResult();
 
-                var sentTypes = fixture.ReadSentTypes(expectedPackets: 4);
+                var sentTypes = fixture.ReadSentTypes(expectedPackets: 3);
                 Check("select-dungeon tower creates CurrentRun payload",
                     fixture.Session.Player.CurrentRun != null
                     && fixture.Session.Player.CurrentRun.DungeonId == 11000
                     && fixture.Session.Player.CurrentRun.Tower != null,
                     ref failures);
-                Check("select-dungeon tower packet order starts with 0x001C then tower packets",
-                    sentTypes.Count >= 4
-                    && sentTypes[0] == 0x001C
-                    && sentTypes[1] == 0x008E
-                    && sentTypes[2] == 0x008F
-                    && sentTypes[3] == 0x001E,
+                Check("select-dungeon tower packet order starts with 0x008E then tower packets",
+                    sentTypes.Count >= 3
+                    && sentTypes[0] == 0x008E
+                    && sentTypes[1] == 0x008F
+                    && sentTypes[2] == 0x001E,
                     ref failures);
             }
 
@@ -231,12 +214,15 @@ namespace DfoServer.SelfTests
                     SystemRentalTimeProvider.Instance);
                 var reviveCoin = new ReviveCoinService(_inventoryStore, _assetService, _dailyReset);
 
+                var inventoryRefresh = new Network.Handlers.InventoryRefreshSender(
+                    _inventoryStore, selectCharacterDataSource, characterRepository);
                 return new DungeonHandler(
                     _assetService,
                     reviveCoin,
                     characterRepository,
                     selectCharacterDataSource,
-                    SystemRentalTimeProvider.Instance);
+                    SystemRentalTimeProvider.Instance,
+                    inventoryRefresh);
             }
 
             public List<ushort> ReadSentTypes(int expectedPackets)

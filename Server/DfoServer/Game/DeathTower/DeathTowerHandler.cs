@@ -24,10 +24,6 @@ namespace DfoServer.Game.DeathTower
             var hasRun = session.Player.CurrentRun != null;
             FileLogger.Log($"[DeathTower] ENTER: cid={session.Player.CharacterId} dungeon={dungeonId} difficulty={difficulty} hasRun={hasRun} stages={tower.Config.TotalStages} basisLv={tower.Config.BasisLevel}");
 
-            var dungeonInfoBody = DeathTowerPacketBuilder.BuildTowerDungeonInfo(dungeonId, difficulty);
-            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x001C, dungeonInfoBody));
-            FileLogger.Log($"[DeathTower] SENT 0x001C DUNGEON_INFO(tower): bodyLen={dungeonInfoBody.Length}");
-
             // NOTI 142 DEATH_TOWER_INFO (8B)
             var infoBody = DeathTowerPacketBuilder.BuildTowerInfo(dungeonId, (ushort)tower.Config.TotalStages);
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x008E, infoBody));

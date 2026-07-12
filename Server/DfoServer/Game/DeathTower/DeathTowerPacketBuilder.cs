@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using DfoServer.Network.Builders;
 using DfoServer.Network;
 
 namespace DfoServer.Game.DeathTower
@@ -11,20 +10,6 @@ namespace DfoServer.Game.DeathTower
         public const byte NormalTowerInfoModeByte = 0;
         public const byte ObservedRandomBuffType = 11;
 
-        public static byte[] BuildTowerDungeonInfo(int dungeonId, byte difficulty)
-        {
-            return DungeonNotificationBuilder.BuildDungeonInfo(
-                dungeonId: dungeonId,
-                difficulty: difficulty,
-                modeFlag: 0,
-                bossX: 0,
-                bossY: 0,
-                hellPartyRoomX: 0xFF,
-                hellPartyRoomY: 0xFF,
-                dungeonMode: 0,
-                hellPartyEnabled: 0,
-                value2: 0);
-        }
         // NOTI 142 DEATH_TOWER_INFO (8B 固定, 双端闭环)
 
         public static byte[] BuildTowerInfo(
