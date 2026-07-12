@@ -82,6 +82,58 @@ namespace DfoServer.SelfTests
             Check("回拨后同一周三20:00重新触发", weeklyFires == 3);
 
             // ── 异常隔离: 前一个回调抛异常不影响后一个 ──
+            // 一次性 timer: 到期顺序、同名替换、惰性取消。
+            var oneShotClock = new ClockService();
+            var oneShotFires = 0;
+            oneShotClock.ScheduleOneShot("once", Bj(2026, 7, 4, 10, 0, 10), _ => oneShotFires++);
+            oneShotClock.CheckOnce(Bj(2026, 7, 4, 10, 0, 0));
+            oneShotClock.CheckOnce(Bj(2026, 7, 4, 10, 0, 9));
+            Check("one-shot到期前不触发", oneShotFires == 0);
+            oneShotClock.CheckOnce(Bj(2026, 7, 4, 10, 0, 10));
+            oneShotClock.CheckOnce(Bj(2026, 7, 4, 10, 0, 20));
+            Check("one-shot只触发一次", oneShotFires == 1);
+
+            var replacedFires = 0;
+            oneShotClock.ScheduleOneShot("replace", Bj(2026, 7, 4, 10, 1, 0), _ => replacedFires += 10);
+            oneShotClock.ScheduleOneShot("replace", Bj(2026, 7, 4, 10, 2, 0), _ => replacedFires++);
+            oneShotClock.CheckOnce(Bj(2026, 7, 4, 10, 1, 30));
+            Check("同名one-shot替换旧调度", replacedFires == 0);
+            oneShotClock.CheckOnce(Bj(2026, 7, 4, 10, 2, 1));
+            Check("同名one-shot只执行最新调度", replacedFires == 1);
+
+            var cancelledFires = 0;
+            oneShotClock.ScheduleOneShot("cancel", Bj(2026, 7, 4, 10, 3, 0), _ => cancelledFires++);
+            Check("CancelOneShot取消存活调度返回true", oneShotClock.CancelOneShot("cancel"));
+            oneShotClock.CheckOnce(Bj(2026, 7, 4, 10, 4, 0));
+            Check("已取消one-shot不触发", cancelledFires == 0);
+
+            var handleFires = 0;
+            var oldHandle = oneShotClock.ScheduleOneShot("handle", Bj(2026, 7, 4, 10, 5, 0), _ => handleFires += 10);
+            oneShotClock.ScheduleOneShot("handle", Bj(2026, 7, 4, 10, 6, 0), _ => handleFires++);
+            Check("旧one-shot句柄不能取消替换后的新调度", !oldHandle.Cancel());
+            oneShotClock.CheckOnce(Bj(2026, 7, 4, 10, 6, 1));
+            Check("替换后的新调度不受旧句柄影响", handleFires == 1);
+
+            var prefixFires = 0;
+            oneShotClock.ScheduleOneShot("raid:1:ready", Bj(2026, 7, 4, 10, 7, 0), _ => prefixFires += 10);
+            oneShotClock.ScheduleOneShot("raid:1:attack", Bj(2026, 7, 4, 10, 7, 0), _ => prefixFires += 10);
+            oneShotClock.ScheduleOneShot("raid:2:ready", Bj(2026, 7, 4, 10, 7, 0), _ => prefixFires++);
+            Check("前缀取消会移除匹配timer", oneShotClock.CancelOneShotsByPrefix("raid:1:") == 2);
+            oneShotClock.CheckOnce(Bj(2026, 7, 4, 10, 7, 1));
+            Check("前缀取消不影响其他团本timer", prefixFires == 1);
+
+            var compactClock = new ClockService();
+            var compactFires = 0;
+            for (var i = 0; i < 1100; i++)
+                compactClock.ScheduleOneShot("compact", Bj(2026, 7, 4, 11, 0, 0).AddSeconds(i), _ => compactFires++);
+            var compactSnapshot = compactClock.GetDebugSnapshot();
+            Check("大量同名替换会压缩惰性取消节点",
+                compactSnapshot.OneShotTimers == 1
+                && compactSnapshot.QueuedEntries < 128
+                && compactSnapshot.LazyCancelledOneShots < 128);
+            compactClock.CheckOnce(Bj(2026, 7, 4, 11, 20, 0));
+            Check("压缩后仍只触发最新one-shot", compactFires == 1);
+
             var clock2 = new ClockService();
             var survived = 0;
             clock2.RegisterMinuteTick("t-throws", _ => throw new InvalidOperationException("boom"));

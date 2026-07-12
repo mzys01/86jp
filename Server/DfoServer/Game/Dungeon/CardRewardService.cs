@@ -1,4 +1,5 @@
 using DfoServer.Game.Inventory;
+using DfoServer.Infrastructure;
 using DfoServer.Network;
 using DfoServer.Network.Builders;
 using DfoServer.Network.Handlers.Dungeon;
@@ -14,9 +15,20 @@ namespace DfoServer.Game.Dungeon
         private readonly DungeonSharedServices _svc;
         private readonly IAssetService _assetService;
 
+        private enum CardRewardSide
+        {
+            Free,
+            Paid,
+        }
+
         internal CardRewardService(DungeonSharedServices svc, IAssetService assetService)
         {
             _svc = svc ?? throw new ArgumentNullException(nameof(svc));
+            _assetService = assetService ?? throw new ArgumentNullException(nameof(assetService));
+        }
+
+        internal CardRewardService(IAssetService assetService)
+        {
             _assetService = assetService ?? throw new ArgumentNullException(nameof(assetService));
         }
 
@@ -26,33 +38,26 @@ namespace DfoServer.Game.Dungeon
             var run = session.Player.CurrentRun;
             if (run == null) return;
 
-            var cts = new CancellationTokenSource();
-            run.AutoFlipCts = cts;
-            var token = cts.Token;
-
-            _ = Task.Run(async () =>
-            {
-                try
+            // 旧服翻牌阶段使用队伍 timer key 防止过期回调误推进。
+            // 当前项目保留同一安全边界: timer 只负责到点请求推进, 真正执行前仍要重查当前局和版本号。
+            var version = NextAutoFlipVersion(run);
+            var timerName = BuildAutoFlipTimerName(session);
+            var handle = ClockService.Instance.ScheduleOneShotAfterAsync(
+                timerName,
+                TimeSpan.FromMilliseconds(layoutDelayMs),
+                async _ =>
                 {
-                    await Task.Delay(layoutDelayMs, token);
-                    if (token.IsCancellationRequested) return;
-                    if (!ReferenceEquals(session.Player.CurrentRun, run)) return;
+                    if (!IsAutoFlipTimerCurrent(session, run, version)) return;
                     if (run.Phase != DungeonRunPhase.ResultShown) return;
 
-                    FileLogger.Log("[CardReward] Auto-layout timer fired");
+                    FileLogger.Log("[CardReward] Auto-layout ClockService timer fired");
                     await SendCardLayout(session);
+                    if (!IsAutoFlipTimerCurrent(session, run, version)) return;
                     run.Phase = DungeonRunPhase.CardsRevealed;
 
-                    await Task.Delay(autoFlipDelayMs, token);
-                    if (token.IsCancellationRequested) return;
-                    if (!ReferenceEquals(session.Player.CurrentRun, run)) return;
-
-                    FileLogger.Log("[CardReward] Auto-flip timer fired");
-                    await AutoFlipFreeCard(session, run);
-                }
-                catch (TaskCanceledException) { }
-                catch (Exception ex) { FileLogger.Log($"[CardReward] Auto-flow error: {ex}"); }
-            }, token);
+                    ScheduleAutoFlipTimer(session, run, autoFlipDelayMs, version, "Auto-flow");
+                });
+            StoreAutoFlipHandle(run, version, handle);
         }
 
         internal void StartDelayedAutoFlip(EnhancedClientSession session, int delayMs)
@@ -61,23 +66,9 @@ namespace DfoServer.Game.Dungeon
             var run = session.Player.CurrentRun;
             if (run == null) return;
 
-            var cts = new CancellationTokenSource();
-            run.AutoFlipCts = cts;
-            var token = cts.Token;
-
-            _ = Task.Run(async () =>
-            {
-                try
-                {
-                    await Task.Delay(delayMs, token);
-                    if (token.IsCancellationRequested) return;
-                    if (!ReferenceEquals(session.Player.CurrentRun, run)) return;
-                    FileLogger.Log("[CardReward] Standalone auto-flip timer fired");
-                    await AutoFlipFreeCard(session, run);
-                }
-                catch (TaskCanceledException) { }
-                catch (Exception ex) { FileLogger.Log($"[CardReward] Auto-flip error: {ex}"); }
-            }, token);
+            // 玩家已经看到翻牌布局后, 只需要保留 4s 自动翻免费卡这一段短 timer。
+            var version = NextAutoFlipVersion(run);
+            ScheduleAutoFlipTimer(session, run, delayMs, version, "Standalone");
         }
 
         internal async Task HandleSelectCard(EnhancedClientSession session, byte[] body)
@@ -99,19 +90,16 @@ namespace DfoServer.Game.Dungeon
             if (cardType > 1 || cardIndex > 3) return;
             if (cardType == 0) DungeonRunLifecycle.CancelAutoFlip(session);
 
-            run.CardFlipCount++;
-            if (cardType == 0) run.FreeCardSlots[cardIndex] = 0x00;
-            else run.PaidCardSlots[cardIndex] = 0x00;
+            if (!TrySelectCardSlot(run, cardType, cardIndex))
+            {
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0047, BuildCardInfoAck(session)));
+                return;
+            }
 
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0047, BuildCardInfoAck(session)));
 
-            bool allDone = run.FreeCardSlots[0] != 0xFF
-                && (run.PaidCardSlots[0] != 0xFF || !HasPaidCardReward(run.CardRewards));
-            if (allDone)
-            {
-                await DeliverCardRewards(session);
-                run.CardRewards = null;
-            }
+            if (cardIndex == 0)
+                await DeliverCardRewards(session, run, cardType == 0 ? CardRewardSide.Free : CardRewardSide.Paid);
         }
 
         internal async Task HandleCardStartRequest(EnhancedClientSession session)
@@ -144,17 +132,8 @@ namespace DfoServer.Game.Dungeon
 
             DungeonRunLifecycle.CancelAutoFlip(session);
 
-            bool pendingPaidCard = run != null
-                && HasPaidCardReward(run.CardRewards)
-                && run.PaidCardSlots[0] == 0xFF;
-            if (state == 1 && pendingPaidCard)
-            {
-                run.PaidCardSlots[0] = 0x00;
-                run.CardFlipCount++;
-                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0047, BuildCardInfoAck(session)));
-                await DeliverCardRewards(session);
-                run.CardRewards = null;
-            }
+            // EPLP/再次挑战只负责结束当前结算界面, 不能替玩家自动翻付费卡或补发奖励。
+            // 返城/重进发生在 timer 到期前时, 正常语义就是不获得翻牌奖励。
 
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0048,
                 new byte[] { 0x01, state, option }));
@@ -164,55 +143,157 @@ namespace DfoServer.Game.Dungeon
 
         private async Task AutoFlipFreeCard(EnhancedClientSession session, DungeonRun run)
         {
-            if (run.FreeCardSlots[0] != 0xFF) return;
-            run.CardFlipCount++;
-            run.FreeCardSlots[0] = 0x00;
+            if (!TrySelectCardSlot(run, cardType: 0, cardIndex: 0))
+                return;
 
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0047, BuildCardInfoAck(session)));
+            await DeliverCardRewards(session, run, CardRewardSide.Free);
+        }
 
-            bool hasPaid = HasPaidCardReward(run.CardRewards);
-            bool paidAlreadyFlipped = hasPaid && run.PaidCardSlots[0] != 0xFF;
-            if (!hasPaid || paidAlreadyFlipped)
+        private static bool TrySelectCardSlot(DungeonRun run, byte cardType, byte cardIndex)
+        {
+            lock (run.SyncRoot)
             {
-                await DeliverCardRewards(session);
-                run.CardRewards = null;
+                var slots = cardType == 0 ? run.FreeCardSlots : run.PaidCardSlots;
+                if (slots[cardIndex] != 0xFF)
+                    return false;
+
+                slots[cardIndex] = 0x00;
+                run.CardFlipCount++;
+                return true;
+            }
+        }
+
+        private void ScheduleAutoFlipTimer(
+            EnhancedClientSession session,
+            DungeonRun run,
+            int delayMs,
+            int version,
+            string source)
+        {
+            if (!IsAutoFlipTimerCurrent(session, run, version))
+                return;
+
+            var timerName = BuildAutoFlipTimerName(session);
+            var handle = ClockService.Instance.ScheduleOneShotAfterAsync(
+                timerName,
+                TimeSpan.FromMilliseconds(delayMs),
+                async _ =>
+                {
+                    if (!IsAutoFlipTimerCurrent(session, run, version)) return;
+                    FileLogger.Log($"[CardReward] {source} auto-flip ClockService timer fired");
+                    await AutoFlipFreeCard(session, run);
+                });
+            StoreAutoFlipHandle(run, version, handle);
+        }
+
+        private static int NextAutoFlipVersion(DungeonRun run)
+        {
+            var version = Interlocked.Increment(ref run.AutoFlipTimerVersion);
+            if (version == 0)
+                version = Interlocked.Increment(ref run.AutoFlipTimerVersion);
+            return version;
+        }
+
+        private static bool IsAutoFlipTimerCurrent(
+            EnhancedClientSession session,
+            DungeonRun run,
+            int version)
+            => session?.Player != null
+               && ReferenceEquals(session.Player.CurrentRun, run)
+               && run.AutoFlipTimerVersion == version;
+
+        private static void StoreAutoFlipHandle(
+            DungeonRun run,
+            int version,
+            ClockService.ClockTimerHandle handle)
+        {
+            // 注册和取消可能跨线程竞争: 若版本已经变化, 说明本局流程被玩家操作/返城/换局打断。
+            if (run.AutoFlipTimerVersion != version)
+            {
+                handle.Cancel();
+                return;
+            }
+
+            var previous = Interlocked.Exchange(ref run.AutoFlipTimerHandle, handle);
+            if (previous != null && !ReferenceEquals(previous, handle))
+                previous.Cancel();
+
+            if (run.AutoFlipTimerVersion != version)
+            {
+                Interlocked.CompareExchange(ref run.AutoFlipTimerHandle, null, handle);
+                handle.Cancel();
+            }
+        }
+
+        private async Task DeliverCardRewards(
+            EnhancedClientSession session,
+            DungeonRun run,
+            CardRewardSide side)
+        {
+            var cards = ReserveCardRewards(run, side);
+            if (cards == null)
+                return;
+
+            var cid = session.Player.CharacterId;
+            var aid = session.Account?.AccountId ?? 1;
+            var entries = new List<byte[]>();
+
+            if (side == CardRewardSide.Free)
+            {
+                CollectGoldReward(cid, aid, cards, 0, entries);
+                CollectItemReward(cid, aid, cards, 1, entries);
             }
             else
             {
-                await DeliverFreeCardRewardsOnly(session);
+                CollectGoldReward(cid, aid, cards, 4, entries);
+                CollectItemReward(cid, aid, cards, 5, entries);
+            }
+
+            await SendItemUpdates(session, entries);
+            ClearCardRewardsIfFinished(run);
+            FileLogger.Log($"[CardReward] {side} rewards delivered: {entries.Count} entries");
+        }
+
+        private static List<ClearRewardGenerator.CardReward> ReserveCardRewards(
+            DungeonRun run,
+            CardRewardSide side)
+        {
+            lock (run.SyncRoot)
+            {
+                var cards = run.CardRewards;
+                if (cards == null)
+                    return null;
+
+                if (side == CardRewardSide.Free)
+                {
+                    if (run.FreeCardRewardDelivered)
+                        return null;
+
+                    run.FreeCardRewardDelivered = true;
+                    return cards;
+                }
+
+                if (!HasPaidCardReward(cards) || run.PaidCardRewardDelivered)
+                    return null;
+
+                run.PaidCardRewardDelivered = true;
+                return cards;
             }
         }
 
-        private async Task DeliverCardRewards(EnhancedClientSession session)
+        private static void ClearCardRewardsIfFinished(DungeonRun run)
         {
-            var cards = session.Player.CurrentRun?.CardRewards;
-            if (cards == null) return;
-            var cid = session.Player.CharacterId;
-            var aid = session.Account?.AccountId ?? 1;
-            var entries = new List<byte[]>();
+            lock (run.SyncRoot)
+            {
+                var cards = run.CardRewards;
+                if (cards == null)
+                    return;
 
-            CollectGoldReward(cid, aid, cards, 0, entries);
-            CollectItemReward(cid, aid, cards, 1, entries);
-            CollectGoldReward(cid, aid, cards, 4, entries);
-            CollectItemReward(cid, aid, cards, 5, entries);
-
-            await SendItemUpdates(session, entries);
-            FileLogger.Log($"[CardReward] Rewards delivered: {entries.Count} entries");
-        }
-
-        private async Task DeliverFreeCardRewardsOnly(EnhancedClientSession session)
-        {
-            var cards = session.Player.CurrentRun?.CardRewards;
-            if (cards == null) return;
-            var cid = session.Player.CharacterId;
-            var aid = session.Account?.AccountId ?? 1;
-            var entries = new List<byte[]>();
-
-            CollectGoldReward(cid, aid, cards, 0, entries);
-            CollectItemReward(cid, aid, cards, 1, entries);
-
-            await SendItemUpdates(session, entries);
-            FileLogger.Log($"[CardReward] Free rewards delivered: {entries.Count} entries");
+                var paidDone = !HasPaidCardReward(cards) || run.PaidCardRewardDelivered;
+                if (run.FreeCardRewardDelivered && paidDone)
+                    run.CardRewards = null;
+            }
         }
 
         private void CollectGoldReward(int cid, int aid, List<ClearRewardGenerator.CardReward> cards, int index, List<byte[]> entries)
@@ -223,8 +304,8 @@ namespace DfoServer.Game.Dungeon
                 using (var scope = _assetService.OpenScope(cid, aid))
                 {
                     _assetService.GrantGold(scope, cards[index].GoldAmount);
-                    scope.Commit();
                     var wallet = _assetService.LoadWallet(scope);
+                    scope.Commit();
                     entries.Add(ItemListUpdateBuilder.BuildRawItemEntry(0, 0, (uint)wallet.Gold));
                 }
             }
@@ -312,5 +393,8 @@ namespace DfoServer.Game.Dungeon
             for (int i = 1; i < 8; i++) w.WriteUInt16(0xFFFF);
             return w.ToArray();
         }
+
+        private static string BuildAutoFlipTimerName(EnhancedClientSession session)
+            => "dungeon-card:" + session.SessionId.ToString("N") + ":auto";
     }
 }

@@ -1,7 +1,7 @@
 using System;
 using System.Net.Sockets;
-using System.Threading;
 using DfoServer.Game.Dungeon;
+using DfoServer.Infrastructure;
 using DfoServer.Network;
 using DfoServer.Network.Handlers.Dungeon;
 
@@ -85,17 +85,27 @@ namespace DfoServer.SelfTests
             // 6. 翻牌定时器句柄: 取消置空 + 换局时旧句柄必被取消
             DungeonRunLifecycle.BeginRun(session, 1002, 0);
             var firstRun = player.CurrentRun;
-            var cts = new CancellationTokenSource();
-            firstRun.AutoFlipCts = cts;
+            var handle = ClockService.Instance.ScheduleOneShot(
+                "selftest:auto-flip:" + Guid.NewGuid().ToString("N"),
+                DateTime.UtcNow.AddHours(1),
+                _ => { });
+            var versionBeforeCancel = firstRun.AutoFlipTimerVersion;
+            firstRun.AutoFlipTimerHandle = handle;
             DungeonRunLifecycle.CancelAutoFlip(session);
             Check("CancelAutoFlip cancels and clears the handle",
-                cts.IsCancellationRequested && firstRun.AutoFlipCts == null, ref failures);
+                firstRun.AutoFlipTimerHandle == null
+                && firstRun.AutoFlipTimerVersion == versionBeforeCancel + 1
+                && !handle.Cancel(),
+                ref failures);
 
-            var staleCts = new CancellationTokenSource();
-            firstRun.AutoFlipCts = staleCts;
+            var staleHandle = ClockService.Instance.ScheduleOneShot(
+                "selftest:auto-flip:" + Guid.NewGuid().ToString("N"),
+                DateTime.UtcNow.AddHours(1),
+                _ => { });
+            firstRun.AutoFlipTimerHandle = staleHandle;
             DungeonRunLifecycle.BeginRun(session, 1003, 0);
             Check("BeginRun cancels the previous run timer and swaps the run",
-                staleCts.IsCancellationRequested
+                !staleHandle.Cancel()
                 && !ReferenceEquals(player.CurrentRun, firstRun)
                 && player.CurrentRun.DungeonId == 1003,
                 ref failures);

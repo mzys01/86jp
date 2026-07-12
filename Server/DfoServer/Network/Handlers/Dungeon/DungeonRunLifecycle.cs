@@ -75,17 +75,16 @@ namespace DfoServer.Network.Handlers.Dungeon
         }
 
         // 取消当前局的翻牌自动流程定时器(结算界面 2s 布局 + 4s 自动翻免费卡)。
-        // 用 Interlocked 交换句柄, 与定时器回调竞争时最多一方拿到实例。
+        // 先推进版本号, 让已经出队但还在异步发包的旧回调失效; 再取消仍挂在 ClockService 中的句柄。
         internal static void CancelAutoFlip(EnhancedClientSession session)
         {
             var run = session?.Player?.CurrentRun;
             if (run == null)
                 return;
 
-            var cts = Interlocked.Exchange(ref run.AutoFlipCts, null);
-            if (cts == null) return;
-            try { cts.Cancel(); } catch { /* 与回调线程竞争 Dispose 时的良性竞态, 吞掉即可 */ }
-            cts.Dispose();
+            Interlocked.Increment(ref run.AutoFlipTimerVersion);
+            var handle = Interlocked.Exchange(ref run.AutoFlipTimerHandle, null);
+            handle?.Cancel();
         }
     }
 }

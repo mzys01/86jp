@@ -1,6 +1,6 @@
 using System;
 using System.Collections.Generic;
-using System.Threading;
+using DfoServer.Infrastructure;
 
 namespace DfoServer.Game.Dungeon
 {
@@ -26,6 +26,7 @@ namespace DfoServer.Game.Dungeon
             DungeonId = dungeonId;
             Difficulty = difficulty;
             Phase = DungeonRunPhase.InProgress;
+            StartedUtc = DateTime.UtcNow;
         }
 
         // 自测用: 构造一个字段全为默认值的空局。
@@ -36,6 +37,7 @@ namespace DfoServer.Game.Dungeon
         public short DungeonId;
         public byte Difficulty;
         public DungeonRunPhase Phase;
+        public DateTime StartedUtc;
 
         // 迷宫选择与任务连接
         public int MazeIndex = -1;
@@ -90,14 +92,21 @@ namespace DfoServer.Game.Dungeon
         public int CardFlipCount;
         public byte[] FreeCardSlots = { 0xFF, 0xFF, 0xFF, 0xFF };
         public byte[] PaidCardSlots = { 0xFF, 0xFF, 0xFF, 0xFF };
+        // 翻牌奖励按免费/付费两段分别做幂等标记。
+        // 自动翻免费卡、玩家手动翻牌、EPLP/再次挑战可能前后贴得很近; 发奖前必须先占用对应标记,
+        // 防止后续路径把同一段奖励再次入库。
+        public bool FreeCardRewardDelivered;
+        public bool PaidCardRewardDelivered;
 
         // 死亡之塔: 塔是一局副本的变体, 塔专属状态(层数/推进状态/序号)封装在 DeathTowerSession,
         // 挂在局对象上; null=本局不是塔。
         public DeathTower.DeathTowerSession Tower;
 
-        // 翻牌自动流程定时器句柄。保持字段(而非属性): 取消路径用 Interlocked.Exchange(ref ...)。
-        // 定时器回调必须捕获所属的 DungeonRun 实例并在动作前校验它仍是当前局,
-        // 防止残留回调污染下一局。
-        public CancellationTokenSource AutoFlipCts;
+        // 翻牌自动流程定时器句柄(结算界面 2s 布局 + 4s 自动翻免费卡)。
+        // 旧服 CParty timer 使用 gen_timer_key/check_timer_key 让旧回调失效;
+        // 当前项目用 ClockTimerHandle + 单局版本号表达同一语义。
+        // 回调必须捕获所属 DungeonRun 实例, 并在动作前校验它仍是当前局。
+        public ClockService.ClockTimerHandle AutoFlipTimerHandle;
+        public int AutoFlipTimerVersion;
     }
 }
