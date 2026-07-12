@@ -1,4 +1,5 @@
 using DfoServer.Infrastructure;
+using DfoServer.Game.Currency;
 using DfoServer.Game.ExpertJob;
 using DfoServer.Game.ItemUpgrade;
 using System;
@@ -460,6 +461,23 @@ ORDER BY sort_order;";
             using (var connection = OpenConnection())
             using (var transaction = connection.BeginTransaction())
             {
+                if (dbListType == InventoryListType.Main && CurrencyService.IsCubeFragmentSlot(slotIndex))
+                {
+                    foreach (var cube in CurrencyService.LoadCubeFragments(connection, transaction, accountId))
+                    {
+                        if (cube.Slot == slotIndex && cube.Count > 0)
+                        {
+                            return new CommonInventoryItem
+                            {
+                                SlotIndex = slotIndex,
+                                ItemTemplateId = cube.ItemId,
+                                CountOrInstanceValue = cube.Count,
+                            };
+                        }
+                    }
+                    return null;
+                }
+
                 if (dbListType == InventoryListType.AccountCargo)
                     return _db.LoadAccountCargoCommonItem(connection, transaction, accountId, slotIndex);
 

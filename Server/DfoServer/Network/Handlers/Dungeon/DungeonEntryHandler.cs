@@ -148,7 +148,7 @@ namespace DfoServer.Network.Handlers.Dungeon
             await TryFanOutDungeonEntryToPartyAsync(session, header, req, bossPos, (byte)selection.Index);
         }
 
-        // 给指定会话发一份 SELECT_DUNGEON 出站序列(0x1C DUNGEON_INFO / START_MAP / 0x117 / 0x19F)。
+        // 给指定会话发送 SELECT_DUNGEON 出站序列；秘密商店 NPC 上下文只在通关后发送。
         // Hell 等参数从该会话自己的 CurrentRun 读(队员的 run 已拷贝队长 selection)。
         private async Task SendDungeonSelectPacketsTo(
             EnhancedClientSession s,
@@ -174,7 +174,6 @@ namespace DfoServer.Network.Handlers.Dungeon
 
             await _mapHandler.SendStartMapAsync(s, 0xFF, 0xFF, overrideMapId: -1);
 
-            await s.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0117, BitConverter.GetBytes(s.Player.CharacterId)));
             if (StrikerSupportTagCharacterPacketBuilder.TryBuildOwnerSupportBody(s.Player.CharacterId, out var strikerBody))
                 await s.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x019F, strikerBody));
             else
