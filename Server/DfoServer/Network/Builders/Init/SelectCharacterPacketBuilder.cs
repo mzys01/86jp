@@ -26,9 +26,28 @@ namespace DfoServer.Network.Builders
                 : NewCharacterInitSequence.Build();
             var darkKnightComboSent = false;
             var darkKnightComboTemplateExists = HasTemplate(templates, 0x00, 0x01C0);
+            var strikerSupportSent = false;
 
             foreach (var template in templates)
             {
+                if (template.Kind == SelectCharacterPacketTemplateKind.Raw
+                    && template.Command == 0x00
+                    && template.Type == 0x019F)
+                {
+                    if (strikerSupportSent)
+                    {
+                        FileLogger.Log("[SelectCharacterPacketBuilder] SKIP duplicate cmd=0 type=0x019F");
+                        continue;
+                    }
+
+                    // 支援兵动态状态始终替换 occurrence 0，避免保留重复或过期项。
+                    var strikerSupportBody = BuildStrikerSupportBody(snapshot);
+                    strikerSupportSent = true;
+                    FileLogger.Log($"[SelectCharacterPacketBuilder] OK cmd=0 type=0x019F(415) occ=0 bodyLen={strikerSupportBody.Length}");
+                    yield return GamePacketEnvelopeBuilder.Build(0x00, 0x019F, strikerSupportBody);
+                    continue;
+                }
+
                 if (template.Kind == SelectCharacterPacketTemplateKind.ItemList)
                 {
                     var body = ItemListPacketBuilder.BuildBody(snapshot.ItemListSnapshot, template.ItemListType);
@@ -69,6 +88,13 @@ namespace DfoServer.Network.Builders
                 FileLogger.Log($"[SelectCharacterPacketBuilder] ERROR: no builder for cmd={template.Command} type=0x{template.Type:X4} occ={template.OccurrenceIndex}");
             }
 
+            if (!strikerSupportSent)
+            {
+                var injectedStrikerSupportBody = BuildStrikerSupportBody(snapshot);
+                FileLogger.Log($"[SelectCharacterPacketBuilder] INJECT cmd=0 type=0x019F(415) occ=0 bodyLen={injectedStrikerSupportBody.Length}");
+                yield return GamePacketEnvelopeBuilder.Build(0x00, 0x019F, injectedStrikerSupportBody);
+            }
+
             if (!darkKnightComboSent && TryBuildDarkKnightComboSkillInfo(snapshot, out var trailingComboBody))
             {
                 FileLogger.Log($"[SelectCharacterPacketBuilder] OK cmd=0 type=0x01C0(448) occ=0 bodyLen={trailingComboBody.Length}");
@@ -83,6 +109,13 @@ namespace DfoServer.Network.Builders
                 return false;
 
             return _registry.TryBuild(0x01C0, snapshot, 0, out body);
+        }
+
+        private static byte[] BuildStrikerSupportBody(SelectCharacterDataSnapshot snapshot)
+        {
+            return _registry.TryBuild(0x019F, snapshot, 0, out var body)
+                ? body
+                : new byte[] { 0x00, 0x00 };
         }
 
         private static bool HasTemplate(List<SelectCharacterPacketTemplate> templates, byte command, ushort type)

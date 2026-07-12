@@ -2,6 +2,7 @@ using DfoServer.Game.Skills;
 using DfoServer.GameWorld;
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text.RegularExpressions;
 
 namespace DfoServer.Game.Mercenary
@@ -9,36 +10,58 @@ namespace DfoServer.Game.Mercenary
     // 支援兵技能配置的一条记录。
     public sealed class StrikerSkillEntry
     {
-        public int Job { get; set; }
-        public int GrowType { get; set; }
-        public int SkillIndex { get; set; }
-        public int ComboIndex { get; set; }
-        public int RequiredSkillIndex { get; set; }
-        public string VideoPath { get; set; }
-        public int[] ComponentSkillIndexes { get; set; } = Array.Empty<int>();
-        public string SkillName { get; set; }
-        public int RequiredLevel { get; set; }
+        internal StrikerSkillEntry(int job, int growType, int skillIndex, int comboIndex, int requiredLevel)
+        {
+            Job = job;
+            GrowType = growType;
+            SkillIndex = skillIndex;
+            ComboIndex = comboIndex;
+            RequiredLevel = requiredLevel;
+        }
+
+        public int Job { get; }
+        public int GrowType { get; }
+        public int SkillIndex { get; }
+        // PVF 第四字段（历史名 ComboIndex），用于状态校验。
+        public int ComboIndex { get; }
+        public int RequiredLevel { get; }
     }
 
     public static class StrikerSkillDataProvider
     {
-        private static readonly object Sync = new object();
-        private static List<StrikerSkillEntry> _entries;
+        private sealed class ProviderState
+        {
+            public ProviderState(
+                IReadOnlyList<StrikerSkillEntry> entries,
+                int minimumSupportLevel,
+                int maxActiveSupportCount)
+            {
+                Entries = entries;
+                MinimumSupportLevel = minimumSupportLevel;
+                MaxActiveSupportCount = maxActiveSupportCount;
+            }
+
+            public IReadOnlyList<StrikerSkillEntry> Entries { get; }
+            public int MinimumSupportLevel { get; }
+            public int MaxActiveSupportCount { get; }
+        }
+
+        private static readonly Lazy<ProviderState> State = new Lazy<ProviderState>(LoadState);
 
         public static void Warmup()
         {
-            EnsureLoaded();
+            _ = State.Value;
         }
 
         public static IReadOnlyList<StrikerSkillEntry> GetAvailableSkills(int job, int growType, int level)
         {
-            EnsureLoaded();
-            // 部分数据库转职值带有打包信息，低四位才对应支援兵配置。
+            var entries = State.Value.Entries;
+            // 转职值可能带有打包信息，低四位对应支援兵配置。
             var normalizedGrowType = NormalizeGrowType(growType);
             var result = new List<StrikerSkillEntry>();
-            for (int i = 0; i < _entries.Count; i++)
+            for (int i = 0; i < entries.Count; i++)
             {
-                var entry = _entries[i];
+                var entry = entries[i];
                 if (entry.Job != job || entry.GrowType != normalizedGrowType)
                     continue;
                 if (entry.RequiredLevel > level)
@@ -46,26 +69,24 @@ namespace DfoServer.Game.Mercenary
 
                 result.Add(entry);
             }
-            return result;
+            return result.AsReadOnly();
         }
 
-        public static IReadOnlyList<StrikerSkillEntry> GetAll()
+        internal static IReadOnlyList<StrikerSkillEntry> GetAll()
         {
-            EnsureLoaded();
-            return _entries;
+            return State.Value.Entries;
         }
 
         public static StrikerSkillEntry FindBySkill(int job, int growType, int skillIndex, int comboIndex)
         {
-            EnsureLoaded();
-
+            var entries = State.Value.Entries;
             var normalizedGrowType = NormalizeGrowType(growType);
-            for (var i = 0; i < _entries.Count; i++)
+            for (var i = 0; i < entries.Count; i++)
             {
-                var entry = _entries[i];
+                var entry = entries[i];
                 if (entry.Job != job || entry.GrowType != normalizedGrowType)
                     continue;
-                if (entry.SkillIndex == skillIndex && (comboIndex <= 0 || entry.ComboIndex == comboIndex))
+                if (entry.SkillIndex == skillIndex && entry.ComboIndex == comboIndex)
                     return entry;
             }
 
@@ -77,73 +98,117 @@ namespace DfoServer.Game.Mercenary
             return growType > 0x0F ? growType & 0x0F : growType;
         }
 
-        private static void EnsureLoaded()
+        public static int GetMinimumSupportLevel()
         {
-            if (_entries != null)
-                return;
-
-            lock (Sync)
-            {
-                if (_entries != null)
-                    return;
-
-                _entries = Parse(PvfArchiveAccessor.ReadText("etc/linksystem/striker.etc"));
-            }
+            return State.Value.MinimumSupportLevel;
         }
 
-        private static List<StrikerSkillEntry> Parse(string text)
+        public static int GetMaxActiveSupportCount()
+        {
+            return State.Value.MaxActiveSupportCount;
+        }
+
+        private static ProviderState LoadState()
+        {
+            var strikerText = PvfArchiveAccessor.ReadText("etc/linksystem/striker.etc");
+            var entries = Parse(strikerText);
+            var maxActiveSupportCount = ParseFirstPositiveInt(
+                ExtractSection(strikerText, "striker combo"));
+
+            var linkText = PvfArchiveAccessor.ReadText("etc/characlinksystem.etc");
+            var minimumSupportLevel = ParseLinkCharacterMinimumLevel(
+                ExtractSection(linkText, "1st link character info"));
+            if (minimumSupportLevel <= 0 || maxActiveSupportCount <= 0)
+                throw new InvalidOperationException(
+                    $"invalid linksystem rules: minimumLevel={minimumSupportLevel} maxActive={maxActiveSupportCount}");
+
+            return new ProviderState(entries, minimumSupportLevel, maxActiveSupportCount);
+        }
+
+        private static int ParseFirstPositiveInt(string text)
+        {
+            foreach (Match match in Regex.Matches(text ?? string.Empty, @"-?\d+"))
+            {
+                if (int.TryParse(match.Value, out var value) && value > 0)
+                    return value;
+            }
+            return 0;
+        }
+
+        private static int ParseLinkCharacterMinimumLevel(string text)
+        {
+            var values = new List<int>();
+            foreach (Match match in Regex.Matches(text ?? string.Empty, @"-?\d+"))
+            {
+                if (int.TryParse(match.Value, out var value))
+                    values.Add(value);
+            }
+            // [1st link character info] 为七元组，末字段是支援候选最低等级。
+            return values.Count == 7 && values[6] > 0 ? values[6] : 0;
+        }
+
+        private static IReadOnlyList<StrikerSkillEntry> Parse(string text)
         {
             var section = ExtractSection(text, "striker skill");
             var tokens = Tokenize(section);
+            if (tokens.Count == 0)
+                throw new InvalidOperationException("PVF striker skill section is empty");
             var entries = new List<StrikerSkillEntry>();
 
             int offset = 0;
             while (offset < tokens.Count)
             {
+                var recordOffset = offset;
                 if (!TryReadInt(tokens, ref offset, out var job)
                     || !TryReadInt(tokens, ref offset, out var growType)
                     || !TryReadInt(tokens, ref offset, out var skillIndex)
                     || !TryReadInt(tokens, ref offset, out var comboIndex)
-                    || !TryReadInt(tokens, ref offset, out var requiredSkillIndex)
-                    || !TryReadString(tokens, ref offset, out var videoPath)
+                    || !TryReadInt(tokens, ref offset, out _)
+                    || !TryReadString(tokens, ref offset, out _)
                     || !TryReadInt(tokens, ref offset, out var componentCount))
                 {
-                    break;
+                    throw new InvalidOperationException(
+                        $"invalid striker skill record header at token {recordOffset}");
                 }
 
                 if (componentCount < 0 || componentCount > 128)
-                    break;
-
-                var components = new int[componentCount];
-                var valid = true;
-                for (int i = 0; i < componentCount; i++)
+                    throw new InvalidOperationException(
+                        $"invalid striker component count {componentCount} at token {recordOffset}");
+                if (job < 0 || job > byte.MaxValue
+                    || growType < 0 || growType > 0x0F
+                    || skillIndex <= 0 || skillIndex > ushort.MaxValue
+                    || comboIndex < 0 || comboIndex > ushort.MaxValue)
                 {
-                    if (!TryReadInt(tokens, ref offset, out components[i]))
-                    {
-                        valid = false;
-                        break;
-                    }
+                    throw new InvalidOperationException(
+                        $"out-of-range striker record at token {recordOffset}: job={job} grow={growType} skill={skillIndex} combo={comboIndex}");
                 }
 
-                if (!valid)
-                    break;
+                for (int i = 0; i < componentCount; i++)
+                {
+                    if (!TryReadInt(tokens, ref offset, out _))
+                        throw new InvalidOperationException(
+                            $"truncated striker component list at token {recordOffset}");
+                }
 
                 var data = SkillDataProvider.GetSkill(job, skillIndex);
-                entries.Add(new StrikerSkillEntry
-                {
-                    Job = job,
-                    GrowType = growType,
-                    SkillIndex = skillIndex,
-                    ComboIndex = comboIndex,
-                    RequiredSkillIndex = requiredSkillIndex,
-                    VideoPath = videoPath,
-                    ComponentSkillIndexes = components,
-                    SkillName = data?.Name,
-                    RequiredLevel = data?.RequiredLevel ?? 0,
-                });
+                if (data == null)
+                    throw new InvalidOperationException(
+                        $"striker PVF references missing static skill job={job} skill={skillIndex}");
+                entries.Add(new StrikerSkillEntry(
+                    job,
+                    growType,
+                    skillIndex,
+                    comboIndex,
+                    data.RequiredLevel));
             }
 
-            return entries;
+            var duplicate = entries
+                .GroupBy(entry => (entry.Job, entry.GrowType, entry.SkillIndex))
+                .FirstOrDefault(group => group.Count() > 1);
+            if (duplicate != null)
+                throw new InvalidOperationException(
+                    $"duplicate striker skill job={duplicate.Key.Job} grow={duplicate.Key.GrowType} skill={duplicate.Key.SkillIndex}");
+            return entries.AsReadOnly();
         }
 
         private static string ExtractSection(string text, string tag)

@@ -410,7 +410,7 @@ namespace DfoServer.Network.Handlers.Dungeon
                 new byte[] { 0x00 }));
             await _svc.SendUserInfoSubtype0Broadcast(session);
 
-            FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] ReturnToVillage: 4 town packets + subtype0 honor sent");
+            FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] ReturnToVillage: town state + subtype0 sent");
         }
 
         private async Task UpdateDungeonPermission(EnhancedClientSession session, int dungeonId, int difficulty)

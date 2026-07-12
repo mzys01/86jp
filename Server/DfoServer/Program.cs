@@ -125,6 +125,7 @@ namespace DfoServer
             {
                 GameWorld.PvfArchiveAccessor.ReadText("character/character.lst");
                 Game.Mercenary.StrikerSkillDataProvider.Warmup();
+                Game.Mercenary.StrikerDefaultAvatarDataProvider.Warmup();
                 Console.WriteLine("OK");
             }
             catch (Exception ex)

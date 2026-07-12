@@ -1,71 +1,64 @@
 using DfoServer.Game.CharacterData;
+using DfoServer.Game.SelectCharacter;
 using DfoServer.Infrastructure;
 using System;
 using System.Collections.Generic;
+using System.Linq;
 
 namespace DfoServer.Game.Mercenary
 {
-    // 支援兵协议优先使用支援角色真实已学习等级；未学习或未记录时按协议保底为 1。
+    // 只读取活动技能页的真实已学等级；缺失为 0，PVF 合法性由 StrikerSkillDataProvider 校验。
     internal static class StrikerSupportSkillLevelSource
     {
+        private static readonly Lazy<SqliteCharacterProgressRepository> ProgressRepository =
+            new Lazy<SqliteCharacterProgressRepository>(() =>
+                new SqliteCharacterProgressRepository(ServerPaths.DatabasePath, ServerPaths.SchemaFilePath));
+        private static readonly Lazy<SqliteSubtype1Repository> Subtype1Repository =
+            new Lazy<SqliteSubtype1Repository>(() =>
+                new SqliteSubtype1Repository(ServerPaths.DatabasePath, ServerPaths.SchemaFilePath));
+
         public static Dictionary<ushort, byte> LoadLearnedLevels(int characterId)
         {
             var result = new Dictionary<ushort, byte>();
-            try
+            foreach (var entry in LoadActiveSkillPageEntries(characterId))
             {
-                var progressRepo = new SqliteCharacterProgressRepository(ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
-                var snapshot = progressRepo.LoadSkills(characterId);
-                if (snapshot == null)
-                    return result;
-
-                foreach (var page in snapshot.Pages)
-                {
-                    foreach (var entry in page.Entries)
-                    {
-                        if (entry.SkillId == 0 || entry.Level == 0)
-                            continue;
-
-                        if (!result.TryGetValue(entry.SkillId, out var existing) || entry.Level > existing)
-                            result[entry.SkillId] = entry.Level;
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                FileLogger.Log($"[StrikerSupport] load learned skill levels failed cid={characterId}: {ex.Message}");
+                if (!result.TryGetValue(entry.SkillId, out var existing) || entry.Level > existing)
+                    result[entry.SkillId] = entry.Level;
             }
 
             return result;
         }
 
-        public static byte ResolveBaseLevel(int characterId, ushort skillId)
+        public static IReadOnlyList<SkillInfoEntrySnapshot> LoadActiveSkillPageEntries(
+            int characterId,
+            byte? knownPageIndex = null)
         {
-            if (characterId <= 0 || skillId == 0)
-                return 0;
+            if (characterId <= 0)
+                return Array.Empty<SkillInfoEntrySnapshot>();
 
-            return ResolveLearnedLevel(LoadLearnedLevels(characterId), skillId);
-        }
-
-        public static byte ResolveBaseLevel(
-            IReadOnlyDictionary<ushort, byte> learnedLevels,
-            StrikerSkillEntry skill)
-        {
-            if (skill == null)
-                return 0;
-
-            return ResolveLearnedLevel(learnedLevels, (ushort)skill.SkillIndex);
-        }
-
-        private static byte ResolveLearnedLevel(IReadOnlyDictionary<ushort, byte> learnedLevels, ushort skillId)
-        {
-            if (learnedLevels != null
-                && learnedLevels.TryGetValue(skillId, out var learnedLevel)
-                && learnedLevel > 0)
+            try
             {
-                return learnedLevel;
-            }
+                var snapshot = ProgressRepository.Value.LoadSkills(characterId);
+                if (snapshot?.Pages == null || snapshot.Pages.Count == 0)
+                    return Array.Empty<SkillInfoEntrySnapshot>();
 
-            return 1;
+                var pageIndex = knownPageIndex
+                    ?? Subtype1Repository.Value.LoadSkillTreeIndex(characterId)
+                    ?? 0;
+                if (pageIndex >= snapshot.Pages.Count)
+                    pageIndex = 0;
+
+                return snapshot.Pages[pageIndex].Entries
+                    .Where(entry => entry != null && entry.SkillId != 0 && entry.Level > 0)
+                    .OrderBy(entry => entry.Slot)
+                    .ToList();
+            }
+            catch (Exception ex)
+            {
+                FileLogger.Log($"[StrikerSupport] load active skill page failed cid={characterId}: {ex.Message}");
+                return Array.Empty<SkillInfoEntrySnapshot>();
+            }
         }
+
     }
 }

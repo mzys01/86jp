@@ -175,7 +175,7 @@ namespace DfoServer.Network.Handlers.Dungeon
             await _mapHandler.SendStartMapAsync(s, 0xFF, 0xFF, overrideMapId: -1);
 
             await s.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0117, BitConverter.GetBytes(s.Player.CharacterId)));
-            if (StrikerSupportTagCharacterPacketBuilder.TryBuildDungeonOwnerMappedSupportBody(s.Player.CharacterId, out var strikerBody))
+            if (StrikerSupportTagCharacterPacketBuilder.TryBuildOwnerSupportBody(s.Player.CharacterId, out var strikerBody))
                 await s.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x019F, strikerBody));
             else
                 await s.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x019F, new byte[] { 0x00, 0x00 }));

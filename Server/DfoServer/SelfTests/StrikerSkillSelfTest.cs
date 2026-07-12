@@ -1,5 +1,7 @@
 using DfoServer.Game.Accounts;
+using DfoServer.Game.Inventory;
 using DfoServer.Game.Mercenary;
+using DfoServer.Game.SelectCharacter;
 using DfoServer.Infrastructure;
 using DfoServer.Network.Builders;
 using DfoServer.Network.Handlers;
@@ -32,18 +34,133 @@ namespace DfoServer.SelfTests
 
             var packedSwordman = StrikerSkillDataProvider.GetAvailableSkills(job: 0, growType: 35, level: 86);
             Check("packed swordman growType=35 maps to PVF growType=3", packedSwordman.Count > 0);
+            Check("striker minimum support level comes from linksystem PVF",
+                StrikerSkillDataProvider.GetMinimumSupportLevel() == 70);
+            Check("striker active support count comes from striker PVF",
+                StrikerSkillDataProvider.GetMaxActiveSupportCount() == 1);
+            var zeroCombo = all.First(entry => entry.ComboIndex == 0);
+            Check("striker combo zero remains an exact legal state value",
+                StrikerSkillDataProvider.FindBySkill(
+                    zeroCombo.Job, zeroCombo.GrowType, zeroCombo.SkillIndex, zeroCombo.ComboIndex) != null);
+            var nonZeroCombo = all.First(entry => entry.ComboIndex > 0);
+            Check("striker state rejects combo-zero wildcard for nonzero combo skill",
+                StrikerSkillDataProvider.FindBySkill(
+                    nonZeroCombo.Job, nonZeroCombo.GrowType, nonZeroCombo.SkillIndex, 0) == null);
+            Check("0x01E8 success ACK contains only consumed result byte",
+                MercenaryHandler.BuildSelectSuccessAck().SequenceEqual(new byte[] { 0x01 }));
+            Check("0x01E5 failure ACK contains result and mandatory error byte",
+                MercenaryHandler.BuildSkillListFailureAck().SequenceEqual(new byte[] { 0x00, 0x00 }));
+            Check("0x01E8 failure ACK contains result and mandatory error byte",
+                MercenaryHandler.BuildSelectFailureAck().SequenceEqual(new byte[] { 0x00, 0x00 }));
+            Check("PVF-legal unlearned support skill remains selectable without a learned-level fallback",
+                StrikerSkillDataProvider.GetAvailableSkills(job: 0, growType: 4, level: 85)
+                    .Any(entry => entry.SkillIndex == 74 && entry.ComboIndex == 43));
+            var normalizedUnlearnedPage = StrikerSupportTagCharacterPacketBuilder.NormalizeSkillPageEntriesForTest(
+                new MercenarySupportState { SkillId = 74, StrikerSkillId = 43 },
+                new[]
+                {
+                    new SkillInfoEntrySnapshot { Slot = 54, SkillId = 33, Level = 10 },
+                    new SkillInfoEntrySnapshot { Slot = 198, SkillId = 72, Level = 23 },
+                });
+            Check("0x019F unlearned selected skill keeps real page without synthetic slot/level",
+                normalizedUnlearnedPage.Count == 2
+                && !normalizedUnlearnedPage.Any(entry => entry.SkillId == 74)
+                && normalizedUnlearnedPage.Select(entry => entry.Slot).SequenceEqual(new byte[] { 54, 198 }));
+            var allDefaultAvatarRows = StrikerDefaultAvatarDataProvider.GetAllForTest().Values
+                .Where(defaults => defaults != null)
+                .ToList();
+            Check("all PVF default-avatar positive slots 0..10 match their equipment types",
+                allDefaultAvatarRows.All(defaults =>
+                    defaults.Count >= 11
+                    && Enumerable.Range(0, 11).All(slot =>
+                        defaults[slot] <= 0
+                        || StrikerSupportTagCharacterPacketBuilder.IsEquipmentSlotMatchForTest(
+                            (byte)slot,
+                            defaults[slot]))));
+            Check("PVF default-avatar slots 9/10 remain nonpositive",
+                allDefaultAvatarRows.All(defaults => defaults.Count >= 11
+                    && defaults[9] <= 0
+                    && defaults[10] <= 0));
+            Check("equipment slot validator accepts a real weapon in weapon slot",
+                StrikerSupportTagCharacterPacketBuilder.IsEquipmentSlotMatchForTest(11, 101040019));
+            Check("equipment slot validator rejects the same weapon in an avatar slot",
+                !StrikerSupportTagCharacterPacketBuilder.IsEquipmentSlotMatchForTest(0, 101040019));
 
             CheckMercenarySupportRepository();
             CheckMercenaryWireSlotMapping();
+            CheckSelectCharacterTagLifecycle();
             CheckAdventureGroupLevelCalculation();
-            CheckStrikerSupportSkillLevels();
-            CheckMainApplyTagRecordPatch();
+            CheckTagRecordSerializerBoundary();
 
-            Console.WriteLine("sample: " + string.Join(", ", mage.Take(3).Select(x => $"{x.SkillIndex}/{x.ComboIndex}:{x.SkillName ?? "?"}")));
+            Console.WriteLine("sample: " + string.Join(", ", mage.Take(3).Select(x => $"{x.SkillIndex}/{x.ComboIndex}")));
             return _failures == 0 ? 0 : 1;
         }
 
         private static int _failures;
+
+        private static void CheckSelectCharacterTagLifecycle()
+        {
+            var duplicateSnapshot = new SelectCharacterDataSnapshot
+            {
+                PacketTemplates = new List<SelectCharacterPacketTemplate>
+                {
+                    new SelectCharacterPacketTemplate
+                    {
+                        Kind = SelectCharacterPacketTemplateKind.Raw,
+                        Command = 0x00,
+                        Type = 0x019F,
+                        OccurrenceIndex = 7,
+                    },
+                    new SelectCharacterPacketTemplate
+                    {
+                        Kind = SelectCharacterPacketTemplateKind.Raw,
+                        Command = 0x00,
+                        Type = 0x019F,
+                        OccurrenceIndex = 9,
+                    },
+                },
+            };
+            var duplicatePackets = SelectCharacterPacketBuilder.BuildPacketStream(
+                new FixedSelectCharacterDataSource(duplicateSnapshot),
+                0,
+                0).ToList();
+            Check("select-character emits exactly one dynamic 0x019F when templates duplicate it",
+                CountPackets(duplicatePackets, 0x00, 0x019F) == 1);
+
+            var missingSnapshot = new SelectCharacterDataSnapshot
+            {
+                PacketTemplates = new List<SelectCharacterPacketTemplate>
+                {
+                    new SelectCharacterPacketTemplate
+                    {
+                        Kind = SelectCharacterPacketTemplateKind.Raw,
+                        Command = 0x00,
+                        Type = 0x0331,
+                    },
+                },
+            };
+            var missingPackets = SelectCharacterPacketBuilder.BuildPacketStream(
+                new FixedSelectCharacterDataSource(missingSnapshot),
+                0,
+                0).ToList();
+            Check("select-character injects one empty dynamic 0x019F when templates omit it",
+                CountPackets(missingPackets, 0x00, 0x019F) == 1
+                && missingPackets.Any(packet =>
+                    packet.Length == 17
+                    && packet[0] == 0x00
+                    && BitConverter.ToUInt16(packet, 1) == 0x019F
+                    && packet[15] == 0x00
+                    && packet[16] == 0x00));
+        }
+
+        private static int CountPackets(IEnumerable<byte[]> packets, byte command, ushort type)
+        {
+            return packets.Count(packet =>
+                packet != null
+                && packet.Length >= 15
+                && packet[0] == command
+                && BitConverter.ToUInt16(packet, 1) == type);
+        }
 
         private static void CheckMercenaryWireSlotMapping()
         {
@@ -114,7 +231,9 @@ namespace DfoServer.SelfTests
 
         private static void CheckMercenarySupportRepository()
         {
-            var tempDb = Path.Combine(Path.GetTempPath(), "dfo-striker-support-selftest-" + Guid.NewGuid().ToString("N") + ".db");
+            var tempDb = Path.Combine(
+                Path.GetDirectoryName(ServerPaths.DatabasePath) ?? AppContext.BaseDirectory,
+                "dfo-striker-support-selftest-" + Guid.NewGuid().ToString("N") + ".db");
             try
             {
                 var connStr = SqliteDatabaseBootstrap.Initialize(tempDb, ServerPaths.SchemaFilePath);
@@ -154,16 +273,25 @@ VALUES (91001, 1, 'owner', 3, 0, 1),
                     StrikerSkillId = 1,
                 });
 
-                var overwritten = repo.LoadForOwner(91001).SingleOrDefault();
+                var overwritten = repo.LoadSlot(91001, 0);
                 Check("mercenary support state upserts by owner+slot", overwritten != null && overwritten.SkillId == 24 && overwritten.StrikerSkillId == 1);
 
                 repo.Clear(91001, 0);
-                Check("mercenary support state clears primary table", repo.LoadForOwner(91001).Count == 0);
+                Check("mercenary support state clears primary table", repo.LoadSlot(91001, 0) == null);
                 Check("mercenary support state clears subtype0 link", ReadSubtype0Link(tempDb, 91001) == "0/0/0");
             }
             finally
             {
-                try { if (File.Exists(tempDb)) File.Delete(tempDb); } catch { }
+                try
+                {
+                    SqliteConnection.ClearAllPools();
+                    foreach (var path in new[] { tempDb, tempDb + "-wal", tempDb + "-shm" })
+                    {
+                        if (File.Exists(path))
+                            File.Delete(path);
+                    }
+                }
+                catch { }
             }
         }
 
@@ -190,171 +318,161 @@ WHERE character_id=@cid", conn))
             }
         }
 
-        private static void CheckStrikerSupportSkillLevels()
+        private static void CheckTagRecordSerializerBoundary()
         {
-            var sampleSkill = new StrikerSkillEntry
+            var snapshot = new UserInfoAdditionSnapshot
             {
-                SkillIndex = 24,
-                RequiredLevel = 60,
+                StatHpMax = 123456,
+                StatMpMax = 65432,
+                StatPhysicalAttack = 111,
+                StatPhysicalDefense = 222,
+                StatMagicalAttack = 333,
+                StatMagicalDefense = 444,
+                StatFireResistance = -5,
+                StatWaterResistance = 6,
+                StatDarkResistance = 7,
+                StatLightResistance = 8,
+                StatInventoryLimit = 987654,
+                StatHpRegenSpeed = 11,
+                StatMpRegenSpeed = 12,
+                StatMoveSpeed = 13000,
+                StatAttackSpeed = 14000,
+                StatCastSpeed = 15000,
+                StatHitRecovery = 16000,
+                StatJumpPower = 17000,
+                StatWeight = 765432,
+                CloneTitleItemId = 456789,
+                SkillTreeIndex = 1,
             };
-
-            Check("striker support learned level uses real skill level",
-                StrikerSupportSkillLevelSource.ResolveBaseLevel(
-                    new Dictionary<ushort, byte> { { 24, 7 } },
-                    sampleSkill) == 7);
-            Check("striker support unlearned level defaults to one",
-                StrikerSupportSkillLevelSource.ResolveBaseLevel(
-                    new Dictionary<ushort, byte>(),
-                    sampleSkill) == 1);
-            Check("striker support explicit zero level defaults to one",
-                StrikerSupportSkillLevelSource.ResolveBaseLevel(
-                    new Dictionary<ushort, byte> { { 24, 0 } },
-                    sampleSkill) == 1);
-        }
-
-        private static void CheckMainApplyTagRecordPatch()
-        {
-            var raw = new byte[1913];
-            var tableOffset = 1738;
-            var entryOffset = tableOffset + 2;
-            var selectedOffset = tableOffset - 7;
-            var appendedOffset = entryOffset + 41 * 4;
-            raw[2] = 4;
-            raw[6] = (byte)'2';
-            raw[7] = (byte)'0';
-            raw[8] = (byte)'0';
-            raw[9] = (byte)'2';
-            raw[10] = 86;
-            raw[11] = 11;
-            raw[12] = 0x14;
-            raw[13] = 94;
-            raw[14] = 0;
-            raw[selectedOffset] = 0;
-            raw[selectedOffset + 1] = 0;
-            raw[tableOffset] = 41;
-            raw[tableOffset + 1] = 0;
-
-            for (var i = 0; i < raw[tableOffset]; i++)
+            var avatar = new InvenItem
             {
-                var entry = entryOffset + i * 4;
-                var skillId = i == 0 ? 86 : 90 + i;
-                raw[entry] = (byte)(i + 2);
-                raw[entry + 1] = (byte)(skillId & 0xFF);
-                raw[entry + 2] = (byte)((skillId >> 8) & 0xFF);
-                raw[entry + 3] = (byte)(1 + i);
+                Slot = 0,
+                ItemId = 400001,
+                JewelSocket = new byte[30],
+                Expansion = new byte[4],
+                Tail10 = new byte[10],
+            };
+            var weapon = new InvenItem
+            {
+                Slot = 11,
+                ItemId = 12345,
+                Value = 0x10203040,
+                Durability = 77,
+                Tail10 = Enumerable.Range(1, 10).Select(i => (byte)i).ToArray(),
+            };
+            var lastClientSlot = new InvenItem
+            {
+                Slot = 29,
+                ItemId = 0x17E69F80,
+                Tail10 = Enumerable.Repeat((byte)0x5A, 10).ToArray(),
+            };
+            var equipment = new[] { avatar, weapon, lastClientSlot };
+            var skillPage = new List<SkillInfoEntrySnapshot>
+            {
+                new SkillInfoEntrySnapshot { Slot = 54, SkillId = 33, Level = 10 },
+                new SkillInfoEntrySnapshot { Slot = 198, SkillId = 72, Level = 23 },
+                new SkillInfoEntrySnapshot { Slot = 199, SkillId = 73, Level = 21 },
+            };
+            var nameLengths = new[] { 1, 12 };
+            var previousLength = -1;
+            var previousNameLength = 0;
+            foreach (var nameLength in nameLengths)
+            {
+                var name = Enumerable.Range(0, nameLength).Select(i => (byte)('A' + i % 26)).ToArray();
+                var raw = StrikerSupportTagCharacterPacketBuilder.BuildRecordForTest(
+                    1001, name, 86, 0, 0x21, 72, snapshot, equipment, skillPage);
+                Check($"0x019F serializer preserves DSTR name length {nameLength}",
+                    BitConverter.ToUInt16(raw, 0) == 1001 &&
+                    BitConverter.ToInt32(raw, 2) == nameLength &&
+                    raw.Skip(6).Take(nameLength).SequenceEqual(name));
+                Check($"0x019F serializer record length follows DSTR length {nameLength}",
+                    previousLength < 0 || raw.Length == previousLength + nameLength - previousNameLength);
+                previousLength = raw.Length;
+                previousNameLength = nameLength;
             }
 
-            var patched = StrikerSupportTagCharacterPacketBuilder.PatchSelectedSkillIntoTagRecord(raw, new MercenarySupportState
+            var record = StrikerSupportTagCharacterPacketBuilder.BuildRecordForTest(
+                1001, new byte[] { 0x54, 0x45, 0x53, 0x54 }, 86, 0, 0x21, 72,
+                snapshot, equipment, skillPage);
+            var offset = 2;
+            var nameSize = BitConverter.ToInt32(record, offset);
+            offset += 4 + nameSize;
+            Check("0x019F serializer preserves level/job/full grow header bytes",
+                record[offset] == 86 && record[offset + 1] == 0 && record[offset + 2] == 0x21);
+            offset += 3;
+            Check("0x019F serializer preserves selected skill header", BitConverter.ToUInt16(record, offset) == 72);
+            offset += 2;
+            var statLength = BitConverter.ToInt32(record, offset);
+            offset += 4;
+            Check("0x019F serializer keeps 82B stat blob and zero-filled 34B opaque middle",
+                statLength == 82 &&
+                BitConverter.ToUInt32(record, offset) == snapshot.StatHpMax &&
+                record.Skip(offset + 24).Take(34).All(value => value == 0) &&
+                BitConverter.ToUInt32(record, offset + 78) == snapshot.StatWeight);
+            offset += statLength;
+            Check("0x019F serializer writes equipment count", record[offset++] == equipment.Length);
+            foreach (var item in equipment)
             {
-                OwnerCharacterId = 91001,
-                Slot = 0,
-                SupportCharacterId = 1002,
-                SkillId = 24,
-                StrikerSkillId = 1,
+                var rawItem = item.ToBytes();
+                Check($"0x019F serializer preserves InvenItem bytes for synthetic slot {item.Slot}",
+                    record.Skip(offset).Take(rawItem.Length).SequenceEqual(rawItem));
+                offset += rawItem.Length;
+            }
+            Check("0x019F serializer places clone title after equipment",
+                BitConverter.ToUInt32(record, offset) == snapshot.CloneTitleItemId);
+            offset += 4;
+            Check("0x019F serializer writes skill page count/index",
+                record[offset] == skillPage.Count && record[offset + 1] == snapshot.SkillTreeIndex);
+            var skillOffset = offset + 2;
+            var expectedSkillBytes = skillPage.SelectMany(skill => new[]
+            {
+                skill.Slot,
+                (byte)(skill.SkillId & 0xFF),
+                (byte)(skill.SkillId >> 8),
+                skill.Level,
             });
-            var expectedLevel = StrikerSupportSkillLevelSource.ResolveBaseLevel(1002, 24);
+            Check("0x019F serializer preserves skill slot/id/level",
+                expectedSkillBytes.SequenceEqual(record.Skip(skillOffset).Take(skillPage.Count * 4)));
+            var opaqueTailOffset = skillOffset + skillPage.Count * 4;
+            Check("0x019F serializer writes empty opaqueFlag/count/u32[] tail",
+                record.Length == opaqueTailOffset + 5 &&
+                record.Skip(opaqueTailOffset).SequenceEqual(new byte[5]));
 
-            Check("0x019F main apply patch keeps record length", patched.Length == raw.Length);
-            Check("0x019F main apply patch appends missing support skill",
-                patched[tableOffset] == 42 &&
-                patched[appendedOffset] == 1 &&
-                patched[appendedOffset + 1] == 24 &&
-                patched[appendedOffset + 2] == 0 &&
-                patched[appendedOffset + 3] == expectedLevel);
-            Check("0x019F main apply patch keeps header character level byte",
-                patched[10] == 86);
-            Check("0x019F main apply patch rewrites display job context",
-                patched[11] == 0);
-            Check("0x019F main apply patch updates packed grow and selected skill",
-                patched[12] == 0x13 &&
-                patched[13] == 24 &&
-                patched[14] == 0);
-            Check("0x019F main apply patch updates traced selected skill",
-                patched[selectedOffset] == 24 &&
-                patched[selectedOffset + 1] == 0);
-            var asuraPatched = StrikerSupportTagCharacterPacketBuilder.PatchSelectedSkillIntoTagRecord(raw, new MercenarySupportState
-            {
-                OwnerCharacterId = 91001,
-                Slot = 0,
-                SupportCharacterId = 1009,
-                SkillId = 74,
-                StrikerSkillId = 43,
-            });
-            var fallback = StrikerSupportTagCharacterPacketBuilder.CloneTagCharacterRawRecordTemplate();
-            var fallbackPatched = StrikerSupportTagCharacterPacketBuilder.PatchSelectedSkillIntoTagRecord(fallback, new MercenarySupportState
-            {
-                OwnerCharacterId = 91001,
-                Slot = 0,
-                SupportCharacterId = 1002,
-                SkillId = 24,
-                StrikerSkillId = 1,
-            });
+            var emptyRecord = StrikerSupportTagCharacterPacketBuilder.BuildRecordForTest(
+                1001, new byte[] { 0x54, 0x45, 0x53, 0x54 }, 86, 0, 0x21, 72,
+                snapshot, Array.Empty<InvenItem>(), Array.Empty<SkillInfoEntrySnapshot>());
+            Check("0x019F serializer supports zero equipment and skill counts",
+                emptyRecord.Length == 113 && emptyRecord[101] == 0 && emptyRecord[106] == 0 &&
+                emptyRecord.Skip(108).SequenceEqual(new byte[5]));
 
-            Check("0x019F fallback template has stable record length", fallback.Length == 1913 && fallbackPatched.Length == fallback.Length);
-            Check("0x019F fallback template supports selected skill patch",
-                fallbackPatched[13] == 24 &&
-                fallbackPatched[14] == 0);
-            StrikerSupportTagCharacterPacketBuilder.PatchTagRecordCharacterId(patched, 91001);
-            Check("0x019F owner mirror patch rewrites record character id",
-                patched[0] == 0x79 &&
-                patched[1] == 0x63);
-
-            var missingEquipmentPatched = StrikerSupportTagCharacterPacketBuilder.PatchMissingTemplateEquipmentEntriesForTest(
-                StrikerSupportTagCharacterPacketBuilder.CloneTagCharacterRawRecordTemplate(),
-                11, 13, 15);
-            var equipmentBlockOffset = FindAvatarEquipmentBlockOffsetForSelfTest(missingEquipmentPatched);
-            Check("0x019F missing template equipment removal keeps record length",
-                missingEquipmentPatched.Length == fallback.Length);
-            Check("0x019F missing template equipment removal keeps slot0 default-avatar entries",
-                equipmentBlockOffset > 0 &&
-                missingEquipmentPatched[equipmentBlockOffset] == 0 &&
-                missingEquipmentPatched[equipmentBlockOffset + 8 * 85] == 8);
-            Check("0x019F missing template equipment removal removes optional slots only",
-                equipmentBlockOffset > 0 &&
-                missingEquipmentPatched[equipmentBlockOffset - 1] == 13 &&
-                missingEquipmentPatched[equipmentBlockOffset + 9 * 85] == 11);
-
-            var knightGrow2Defaults = StrikerSupportTagCharacterPacketBuilder.ResolveDefaultAvatarItemIdsForTest(12, 34);
-            Check("0x019F default avatar lookup handles PVF header offset",
-                knightGrow2Defaults != null &&
-                knightGrow2Defaults.Length >= 11 &&
-                knightGrow2Defaults[0] == 413550014 &&
-                knightGrow2Defaults[3] == 413500014 &&
-                knightGrow2Defaults[8] == 413580005 &&
-                knightGrow2Defaults[9] == -1 &&
-                knightGrow2Defaults[10] == -1);
-        }
-
-        private static int FindAvatarEquipmentBlockOffsetForSelfTest(byte[] rawRecord)
-        {
-            if (rawRecord == null)
-                return -1;
-
-            for (var offset = 0; offset + 8 * 85 + 5 <= rawRecord.Length; offset++)
-            {
-                var ok = true;
-                for (var slot = 0; slot <= 8; slot++)
+            var maxSkillPage = Enumerable.Range(0, byte.MaxValue)
+                .Select(i => new SkillInfoEntrySnapshot
                 {
-                    var slotOffset = offset + slot * 85;
-                    if (slotOffset + 4 >= rawRecord.Length || rawRecord[slotOffset] != slot)
-                    {
-                        ok = false;
-                        break;
-                    }
+                    Slot = (byte)i,
+                    SkillId = (ushort)(1000 + i),
+                    Level = 1,
+                })
+                .ToList();
+            var maxSkillRecord = StrikerSupportTagCharacterPacketBuilder.BuildRecordForTest(
+                1001, new byte[] { 0x54, 0x45, 0x53, 0x54 }, 86, 0, 0x21, 72,
+                snapshot, Array.Empty<InvenItem>(), maxSkillPage);
+            Check("0x019F serializer accepts the u8 maximum skill count",
+                maxSkillRecord[106] == byte.MaxValue && maxSkillRecord.Length == 113 + byte.MaxValue * 4);
 
-                    var itemId = BitConverter.ToInt32(rawRecord, slotOffset + 1);
-                    if (itemId <= 0 || itemId > 500000000)
-                    {
-                        ok = false;
-                        break;
-                    }
-                }
-
-                if (ok)
-                    return offset;
+            var overflowRejected = false;
+            try
+            {
+                StrikerSupportTagCharacterPacketBuilder.BuildRecordForTest(
+                    1001, new byte[] { 0x54 }, 86, 0, 0x21, 72,
+                    snapshot,
+                    Array.Empty<InvenItem>(),
+                    maxSkillPage.Concat(new[] { new SkillInfoEntrySnapshot { Slot = 255, SkillId = 2000, Level = 1 } }).ToList());
             }
-
-            return -1;
+            catch (ArgumentOutOfRangeException)
+            {
+                overflowRejected = true;
+            }
+            Check("0x019F serializer rejects skill count overflow", overflowRejected);
         }
 
         private static void Check(string name, bool ok)
@@ -362,6 +480,20 @@ WHERE character_id=@cid", conn))
             Console.WriteLine((ok ? "[PASS] " : "[FAIL] ") + name);
             if (!ok)
                 _failures++;
+        }
+
+        private sealed class FixedSelectCharacterDataSource : ISelectCharacterDataSource
+        {
+            private readonly SelectCharacterDataSnapshot _snapshot;
+
+            public FixedSelectCharacterDataSource(SelectCharacterDataSnapshot snapshot)
+            {
+                _snapshot = snapshot;
+            }
+
+            public SelectCharacterDataSnapshot Load(int characterId, int accountId) => _snapshot;
+            public int GetSeedCharacterId() => 0;
+            public void InitializeNewCharacter(int characterId, int accountId, byte job) { }
         }
     }
 }
