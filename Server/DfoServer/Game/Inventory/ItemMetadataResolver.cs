@@ -1,6 +1,7 @@
 using DfoServer.GameWorld;
 using PvfLib;
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Text.RegularExpressions;
@@ -103,6 +104,9 @@ namespace DfoServer.Game.Inventory
         internal static readonly Lazy<LstFile> EquipmentList = new Lazy<LstFile>(() => LstFile.Parse(PvfArchiveAccessor.ReadText("equipment/equipment.lst")));
         private static readonly Lazy<LstFile> StackableList = new Lazy<LstFile>(() => LstFile.Parse(PvfArchiveAccessor.ReadText("stackable/stackable.lst")));
         private static readonly Lazy<ItemSellRates> SellRates = new Lazy<ItemSellRates>(() => ItemSellRates.Parse(PvfArchiveAccessor.ReadText("equipment/pricetable.tbl")));
+        // PvfArchiveAccessor与equipment.lst都是进程级不可变Lazy，装备类型也按进程缓存。
+        private static readonly ConcurrentDictionary<int, Lazy<string>> EquipmentTypeCache
+            = new ConcurrentDictionary<int, Lazy<string>>();
         private static readonly Regex AvatarSocketRegex = new Regex(@"\[\s*([ABCDSM])\s+socket\s*\]", RegexOptions.IgnoreCase | RegexOptions.Compiled);
         private const string AvatarTypeSelectTag = "[avatar type select]";
         private const string AvatarTypeSelectEndTag = "[/avatar type select]";
@@ -502,14 +506,22 @@ namespace DfoServer.Game.Inventory
 
         private static bool TryGetEquipmentType(int itemTemplateId, out string equipmentType)
         {
-            equipmentType = null;
-            var equipmentEntry = EquipmentList.Value.GetById(itemTemplateId);
+            var equipmentList = EquipmentList.Value;
+            var cached = EquipmentTypeCache.GetOrAdd(
+                itemTemplateId,
+                id => new Lazy<string>(() => LoadEquipmentType(equipmentList, id)));
+            equipmentType = cached.Value;
+            return !string.IsNullOrWhiteSpace(equipmentType);
+        }
+
+        private static string LoadEquipmentType(LstFile equipmentList, int itemTemplateId)
+        {
+            var equipmentEntry = equipmentList.GetById(itemTemplateId);
             if (equipmentEntry == null)
-                return false;
+                return null;
 
             var equipment = EquipmentFile.Parse(PvfArchiveAccessor.ReadText(Path.Combine("equipment", equipmentEntry.FilePath)));
-            equipmentType = NormalizeEquipmentType(equipment.EquipmentType);
-            return !string.IsNullOrWhiteSpace(equipmentType);
+            return NormalizeEquipmentType(equipment.EquipmentType);
         }
 
         private static HashSet<string> ExtractAllowedEquipmentTypes(List<string> stringDataItems)

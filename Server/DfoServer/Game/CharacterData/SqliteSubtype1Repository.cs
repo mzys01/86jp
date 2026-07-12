@@ -108,9 +108,14 @@ namespace DfoServer.Game.CharacterData
 
                 
                 
-                using (var cmd = new SqliteCommand("SELECT slot, item_id, raw_entry FROM character_equipped_entries WHERE character_id=@cid ORDER BY slot", conn))
+                using (var cmd = new SqliteCommand(@"
+SELECT slot, item_id, raw_entry
+FROM character_equipped_entries
+WHERE character_id=@cid AND (expire_time=0 OR expire_time>@now)
+ORDER BY slot", conn))
                 {
                     cmd.Parameters.AddWithValue("@cid", characterId);
+                    cmd.Parameters.AddWithValue("@now", DateTimeOffset.UtcNow.ToUnixTimeSeconds());
                     using (var r = cmd.ExecuteReader())
                     {
                         while (r.Read())

@@ -1,5 +1,8 @@
+using DfoServer.Game.Accounts;
+using DfoServer.Game.CharacterData;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Party;
+using DfoServer.Infrastructure;
 using DfoServer.Network.Builders;
 using DfoServer.Network.Builders.Party;
 using DfoServer.Network.Parsers.Party;
@@ -16,6 +19,8 @@ namespace DfoServer.Network.Handlers
     {
         private readonly PartyManager _partyManager;
         private readonly ICharacterRepository _characterRepository;
+        private readonly SqliteSubtype0FieldsRepository _subtype0Repository;
+        private readonly HonorLevelSyncService _honorLevel;
         private readonly Game.Session.ISessionDirectory _sessions;   // 跨会话定位(邀请/广播); 单人/自测时可为 null。采用上游会话注册表(按 charId 查, 抗重连)
         private const string ProtocolName = "GameProtocol";
 
@@ -24,6 +29,8 @@ namespace DfoServer.Network.Handlers
         {
             _partyManager = partyManager;
             _characterRepository = characterRepository;
+            _subtype0Repository = new SqliteSubtype0FieldsRepository(ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
+            _honorLevel = new HonorLevelSyncService(characterRepository);
             _sessions = sessions;
             // 断线清理走会话目录的生命周期事件: 断线者自动退队, 剩余成员收到名册刷新。
             // 不订阅就会产生幽灵队员(断线者永久留在名册里)。事件在 session 从目录移除前触发,
@@ -152,6 +159,12 @@ namespace DfoServer.Network.Handlers
             await s.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0017, TownAreaNotificationBuilder.BuildUserArea(snap)));
             await s.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0018, TownAreaNotificationBuilder.BuildAreaUsers(snap)));
             await s.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x00CA, new byte[] { 0x00 }));
+            await Dungeon.DungeonSharedServices.SendUserInfoSubtype0BroadcastAsync(
+                s,
+                _characterRepository,
+                _subtype0Repository,
+                _honorLevel,
+                $"{reason} subtype0");
             FileLogger.Log($"[{ProtocolName}] {reason}: cid={s.Player.CharacterId} 在副本内 → 清 run + 拉回城镇");
         }
 

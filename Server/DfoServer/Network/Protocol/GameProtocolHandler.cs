@@ -103,7 +103,7 @@ namespace DfoServer.Network
             var collectBoxProgressRepository = new Game.Inventory.CollectBoxProgressRepository(databasePath, schemaFilePath);
             _collectionBoxHandler = new CollectionBoxHandler(inventoryStore, collectBoxProgressRepository);
             _shopCoinEventHandler = new ShopCoinEventHandler(reviveCoinService, _inventoryRefreshSender);
-            _mercenaryHandler = new MercenaryHandler(characterRepository, getUserInfoTemplate);
+            _mercenaryHandler = new MercenaryHandler(characterRepository);
             _partyHandler = new PartyHandler(_partyManager, characterRepository, sessionDirectory);
             PetCreatureRuntimeService.EnsureClockRegistered();
             _growthCapsuleHandler = new GrowthCapsuleHandler(
@@ -420,8 +420,6 @@ namespace DfoServer.Network
 
         private void RegisterMercenaryHandlers(Dictionary<ushort, Func<EnhancedClientSession, GamePacketHeader, byte[], Task>> d)
         {
-            // 只处理支援兵弹窗使用的角色信息子类型 5；普通角色信息仍走原有 0x0008。
-            d[0x0002] = _mercenaryHandler.HandleUserInfoSubtypeRequest;
             d[0x01E5] = _mercenaryHandler.HandleMercenaryRequest;                  //485 支援兵技能列表
             d[0x01E8] = _mercenaryHandler.HandleMercenaryRequest;                  //488 支援兵选择
         }

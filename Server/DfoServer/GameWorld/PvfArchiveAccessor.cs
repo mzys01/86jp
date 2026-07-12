@@ -1,7 +1,8 @@
 ﻿using PvfLib;
 using System;
-using System.IO;
 using System.Collections.Generic;
+using System.IO;
+using System.Linq;
 
 namespace DfoServer.GameWorld
 {
@@ -32,6 +33,22 @@ namespace DfoServer.GameWorld
                     result.Add(content);
             }
             return result;
+        }
+
+        public static IReadOnlyList<string> FindPathsContaining(string fragment)
+        {
+            if (string.IsNullOrWhiteSpace(fragment))
+                return Array.Empty<string>();
+            return Archive.Value.Files
+                .Select(file => string.IsNullOrEmpty(file.Path)
+                    ? file.Name
+                    : string.IsNullOrEmpty(file.Name)
+                        ? file.Path
+                        : file.Path.TrimEnd('/', '\\') + "/" + file.Name)
+                .Where(path => !string.IsNullOrEmpty(path)
+                    && path.IndexOf(fragment, StringComparison.OrdinalIgnoreCase) >= 0)
+                .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+                .ToList();
         }
 
         private static string NormalizeRelativePath(string relativePath)
