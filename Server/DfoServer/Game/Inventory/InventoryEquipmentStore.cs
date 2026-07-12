@@ -1,12 +1,14 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using DfoServer.Game.ItemUpgrade;
 using Microsoft.Data.Sqlite;
 
 namespace DfoServer.Game.Inventory
 {
     internal sealed class InventoryEquipmentStore
     {
+        private const int CharmEquipmentSlot = 29;
         private const string DefaultEquipmentExtraJson =
             "{\"extData0\":0,\"prefixData0E\":\"0000000000000000\",\"middleData1A\":\"0000000000000000000000000000000000\",\"tailData2F\":\"00000000000000000000000000000000000000000000000000000000000000000000000000\"}";
 
@@ -307,6 +309,11 @@ WHERE character_id = @cid;";
                     FileLogger.Log($"  [EquipMove] EQUIP blocked: invalid source slot={request.SourceSlotIndex} want=0x{wantId:X8} found={(mainSource != null ? $"0x{mainSource.ItemTemplateId:X8}/{mainSource.ItemKind}" : "null")}");
                     return EquipOutcome.NoOp;
                 }
+                if (!IsCharmSlotCompatible(wantId, equipSlot))
+                {
+                    FileLogger.Log($"  [EquipMove] EQUIP blocked: item=0x{wantId:X8} is incompatible with slot {equipSlot} (charm slot=29)");
+                    return EquipOutcome.NoOp;
+                }
                 if (equipSlot == 12 && existing != null && existing.ItemId == wantId)
                 {
                     FileLogger.Log($"  [EquipMove] slot {equipSlot} 已是 0x{wantId:X8} (称号 P2 反转包) -> ReverseError");
@@ -580,6 +587,13 @@ VALUES (@accountId, @selectionKey, @value32, @itemCount, CURRENT_TIMESTAMP);";
             return sourceListType == InventoryListType.Pet
                 && source.ItemKind == "pet"
                 && TryIsPetInventoryEquipment(expectedItemId);
+        }
+
+        internal static bool IsCharmSlotCompatible(int itemTemplateId, int equipmentSlot)
+        {
+            var equipmentType = EquipmentTypeInfo.ParseOrUnknown(ItemMetadataResolver.ResolveEquipmentType(itemTemplateId));
+            var isCharm = equipmentType == EquipmentType.Charm;
+            return equipmentSlot == CharmEquipmentSlot ? isCharm : !isCharm;
         }
 
         private static bool TryIsPetInventoryEquipment(int itemTemplateId)
