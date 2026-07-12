@@ -46,6 +46,7 @@ namespace DfoServer.Network.Handlers.Dungeon
             SqliteCharacterRepository characterRepository,
             SqliteSelectCharacterDataSource selectCharacterDataSource,
             IRentalTimeProvider rentalTimeProvider,
+            InventoryRefreshSender inventoryRefresh,
             Game.Party.PartyManager partyManager = null,
             Game.Session.ISessionDirectory sessions = null)
         {
@@ -57,7 +58,7 @@ namespace DfoServer.Network.Handlers.Dungeon
             SelectCharacterDataSource = selectCharacterDataSource ?? throw new ArgumentNullException(nameof(selectCharacterDataSource));
             RentalTimeProvider = rentalTimeProvider ?? SystemRentalTimeProvider.Instance;
             DeathTower = new Game.DeathTower.DeathTowerHandler();
-            QuestDrops = new Game.Quests.QuestDropService(assetService);
+            QuestDrops = new Game.Quests.QuestDropService(assetService, inventoryRefresh);
             Subtype1Repository = new SqliteSubtype1Repository(ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
             CharacterStateRepository = new SqliteCharacterStateRepository(ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
             ProgressRepository = new SqliteCharacterProgressRepository(ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
