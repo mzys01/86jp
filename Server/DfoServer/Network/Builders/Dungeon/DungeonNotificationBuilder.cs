@@ -247,19 +247,28 @@ namespace DfoServer.Network.Builders
             return new byte[] { 0x00 };
         }
 
-        public static byte[] BuildPlayResult(ushort userId, uint noticeExp, bool allKill,
-            byte rankGrade = 99, byte clientRankPoint = 99)
+        public static byte[] BuildPlayResult(
+            ushort userId,
+            int clearTimeMs,
+            byte rankIndex,
+            byte timeBonusPoint,
+            byte clientRankPoint,
+            bool questMaze = false,
+            bool newBestClearTime = false)
         {
             var writer = new GamePacketWriter();
-            writer.WriteByte(rankGrade);
-            writer.WriteUInt32(noticeExp);
-            writer.WriteByte(0x00);              // flagB
+            // df_game_r DisPatcher_SetPlayResult::SendResult:
+            // rankIndex, clearTimeMs, timeBonusPoint, clientRankPoint,
+            // then CParty::makeBestClearTimePacket.
+            writer.WriteByte(rankIndex);
+            writer.WriteInt32(clearTimeMs);
+            writer.WriteByte(timeBonusPoint);
             writer.WriteByte(clientRankPoint);
-            writer.WriteByte(allKill ? (byte)1 : (byte)0);  // allKillFlag
-            writer.WriteByte(0x01);              // result count
+            writer.WriteByte(questMaze ? (byte)1 : (byte)0);
+            writer.WriteByte(0x01);              // member count
             writer.WriteUInt16(userId);
-            writer.WriteUInt32(noticeExp);
-            writer.WriteByte(0x01);              // result flag
+            writer.WriteInt32(clearTimeMs);
+            writer.WriteByte(newBestClearTime ? (byte)1 : (byte)0);
             return writer.ToArray();
         }
 

@@ -24,6 +24,7 @@ namespace DfoServer
             ("--selftest-dungeon-map-fallback", SelfTests.DungeonMapFallbackSelfTest.Run),
             ("--selftest-dungeon-room-progress", SelfTests.DungeonRoomProgressSelfTest.Run),
             ("--selftest-dungeon-run", SelfTests.DungeonRunLifecycleSelfTest.Run),
+            ("--selftest-card-reward-flow", SelfTests.CardRewardFlowSelfTest.Run),
             ("--selftest-monster-card-drop", SelfTests.MonsterCardDropSelfTest.Run),
             ("--selftest-character-option", SelfTests.CharacterOptionSelfTest.Run),
             ("--selftest-crystal-contract", SelfTests.CrystalContractSelfTest.Run),

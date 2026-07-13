@@ -1,109 +1,307 @@
 using System;
 using System.Collections.Generic;
 using System.Threading;
+using System.Threading.Tasks;
 
 namespace DfoServer.Infrastructure
 {
-    // 时钟服务: 进程内定时触发器, 到了指定时间点执行注册的回调。
-    // 只解决"到点主动给在线玩家做某件事"(推送/广播/定期结算); 数据本身的正确性
-    // 一律由正常业务路径(登录/使用时读库判定)保证, 不依赖本时钟。
-    //
-    // 使用规则(接入前必读):
-    //   1) 本服务不往数据库写任何东西, 也不记"上次执行到哪"。停机或卡顿期间错过的
-    //      时间点不补触发、连续错过多次只触发一次——所以你的功能必须做到:
-    //      时钟一次都没响, 玩家在登录/使用时拿到的状态也照样正确;
-    //   2) 回调里只允许 读数据(可顺带结算)/检查条件/给在线玩家发包。不允许凭空
-    //      创造新数据(如直接发道具)——那类需求应做成"落库记账+登录或使用时兑现",
-    //      时钟顶多提醒在线的人;
-    //   3) 回调不会与自己并发(上一轮没跑完则跳过本轮检查), 抛异常只记日志、
-    //      不影响其他回调; 耗时或异步操作请自行派发;
-    //   4) 系统时间被往回调时自动重新对表, 该轮不触发; 被拨回去的时间点随时间
-    //      再次到来会再触发一次(在规则2约束下这是无害的)。
-    //
-    // 时间基准: 北京时间(UTC+8), 与每日重置口径一致(06:00)。
-    // 用法(构造期注册, Program 启动服务器后统一 Start):
-    //   ClockService.Instance.RegisterMinuteTick("online-progress", utcNow => { ... });
-    //   ClockService.Instance.RegisterDailyMoment("fatigue-refresh", 6, 0, utcNow => { ... });
-    //   ClockService.Instance.RegisterWeeklyMoment("raid-open", DayOfWeek.Wednesday, 20, 0, utcNow => { ... });
+    /// <summary>
+    /// 进程内时间队列, 用于在线通知和短生命周期的运行时控制。
+    /// </summary>
+    /// <remarks>
+    /// 设计上对齐旧服的堆式 TimerQueue: 回调按 UTC 到期时间排序, 已取消/被替换的节点采用惰性清理,
+    /// 每分钟/每日/每周这类周期任务在卡顿后只触发一次, 不补放每个错过的时间点。
+    ///
+    /// 适合接入团本 ready 倒计时、攻坚阶段计时、在线宠物运行时检查、UI 刷新通知等进程内控制流。
+    /// 不要把它当成奖励、次数限制、每日重置、团本持久进度等跨重启状态的唯一真相来源。
+    /// 这类功能必须先落库保存权威状态, 登录或启动时再按持久化状态重建仍需要的 timer。
+    ///
+    /// 一次性 timer 命名约定:
+    ///   domain:key:stage
+    /// 示例:
+    ///   raid:1002:ready
+    ///   raid:1002:attack
+    ///   pet-death:{sessionId}
+    /// 整个聚合对象销毁时, 用 CancelOneShotsByPrefix("raid:1002:") 批量清理。
+    /// </remarks>
     public sealed class ClockService
     {
         public static readonly ClockService Instance = new ClockService();
 
-        private const int TimeZoneOffsetHours = 8;   // 北京 UTC+8
-        private const int TimerResolutionMs = 5000;  // 5秒分辨率: 时刻触发误差 ≤5s
+        private const int TimeZoneOffsetHours = 8;
+        private const int MaxTimerDueMs = int.MaxValue - 1;
+        private const int QueueCompactionStaleThreshold = 1024;
+
+        private enum ScheduledKind
+        {
+            MinuteTick,
+            Moment,
+            OneShot,
+        }
 
         private sealed class MomentEntry
         {
             public string Name;
             public int Hour;
             public int Minute;
-            public DayOfWeek? Day;          // null = 每日
-            public DateTime NextDueUtc;     // MinValue = 未定位(首查时定位, 启动前的时刻不补)
+            public DayOfWeek? Day;
+            public DateTime NextDueUtc;
             public Action<DateTime> Callback;
         }
 
-        private sealed class OneShotEntry
+        private sealed class ScheduledEntry
         {
             public string Name;
+            public long Id;
+            public ScheduledKind Kind;
             public DateTime DueUtc;
             public Action<DateTime> Callback;
+            public MomentEntry Moment;
+            public int Generation;
+            public bool Cancelled;
         }
 
         private readonly object _sync = new object();
+        private readonly TimeQueue<ScheduledEntry> _queue = new TimeQueue<ScheduledEntry>();
         private readonly List<KeyValuePair<string, Action<DateTime>>> _minuteTicks
             = new List<KeyValuePair<string, Action<DateTime>>>();
         private readonly List<MomentEntry> _moments = new List<MomentEntry>();
-        private readonly Dictionary<string, OneShotEntry> _oneShots
-            = new Dictionary<string, OneShotEntry>(StringComparer.Ordinal);
-        private long _lastMinuteIndex = -1;
-        private DateTime _lastCheckedUtc = DateTime.MinValue;
-        private Timer _timer;
-        private int _checking;   // OnTimer 重入门闩: 保证回调不重叠
+        private readonly Dictionary<string, ScheduledEntry> _oneShots
+            = new Dictionary<string, ScheduledEntry>(StringComparer.Ordinal);
 
-        // 每分钟节拍(跨整分触发一次)。不保证补齐卡顿跳过的分钟, 消费者必须幂等/拉取式。
+        private DateTime _lastCheckedUtc = DateTime.MinValue;
+        private bool _anchored;
+        private int _generation;
+        private long _nextEntryId;
+        private int _staleOneShotNodes;
+        private Timer _timer;
+        private int _checking;
+
+        public sealed class ClockTimerHandle
+        {
+            private readonly ClockService _owner;
+            private readonly long _id;
+
+            internal ClockTimerHandle(ClockService owner, string name, long id, DateTime dueUtc)
+            {
+                _owner = owner;
+                Name = name;
+                _id = id;
+                DueUtc = dueUtc;
+            }
+
+            public string Name { get; }
+            public DateTime DueUtc { get; }
+
+            /// <summary>
+            /// 取消当前句柄对应的那一次调度。若该 timer 已触发、已取消, 或已被同名新 timer 替换, 返回 false。
+            /// </summary>
+            public bool Cancel()
+                => _owner.CancelOneShot(Name, _id);
+        }
+
+        internal readonly struct ClockDebugSnapshot
+        {
+            public ClockDebugSnapshot(
+                int queuedEntries,
+                int oneShotTimers,
+                int lazyCancelledOneShots,
+                int minuteTickCallbacks,
+                int momentCallbacks,
+                bool anchored,
+                DateTime lastCheckedUtc)
+            {
+                QueuedEntries = queuedEntries;
+                OneShotTimers = oneShotTimers;
+                LazyCancelledOneShots = lazyCancelledOneShots;
+                MinuteTickCallbacks = minuteTickCallbacks;
+                MomentCallbacks = momentCallbacks;
+                Anchored = anchored;
+                LastCheckedUtc = lastCheckedUtc;
+            }
+
+            public int QueuedEntries { get; }
+            public int OneShotTimers { get; }
+            public int LazyCancelledOneShots { get; }
+            public int MinuteTickCallbacks { get; }
+            public int MomentCallbacks { get; }
+            public bool Anchored { get; }
+            public DateTime LastCheckedUtc { get; }
+        }
+
+        /// <summary>
+        /// 注册每分钟节拍回调。墙钟跨过 UTC 整分钟时触发一次; 长时间卡顿只合并成一次回调, 不补齐跳过的分钟。
+        /// </summary>
         public void RegisterMinuteTick(string name, Action<DateTime> callback)
         {
             if (string.IsNullOrWhiteSpace(name)) throw new ArgumentException("name is empty", nameof(name));
             if (callback == null) throw new ArgumentNullException(nameof(callback));
-            lock (_sync)
-                _minuteTicks.Add(new KeyValuePair<string, Action<DateTime>>(name, callback));
-        }
-
-        // 每日北京时间 HH:mm 触发一次。
-        public void RegisterDailyMoment(string name, int hour, int minute, Action<DateTime> callback)
-            => RegisterMoment(name, null, hour, minute, callback);
-
-        // 每周指定星期的北京时间 HH:mm 触发一次。
-        public void RegisterWeeklyMoment(string name, DayOfWeek day, int hour, int minute, Action<DateTime> callback)
-            => RegisterMoment(name, day, hour, minute, callback);
-
-        // 进程内一次性定时器。同名任务会覆盖旧任务；会话/登录重建时,
-        // 调用方必须从持久化状态重新恢复仍需要的定时器。
-        public void ScheduleOneShot(string name, DateTime dueUtc, Action<DateTime> callback)
-        {
-            if (string.IsNullOrWhiteSpace(name)) throw new ArgumentException("name is empty", nameof(name));
-            if (callback == null) throw new ArgumentNullException(nameof(callback));
-            if (dueUtc.Kind == DateTimeKind.Local)
-                dueUtc = dueUtc.ToUniversalTime();
 
             lock (_sync)
             {
-                _oneShots[name] = new OneShotEntry
+                var wasEmpty = _minuteTicks.Count == 0;
+                _minuteTicks.Add(new KeyValuePair<string, Action<DateTime>>(name, callback));
+
+                if (_anchored && wasEmpty)
                 {
-                    Name = name,
-                    DueUtc = dueUtc,
-                    Callback = callback,
-                };
+                    EnqueueMinuteTickLocked(_lastCheckedUtc);
+                    ArmTimerLocked(DateTime.UtcNow);
+                }
             }
         }
 
+        /// <summary>
+        /// 注册每日北京时间 HH:mm 回调。首次检查只定位下一次触发点, 不补放服务启动前错过的时刻。
+        /// </summary>
+        public void RegisterDailyMoment(string name, int hour, int minute, Action<DateTime> callback)
+            => RegisterMoment(name, null, hour, minute, callback);
+
+        /// <summary>
+        /// 注册每周指定星期的北京时间 HH:mm 回调。首次检查只定位下一次触发点, 不补放服务启动前错过的时刻。
+        /// </summary>
+        public void RegisterWeeklyMoment(string name, DayOfWeek day, int hour, int minute, Action<DateTime> callback)
+            => RegisterMoment(name, day, hour, minute, callback);
+
+        /// <summary>
+        /// 按相对延迟注册一次性回调。小于等于 0 的延迟会在调度器下一次检查时尽快触发。
+        /// 同名调度会替换旧调度。
+        /// </summary>
+        public ClockTimerHandle ScheduleOneShotAfter(string name, TimeSpan delay, Action<DateTime> callback)
+            => ScheduleOneShot(name, DateTime.UtcNow.Add(NormalizeDelay(delay)), callback);
+
+        /// <summary>
+        /// ScheduleOneShotAfter 的异步版本。异步回调采用 fire-and-forget, 异常由 ClockService 捕获并写日志。
+        /// </summary>
+        public ClockTimerHandle ScheduleOneShotAfterAsync(string name, TimeSpan delay, Func<DateTime, Task> callback)
+            => ScheduleOneShotAsync(name, DateTime.UtcNow.Add(NormalizeDelay(delay)), callback);
+
+        /// <summary>
+        /// 按绝对时间注册异步一次性回调。异步回调采用 fire-and-forget, 异常由 ClockService 捕获并写日志。
+        /// </summary>
+        public ClockTimerHandle ScheduleOneShotAsync(string name, DateTime dueUtc, Func<DateTime, Task> callback)
+        {
+            if (callback == null) throw new ArgumentNullException(nameof(callback));
+            return ScheduleOneShot(name, dueUtc, utcNow => _ = RunAsyncCallback(name, callback, utcNow));
+        }
+
+        /// <summary>
+        /// 按绝对 UTC 时间注册一次性回调。Local DateTime 会转换成 UTC, Unspecified DateTime 按 UTC 处理。
+        /// 同名调度会替换旧调度。若后续必须取消这一"具体一次"调度, 请保存返回的句柄。
+        /// </summary>
+        public ClockTimerHandle ScheduleOneShot(string name, DateTime dueUtc, Action<DateTime> callback)
+        {
+            if (string.IsNullOrWhiteSpace(name)) throw new ArgumentException("name is empty", nameof(name));
+            if (callback == null) throw new ArgumentNullException(nameof(callback));
+            dueUtc = NormalizeUtc(dueUtc);
+
+            lock (_sync)
+            {
+                if (_oneShots.TryGetValue(name, out var previous))
+                {
+                    previous.Cancelled = true;
+                    NoteStaleOneShotQueuedLocked();
+                }
+
+                var entry = new ScheduledEntry
+                {
+                    Name = name,
+                    Id = NextEntryIdLocked(),
+                    Kind = ScheduledKind.OneShot,
+                    DueUtc = dueUtc,
+                    Callback = callback,
+                };
+                _oneShots[name] = entry;
+                _queue.Enqueue(entry, dueUtc);
+                CompactQueueIfNeededLocked();
+                ArmTimerLocked(DateTime.UtcNow);
+                return new ClockTimerHandle(this, name, entry.Id, dueUtc);
+            }
+        }
+
+        /// <summary>
+        /// 取消指定名称的最新一次性调度。没有存活调度时返回 false。
+        /// 若旧调用方不能误取消同名新调度, 优先使用 ClockTimerHandle.Cancel。
+        /// </summary>
         public bool CancelOneShot(string name)
         {
             if (string.IsNullOrWhiteSpace(name))
                 return false;
 
             lock (_sync)
-                return _oneShots.Remove(name);
+            {
+                if (!_oneShots.TryGetValue(name, out var entry))
+                    return false;
+
+                entry.Cancelled = true;
+                NoteStaleOneShotQueuedLocked();
+                _oneShots.Remove(name);
+                CompactQueueIfNeededLocked();
+                ArmTimerLocked(DateTime.UtcNow);
+                return true;
+            }
+        }
+
+        /// <summary>
+        /// 批量取消所有名称以前缀开头的一次性调度, 返回取消数量。
+        /// 用于聚合对象销毁, 例如取消 raid:{raidKey}:* 下的全部团本 timer。
+        /// </summary>
+        public int CancelOneShotsByPrefix(string namePrefix)
+        {
+            if (string.IsNullOrEmpty(namePrefix))
+                return 0;
+
+            lock (_sync)
+            {
+                var names = new List<string>();
+                foreach (var pair in _oneShots)
+                    if (pair.Key.StartsWith(namePrefix, StringComparison.Ordinal))
+                        names.Add(pair.Key);
+
+                foreach (var name in names)
+                {
+                    _oneShots[name].Cancelled = true;
+                    NoteStaleOneShotQueuedLocked();
+                    _oneShots.Remove(name);
+                }
+
+                if (names.Count > 0)
+                {
+                    CompactQueueIfNeededLocked();
+                    ArmTimerLocked(DateTime.UtcNow);
+                }
+                return names.Count;
+            }
+        }
+
+        private bool CancelOneShot(string name, long id)
+        {
+            lock (_sync)
+            {
+                if (!_oneShots.TryGetValue(name, out var entry) || entry.Id != id)
+                    return false;
+
+                entry.Cancelled = true;
+                NoteStaleOneShotQueuedLocked();
+                _oneShots.Remove(name);
+                CompactQueueIfNeededLocked();
+                ArmTimerLocked(DateTime.UtcNow);
+                return true;
+            }
+        }
+
+        internal ClockDebugSnapshot GetDebugSnapshot()
+        {
+            lock (_sync)
+            {
+                return new ClockDebugSnapshot(
+                    _queue.Count,
+                    _oneShots.Count,
+                    _staleOneShotNodes,
+                    _minuteTicks.Count,
+                    _moments.Count,
+                    _anchored,
+                    _lastCheckedUtc);
+            }
         }
 
         private void RegisterMoment(string name, DayOfWeek? day, int hour, int minute, Action<DateTime> callback)
@@ -114,7 +312,8 @@ namespace DfoServer.Infrastructure
             if (minute < 0 || minute > 59) throw new ArgumentOutOfRangeException(nameof(minute), minute, "minute must be 0-59");
 
             lock (_sync)
-                _moments.Add(new MomentEntry
+            {
+                var moment = new MomentEntry
                 {
                     Name = name,
                     Hour = hour,
@@ -122,7 +321,15 @@ namespace DfoServer.Infrastructure
                     Day = day,
                     NextDueUtc = DateTime.MinValue,
                     Callback = callback,
-                });
+                };
+                _moments.Add(moment);
+
+                if (_anchored)
+                {
+                    EnqueueMomentLocked(moment, _lastCheckedUtc);
+                    ArmTimerLocked(DateTime.UtcNow);
+                }
+            }
         }
 
         public void Start()
@@ -131,14 +338,17 @@ namespace DfoServer.Infrastructure
             {
                 if (_timer != null)
                     return;
-                _timer = new Timer(OnTimer, null, 1000, TimerResolutionMs);
+
+                _timer = new Timer(OnTimer, null, Timeout.Infinite, Timeout.Infinite);
+                EnsureAnchoredLocked(DateTime.UtcNow);
+                ArmTimerLocked(DateTime.UtcNow);
             }
         }
 
         private void OnTimer(object state)
         {
             if (Interlocked.CompareExchange(ref _checking, 1, 0) != 0)
-                return;   // 上一轮未结束(慢回调), 跳过本轮 — 回调保证不重叠
+                return;
 
             try
             {
@@ -151,97 +361,265 @@ namespace DfoServer.Infrastructure
             finally
             {
                 Interlocked.Exchange(ref _checking, 0);
+                RefreshTimer();
             }
         }
 
-        // 检查一轮并触发到期回调(自测以合成时间直接调用)。
-        // 首轮只定位不触发: 启动之前错过的时刻一律不补。
         internal void CheckOnce(DateTime utcNow)
         {
-            List<KeyValuePair<string, Action<DateTime>>> dueMinuteTicks = null;
-            List<MomentEntry> dueMoments = null;
-            List<OneShotEntry> dueOneShots = null;
+            utcNow = NormalizeUtc(utcNow);
+            List<KeyValuePair<string, Action<DateTime>>> dueCallbacks = null;
 
             lock (_sync)
             {
-                // 系统时钟回拨: 重新定位全部基准, 该轮不触发(与"首查只定位"同语义)。
-                // 重定位后已过时刻可能随时间重新到来而再次触发 — 消费者幂等前提下无害。
-                if (_lastCheckedUtc != DateTime.MinValue && utcNow < _lastCheckedUtc)
+                if (!_anchored)
+                {
+                    EnsureAnchoredLocked(utcNow);
+                }
+                else if (_lastCheckedUtc != DateTime.MinValue && utcNow < _lastCheckedUtc)
                 {
                     FileLogger.Log($"[Clock] wall clock moved backwards ({_lastCheckedUtc:HH:mm:ss} -> {utcNow:HH:mm:ss} UTC), re-anchoring");
-                    _lastMinuteIndex = utcNow.Ticks / TimeSpan.TicksPerMinute;
-                    foreach (var moment in _moments)
-                        if (moment.NextDueUtc != DateTime.MinValue)
-                            moment.NextDueUtc = ComputeNextDueUtc(moment, utcNow);
+                    ReanchorRecurringLocked(utcNow);
                     _lastCheckedUtc = utcNow;
+                    ArmTimerLocked(utcNow);
                     return;
                 }
+
                 _lastCheckedUtc = utcNow;
 
-                var minuteIndex = utcNow.Ticks / TimeSpan.TicksPerMinute;
-                if (_lastMinuteIndex < 0)
+                while (_queue.TryPeek(out var entry, out var dueUtc))
                 {
-                    _lastMinuteIndex = minuteIndex;
-                }
-                else if (minuteIndex > _lastMinuteIndex)
-                {
-                    _lastMinuteIndex = minuteIndex;
-                    if (_minuteTicks.Count > 0)
-                        dueMinuteTicks = new List<KeyValuePair<string, Action<DateTime>>>(_minuteTicks);
-                }
-
-                foreach (var moment in _moments)
-                {
-                    if (moment.NextDueUtc == DateTime.MinValue)
+                    if (entry.Cancelled || IsStaleRecurringEntry(entry))
                     {
-                        moment.NextDueUtc = ComputeNextDueUtc(moment, utcNow);
+                        _queue.Dequeue();
+                        NoteStaleEntryDequeuedLocked(entry);
                         continue;
                     }
 
-                    if (utcNow >= moment.NextDueUtc)
-                    {
-                        (dueMoments ?? (dueMoments = new List<MomentEntry>())).Add(moment);
-                        moment.NextDueUtc = ComputeNextDueUtc(moment, utcNow);   // 严格晚于now: 间隙塌缩
-                    }
+                    if (dueUtc > utcNow)
+                        break;
+
+                    _queue.Dequeue();
+                    CollectDueEntryLocked(entry, utcNow, ref dueCallbacks);
                 }
+
+                ArmTimerLocked(utcNow);
             }
 
-            // 回调在锁外执行: 允许回调内再注册, 也避免慢回调拖住注册
-            lock (_sync)
+            if (dueCallbacks != null)
+                foreach (var callback in dueCallbacks)
+                    Invoke(callback.Key, callback.Value, utcNow);
+
+            RefreshTimer();
+        }
+
+        private void CollectDueEntryLocked(
+            ScheduledEntry entry,
+            DateTime utcNow,
+            ref List<KeyValuePair<string, Action<DateTime>>> dueCallbacks)
+        {
+            switch (entry.Kind)
             {
-                if (_oneShots.Count > 0)
-                {
-                    foreach (var oneShot in _oneShots.Values)
+                case ScheduledKind.MinuteTick:
+                    if (_minuteTicks.Count > 0)
                     {
-                        if (utcNow >= oneShot.DueUtc)
-                            (dueOneShots ?? (dueOneShots = new List<OneShotEntry>())).Add(oneShot);
+                        if (dueCallbacks == null)
+                            dueCallbacks = new List<KeyValuePair<string, Action<DateTime>>>();
+                        dueCallbacks.AddRange(_minuteTicks);
+                        EnqueueMinuteTickLocked(utcNow);
                     }
+                    break;
 
-                    if (dueOneShots != null)
+                case ScheduledKind.Moment:
+                    if (entry.Moment == null)
+                        break;
+                    if (dueCallbacks == null)
+                        dueCallbacks = new List<KeyValuePair<string, Action<DateTime>>>();
+                    dueCallbacks.Add(new KeyValuePair<string, Action<DateTime>>(
+                        entry.Moment.Name,
+                        entry.Moment.Callback));
+                    EnqueueMomentLocked(entry.Moment, utcNow);
+                    break;
+
+                case ScheduledKind.OneShot:
+                    if (_oneShots.TryGetValue(entry.Name, out var current)
+                        && ReferenceEquals(current, entry))
                     {
-                        foreach (var oneShot in dueOneShots)
-                        {
-                            if (_oneShots.TryGetValue(oneShot.Name, out var current)
-                                && ReferenceEquals(current, oneShot))
-                            {
-                                _oneShots.Remove(oneShot.Name);
-                            }
-                        }
+                        _oneShots.Remove(entry.Name);
+                        if (dueCallbacks == null)
+                            dueCallbacks = new List<KeyValuePair<string, Action<DateTime>>>();
+                        dueCallbacks.Add(new KeyValuePair<string, Action<DateTime>>(
+                            entry.Name,
+                            entry.Callback));
                     }
-                }
+                    break;
+            }
+        }
+
+        private void EnsureAnchoredLocked(DateTime utcNow)
+        {
+            _anchored = true;
+            ReanchorRecurringLocked(utcNow);
+            _lastCheckedUtc = utcNow;
+        }
+
+        private void ReanchorRecurringLocked(DateTime utcNow)
+        {
+            unchecked
+            {
+                _generation++;
+                if (_generation == 0)
+                    _generation = 1;
             }
 
-            if (dueMinuteTicks != null)
-                foreach (var tick in dueMinuteTicks)
-                    Invoke(tick.Key, tick.Value, utcNow);
+            if (_minuteTicks.Count > 0)
+                EnqueueMinuteTickLocked(utcNow);
 
-            if (dueMoments != null)
-                foreach (var moment in dueMoments)
-                    Invoke(moment.Name, moment.Callback, utcNow);
+            foreach (var moment in _moments)
+                EnqueueMomentLocked(moment, utcNow);
+        }
 
-            if (dueOneShots != null)
-                foreach (var oneShot in dueOneShots)
-                    Invoke(oneShot.Name, oneShot.Callback, utcNow);
+        private void EnqueueMinuteTickLocked(DateTime utcNow)
+        {
+            var dueUtc = NextMinuteBoundaryUtc(utcNow);
+            _queue.Enqueue(new ScheduledEntry
+            {
+                Name = "minute-tick",
+                Kind = ScheduledKind.MinuteTick,
+                DueUtc = dueUtc,
+                Generation = _generation,
+            }, dueUtc);
+        }
+
+        private void EnqueueMomentLocked(MomentEntry moment, DateTime utcNow)
+        {
+            var dueUtc = ComputeNextDueUtc(moment, utcNow);
+            moment.NextDueUtc = dueUtc;
+            _queue.Enqueue(new ScheduledEntry
+            {
+                Name = moment.Name,
+                Kind = ScheduledKind.Moment,
+                DueUtc = dueUtc,
+                Moment = moment,
+                Generation = _generation,
+            }, dueUtc);
+        }
+
+        private bool IsStaleRecurringEntry(ScheduledEntry entry)
+            => entry.Kind != ScheduledKind.OneShot && entry.Generation != _generation;
+
+        private long NextEntryIdLocked()
+        {
+            unchecked
+            {
+                _nextEntryId++;
+                if (_nextEntryId == 0)
+                    _nextEntryId = 1;
+            }
+
+            return _nextEntryId;
+        }
+
+        private void RefreshTimer()
+        {
+            lock (_sync)
+                ArmTimerLocked(DateTime.UtcNow);
+        }
+
+        private void ArmTimerLocked(DateTime utcNow)
+        {
+            if (_timer == null)
+                return;
+
+            while (_queue.TryPeek(out var entry, out _)
+                   && (entry.Cancelled || IsStaleRecurringEntry(entry)))
+            {
+                _queue.Dequeue();
+                NoteStaleEntryDequeuedLocked(entry);
+            }
+
+            if (!_queue.TryPeek(out _, out var dueUtc))
+            {
+                _timer.Change(Timeout.Infinite, Timeout.Infinite);
+                return;
+            }
+
+            var delayMs = (dueUtc - utcNow).TotalMilliseconds;
+            var dueTime = delayMs <= 0
+                ? 0
+                : delayMs >= MaxTimerDueMs
+                    ? MaxTimerDueMs
+                    : (int)Math.Ceiling(delayMs);
+            _timer.Change(dueTime, Timeout.Infinite);
+        }
+
+        private void CompactQueueIfNeededLocked()
+        {
+            if (_staleOneShotNodes < QueueCompactionStaleThreshold)
+                return;
+
+            if (_staleOneShotNodes <= _oneShots.Count)
+                return;
+
+            _queue.Compact(IsQueueEntryLiveLocked);
+            _staleOneShotNodes = 0;
+        }
+
+        private bool IsQueueEntryLiveLocked(ScheduledEntry entry)
+        {
+            if (entry == null || entry.Cancelled || IsStaleRecurringEntry(entry))
+                return false;
+
+            if (entry.Kind != ScheduledKind.OneShot)
+                return true;
+
+            return _oneShots.TryGetValue(entry.Name, out var current)
+                   && ReferenceEquals(current, entry);
+        }
+
+        private void NoteStaleOneShotQueuedLocked()
+        {
+            if (_staleOneShotNodes < int.MaxValue)
+                _staleOneShotNodes++;
+        }
+
+        private void NoteStaleEntryDequeuedLocked(ScheduledEntry entry)
+        {
+            if (entry != null && entry.Kind == ScheduledKind.OneShot && _staleOneShotNodes > 0)
+                _staleOneShotNodes--;
+        }
+
+        private static DateTime NormalizeUtc(DateTime value)
+        {
+            if (value.Kind == DateTimeKind.Local)
+                return value.ToUniversalTime();
+            if (value.Kind == DateTimeKind.Unspecified)
+                return DateTime.SpecifyKind(value, DateTimeKind.Utc);
+            return value;
+        }
+
+        private static TimeSpan NormalizeDelay(TimeSpan delay)
+            => delay <= TimeSpan.Zero ? TimeSpan.Zero : delay;
+
+        private static async Task RunAsyncCallback(
+            string name,
+            Func<DateTime, Task> callback,
+            DateTime utcNow)
+        {
+            try
+            {
+                await callback(utcNow);
+            }
+            catch (Exception ex)
+            {
+                FileLogger.Log($"[Clock] async callback '{name}' error: {ex.Message}");
+            }
+        }
+
+        private static DateTime NextMinuteBoundaryUtc(DateTime utcNow)
+        {
+            var minuteTicks = utcNow.Ticks / TimeSpan.TicksPerMinute;
+            return new DateTime((minuteTicks + 1) * TimeSpan.TicksPerMinute, DateTimeKind.Utc);
         }
 
         private static void Invoke(string name, Action<DateTime> callback, DateTime utcNow)
@@ -256,7 +634,6 @@ namespace DfoServer.Infrastructure
             }
         }
 
-        // 下一个到期时刻(严格晚于 utcNow), 按北京时间帧计算后换回 UTC。
         private static DateTime ComputeNextDueUtc(MomentEntry moment, DateTime utcNow)
         {
             var beijing = utcNow.AddHours(TimeZoneOffsetHours);
@@ -271,7 +648,69 @@ namespace DfoServer.Infrastructure
             while (candidate <= beijing)
                 candidate = candidate.AddDays(stepDays);
 
-            return candidate.AddHours(-TimeZoneOffsetHours);
+            return DateTime.SpecifyKind(candidate.AddHours(-TimeZoneOffsetHours), DateTimeKind.Utc);
+        }
+
+        private sealed class TimeQueue<T>
+            where T : class
+        {
+            private readonly PriorityQueue<T, QueuePriority> _heap
+                = new PriorityQueue<T, QueuePriority>();
+            private long _sequence;
+
+            public int Count => _heap.Count;
+
+            public void Enqueue(T item, DateTime dueUtc)
+                => _heap.Enqueue(item, new QueuePriority(dueUtc.Ticks, _sequence++));
+
+            public void Compact(Predicate<T> keep)
+            {
+                if (keep == null) throw new ArgumentNullException(nameof(keep));
+
+                var live = new List<KeyValuePair<T, QueuePriority>>();
+                foreach (var item in _heap.UnorderedItems)
+                {
+                    if (keep(item.Element))
+                        live.Add(new KeyValuePair<T, QueuePriority>(item.Element, item.Priority));
+                }
+
+                _heap.Clear();
+                foreach (var item in live)
+                    _heap.Enqueue(item.Key, item.Value);
+            }
+
+            public bool TryPeek(out T item, out DateTime dueUtc)
+            {
+                if (_heap.TryPeek(out item, out var priority))
+                {
+                    dueUtc = new DateTime(priority.DueTicks, DateTimeKind.Utc);
+                    return true;
+                }
+
+                dueUtc = default;
+                return false;
+            }
+
+            public T Dequeue()
+                => _heap.Dequeue();
+        }
+
+        private readonly struct QueuePriority : IComparable<QueuePriority>
+        {
+            public readonly long DueTicks;
+            private readonly long _sequence;
+
+            public QueuePriority(long dueTicks, long sequence)
+            {
+                DueTicks = dueTicks;
+                _sequence = sequence;
+            }
+
+            public int CompareTo(QueuePriority other)
+            {
+                var dueCompare = DueTicks.CompareTo(other.DueTicks);
+                return dueCompare != 0 ? dueCompare : _sequence.CompareTo(other._sequence);
+            }
         }
     }
 }

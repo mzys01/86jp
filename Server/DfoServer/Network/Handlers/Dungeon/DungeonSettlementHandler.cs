@@ -109,10 +109,14 @@ namespace DfoServer.Network.Handlers.Dungeon
             var monsterGrowthContractBonus = run.MonsterGrowthContractBonusExp;
 
             // Settlement 3 packets: NOTI 34, NOTI 37, NOTI 35
+            var clearTimeMs = CalculateClearTimeMs(run);
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0022,
                 DungeonNotificationBuilder.BuildPlayResult(
-                    session.Player.UserId, monsterTotalExp, allKill: true,
-                    rankGrade: clearRank.RankGrade, clientRankPoint: clearRank.ClientRankPoint)));
+                    session.Player.UserId,
+                    clearTimeMs,
+                    rankIndex: (byte)clearRank.RankBonusIndex,
+                    timeBonusPoint: (byte)Math.Max(0, Math.Min(255, clearRank.TimeBonusPoint)),
+                    clientRankPoint: clearRank.ClientRankPoint)));
             var (remainSp, remainTp) = _svc.GetRemainingSpTp(session, persist: leveledUp, logTag: "SET_PLAY_RESULT");
 
             if (clearNormalExpGain > 0 || leveledUp || clearHonorExpGain > 0)
@@ -149,11 +153,13 @@ namespace DfoServer.Network.Handlers.Dungeon
                 await _svc.SendInDungeonLevelUpFollowups(session);
             }
 
-            // Card layout is deferred: 2 s timer -> layout, then 4 s -> auto-flip free card.
-            // Phase is already ResultShown (set at method entry); the lazy-layout branches key off it.
+            // 翻牌布局延后: 2 秒 timer 发布局, 再 4 秒 timer 自动翻免费卡。
+            // Phase 已在方法入口置为 ResultShown; 懒布局分支都以它作为业务校验。
             run.CardFlipCount = 0;
             run.FreeCardSlots = new byte[] { 0xFF, 0xFF, 0xFF, 0xFF };
             run.PaidCardSlots = new byte[] { 0xFF, 0xFF, 0xFF, 0xFF };
+            run.FreeCardRewardDelivered = false;
+            run.PaidCardRewardDelivered = false;
 
             _svc.CardRewards.ScheduleAutoFlow(session, layoutDelayMs: 2000, autoFlipDelayMs: 4000);
 
@@ -185,6 +191,19 @@ namespace DfoServer.Network.Handlers.Dungeon
                 return body[SetPlayResultRankPointOffset];
 
             return body[0];
+        }
+
+        private static int CalculateClearTimeMs(DungeonRun run)
+        {
+            if (run == null || run.StartedUtc == DateTime.MinValue)
+                return 0;
+
+            var elapsed = DateTime.UtcNow - run.StartedUtc;
+            if (elapsed <= TimeSpan.Zero)
+                return 0;
+            if (elapsed.TotalMilliseconds >= int.MaxValue)
+                return int.MaxValue;
+            return (int)Math.Round(elapsed.TotalMilliseconds);
         }
 
         private ClearExpParts CalculateClearRewardExp(EnhancedClientSession session, int rankBonusIndex)
