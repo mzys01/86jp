@@ -1,5 +1,6 @@
 using DfoServer.Game.Inventory;
 using DfoServer.Infrastructure;
+using DfoServer.Network.Builders;
 using Microsoft.Data.Sqlite;
 using System;
 using System.IO;
@@ -22,6 +23,20 @@ namespace DfoServer.SelfTests
             var failures = 0;
             Check("sample pet is pet inventory equipment",
                 ItemMetadataResolver.IsPetInventoryEquipment(MiniBloodPetItemId),
+                ref failures);
+            Check("compound item success ACK matches 86 client short body",
+                BytesEqual(
+                    CompoundItemAckBuilder.Build(new CompoundItemRecipeResult
+                    {
+                        SourceSlotIndex = 106,
+                        RequestedCount = 1,
+                    }),
+                    new byte[] { 0x01, 0x6A, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00 }),
+                ref failures);
+            Check("compound item error ACK matches 86 client short body",
+                BytesEqual(
+                    CompoundItemAckBuilder.BuildError(21, 106),
+                    new byte[] { 0x00, 0x6A, 0x00, 0x00, 0x15 }),
                 ref failures);
 
             var raw = MakeEquipListCodec.BuildEntryFromDisplayFields(
@@ -136,6 +151,20 @@ WHERE character_id = @characterId
                 if (File.Exists(file))
                     File.Delete(file);
             }
+        }
+
+        private static bool BytesEqual(byte[] left, byte[] right)
+        {
+            if (ReferenceEquals(left, right))
+                return true;
+            if (left == null || right == null || left.Length != right.Length)
+                return false;
+            for (var index = 0; index < left.Length; index++)
+            {
+                if (left[index] != right[index])
+                    return false;
+            }
+            return true;
         }
 
         private static void Check(string name, bool ok, ref int failures)

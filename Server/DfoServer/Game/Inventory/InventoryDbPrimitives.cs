@@ -99,6 +99,18 @@ ORDER BY slot_index;";
             return -1;
         }
 
+        internal int FindEmptyPetCreatureInventorySlot(SqliteConnection connection, SqliteTransaction transaction, int characterId)
+        {
+            return FindEmptySlotExcept(
+                connection,
+                transaction,
+                characterId,
+                InventoryListType.Pet,
+                SqliteInventoryStore.PetInventorySlotStart,
+                SqliteInventoryStore.PetInventorySlotEnd,
+                SqliteInventoryStore.PetCreatureEquipSlot);
+        }
+
         internal SqliteInventoryStore.ItemRecord FindItemByTemplateId(SqliteConnection connection, SqliteTransaction transaction, int characterId, InventoryListType listType, int templateId)
         {
             using (var command = connection.CreateCommand())
@@ -979,7 +991,14 @@ WHERE character_id = @characterId AND list_type = @listType;";
             var insertRows = metadata.IsStackable && !isAvatarReward ? 1 : effectiveCount;
             for (var rowIndex = 0; rowIndex < insertRows; rowIndex++)
             {
-                var targetSlot = FindEmptySlot(connection, transaction, characterId, insertListType, slotStart, slotEnd);
+                var targetSlot = FindEmptyBoosterRewardSlot(
+                    connection,
+                    transaction,
+                    characterId,
+                    insertListType,
+                    slotStart,
+                    slotEnd,
+                    isCreature);
                 if (targetSlot < 0)
                 {
                     FileLogger.Log($"  [Booster] no empty slot item=0x{itemTemplateId:X8} list={insertListType} range={slotStart}-{slotEnd}");
@@ -1039,6 +1058,21 @@ WHERE character_id = @characterId AND list_type = @listType;";
             }
 
             return results.Count > 0;
+        }
+
+        private int FindEmptyBoosterRewardSlot(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            int characterId,
+            InventoryListType listType,
+            int slotStart,
+            int slotEnd,
+            bool isCreature)
+        {
+            if (!isCreature)
+                return FindEmptySlot(connection, transaction, characterId, listType, slotStart, slotEnd);
+
+            return FindEmptyPetCreatureInventorySlot(connection, transaction, characterId);
         }
 
         private int FillBoosterRewardExistingStacks(

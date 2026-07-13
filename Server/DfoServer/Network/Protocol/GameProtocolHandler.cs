@@ -252,6 +252,7 @@ namespace DfoServer.Network
             d[0x0015] = _inventoryHandler.Handle_ENUM_CMDPACKET_BUY_ITEM;          //21
             d[0x0016] = _inventoryHandler.Handle_ENUM_CMDPACKET_SELL_ITEM;         //22
             d[0x0017] = _inventoryHandler.Handle_ENUM_CMDPACKET_REPAIR_EQUIPMENT;  //23 装备修理
+            d[0x0019] = _inventoryHandler.Handle_ENUM_CMDPACKET_COMPOUND_ITEM;     //25 compound item / recipe
             d[0x001A] = _inventoryHandler.Handle_ENUM_CMDPACKET_DISJOINT_ITEM;     //26 系统分解
             d[0x00CA] = _inventoryHandler.Handle_DISJOINT_AVATAR;                  //202 时装分解
             d[0x001B] = _inventoryHandler.Handle_USE_LOTTERY_ITEM;                  //27

@@ -224,6 +224,7 @@ CREATE TABLE IF NOT EXISTS character_creatures (
     field_after_value INTEGER NOT NULL DEFAULT 0,
     creature_text BLOB,
     tail_flag INTEGER NOT NULL DEFAULT 0,
+    extra_json TEXT NOT NULL DEFAULT '{}',
     PRIMARY KEY (character_id, sort_order),
     FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
 );

@@ -413,7 +413,7 @@ ON CONFLICT(character_id) DO UPDATE SET
             {
                 conn.Open();
                 using (var cmd = new SqliteCommand(
-                    "SELECT creature_key, field04, mode_flag, progress_value, mode1_field0a, mode1_field0b, field_after_value, creature_text, tail_flag FROM character_creatures WHERE character_id = @cid ORDER BY sort_order", conn))
+                    "SELECT creature_key, field04, mode_flag, progress_value, mode1_field0a, mode1_field0b, field_after_value, creature_text, tail_flag, extra_json FROM character_creatures WHERE character_id = @cid ORDER BY sort_order", conn))
                 {
                     cmd.Parameters.AddWithValue("@cid", characterId);
                     using (var reader = cmd.ExecuteReader())
@@ -431,6 +431,7 @@ ON CONFLICT(character_id) DO UPDATE SET
                                 FieldAfterValue32 = (byte)reader.GetInt32(6),
                                 CreatureTextBytes = reader.IsDBNull(7) ? new byte[0] : (byte[])reader[7],
                                 TailFlag = (byte)reader.GetInt32(8),
+                                ExtraJson = reader.IsDBNull(9) ? "{}" : reader.GetString(9),
                             });
                         }
                     }
@@ -456,7 +457,7 @@ ON CONFLICT(character_id) DO UPDATE SET
                     {
                         var entry = snapshot.Entries[i];
                         using (var cmd = new SqliteCommand(
-                            "INSERT INTO character_creatures (character_id, sort_order, creature_key, field04, mode_flag, progress_value, mode1_field0a, mode1_field0b, field_after_value, creature_text, tail_flag) VALUES (@cid, @ord, @key, @f04, @mf, @pv, @m0a, @m0b, @fav, @txt, @tf)", conn, tx))
+                            "INSERT INTO character_creatures (character_id, sort_order, creature_key, field04, mode_flag, progress_value, mode1_field0a, mode1_field0b, field_after_value, creature_text, tail_flag, extra_json) VALUES (@cid, @ord, @key, @f04, @mf, @pv, @m0a, @m0b, @fav, @txt, @tf, @extra)", conn, tx))
                         {
                             cmd.Parameters.AddWithValue("@cid", characterId);
                             cmd.Parameters.AddWithValue("@ord", i);
@@ -469,6 +470,7 @@ ON CONFLICT(character_id) DO UPDATE SET
                             cmd.Parameters.AddWithValue("@fav", (int)entry.FieldAfterValue32);
                             cmd.Parameters.AddWithValue("@txt", entry.CreatureTextBytes != null && entry.CreatureTextBytes.Length > 0 ? (object)entry.CreatureTextBytes : DBNull.Value);
                             cmd.Parameters.AddWithValue("@tf", (int)entry.TailFlag);
+                            cmd.Parameters.AddWithValue("@extra", string.IsNullOrWhiteSpace(entry.ExtraJson) ? "{}" : entry.ExtraJson);
                             cmd.ExecuteNonQuery();
                         }
                     }
