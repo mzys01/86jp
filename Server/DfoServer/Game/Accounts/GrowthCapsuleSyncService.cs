@@ -16,7 +16,6 @@ namespace DfoServer.Game.Accounts
         private readonly HonorLevelSyncService _honorLevel;
         private readonly GrowthCapsuleProgressRepository _growthCapsuleRepository;
         private readonly SqliteCharacterProgressRepository _progressRepository;
-        private readonly SqliteSubtype1Repository _subtype1Repository;
 
         public GrowthCapsuleSyncService(ICharacterRepository characterRepository)
             : this(characterRepository, ServerPaths.DatabasePath, ServerPaths.SchemaFilePath)
@@ -32,7 +31,6 @@ namespace DfoServer.Game.Accounts
             _honorLevel = new HonorLevelSyncService(characterRepository, databasePath, schemaFilePath);
             _growthCapsuleRepository = new GrowthCapsuleProgressRepository(databasePath, schemaFilePath);
             _progressRepository = new SqliteCharacterProgressRepository(databasePath, schemaFilePath);
-            _subtype1Repository = new SqliteSubtype1Repository(databasePath, schemaFilePath);
         }
 
         public async Task SendExpProgressAsync(
@@ -53,7 +51,8 @@ namespace DfoServer.Game.Accounts
 
             honor = honor ?? _honorLevel.LoadSummary(accountId);
             growthCapsule = growthCapsule ?? _growthCapsuleRepository.LoadSummary(accountId);
-            ResolveRemainingSkillPoints(session, out var remainSp, out var remainTp);
+            if (!TryResolveSkillPointProtocolState(session, out var skillPoints))
+                return;
 
             var displayExp = GrowthCapsuleDataProvider.GetDisplayProgress(
                 session.Player.Level, growthCapsule);
@@ -63,48 +62,43 @@ namespace DfoServer.Game.Accounts
                 ExpNotificationBuilder.Build(
                     session.Player.Level,
                     session.Player.Exp,
-                    remainSp,
-                    remainTp,
+                    skillPoints,
                     honor,
                     growthCapsuleExp: displayExp)));
             FileLogger.Log($"[GameProtocol] GROWTH_CAPSULE_SYNC {reason}: account={accountId} cid={session.Player.CharacterId} level={session.Player.Level} total={growthCapsule.TotalExp} display={displayExp} claimable={growthCapsule.TotalExp >= growthCapsule.RequiredExp} honorLevel={honor.HonorLevel} honorExp={honor.HonorExp}");
         }
 
-        private void ResolveRemainingSkillPoints(
+        private bool TryResolveSkillPointProtocolState(
             EnhancedClientSession session,
-            out ushort remainSp,
-            out ushort remainTp)
+            out SkillPointProtocolState skillPoints)
         {
-            remainSp = 0;
-            remainTp = 0;
+            skillPoints = default;
             try
             {
                 var record = _characterRepository.GetById(session.Player.CharacterId);
                 if (record == null)
-                    return;
-
-                var synced = SkillStateService.LoadAndSync(
-                    _progressRepository,
-                    record.CharacterId,
-                    record.Job,
-                    session.Player.Level,
-                    record.BonusSp,
-                    record.BonusTp,
-                    persist: false);
-                if (synced.Points == null)
-                    return;
-
-                var skillTreeIndex = session.Player.Subtype0Tail?.SkillTreeIndex
-                    ?? _subtype1Repository.LoadSkillTreeIndex(record.CharacterId)
-                    ?? 0;
-                remainSp = SkillStateService.GetPageRemainingSp(
-                    synced.Skills, synced.Points, skillTreeIndex == 1 ? 1 : 0);
-                remainTp = (ushort)synced.Points.RemainingTp;
+                {
+                    FileLogger.Log($"[GameProtocol] GROWTH_CAPSULE_SYNC skill points failed: character {session.Player.CharacterId} not found");
+                }
+                else
+                {
+                    skillPoints = SkillStateService.LoadProtocolState(
+                        _progressRepository,
+                        record.CharacterId,
+                        record.Job,
+                        session.Player.Level,
+                        record.BonusSp,
+                        record.BonusTp,
+                        persist: false);
+                    return true;
+                }
             }
             catch (Exception ex)
             {
                 FileLogger.Log($"[GameProtocol] GROWTH_CAPSULE_SYNC skill points failed: {ex.Message}");
             }
+
+            return false;
         }
     }
 }

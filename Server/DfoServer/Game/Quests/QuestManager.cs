@@ -23,6 +23,7 @@ namespace DfoServer.Game.Quests
         private readonly IAssetService _assetService;
         private readonly QuestService _service;
         private readonly SqliteCharacterRepository _characterRepository;
+        private readonly SqliteCharacterProgressRepository _progressRepository;
         private readonly HonorLevelSyncService _honorLevel;
         private readonly GrowthCapsuleProgressRepository _growthCapsuleRepository;
 
@@ -34,6 +35,7 @@ namespace DfoServer.Game.Quests
             _assetService = assetService;
             _service = new QuestService(connStr, assetService);
             _characterRepository = new SqliteCharacterRepository(_databasePath, ServerPaths.SchemaFilePath);
+            _progressRepository = SqliteCharacterProgressRepository.FromConnectionString(connStr);
             _honorLevel = new HonorLevelSyncService(
                 _characterRepository,
                 _databasePath,
@@ -107,32 +109,33 @@ namespace DfoServer.Game.Quests
                 player.Level = result.NewLevel;
             }
 
-            ushort remainSp = 0, remainTp = 0;
-            try
-            {
-                CharacterRecord rec;
-                using (var conn = new Microsoft.Data.Sqlite.SqliteConnection(_connStr))
-                {
-                    conn.Open();
-                    rec = SqliteCharacterRepository.LoadById(conn, cid);
-                }
-                var skillRepo = SqliteCharacterProgressRepository.FromConnectionString(_connStr);
-                if (rec != null)
-                {
-                    var synced = SkillStateService.LoadAndSync(
-                        skillRepo, cid, rec.Job, player.Level, rec.BonusSp, rec.BonusTp, persist: player.Level > prevLevel);
-                    var skillTreeIndex = player.Subtype0Tail?.SkillTreeIndex
-                        ?? SqliteSubtype1Repository.FromConnectionString(_connStr).LoadSkillTreeIndex(cid)
-                        ?? 0;
-                    remainSp = SkillStateService.GetPageRemainingSp(synced.Skills, synced.Points, skillTreeIndex == 1 ? 1 : 0);
-                    remainTp = (ushort)synced.Points.RemainingTp;
-                }
-            }
-            catch (Exception ex) { FileLogger.Log($"[QuestManager] SP calc ERROR: {ex.Message}"); }
-
             var leveledUp = player.Level > prevLevel;
             var inDungeon = player.CurrentRun != null;
-            var sentExpNotification = result.Exp > 0 || leveledUp;
+            var needsExpNotification = result.Exp > 0 || leveledUp;
+            SkillPointProtocolState? skillPoints = null;
+            if (needsExpNotification)
+            {
+                try
+                {
+                    var rec = _characterRepository.GetById(cid);
+                    if (rec != null)
+                    {
+                        skillPoints = SkillStateService.LoadProtocolState(
+                            _progressRepository,
+                            cid,
+                            rec.Job,
+                            player.Level,
+                            rec.BonusSp,
+                            rec.BonusTp,
+                            persist: leveledUp);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    FileLogger.Log($"[QuestManager] SP calc ERROR: {ex.Message}");
+                }
+            }
+
             var refreshesCharacterState = leveledUp
                 || result.ChainType == 1
                 || result.ChainType == 2
@@ -145,9 +148,9 @@ namespace DfoServer.Game.Quests
                 honorLevel = HonorLevelDataProvider.CalculateFromHonorExp(result.TotalHonorExp, 0);
                 growthCapsule = GrowthCapsuleDataProvider.Calculate(result.TotalGrowthCapsuleExp);
             }
-            else if (sentExpNotification || refreshesCharacterState)
+            else if (needsExpNotification || refreshesCharacterState)
                 honorLevel = ResolveHonorLevelForExp();
-            if (sentExpNotification && player.Level >= ExpTableProvider.MaxLevel && growthCapsule == null)
+            if (needsExpNotification && player.Level >= ExpTableProvider.MaxLevel && growthCapsule == null)
                 growthCapsule = _growthCapsuleRepository.LoadSummary(_sender.AccountId);
             if (result.HonorExp > 0 && player.Subtype0Tail != null)
                 HonorLevelDataProvider.ApplyToSubtype0Tail(player.Subtype0Tail, honorLevel);
@@ -160,13 +163,17 @@ namespace DfoServer.Game.Quests
                 await SendUserInfoBroadcast(cid, honorLevel);
             }
 
-            if (sentExpNotification)
+            if (needsExpNotification && skillPoints.HasValue)
             {
                 await _sender.SendNotiAsync(0x0025,
                     ExpNotificationBuilder.Build(
-                        player.Level, player.Exp, remainSp, remainTp, honorLevel,
+                        player.Level, player.Exp, skillPoints.Value, honorLevel,
                         growthCapsuleExp: GrowthCapsuleDataProvider.GetDisplayProgress(
                             player.Level, growthCapsule)));
+            }
+            else if (needsExpNotification)
+            {
+                FileLogger.Log($"[QuestManager] EXP notification skipped: skill-point protocol state unavailable for cid={cid}");
             }
 
             if (leveledUp)
@@ -350,7 +357,6 @@ namespace DfoServer.Game.Quests
                     record = SqliteCharacterRepository.LoadById(conn, characterId);
                 }
                 var addition = SqliteSubtype1Repository.FromConnectionString(_connStr).Load(characterId);
-                var skillRepo = SqliteCharacterProgressRepository.FromConnectionString(_connStr);
 
                 if (record != null && addition != null)
                 {
@@ -362,7 +368,7 @@ namespace DfoServer.Game.Quests
                         accountCharacters);
                     HonorLevelDataProvider.ApplyToUserInfoAddition(addition, honorLevel);
                     var synced = SkillStateService.LoadAndSync(
-                        skillRepo, characterId, record.Job, record.Level, record.BonusSp, record.BonusTp, persist: false);
+                        _progressRepository, characterId, record.Job, record.Level, record.BonusSp, record.BonusTp, persist: false);
                     var w = new Network.GamePacketWriter();
                     w.WriteByte(1);
                     w.WriteUInt16(1);

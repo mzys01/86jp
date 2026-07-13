@@ -132,21 +132,36 @@ namespace DfoServer.Network.Handlers.Dungeon
                 persist: persist);
         }
 
-        // 经验入口共用: 升级/结算后的 SP/TP 剩余点计算, 失败按 0 发并留日志。
-        internal (ushort RemainSp, ushort RemainTp) GetRemainingSpTp(EnhancedClientSession session, bool persist, string logTag)
+        // 经验入口共用：返回 0x0025 所需的两页 SP 和共享 TP 绝对状态。
+        internal bool TryGetSkillPointProtocolState(
+            EnhancedClientSession session,
+            bool persist,
+            string logTag,
+            out SkillPointProtocolState skillPoints)
         {
+            skillPoints = default;
             try
             {
-                var synced = LoadSyncedSkillState(session.Player.CharacterId, session.Player.Level, persist: persist);
+                var synced = LoadSyncedSkillState(
+                    session.Player.CharacterId,
+                    session.Player.Level,
+                    persist);
                 if (synced.Points != null)
                 {
-                    var pageIndex = session.Player.Subtype0Tail?.SkillTreeIndex == 1 ? 1 : 0;
-                    return (SkillStateService.GetPageRemainingSp(synced.Skills, synced.Points, pageIndex),
-                            (ushort)synced.Points.RemainingTp);
+                    skillPoints = SkillStateService.GetProtocolState(
+                        synced.Skills,
+                        synced.Points);
+                    return true;
                 }
             }
-            catch (Exception ex) { FileLogger.Log($"[DungeonHandler] {logTag} ERROR: skill state sync failed, SP/TP sent as 0: {ex.Message}"); }
-            return (0, 0);
+            catch (Exception ex)
+            {
+                FileLogger.Log($"[DungeonHandler] {logTag} ERROR: skill-point protocol state refresh failed: {ex.Message}");
+                return false;
+            }
+
+            FileLogger.Log($"[DungeonHandler] {logTag} ERROR: no verified skill-point protocol state is available");
+            return false;
         }
 
         // 副本内升级的后续通知: 刷新可接任务列表 + 补属性(subtype1)。

@@ -141,12 +141,16 @@ namespace DfoServer.Network.Handlers.Dungeon
             CharacterProgressService.PersistLevelAndExp(session.Player.CharacterId, session.Player.Level, session.Player.Exp);
             FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] TUTORIAL_LEVEL_UP: {1}->{target} exp={targetExp}");
 
-            var (remainSp, remainTp) = _svc.GetRemainingSpTp(session, persist: true, logTag: "TUTORIAL_LEVEL_UP");
+            var hasSkillPoints = _svc.TryGetSkillPointProtocolState(
+                session, persist: true, logTag: "TUTORIAL_LEVEL_UP", out var skillPoints);
             var honorLevel = _svc.ResolveHonorLevelForExp(session);
 
-            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0025,
-                ExpNotificationBuilder.Build(
-                    session.Player.Level, session.Player.Exp, remainSp, remainTp, honorLevel)));
+            if (hasSkillPoints)
+            {
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0025,
+                    ExpNotificationBuilder.Build(
+                        session.Player.Level, session.Player.Exp, skillPoints, honorLevel)));
+            }
 
             await _svc.SendInDungeonLevelUpFollowups(session);
 

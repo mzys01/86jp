@@ -3,6 +3,7 @@ using DfoServer.Game.Characters;
 using DfoServer.Network.Builders;
 using DfoServer.Game.SelectCharacter;
 using DfoServer.Game.CharacterData;
+using DfoServer.Game.Skills;
 using System;
 using System.IO;
 using DfoServer.Infrastructure;
@@ -91,28 +92,72 @@ INSERT INTO character_subtype1_fields(character_id, progress1, progress2) VALUES
                 Check("HONOR_LEVEL_INFO second u32 is honor exp", BitConverter.ToUInt32(body, 4) == mixed.HonorExp);
 
                 var expBody = ExpNotificationBuilder.Build(
-                    86, 0x11223344u, 0x5566, 0x7788,
+                    86, 0x11223344u,
+                    new SkillPointProtocolState
+                    {
+                        Page0Sp = 0x5566,
+                        Page1Sp = 0x6677,
+                        Page0Tp = 0x7788,
+                        Page1Tp = 0x8899,
+                    },
                     mixed,
-                    partyBonusExp: 0x01020304u,
-                    memberBonusExp: 0x11121314u,
+                    pvpVictoryPointSnapshot: 0x15161718u,
+                    partyRewardExp: 0x01020304u,
+                    memberRewardExp: 0x11121314u,
                     fatigueBuffBonusExp: 0x21222324u,
-                    seriaBufBonusExp: 0x31323334u,
+                    seriaBlessingBonusExp: 0x31323334u,
                     growthContractBonusExp: 0x41424344u,
-                    weekendBonusExp: 0x51525354u,
-                    premiumBonusExp: 0x61626364u,
-                    growthCapsuleExp: 0x71727374u);
-                Check("EXP notification keeps the 86JP 95-byte body", expBody.Length == ExpNotificationBuilder.BodyLength);
-                Check("EXP notification writes level and total exp", expBody[0] == 86 && BitConverter.ToUInt32(expBody, 1) == 0x11223344u);
-                Check("EXP notification writes SP and TP fields", BitConverter.ToUInt16(expBody, 13) == 0x5566 && BitConverter.ToUInt16(expBody, 17) == 0x7788);
-                Check("EXP notification writes fixed bonus offsets", BitConverter.ToUInt32(expBody, 25) == 0x21222324u && BitConverter.ToUInt32(expBody, 30) == 0x31323334u && BitConverter.ToUInt32(expBody, 34) == 0x61626364u);
-                Check("EXP notification writes zero variable-entry count", expBody[50] == 0);
-                Check("EXP notification writes post-count bonus offsets", BitConverter.ToUInt32(expBody, 51) == 0x41424344u && BitConverter.ToUInt32(expBody, 55) == 0x51525354u);
-                Check("EXP notification writes growth capsule exp at client offset 59",
-                    BitConverter.ToUInt32(expBody, ExpNotificationBuilder.GrowthCapsuleExpOffset) == 0x71727374u);
-                Check("EXP notification writes honor level at client offset 63",
+                    fatigueBurnBonusExp: 0x51525354u,
+                    internetCafeBonusExp: 0x61626364u,
+                    eliteMonsterKillBonusExp: 0x71727374u,
+                    growthCapsuleExp: 0x81828384u);
+                Check("0x0025 keeps the current 95-byte N=0 output", expBody.Length == ExpNotificationBuilder.BodyLength);
+                Check("0x0025 writes both skill-page SP and TP fields",
+                    BitConverter.ToUInt16(expBody, 13) == 0x5566
+                    && BitConverter.ToUInt16(expBody, 15) == 0x6677
+                    && BitConverter.ToUInt16(expBody, 17) == 0x7788
+                    && BitConverter.ToUInt16(expBody, 19) == 0x8899);
+                Check("0x0025 writes the PvP victory-point snapshot at +0x15",
+                    BitConverter.ToUInt32(expBody, ExpNotificationBuilder.PvpVictoryPointOffset) == 0x15161718u);
+                Check("0x0025 writes zero variable entries in the current builder",
+                    expBody[ExpNotificationBuilder.VariableEntryCountOffset] == 0);
+                Check("0x0025 writes growth-capsule EXP at client offset +0x3B",
+                    BitConverter.ToUInt32(expBody, ExpNotificationBuilder.GrowthCapsuleExpOffset) == 0x81828384u);
+                Check("0x0025 writes honor level at client offset +0x3F",
                     BitConverter.ToUInt32(expBody, ExpNotificationBuilder.HonorLevelOffset) == mixed.HonorLevel);
-                Check("EXP notification writes honor exp at client offset 67",
+                Check("0x0025 writes current honor-segment EXP at client offset +0x43",
                     BitConverter.ToUInt32(expBody, ExpNotificationBuilder.HonorExpOffset) == mixed.HonorExp);
+                Check("0x0025 keeps the project-only unread 8-byte compatibility tail",
+                    ExpNotificationBuilder.ClientReadLengthWithNoVariableEntries == 87
+                    && ExpNotificationBuilder.CompatibilityTailLength == 8
+                    && BitConverter.ToUInt32(expBody, 87) == 0
+                    && BitConverter.ToUInt32(expBody, 91) == 0);
+                Check("0x0025 matches the exact current 95-byte N=0 output",
+                    BitConverter.ToString(expBody) ==
+                    "56-44-33-22-11-04-03-02-01-14-13-12-11-66-55-77-66-88-77-99-88-" +
+                    "18-17-16-15-24-23-22-21-00-34-33-32-31-44-43-42-41-00-00-00-00-" +
+                    "54-53-52-51-64-63-62-61-00-74-73-72-71-00-00-00-00-84-83-82-81-" +
+                    "03-00-00-00-40-4B-4C-00-00-00-00-00-00-00-00-00-00-00-00-00-" +
+                    "00-00-00-00-00-00-00-00-00-00-00-00");
+
+                var missingSkillPages = SkillStateService.GetProtocolState(
+                    new SkillInfoSnapshot
+                    {
+                        Tail0 = 7,
+                        Tail1 = 10770,
+                        HasTailValues = true,
+                    },
+                    new SkillPointState { RemainingSp = 321, RemainingTp = 7 });
+                Check("missing skill pages do not copy page0 SP and legacy Tail1 is never used as TP",
+                    missingSkillPages.Page0Sp == 321
+                    && missingSkillPages.Page1Sp == 0
+                    && missingSkillPages.Page0Tp == 7
+                    && missingSkillPages.Page1Tp == 7);
+
+                var ordinaryExpBody = ExpNotificationBuilder.Build(
+                    86, 0, default, mixed);
+                Check("ordinary EXP producers default an unavailable PvP victory-point snapshot to zero",
+                    BitConverter.ToUInt32(ordinaryExpBody, ExpNotificationBuilder.PvpVictoryPointOffset) == 0);
 
                 var addition = new UserInfoAdditionSnapshot { ManageLevel = 4, FlagByte = 4 };
                 HonorLevelDataProvider.ApplyToUserInfoAddition(addition, capped);
