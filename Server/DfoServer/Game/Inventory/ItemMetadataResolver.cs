@@ -493,6 +493,78 @@ namespace DfoServer.Game.Inventory
             return true;
         }
 
+        public static bool TryValidatePetEnchantByBeadTarget(int beadItemTemplateId, int targetItemTemplateId, byte enchantUpgradeCount, out int enchantCardItemId, out string rejectReason)
+        {
+            enchantCardItemId = 0;
+            rejectReason = null;
+
+            if (!TryLoadStackable(beadItemTemplateId, out var bead))
+            {
+                rejectReason = "bead is not found in stackable.lst";
+                return false;
+            }
+
+            if (bead.MonsterCardId > 0)
+                enchantCardItemId = bead.MonsterCardId;
+            else if (bead.EnchantIndex > 0)
+                enchantCardItemId = bead.EnchantIndex;
+            else
+            {
+                rejectReason = "bead has no monster card id/enchant index";
+                return false;
+            }
+
+            if (bead.TargetItemIds != null && bead.TargetItemIds.Count > 0 && !bead.TargetItemIds.Contains(targetItemTemplateId))
+            {
+                rejectReason = "target item id is not allowed by bead target item id";
+                return false;
+            }
+
+            StackableItemFile card = null;
+            if (bead.MonsterCardId > 0)
+            {
+                if (!TryLoadStackable(bead.MonsterCardId, out card))
+                {
+                    rejectReason = "monster card is not found in stackable.lst";
+                    return false;
+                }
+            }
+            else
+            {
+                TryLoadStackable(enchantCardItemId, out card);
+            }
+
+            if (card != null)
+            {
+                var allowedTypes = ExtractAllowedEquipmentTypes(card.StringDataItems);
+                if (allowedTypes.Count == 0 || !allowedTypes.Contains("[creature]"))
+                {
+                    rejectReason = "target equipment type is not allowed by monster card string data";
+                    return false;
+                }
+
+                if (card.EnchantTable.Count > 0 && !card.EnchantTable.Contains(enchantUpgradeCount))
+                {
+                    rejectReason = "enchant upgrade count is not allowed by monster card enchant table";
+                    return false;
+                }
+
+                if (card.EnchantTable.Count == 0 && enchantUpgradeCount != 0)
+                {
+                    rejectReason = "monster card has no enchant table for upgraded bead";
+                    return false;
+                }
+            }
+
+            if (card == null && enchantUpgradeCount != 0)
+            {
+                rejectReason = "upgraded enchant bead requires monster card enchant table";
+                return false;
+            }
+
+            return true;
+        }
+
         private static bool TryLoadStackable(int itemTemplateId, out StackableItemFile stackable)
         {
             stackable = null;

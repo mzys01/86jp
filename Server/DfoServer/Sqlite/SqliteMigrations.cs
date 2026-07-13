@@ -167,6 +167,11 @@ CREATE TABLE IF NOT EXISTS character_dark_knight_combo_skill_pages (
             {
                 ("growth_capsule_exp", "INTEGER NOT NULL DEFAULT 0"),
             })),
+
+            (21, "character_creatures extra_json", conn => SqliteSchemaMigrator.EnsureColumns(conn, "character_creatures", new[]
+            {
+                ("extra_json", "TEXT NOT NULL DEFAULT '{}'"),
+            })),
         };
 
         private static void ExecuteBatch(SqliteConnection connection, string sql)

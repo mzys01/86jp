@@ -478,7 +478,24 @@ ORDER BY sort_order;";
         {
             using (var connection = OpenConnection())
             using (var transaction = connection.BeginTransaction())
-                return _db.LoadPetItem(connection, transaction, characterId, slotIndex);
+            {
+                var item = _db.LoadItemRecord(connection, transaction, characterId, InventoryListType.Pet, slotIndex);
+                if (item == null)
+                    return null;
+
+                var extraJson = item.ExtraJson;
+                if (IsCreatureItem(item.ItemTemplateId))
+                {
+                    var storedExtraJson = LoadPetCreatureExtraJson(
+                        connection,
+                        transaction,
+                        characterId,
+                        item.PetSerialOrHandle);
+                    extraJson = MergePetCreatureInstanceExtraJsonForRead(storedExtraJson, extraJson);
+                }
+
+                return InventoryProtocolMapper.ToPetItem(item, ItemExtraView.Parse(extraJson));
+            }
         }
 
         private void UpsertSortItemLock(int characterId, SqliteConnection connection, SqliteTransaction transaction, InventoryListType listType, short slotIndex, byte state)

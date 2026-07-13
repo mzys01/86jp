@@ -14,7 +14,7 @@ namespace DfoServer.Game.Inventory
 {
     public sealed partial class SqliteInventoryStore
     {
-        private const short PetCreatureEquipSlot = 24;
+        internal const short PetCreatureEquipSlot = 24;
         private const short PetCreatureEquippedStorageSlot = PetCreatureEquipSlot + 216;
         private const int MaxPersistentPetCreatureSerial = 0x000FFFFF;
         private const short PetArtifactRedEquipSlot = 25;
@@ -79,6 +79,12 @@ namespace DfoServer.Game.Inventory
                     return false;
                 }
 
+                var sourceExtraJson = ResolvePetCreatureInstanceExtraJson(
+                    connection,
+                    transaction,
+                    characterId,
+                    petSerial,
+                    source.ExtraJson);
                 var currentlyEquipped = LoadPetCreatureEquippedEntry(connection, transaction, characterId);
                 _db.DeleteItem(connection, transaction, source.ItemUid);
                 if (currentlyEquipped.HasValue)
@@ -96,6 +102,7 @@ namespace DfoServer.Game.Inventory
                     characterId,
                     source.ItemTemplateId,
                     petSerial);
+                UpsertPetCreatureExtraJson(connection, transaction, characterId, petSerial, sourceExtraJson);
                 UpsertPetEquippedEntry(
                     connection,
                     transaction,
@@ -249,6 +256,7 @@ namespace DfoServer.Game.Inventory
                 result = CreatePetCreatureMoveResult(request, request.MoveCount);
                 result.PetCreatureStateChanged = true;
                 result.PetItemStateChanged = true;
+                result.PetItemFullRefresh = true;
                 AddPetCreatureRefreshSlot(result, PetCreatureEquippedStorageSlot);
                 AddPetCreatureRefreshSlot(result, (short)targetSlot);
                 AddEquipmentRefreshSlot(result, PetCreatureEquipSlot);
@@ -304,6 +312,7 @@ namespace DfoServer.Game.Inventory
             result = CreatePetCreatureMoveResult(request, request.MoveCount);
             result.PetCreatureStateChanged = true;
             result.PetItemStateChanged = true;
+            result.PetItemFullRefresh = true;
             AddPetCreatureRefreshSlot(result, PetCreatureEquippedStorageSlot);
             AddPetCreatureRefreshSlot(result, targetSlot);
             AddEquipmentRefreshSlot(result, PetCreatureEquipSlot);
@@ -650,6 +659,12 @@ WHERE character_id = @cid
                 else
                 {
                     var petSerial = EnsurePetCreaturePersistentSerial(connection, transaction, characterId, equipped);
+                    var equippedExtraJson = ResolvePetCreatureInstanceExtraJson(
+                        connection,
+                        transaction,
+                        characterId,
+                        petSerial,
+                        equipped.ExtraJson);
                     if (petSerial != 0)
                     {
                         UpsertPetCreatureRuntimeState(
@@ -658,6 +673,7 @@ WHERE character_id = @cid
                             characterId,
                             equipped.ItemTemplateId,
                             petSerial);
+                        UpsertPetCreatureExtraJson(connection, transaction, characterId, petSerial, equippedExtraJson);
                         UpsertPetEquippedEntry(
                             connection,
                             transaction,
@@ -1266,6 +1282,7 @@ LIMIT 1;";
             int itemTemplateId,
             int petSerial)
         {
+            var extraJson = LoadPetCreatureExtraJson(connection, transaction, characterId, petSerial);
             _db.InsertCharacterItem(
                 connection,
                 transaction,
@@ -1282,7 +1299,7 @@ LIMIT 1;";
                 0,
                 0,
                 petSerial,
-                SqliteInventoryStore.CreateDefaultPetExtraJson());
+                extraJson);
         }
 
         private void InsertPetItemContainerItem(
@@ -1481,12 +1498,23 @@ LIMIT 1;";
                     if (!reader.Read())
                         return null;
 
+                    var itemId = reader.GetInt32(0);
+                    var raw = reader.IsDBNull(1) ? null : (byte[])reader.GetValue(1);
+                    var petCreatureExtraJson = slotIndex == PetCreatureEquipSlot && IsCreatureItem(itemId)
+                        ? LoadPetCreatureExtraJson(
+                            connection,
+                            transaction,
+                            characterId,
+                            ResolvePetCreatureSerialFromEquippedRaw(raw))
+                        : null;
+
                     return BuildEquipmentCommonItem(
                         slotIndex,
-                        reader.GetInt32(0),
-                        (byte[])reader.GetValue(1),
+                        itemId,
+                        raw,
                         reader.IsDBNull(2) ? 0 : reader.GetInt32(2),
-                        reader.IsDBNull(3) ? (byte)0 : Convert.ToByte(reader.GetInt32(3), CultureInfo.InvariantCulture));
+                        reader.IsDBNull(3) ? (byte)0 : Convert.ToByte(reader.GetInt32(3), CultureInfo.InvariantCulture),
+                        petCreatureExtraJson);
                 }
             }
         }
@@ -1496,7 +1524,8 @@ LIMIT 1;";
             int itemId,
             byte[] raw,
             int expireTime,
-            byte equipmentLockId)
+            byte equipmentLockId,
+            string petCreatureExtraJson = null)
         {
             var fields = raw != null && raw.Length >= 24
                 ? MakeEquipListCodec.ParseDisplayFields(raw)
@@ -1528,6 +1557,10 @@ LIMIT 1;";
                     for (var index = 0; index < fields.MagicSealTail.Length && 21 + index < tail.Length; index++)
                         tail[21 + index] = fields.MagicSealTail[index];
                 }
+            }
+            if (!string.IsNullOrWhiteSpace(petCreatureExtraJson))
+            {
+                ApplyPetCreatureExtraToCommonPrefix(prefix, petCreatureExtraJson);
             }
 
             return new CommonInventoryItem
@@ -1999,6 +2032,7 @@ WHERE character_id = @cid;";
                 cmd.Parameters.AddWithValue("@cid", characterId);
                 cmd.ExecuteNonQuery();
             }
+
         }
 
         private static bool LegacyPetCreatureStatStateExists(SqliteConnection connection, SqliteTransaction transaction)

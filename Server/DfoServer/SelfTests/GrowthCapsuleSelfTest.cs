@@ -178,7 +178,7 @@ PRAGMA user_version=19;";
                         command.CommandText = "SELECT COUNT(*) FROM pragma_table_info('accounts') WHERE name='growth_capsule_exp';";
                         Check("v19 database migrates account capsule column", Convert.ToInt32(command.ExecuteScalar()) == 1);
                         command.CommandText = "PRAGMA user_version;";
-                        Check("growth capsule migration advances schema to v20", Convert.ToInt32(command.ExecuteScalar()) == 20);
+                        Check("growth capsule migration advances schema past v19", Convert.ToInt32(command.ExecuteScalar()) >= 20);
                     }
                 }
             }

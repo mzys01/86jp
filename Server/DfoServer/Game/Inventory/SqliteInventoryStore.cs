@@ -146,6 +146,7 @@ VALUES (
                 snapshot.AvatarListParam16 = GetListParam(listParams, InventoryListType.Avatar);
                 snapshot.PersonalCargoListParam16 = NormalizePersonalCargoListParam(GetListParam(listParams, InventoryListType.PersonalCargo));
                 snapshot.AccountCargoState = _equipStore.LoadAccountCargoState(connection, null, characterId, accountId);
+                var petCreatureExtraBySerial = LoadPetCreatureExtraJsonMap(connection, null, characterId);
 
                 using (var command = connection.CreateCommand())
                 {
@@ -179,6 +180,12 @@ ORDER BY list_type, slot_index;";
                                     snapshot.PersonalCargoItems.Add(InventoryItemCodec.ReadCommonItem(reader, extraJson));
                                     break;
                                 case InventoryListType.Pet:
+                                    if (IsCreatureItem(reader.GetInt32(2)))
+                                    {
+                                        var petSerial = reader.GetInt32(11);
+                                        petCreatureExtraBySerial.TryGetValue(petSerial, out var storedExtraJson);
+                                        extraJson = MergePetCreatureInstanceExtraJsonForRead(storedExtraJson, extraJson);
+                                    }
                                     snapshot.PetItems.Add(InventoryItemCodec.ReadPetItem(reader, extraJson));
                                     break;
                             }
