@@ -36,6 +36,10 @@ namespace DfoServer.Game.Inventory
 
         bool TryHatchCreatureEgg(int characterId, InventoryListType listType, short slotIndex, int expectedItemTemplateId, out CreatureHatchResult result);
 
+        bool TrySealPetCreature(int characterId, int accountId, PetCreatureSealRequest request, out PetCreatureSealResult result);
+
+        bool TryOpenSealedPetCreatureCapsule(int characterId, int accountId, short slotIndex, out BoosterUseResult result);
+
         bool TryRenameEquippedPetCreature(int characterId, int accountId, PetCreatureRenameRequest request, out PetCreatureRenameResult result);
 
         bool TryBuyItem(int characterId, int accountId, int itemTemplateId, int buyCount, out InventoryMutationResult result);

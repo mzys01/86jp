@@ -74,9 +74,7 @@ namespace DfoServer.Network.Handlers.Pets
                 if (creatureStateBody != null)
                     await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0067, creatureStateBody));
 
-                var creatureListBody = BuildCreatureListRefreshBody(cid);
-                if (creatureListBody != null)
-                    await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0069, creatureListBody));
+                await _refresh.SendCreatureItemListRefresh(session);
             }
 
             var petSatietyLog = result.PetSatietyChanged
@@ -105,7 +103,7 @@ namespace DfoServer.Network.Handlers.Pets
 
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, header.type, CommonPacketBodyBuilder.BuildSuccessAck()));
             await _refresh.SendUpdateItemList(session, InventoryListType.Pet, result.SlotIndex);
-            await SendCreatureListRefresh(session);
+            await _refresh.SendCreatureItemListRefresh(session);
 
             FileLogger.Log($"[{ProtocolName}] HATCH_CREATURE_EGG: OK type=0x{header.type:X4} slot={result.SlotIndex} egg=0x{result.EggItemTemplateId:X8} -> pet=0x{result.HatchedItemTemplateId:X8} serial={result.PetSerialOrHandle}");
         }
@@ -113,8 +111,59 @@ namespace DfoServer.Network.Handlers.Pets
         public async Task HandleRequestHatchedCreature(EnhancedClientSession session, GamePacketHeader header, byte[] body)
         {
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, header.type, CommonPacketBodyBuilder.BuildSuccessAck()));
-            await SendCreatureListRefresh(session);
+            await _refresh.SendCreatureItemListRefresh(session);
             FileLogger.Log($"[{ProtocolName}] REQUEST_HATCHED_CREATURE: refreshed creature list type=0x{header.type:X4} body({body?.Length ?? 0}B)");
+        }
+
+        public async Task HandleSealCreature(EnhancedClientSession session, GamePacketHeader header, byte[] body)
+        {
+            FileLogger.Log($"[{ProtocolName}] SEAL_CREATURE raw({body?.Length ?? 0}B): {(body != null ? BitConverter.ToString(body) : "null")}");
+            if (!TryParsePetCreatureSealRequest(body, out var request))
+            {
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
+                    0x01,
+                    header.type,
+                    CommonPacketBodyBuilder.BuildCmdError(PetSealCapsule.InvalidItemErrorCode)));
+                return;
+            }
+
+            var (cid, aid) = SessionOwnerResolver.Resolve(session);
+            if (!_inventoryStore.TrySealPetCreature(cid, aid, request, out var result))
+            {
+                var errorCode = result != null && result.ErrorCode != 0
+                    ? result.ErrorCode
+                    : PetSealCapsule.InvalidItemErrorCode;
+                FileLogger.Log(
+                    $"[{ProtocolName}] SEAL_CREATURE failed capsule=({request.CapsuleListType},{request.CapsuleSlotIndex}) " +
+                    $"creatureSlot={request.CreatureSlotIndex} expected=0x{request.ExpectedCreatureItemTemplateId:X8} error=0x{errorCode:X2}");
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
+                    0x01,
+                    header.type,
+                    CommonPacketBodyBuilder.BuildCmdError(errorCode)));
+                return;
+            }
+
+            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
+                0x01,
+                header.type,
+                PetSealCreatureAckBuilder.BuildSuccess(result)));
+            if (result.ReplacedCapsuleSlotWithSealedProduct)
+            {
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
+                    0x00,
+                    0x000E,
+                    ItemListUpdateBuilder.BuildEmptyUpdates(InventoryListType.Main, new[] { result.CapsuleSlotIndex })));
+            }
+            await _refresh.SendUpdateItemList(session, InventoryListType.Main, result.MainRefreshSlots);
+            await _refresh.SendUpdateItemList(session, InventoryListType.Pet, result.CreatureSlotIndex);
+            await _refresh.SendCreatureItemListRefresh(session);
+
+            FileLogger.Log(
+                $"[{ProtocolName}] SEAL_CREATURE ok capsule=0x{result.CapsuleItemTemplateId:X8}@{result.CapsuleSlotIndex} " +
+                $"sealed=0x{result.SealedItemTemplateId:X8}@{result.SealedCapsuleSlotIndex} split={result.SplitFromStack} " +
+                $"creature=0x{result.CreatureItemTemplateId:X8}@{result.CreatureSlotIndex} sealedCreature=0x{result.SealedCreatureItemTemplateId:X8} " +
+                $"sourceEgg={result.SourceWasCreatureEgg} serial=0x{result.CreatureSerialOrHandle:X8} " +
+                $"sealUses={(result.HadCreatureSealRemainUseCount ? result.CreatureSealRemainUseCountBefore.ToString() : "new")}->{result.CreatureSealRemainUseCountAfter}");
         }
 
         public async Task HandleVerifyCreatureQuest(EnhancedClientSession session, GamePacketHeader header, byte[] body)
@@ -182,13 +231,6 @@ namespace DfoServer.Network.Handlers.Pets
             await _refresh.SendUpdateItemList(session, InventoryListType.Pet, result.SourceSlotIndex);
         }
 
-        private byte[] BuildCreatureListRefreshBody(int characterId)
-        {
-            var snapshot = new SelectCharacterDataSnapshot();
-            snapshot.InitializationSnapshot.CreatureItemList = _selectCharacterDataSource.LoadCreatureItemListSnapshot(characterId);
-            return new CreatureListBodyBuilder().TryBuild(snapshot, 0, out var body) ? body : null;
-        }
-
         private byte[] BuildCreatureStateRefreshBody(int characterId, int creatureKey)
         {
             if (creatureKey <= 0)
@@ -197,15 +239,6 @@ namespace DfoServer.Network.Handlers.Pets
             var snapshot = _selectCharacterDataSource.LoadCreatureItemListSnapshot(characterId);
             var entry = snapshot.Entries.FirstOrDefault(x => x.CreatureKey == creatureKey);
             return entry != null ? CreatureListBodyBuilder.BuildCreatureStateBody(entry) : null;
-        }
-
-        private async Task SendCreatureListRefresh(EnhancedClientSession session)
-        {
-            var (cid, aid) = SessionOwnerResolver.Resolve(session);
-            var snapshot = _selectCharacterDataSource.Load(cid, aid);
-            var builder = new CreatureListBodyBuilder();
-            if (builder.TryBuild(snapshot, 0, out var creatureListBody))
-                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0069, creatureListBody));
         }
 
         private static bool IsPetConsumableSlot(InventoryListType listType, short slotIndex)
@@ -249,6 +282,36 @@ namespace DfoServer.Network.Handlers.Pets
             }
 
             return slotIndex >= 0;
+        }
+
+        private static bool TryParsePetCreatureSealRequest(byte[] body, out PetCreatureSealRequest request)
+        {
+            request = null;
+            if (body == null || body.Length < 21)
+                return false;
+
+            var capsuleListType = (InventoryListType)body[12];
+            if (capsuleListType != InventoryListType.Main)
+                return false;
+
+            var creatureSlot = BitConverter.ToInt16(body, 13);
+            var expectedCreatureItemTemplateId = BitConverter.ToInt32(body, 15);
+            var capsuleSlot = BitConverter.ToInt16(body, 19);
+            if (expectedCreatureItemTemplateId <= 0
+                || capsuleSlot < 0
+                || capsuleSlot > 500
+                || creatureSlot < SqliteInventoryStore.PetInventorySlotStart
+                || creatureSlot > SqliteInventoryStore.PetInventorySlotEnd)
+                return false;
+
+            request = new PetCreatureSealRequest
+            {
+                CapsuleListType = capsuleListType,
+                CapsuleSlotIndex = capsuleSlot,
+                ExpectedCreatureItemTemplateId = expectedCreatureItemTemplateId,
+                CreatureSlotIndex = creatureSlot,
+            };
+            return true;
         }
 
         private static bool TryParsePetCreatureRenameRequest(byte[] body, out PetCreatureRenameRequest request)

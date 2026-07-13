@@ -298,6 +298,21 @@ LIMIT 1;";
         internal bool TryResolveByCreatureId(int creatureId, out PetCreatureEvolutionEntry entry)
             => _byCreatureId.TryGetValue(creatureId, out entry);
 
+        internal bool TryResolvePreviousByEvolutionItemId(int evolutionItemTemplateId, out PetCreatureEvolutionEntry entry)
+        {
+            foreach (var candidate in _byItemId.Values)
+            {
+                if (candidate.EvolutionItemTemplateId == evolutionItemTemplateId)
+                {
+                    entry = candidate;
+                    return true;
+                }
+            }
+
+            entry = default(PetCreatureEvolutionEntry);
+            return false;
+        }
+
         internal static PetCreatureEvolutionCatalog Load()
         {
             var byCreatureId = new Dictionary<int, PetCreatureEvolutionEntry>();
