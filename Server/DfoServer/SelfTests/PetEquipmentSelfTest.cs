@@ -24,6 +24,24 @@ namespace DfoServer.SelfTests
             Check("sample pet is pet inventory equipment",
                 ItemMetadataResolver.IsPetInventoryEquipment(MiniBloodPetItemId),
                 ref failures);
+            Check("seal creature ACK matches 86 client 19-byte success body",
+                BytesEqual(
+                    PetSealCreatureAckBuilder.BuildSuccess(new PetCreatureSealResult
+                    {
+                        CapsuleSlotIndex = 98,
+                        CreatureSlotIndex = 14,
+                    }),
+                    new byte[]
+                    {
+                        0x01,
+                        0x00, 0x00, 0x00, 0x00,
+                        0x00, 0x00, 0x00, 0x00,
+                        0x00, 0x00,
+                        0x62, 0x00,
+                        0x0E, 0x00,
+                        0x00, 0x00, 0x00, 0x00,
+                    }),
+                ref failures);
             Check("compound item success ACK matches 86 client short body",
                 BytesEqual(
                     CompoundItemAckBuilder.Build(new CompoundItemRecipeResult

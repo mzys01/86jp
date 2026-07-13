@@ -295,6 +295,7 @@ namespace DfoServer.Network
             d[0x00AD] = _petCreatureHandler.HandleHatchCreatureEgg;
             d[0x00AE] = _petCreatureHandler.HandleRequestHatchedCreature;
             d[0x01E0] = _petCreatureHandler.HandleVerifyCreatureQuest;
+            d[0x037F] = _petCreatureHandler.HandleSealCreature;
         }
 
         private void RegisterSortItemLockHandlers(Dictionary<ushort, Func<EnhancedClientSession, GamePacketHeader, byte[], Task>> d)

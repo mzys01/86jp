@@ -1561,6 +1561,7 @@ LIMIT 1;";
             if (!string.IsNullOrWhiteSpace(petCreatureExtraJson))
             {
                 ApplyPetCreatureExtraToCommonPrefix(prefix, petCreatureExtraJson);
+                ApplyPetCreatureExtraToCommonTail(tail, petCreatureExtraJson);
             }
 
             return new CommonInventoryItem

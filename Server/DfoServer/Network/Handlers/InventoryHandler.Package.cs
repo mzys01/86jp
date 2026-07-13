@@ -531,6 +531,14 @@ namespace DfoServer.Network.Handlers
             FileLogger.Log($"[{ProtocolName}] OPEN_PACKAGE_0207 raw({body.Length}B): {BitConverter.ToString(body)} slot={slotIndex} selected={string.Join(",", selectedItemTemplateIds.Select(id => $"0x{id:X8}"))}");
 
             var (cid, aid) = ResolveOwner(session);
+            if (selectedItemTemplateIds.Count == 0
+                && _inventoryStore.TryOpenSealedPetCreatureCapsule(cid, aid, slotIndex, out var sealedPetResult))
+            {
+                await SendBoosterUseResult(session, header.type, sealedPetResult);
+                FileLogger.Log($"[{ProtocolName}] OPEN_PACKAGE_0207: sealed pet source=0x{sealedPetResult.SourceItemTemplateId:X8} slot={sealedPetResult.SourceSlotIndex} rewards={sealedPetResult.Rewards.Count}");
+                return true;
+            }
+
             if (!_inventoryStore.TryOpenPackage0207(cid, aid, slotIndex, selectedItemTemplateIds, out var result))
             {
                 FileLogger.Log($"[{ProtocolName}] OPEN_PACKAGE_0207: failed slot={slotIndex}");
@@ -606,9 +614,22 @@ namespace DfoServer.Network.Handlers
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000E, mainUpdateBody));
 
             await SendAvatarOrPetUpdateListForBoosterRewards(session, result);
+            if (ShouldSendCreatureListRefreshForBoosterRewards(result))
+                await _refresh.SendCreatureItemListRefresh(session);
 
             if (result.ActivatedPremiums.Count > 0)
                 await Game.Premium.PremiumService.ActivateAndNotify(session, result.ActivatedPremiums);
+        }
+
+        private static bool ShouldSendCreatureListRefreshForBoosterRewards(BoosterUseResult result)
+        {
+            if (result?.Rewards == null)
+                return false;
+
+            return result.Rewards.Any(x =>
+                x != null
+                && x.ListType == InventoryListType.Pet
+                && SqliteInventoryStore.IsCreatureItem(x.ItemTemplateId));
         }
 
         internal static bool ShouldSendSourceAckForBoosterResponse(ushort responseType)
