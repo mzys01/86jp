@@ -3,11 +3,13 @@ using DfoServer.Game.Characters;
 using DfoServer.Game.Dungeon;
 using DfoServer.Game.Inventory;
 using DfoServer.Game.Premium;
+using DfoServer.Game.SecretShop;
 using DfoServer.Game.Skills;
 using DfoServer.Infrastructure;
 using DfoServer.Network.Builders;
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading.Tasks;
 using DungeonData = DfoServer.GameWorld.Dungeon;
 
@@ -17,8 +19,6 @@ namespace DfoServer.Network.Handlers.Dungeon
     {
         private readonly DungeonSharedServices _svc;
 
-        // PVF [visible on dungeon clear]=1: Delilah(1000) Gabriel(1002/1003/1004) Yunmi(1203, invalid in 86JP)
-        private static readonly int[] SecretShopNpcIds = { 1000, 1002, 1003, 1004 };
         private const int SetPlayResultRankPointOffset = 10;
         private const int GrowthContractPremiumType = 84; // PVF premiumlist_new.etc: growth contract
         private const float GrowthContractBonusRate = 0.20f;
@@ -365,9 +365,12 @@ namespace DfoServer.Network.Handlers.Dungeon
             if (run.Phase != DungeonRunPhase.InProgress) return;
             run.Phase = DungeonRunPhase.Cleared;
             if (bossCode != 0) run.BossCode = bossCode;
+
+            var offer = CreateSecretShopOffer(run);
+            run.SecretShopOffer = offer;
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x001F, DungeonNotificationBuilder.BuildEnableClearDungeon()));
-            var npcId = SecretShopNpcIds[ServerRandom.Next(SecretShopNpcIds.Length)];
-            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0117, BitConverter.GetBytes(npcId)));
+            foreach (var packet in SecretShopClearPacketBuilder.Build(offer))
+                await session.SendPacketAsync(packet);
             var currentMapId = ResolveCurrentMapId(session);
             await DungeonClearMapQuestSync.SyncAsync(
                 session,
@@ -383,7 +386,27 @@ namespace DfoServer.Network.Handlers.Dungeon
                     run.MazeStartMapId,
                     "dungeon_clear_deferred_start_map");
             }
-            FileLogger.Log($"[DungeonHandler] ClearDungeon: {reason} secretShopNpc={npcId}");
+            var itemSummary = string.Join(",", offer.Items.Select(x => $"{x.ItemId}:price={x.Price}:count={x.Count}"));
+            FileLogger.Log($"[DungeonHandler] ClearDungeon: {reason} secretShopNpc={offer.NpcId} items=[{itemSummary}]");
+        }
+
+        private static SecretShopOffer CreateSecretShopOffer(DungeonRun run)
+        {
+            try
+            {
+                var dungeonBasisLevel = DungeonData.GetDungeonBasicLv(run.DungeonId);
+                return SecretShopOfferFactory.Create(
+                    SecretShopCatalogProvider.Current,
+                    run.DungeonId,
+                    dungeonBasisLevel,
+                    partySize: 1,
+                    ServerRandom.Next);
+            }
+            catch (Exception ex)
+            {
+                FileLogger.Log($"[SecretShop] offer creation failed closed: dungeon={run.DungeonId} error={ex.Message}");
+                return new SecretShopOffer(1000, Array.Empty<SecretShopItemCandidate>());
+            }
         }
 
         private static int ResolveCurrentMapId(EnhancedClientSession session)

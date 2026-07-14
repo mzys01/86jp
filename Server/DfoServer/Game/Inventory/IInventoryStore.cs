@@ -44,6 +44,16 @@ namespace DfoServer.Game.Inventory
 
         bool TryBuyItem(int characterId, int accountId, int itemTemplateId, int buyCount, out InventoryMutationResult result);
 
+        bool TryBuySecretShopItem(
+            int characterId,
+            int accountId,
+            int itemTemplateId,
+            int itemCount,
+            int goldCost,
+            int requiredItemId,
+            int requiredItemCount,
+            out InventoryMutationResult result);
+
         bool TryPickupRentalWeapon(
             SqliteConnection connection,
             SqliteTransaction transaction,

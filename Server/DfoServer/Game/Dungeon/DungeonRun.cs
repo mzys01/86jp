@@ -85,6 +85,9 @@ namespace DfoServer.Game.Dungeon
         public uint MonsterGrowthContractBonusExp;
         public int TotalGold;
 
+        // 本局通关后生成的秘密商店快照；随 DungeonRun 一起创建和销毁。
+        internal SecretShop.SecretShopOffer SecretShopOffer;
+
         // 掉落物追踪
         public ushort SceneSlotCounter;
         public Dictionary<ushort, DropInfo> Drops = new Dictionary<ushort, DropInfo>();
