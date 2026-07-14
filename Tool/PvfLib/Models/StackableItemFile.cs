@@ -46,6 +46,12 @@ namespace PvfLib
         public List<EnchantRandomUpgradeEntry> EnchantEntries { get; set; } = new List<EnchantRandomUpgradeEntry>();
     }
 
+    public sealed class StackableStatusIncreaseEntry
+    {
+        public string EffectType { get; set; }
+        public List<int> Values { get; set; } = new List<int>();
+    }
+
     
     
     
@@ -161,6 +167,7 @@ namespace PvfLib
         public int MagicalAttack { get; set; }
         public int PhysicalDefense { get; set; }
         public int MagicalDefense { get; set; }
+        public List<StackableStatusIncreaseEntry> StatusIncreases { get; set; } = new List<StackableStatusIncreaseEntry>();
 
         #endregion
         #region 解析
@@ -254,6 +261,9 @@ namespace PvfLib
                     case "magical attack": stk.MagicalAttack = ParseInt(data); break;
                     case "physical defense": stk.PhysicalDefense = ParseInt(data); break;
                     case "magical defense": stk.MagicalDefense = ParseInt(data); break;
+                    case "increase status type":
+                        stk.StatusIncreases.AddRange(ParseStatusIncreases(node, content));
+                        break;
                 }
             }
 
@@ -265,6 +275,33 @@ namespace PvfLib
             stk.RandomBoxRemovalItems = ParseRandomBoxRemovalItems(randomBox != null ? randomBox.GetChild("sealing removal item") : null, content);
 
             return stk;
+        }
+
+        private static List<StackableStatusIncreaseEntry> ParseStatusIncreases(
+            ScriptNode node,
+            string content)
+        {
+            var result = new List<StackableStatusIncreaseEntry>();
+            if (node == null || node.Children.Count != 0)
+                return result;
+
+            foreach (var item in node.DataItems)
+            {
+                var raw = item.GetContent(content);
+                var match = Regex.Match(
+                    raw ?? string.Empty,
+                    @"^\s*`?\[(?<type>[^\]\r\n]+)\]`?(?<values>(?:\s+-?\d+)*)\s*$");
+                if (!match.Success)
+                    continue;
+
+                result.Add(new StackableStatusIncreaseEntry
+                {
+                    EffectType = match.Groups["type"].Value.Trim(),
+                    Values = ParseInts(match.Groups["values"].Value),
+                });
+            }
+
+            return result;
         }
 
         private static List<BoosterRewardEntry> ParseBoosterInfo(ScriptNode node, string content)

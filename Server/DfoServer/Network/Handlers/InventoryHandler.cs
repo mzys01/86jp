@@ -14,24 +14,32 @@ namespace DfoServer.Network.Handlers
     {
         // 背包操作直连共享 store; 门面只保留选角初始化本职(称号簿/成就/水晶契约/全量快照/宠物快照)
         private readonly IInventoryStore _inventoryStore;
+        private readonly ExperienceItemUseService _experienceItemUseService;
         private readonly SqliteSelectCharacterDataSource _sqliteSelectCharacterDataSource;
         private readonly ICharacterRepository _characterRepository;
         private readonly InventoryRefreshSender _refresh;
+        private readonly ExperienceItemNotificationService _experienceItemNotifications;
         private readonly Func<byte[], Task> _broadcastGamePacket;
 
         public string ProtocolName => "GameProtocol";
 
-        public InventoryHandler(
+        internal InventoryHandler(
             IInventoryStore inventoryStore,
+            ExperienceItemUseService experienceItemUseService,
             SqliteSelectCharacterDataSource sqliteSelectCharacterDataSource,
             ICharacterRepository characterRepository,
             InventoryRefreshSender refreshSender,
+            ExperienceItemNotificationService experienceItemNotifications,
             Func<byte[], Task> broadcastGamePacket = null)
         {
             _inventoryStore = inventoryStore ?? throw new ArgumentNullException(nameof(inventoryStore));
+            _experienceItemUseService = experienceItemUseService
+                ?? throw new ArgumentNullException(nameof(experienceItemUseService));
             _sqliteSelectCharacterDataSource = sqliteSelectCharacterDataSource ?? throw new ArgumentNullException(nameof(sqliteSelectCharacterDataSource));
             _characterRepository = characterRepository ?? throw new ArgumentNullException(nameof(characterRepository));
             _refresh = refreshSender ?? throw new ArgumentNullException(nameof(refreshSender));
+            _experienceItemNotifications = experienceItemNotifications
+                ?? throw new ArgumentNullException(nameof(experienceItemNotifications));
             _broadcastGamePacket = broadcastGamePacket;
         }
 
