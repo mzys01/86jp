@@ -156,8 +156,9 @@ namespace DfoServer.Game.Inventory
                 
                 
                 
-                var baseSellPrice = stackable.Value >= 0 ? stackable.Value : (stackable.Price >= 0 ? stackable.Price : 0);
-                var sellGold = baseSellPrice > 0 ? Math.Max(1, baseSellPrice * SellRates.Value.Stackable / 1000) : 0;
+                var sellGold = stackable.Value >= 0
+                    ? stackable.Value / 5
+                    : (stackable.Price > 0 ? stackable.Price / 5 : 0);
 
                 int needMatId = 0, needMatCount = 0;
                 if (!string.IsNullOrWhiteSpace(stackable.NeedMaterial))
