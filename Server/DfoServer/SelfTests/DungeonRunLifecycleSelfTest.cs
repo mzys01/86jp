@@ -49,6 +49,8 @@ namespace DfoServer.SelfTests
                 && fresh.CardRewards == null
                 && fresh.FreeCardSlots.Length == 4 && fresh.FreeCardSlots[0] == 0xFF
                 && fresh.PaidCardSlots[3] == 0xFF
+                && !fresh.IsWaitingDeathRespawn
+                && fresh.DeathRespawnAvailableAt == DateTime.MinValue
                 && fresh.Tower == null,
                 ref failures);
 
@@ -105,14 +107,39 @@ namespace DfoServer.SelfTests
                 && !handle.Cancel(),
                 ref failures);
 
+            var deathHandle = ClockService.Instance.ScheduleOneShot(
+                "selftest:death-respawn:" + Guid.NewGuid().ToString("N"),
+                DateTime.UtcNow.AddHours(1),
+                _ => { });
+            var deathVersionBeforeCancel = firstRun.DeathRespawnTimerVersion;
+            firstRun.IsWaitingDeathRespawn = true;
+            firstRun.DeathRespawnAvailableAt = DateTime.UtcNow.AddHours(1);
+            firstRun.DeathRespawnTimerHandle = deathHandle;
+            DungeonRunLifecycle.CancelDeathRespawn(session);
+            Check("CancelDeathRespawn cancels and clears the handle",
+                firstRun.DeathRespawnTimerHandle == null
+                && firstRun.DeathRespawnTimerVersion == deathVersionBeforeCancel + 1
+                && !firstRun.IsWaitingDeathRespawn
+                && firstRun.DeathRespawnAvailableAt == DateTime.MinValue
+                && !deathHandle.Cancel(),
+                ref failures);
+
             var staleHandle = ClockService.Instance.ScheduleOneShot(
                 "selftest:auto-flip:" + Guid.NewGuid().ToString("N"),
                 DateTime.UtcNow.AddHours(1),
                 _ => { });
+            var staleDeathHandle = ClockService.Instance.ScheduleOneShot(
+                "selftest:death-respawn:" + Guid.NewGuid().ToString("N"),
+                DateTime.UtcNow.AddHours(1),
+                _ => { });
             firstRun.AutoFlipTimerHandle = staleHandle;
+            firstRun.IsWaitingDeathRespawn = true;
+            firstRun.DeathRespawnAvailableAt = DateTime.UtcNow.AddHours(1);
+            firstRun.DeathRespawnTimerHandle = staleDeathHandle;
             DungeonRunLifecycle.BeginRun(session, 1003, 0);
             Check("BeginRun cancels the previous run timer and swaps the run",
                 !staleHandle.Cancel()
+                && !staleDeathHandle.Cancel()
                 && !ReferenceEquals(player.CurrentRun, firstRun)
                 && player.CurrentRun.DungeonId == 1003,
                 ref failures);

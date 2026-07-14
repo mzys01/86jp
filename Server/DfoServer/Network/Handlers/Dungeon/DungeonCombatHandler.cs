@@ -10,6 +10,7 @@ using DfoServer.Network.Parsers.Dungeon;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using DungeonData = DfoServer.GameWorld.Dungeon;
 
@@ -19,6 +20,7 @@ namespace DfoServer.Network.Handlers.Dungeon
     {
         private const int GrowthContractPremiumType = 84; // PVF premiumlist_new.etc: growth contract
         private const float GrowthContractMonsterBonusRate = 0.20f;
+        private static readonly TimeSpan DeathRespawnDelay = TimeSpan.FromSeconds(10);
 
         private readonly DungeonSharedServices _svc;
         private readonly DungeonSettlementHandler _settlement;
@@ -538,7 +540,10 @@ namespace DfoServer.Network.Handlers.Dungeon
 
         internal async Task HandleDieCharacter(EnhancedClientSession session, GamePacketHeader header, byte[] body)
         {
-            FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] DIE_CHARACTER: uid={session.Player.UserId} body={BitConverter.ToString(body)}");
+            var bodyHex = body != null ? BitConverter.ToString(body) : "null";
+            FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] DIE_CHARACTER: uid={session.Player.UserId} body={bodyHex}");
+            ScheduleDeathRespawn(session);
+
             // NOTI 32 (wire 0x0020) DIE_STATE: u16 actorId + u8 dieType(0=death) + u8 flag
             var w = new GamePacketWriter();
             w.WriteUInt16(session.Player.UserId);
@@ -546,6 +551,154 @@ namespace DfoServer.Network.Handlers.Dungeon
             w.WriteByte(0x00);
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0020, w.ToArray()));
         }
+
+        internal async Task HandleDeathRespawn(EnhancedClientSession session, GamePacketHeader header, byte[] body)
+        {
+            var bodyHex = body != null ? BitConverter.ToString(body) : "null";
+            FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] DEATH_RESPAWN: uid={session.Player.UserId} body={bodyHex}");
+
+            var run = session?.Player?.CurrentRun;
+            if (run == null)
+            {
+                FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] DEATH_RESPAWN ignored: no active run");
+                return;
+            }
+
+            await ReturnDeathRespawnToTownAsync(
+                session,
+                run,
+                run.DeathRespawnTimerVersion,
+                force: false,
+                source: "client");
+        }
+
+        private void ScheduleDeathRespawn(EnhancedClientSession session)
+        {
+            var run = session?.Player?.CurrentRun;
+            if (run == null)
+                return;
+
+            DungeonRunLifecycle.CancelDeathRespawn(session);
+            run = session.Player.CurrentRun;
+            if (run == null)
+                return;
+
+            run.IsWaitingDeathRespawn = true;
+            run.DeathRespawnAvailableAt = DateTime.UtcNow.Add(DeathRespawnDelay);
+
+            var version = NextDeathRespawnVersion(run);
+            var timerName = BuildDeathRespawnTimerName(session);
+            var handle = ClockService.Instance.ScheduleOneShotAfterAsync(
+                timerName,
+                DeathRespawnDelay,
+                async _ =>
+                {
+                    if (!IsDeathRespawnTimerCurrent(session, run, version)) return;
+
+                    FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] DIE_TIMER: auto-return uid={session.Player.UserId}");
+                    await ReturnDeathRespawnToTownAsync(
+                        session,
+                        run,
+                        version,
+                        force: true,
+                        source: "timer");
+                });
+            StoreDeathRespawnHandle(run, version, handle);
+            FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] DIE_TIMER: scheduled uid={session.Player.UserId} delayMs={(int)DeathRespawnDelay.TotalMilliseconds}");
+        }
+
+        private async Task ReturnDeathRespawnToTownAsync(
+            EnhancedClientSession session,
+            DungeonRun run,
+            int version,
+            bool force,
+            string source)
+        {
+            if (session?.Player == null || run == null)
+                return;
+
+            if (!ReferenceEquals(session.Player.CurrentRun, run)
+                || !run.IsWaitingDeathRespawn
+                || run.DeathRespawnTimerVersion != version)
+            {
+                FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] DEATH_RESPAWN ignored: stale source={source}");
+                return;
+            }
+
+            if (!force)
+            {
+                var remaining = run.DeathRespawnAvailableAt - DateTime.UtcNow;
+                if (remaining > TimeSpan.Zero)
+                {
+                    FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] DEATH_RESPAWN delayed: {remaining.TotalMilliseconds:F0}ms remaining");
+                    return;
+                }
+            }
+
+            DungeonRunLifecycle.CancelDeathRespawn(session);
+            await DungeonRunLifecycle.EndRunToTownAsync(session);
+            session.Player.UserState = 0x00;
+
+            var snapshot = TownAreaNotificationBuilder.CreateCurrentSnapshot(session.Player);
+
+            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0003,
+                EnterSelectDungeonStateBuilder.BuildUserState(session.Player)));
+            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0017,
+                TownAreaNotificationBuilder.BuildUserArea(snapshot)));
+            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0018,
+                TownAreaNotificationBuilder.BuildAreaUsers(snapshot)));
+            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x007B,
+                CommonPacketBodyBuilder.BuildSuccessAck()));
+            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x00CA,
+                new byte[] { 0x00 }));
+
+            // Future failure weakness state should be applied here before subtype0.
+            await _svc.SendUserInfoSubtype0Broadcast(session);
+
+            FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] DEATH_RESPAWN: complete source={source}");
+        }
+
+        private static int NextDeathRespawnVersion(DungeonRun run)
+        {
+            var version = Interlocked.Increment(ref run.DeathRespawnTimerVersion);
+            if (version == 0)
+                version = Interlocked.Increment(ref run.DeathRespawnTimerVersion);
+            return version;
+        }
+
+        private static bool IsDeathRespawnTimerCurrent(
+            EnhancedClientSession session,
+            DungeonRun run,
+            int version)
+            => session?.Player != null
+               && ReferenceEquals(session.Player.CurrentRun, run)
+               && run.IsWaitingDeathRespawn
+               && run.DeathRespawnTimerVersion == version;
+
+        private static void StoreDeathRespawnHandle(
+            DungeonRun run,
+            int version,
+            ClockService.ClockTimerHandle handle)
+        {
+            if (run.DeathRespawnTimerVersion != version)
+            {
+                handle.Cancel();
+                return;
+            }
+
+            var previous = Interlocked.Exchange(ref run.DeathRespawnTimerHandle, handle);
+            if (previous != null && !ReferenceEquals(previous, handle))
+                previous.Cancel();
+
+            if (run.DeathRespawnTimerVersion != version)
+            {
+                Interlocked.CompareExchange(ref run.DeathRespawnTimerHandle, null, handle);
+                handle.Cancel();
+            }
+        }
+
+        private static string BuildDeathRespawnTimerName(EnhancedClientSession session)
+            => "dungeon-death:" + session.SessionId.ToString("N") + ":respawn";
 
         private static uint CalculateGrowthContractMonsterBonus(EnhancedClientSession session, uint baseMonsterExp)
         {
@@ -575,7 +728,7 @@ namespace DfoServer.Network.Handlers.Dungeon
         internal async Task HandleUseCoin(EnhancedClientSession session, GamePacketHeader header, byte[] body)
         {
             // df_game_r: read = u16 targetActorId
-            ushort targetId = body.Length >= 2 ? BitConverter.ToUInt16(body, 0) : session.Player.UserId;
+            ushort targetId = body != null && body.Length >= 2 ? BitConverter.ToUInt16(body, 0) : session.Player.UserId;
             var characterId = session.Player?.CharacterId ?? 0;
             var accountId = session.Account?.AccountId ?? 1;
             FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] USE_COIN: uid={session.Player.UserId} target={targetId} cid={characterId}");
@@ -592,6 +745,8 @@ namespace DfoServer.Network.Handlers.Dungeon
                 FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] USE_COIN: no coin cid={characterId}");
                 return;
             }
+
+            DungeonRunLifecycle.CancelDeathRespawn(session);
 
             // 1. NOTI 0x0020 DIE_STATE: set_charac_live(user, 1=revive)
             //    df_game_r body = u16 actorId + u8 state; 86JP has extra u8 flag

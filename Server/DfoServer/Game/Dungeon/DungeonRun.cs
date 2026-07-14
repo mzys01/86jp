@@ -114,6 +114,11 @@ namespace DfoServer.Game.Dungeon
         public ClockService.ClockTimerHandle AutoFlipTimerHandle;
         public int AutoFlipTimerVersion;
 
+        public bool IsWaitingDeathRespawn;
+        public DateTime DeathRespawnAvailableAt = DateTime.MinValue;
+        public ClockService.ClockTimerHandle DeathRespawnTimerHandle;
+        public int DeathRespawnTimerVersion;
+
         internal bool TryMarkClearMapQuestSynced(int dungeonId, int mapId)
         {
             return _syncedClearMapQuestTargets.Add((dungeonId, mapId));

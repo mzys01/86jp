@@ -68,6 +68,9 @@ namespace DfoServer.Network.Handlers
         public Task Handle_ENUM_CMDPACKET_DIE_CHARACTER(EnhancedClientSession session, GamePacketHeader header, byte[] body)
             => _combat.HandleDieCharacter(session, header, body);
 
+        public Task Handle_ENUM_CMDPACKET_DEATH_RESPAWN(EnhancedClientSession session, GamePacketHeader header, byte[] body)
+            => _combat.HandleDeathRespawn(session, header, body);
+
         public Task Handle_ENUM_CMDPACKET_USE_COIN(EnhancedClientSession session, GamePacketHeader header, byte[] body)
             => _combat.HandleUseCoin(session, header, body);
 
