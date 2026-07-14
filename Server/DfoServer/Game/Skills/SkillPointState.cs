@@ -1,5 +1,6 @@
 using DfoServer.Game.SelectCharacter;
 using DfoServer.Game.CharacterData;
+using Microsoft.Data.Sqlite;
 
 namespace DfoServer.Game.Skills
 {
@@ -172,14 +173,52 @@ namespace DfoServer.Game.Skills
         {
             var skills = repository.LoadSkills(characterId);
             var persisted = repository.LoadSkillPointState(characterId);
+            var synced = Synchronize(
+                skills, persisted, job, level, bonusSp, bonusTp);
+            if (persist)
+                repository.SaveSkillProgress(characterId, synced.Skills, synced.Points);
+            return synced;
+        }
+
+        internal static (SkillInfoSnapshot Skills, SkillPointState Points) LoadAndSync(
+            SqliteCharacterProgressRepository repository,
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            int characterId,
+            byte job,
+            byte level,
+            int bonusSp,
+            int bonusTp,
+            bool persist)
+        {
+            if (repository == null) throw new System.ArgumentNullException(nameof(repository));
+            if (connection == null) throw new System.ArgumentNullException(nameof(connection));
+            if (transaction == null) throw new System.ArgumentNullException(nameof(transaction));
+
+            var skills = repository.LoadSkills(connection, transaction, characterId);
+            var persisted = repository.LoadSkillPointState(connection, transaction, characterId);
+            var synced = Synchronize(
+                skills, persisted, job, level, bonusSp, bonusTp);
+            if (persist)
+            {
+                repository.SaveSkillProgress(
+                    connection, transaction, characterId, synced.Skills, synced.Points);
+            }
+            return synced;
+        }
+
+        private static (SkillInfoSnapshot Skills, SkillPointState Points) Synchronize(
+            SkillInfoSnapshot skills,
+            SkillPointState persisted,
+            byte job,
+            byte level,
+            int bonusSp,
+            int bonusTp)
+        {
             var oldTotalSp = ResolvePreviousTotalSp(skills, persisted, job, level, bonusSp, bonusTp);
             var points = ResolvePointState(skills, persisted, job, level, bonusSp, bonusTp);
             SyncSkillPageRemainingSp(skills, job, level, bonusSp, oldTotalSp, points.TotalSp);
             ApplyProtocolMirrors(skills, points);
-            if (persist)
-            {
-                repository.SaveSkillProgress(characterId, skills, points);
-            }
             return (skills, points);
         }
 

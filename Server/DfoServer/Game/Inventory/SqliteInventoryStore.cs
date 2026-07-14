@@ -520,10 +520,13 @@ WHERE item_uid = @itemUid;";
         }
 
         // 非晶块删除内核: 调用方持有连接与事务并负责提交(失败不提交=回滚)。
+        // 有期限的 PVF stackable 会以 special 形态持久化；已验证其 PVF 类型的调用方
+        // 可显式保留逐颗堆叠语义，不改变其他 special 的通用删除行为。
         internal bool TryDeleteItemCore(
             SqliteConnection connection, SqliteTransaction transaction,
             int characterId, InventoryListType listType, InventoryListType dbListType,
-            short slotIndex, short deleteCount, out InventoryMutationResult result)
+            short slotIndex, short deleteCount, out InventoryMutationResult result,
+            bool treatSourceAsStackable = false)
         {
             result = null;
 
@@ -537,10 +540,16 @@ WHERE item_uid = @itemUid;";
                 return false;
             }
 
-            var stackedCount = GetStackedRecordCount(item);
-            var appliedCount = NormalizeRemovalCount(item, deleteCount);
+            var isStackCountedRecord = treatSourceAsStackable || IsStackCountedRecord(item);
+            var stackedCount = treatSourceAsStackable
+                ? Math.Max(0, item.StackCount)
+                : GetStackedRecordCount(item);
+            var appliedCount = isStackCountedRecord
+                ? deleteCount <= 0 || deleteCount >= stackedCount
+                    ? stackedCount
+                    : deleteCount
+                : 1;
             var itemRemainingCount = Math.Max(0, stackedCount - appliedCount);
-            var isStackCountedRecord = IsStackCountedRecord(item);
             var satietyMutation = default(PetSatietyMutation);
             if (isStackCountedRecord && appliedCount < stackedCount)
             {

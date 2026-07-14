@@ -59,6 +59,11 @@ namespace DfoServer.Network
 
             // 全程序共享一个 SqliteInventoryStore(无状态, 只持连接串): 旧版门面与 AssetService 各自 new 一个
             var inventoryStore = new Game.Inventory.SqliteInventoryStore(databasePath, schemaFilePath, rentalTimeProvider);
+            var experienceItemCooldowns = new ExperienceItemCooldownTracker();
+            var experienceItemUseService = new ExperienceItemUseService(
+                inventoryStore,
+                rentalTimeProvider,
+                experienceItemCooldowns);
             _assetService = new SqliteAssetService(databasePath, schemaFilePath, inventoryStore);
 
             var sqliteSelectCharacterDataSource = new SqliteSelectCharacterDataSource(
@@ -78,7 +83,18 @@ namespace DfoServer.Network
             _loginHandler = new LoginHandler(accountRepository, characterRepository);
             _characterSelectHandler = new CharacterSelectHandler(sqliteSelectCharacterDataSource, characterRepository, getUserInfoTemplate, sessionDirectory);
             _inventoryRefreshSender = new InventoryRefreshSender(inventoryStore, sqliteSelectCharacterDataSource, characterRepository);
-            _inventoryHandler = new InventoryHandler(inventoryStore, sqliteSelectCharacterDataSource, characterRepository, _inventoryRefreshSender, broadcastGamePacket);
+            var experienceItemNotifications = new ExperienceItemNotificationService(
+                characterRepository,
+                databasePath,
+                schemaFilePath);
+            _inventoryHandler = new InventoryHandler(
+                inventoryStore,
+                experienceItemUseService,
+                sqliteSelectCharacterDataSource,
+                characterRepository,
+                _inventoryRefreshSender,
+                experienceItemNotifications,
+                broadcastGamePacket);
             _petCreatureHandler = new PetCreatureHandler(inventoryStore, sqliteSelectCharacterDataSource, _inventoryRefreshSender);
             // 组队与城镇/副本共享同一个 PartyManager 实例: 跟随退出/副本 fan-out 都要看到同一份队伍状态。
             _partyManager = new Game.Party.PartyManager();
@@ -258,6 +274,7 @@ namespace DfoServer.Network
             d[0x001A] = _inventoryHandler.Handle_ENUM_CMDPACKET_DISJOINT_ITEM;     //26 系统分解
             d[0x00CA] = _inventoryHandler.Handle_DISJOINT_AVATAR;                  //202 时装分解
             d[0x001B] = _inventoryHandler.Handle_USE_LOTTERY_ITEM;                  //27
+            d[(ushort)CmdPacketType.INCREASE_STATUS] = _inventoryHandler.Handle_ENUM_CMDPACKET_INCREASE_STATUS;
             d[0x002C] = _inventoryHandler.Handle_ENUM_CMDPACKET_USE_STACKABLE;
             d[0x00D0] = _inventoryHandler.Handle_OPEN_MAGIC_BOX_SINGLE;
             d[0x0050] = _inventoryHandler.Handle_ENUM_CMDPACKET_UPGRADE_ITEM;      //80
