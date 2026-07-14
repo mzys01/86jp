@@ -67,6 +67,11 @@ namespace DfoServer.Game.Inventory
                 {
                     var outcome = _equipStore.HandleEquipSlotMove(connection, transaction, characterId, accountId, request, source, dbSrcList);
                     bool changed = outcome == EquipOutcome.Equipped || outcome == EquipOutcome.Unequipped;
+                    if (outcome == EquipOutcome.NoOp)
+                    {
+                        FileLogger.Log($"  [MoveItem] FAIL: equipment move was rejected without mutation");
+                        return false;
+                    }
                     if (changed)
                         transaction.Commit();
                     result = CreateMoveResult(request, request.MoveCount, mutated: changed);
@@ -78,10 +83,14 @@ namespace DfoServer.Game.Inventory
                 if (request.SourceListType == InventoryListType.Equipment)
                 {
                     bool ok = _equipStore.HandleUnequipFromSlot(connection, transaction, characterId, accountId, request.SourceSlotIndex);
-                    if (ok) transaction.Commit();
+                    if (!ok)
+                    {
+                        FileLogger.Log($"  [MoveItem] FAIL: equipped source slot {request.SourceSlotIndex} could not be unequipped");
+                        return false;
+                    }
+                    transaction.Commit();
                     result = CreateMoveResult(request, request.MoveCount, mutated: ok);
-                    if (ok)
-                        AttachEquipmentMoveState(connection, null, characterId, result, request.SourceSlotIndex, EquipOutcome.Unequipped, null);
+                    AttachEquipmentMoveState(connection, null, characterId, result, request.SourceSlotIndex, EquipOutcome.Unequipped, null);
                     return true;
                 }
 
