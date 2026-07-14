@@ -325,13 +325,23 @@ namespace DfoServer.Network.Handlers
             if (await TryHandleBoosterOpen(session, header, body))
                 return;
 
-            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x00A0, SelectablePackageAckBuilder.BuildError()));
+            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
+                0x01,
+                0x00A0,
+                BuildOpenSelectablePackageFallbackErrorBody(parsedSelectable)));
         }
 
         public async Task Handle_USE_BOOSTER_ITEM(EnhancedClientSession session, GamePacketHeader header, byte[] body)
         {
             if (!await TryHandleBoosterOpen(session, header, body))
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, header.type, new byte[] { 0x00 }));
+        }
+
+        internal static byte[] BuildOpenSelectablePackageFallbackErrorBody(bool parsedSelectable)
+        {
+            return parsedSelectable
+                ? SelectablePackageAckBuilder.BuildError()
+                : CommonPacketBodyBuilder.BuildCmdError(0x04);
         }
 
         public async Task Handle_USE_LOTTERY_ITEM(EnhancedClientSession session, GamePacketHeader header, byte[] body)

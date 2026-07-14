@@ -30,6 +30,8 @@ namespace DfoServer.Game.Inventory
         private const byte PetTradeRestrictionExhausted = 1;
         private const string PetSealRemainUseCountInitializedProperty = "petSealRemainUseCountInitialized";
         private const string PetSealRemainUseCountProperty = "petSealRemainUseCount";
+        private const string PetEnchantCardItemIdProperty = "petEnchantCardItemId";
+        private const string PetEnchantUpgradeCountProperty = "petEnchantUpgradeCount";
 
         private static Dictionary<int, string> LoadPetCreatureExtraJsonMap(
             SqliteConnection connection,
@@ -176,8 +178,8 @@ WHERE character_id = @cid
             BitConverter.GetBytes(enchantCardItemId).CopyTo(tail, PetTailEnchantCardIdIndex);
             tail[PetTailEnchantUpgradeCountIndex] = enchantUpgradeCount;
             json["tailData0A"] = ItemExtraView.ToHex(tail);
-            json["petEnchantCardItemId"] = enchantCardItemId;
-            json["petEnchantUpgradeCount"] = enchantUpgradeCount;
+            json[PetEnchantCardItemIdProperty] = enchantCardItemId;
+            json[PetEnchantUpgradeCountProperty] = enchantUpgradeCount;
             return json.ToJsonString();
         }
 
@@ -189,6 +191,65 @@ WHERE character_id = @cid
             string extraJson)
         {
             UpsertPetCreatureExtraJson(connection, transaction, characterId, petSerial, extraJson);
+            SyncEquippedPetCreatureExtraRaw(connection, transaction, characterId, petSerial, extraJson);
+        }
+
+        internal static void RepairEquippedPetCreatureExtraRaw(
+            string databasePath,
+            string schemaFilePath,
+            int characterId)
+        {
+            if (characterId <= 0)
+                return;
+
+            var connectionString = SqliteDatabaseBootstrap.Initialize(databasePath, schemaFilePath);
+            using (var connection = new SqliteConnection(connectionString))
+            {
+                connection.Open();
+                using (var transaction = connection.BeginTransaction())
+                {
+                    RepairEquippedPetCreatureExtraRaw(connection, transaction, characterId);
+                    transaction.Commit();
+                }
+            }
+        }
+
+        internal static void RepairEquippedPetCreatureExtraRaw(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            int characterId)
+        {
+            byte[] raw = null;
+            var itemId = 0;
+            using (var select = connection.CreateCommand())
+            {
+                select.Transaction = transaction;
+                select.CommandText = @"
+SELECT item_id, raw_entry
+FROM character_equipped_entries
+WHERE character_id = @cid
+  AND slot = @slot
+LIMIT 1;";
+                select.Parameters.AddWithValue("@cid", characterId);
+                select.Parameters.AddWithValue("@slot", PetCreatureEquipSlot);
+                using (var reader = select.ExecuteReader())
+                {
+                    if (!reader.Read())
+                        return;
+
+                    itemId = reader.GetInt32(0);
+                    raw = reader.IsDBNull(1) ? null : (byte[])reader.GetValue(1);
+                }
+            }
+
+            if (!IsCreatureItem(itemId))
+                return;
+
+            var petSerial = ResolvePetCreatureSerialFromEquippedRaw(raw);
+            if (petSerial <= 0)
+                return;
+
+            var extraJson = LoadPetCreatureExtraJson(connection, transaction, characterId, petSerial);
             SyncEquippedPetCreatureExtraRaw(connection, transaction, characterId, petSerial, extraJson);
         }
 
@@ -242,12 +303,11 @@ WHERE character_id = @cid
             if (commonPrefixData0E == null || commonPrefixData0E.Length <= CommonPrefixEnchantUpgradeCountIndex)
                 return;
 
-            var tail = ItemExtraView.Parse(petExtraJson).Pet.TailData0A;
-            if (tail.Length <= PetTailEnchantUpgradeCountIndex)
+            if (!TryResolvePetCreatureEnchant(petExtraJson, out var enchantCardItemId, out var enchantUpgradeCount))
                 return;
 
-            Buffer.BlockCopy(tail, PetTailEnchantCardIdIndex, commonPrefixData0E, CommonPrefixEnchantCardIdIndex, 4);
-            commonPrefixData0E[CommonPrefixEnchantUpgradeCountIndex] = tail[PetTailEnchantUpgradeCountIndex];
+            BitConverter.GetBytes(unchecked((int)enchantCardItemId)).CopyTo(commonPrefixData0E, CommonPrefixEnchantCardIdIndex);
+            commonPrefixData0E[CommonPrefixEnchantUpgradeCountIndex] = enchantUpgradeCount;
         }
 
         private static void ApplyPetCreatureExtraToCommonTail(byte[] commonTailData2F, string petExtraJson)
@@ -307,7 +367,7 @@ WHERE character_id = @cid
             return TryReadJsonObject(extraJson, out var json)
                 && (json.ContainsKey(PetSealRemainUseCountInitializedProperty)
                     || json.ContainsKey(PetSealRemainUseCountProperty)
-                    || json.ContainsKey("petEnchantCardItemId"));
+                    || json.ContainsKey(PetEnchantCardItemIdProperty));
         }
 
         private static void SyncEquippedPetCreatureExtraRaw(
@@ -320,12 +380,8 @@ WHERE character_id = @cid
             if (petSerial <= 0)
                 return;
 
-            var tail = ItemExtraView.Parse(extraJson).Pet.TailData0A;
-            if (tail.Length <= PetTailEnchantUpgradeCountIndex)
+            if (!TryResolvePetCreatureEnchant(extraJson, out var enchantCardItemId, out var enchantUpgradeCount))
                 return;
-
-            var enchantCardItemId = unchecked((uint)BitConverter.ToInt32(tail, PetTailEnchantCardIdIndex));
-            var enchantUpgradeCount = tail[PetTailEnchantUpgradeCountIndex];
 
             byte[] raw = null;
             var itemId = 0;
@@ -384,6 +440,57 @@ WHERE character_id = @cid
                 update.Parameters.AddWithValue("@itemId", itemId);
                 update.ExecuteNonQuery();
             }
+        }
+
+        private static bool TryResolvePetCreatureEnchant(
+            string extraJson,
+            out uint enchantCardItemId,
+            out byte enchantUpgradeCount)
+        {
+            enchantCardItemId = 0;
+            enchantUpgradeCount = 0;
+
+            var tail = ItemExtraView.Parse(extraJson).Pet.TailData0A;
+            if (TryReadJsonObject(extraJson, out var json))
+            {
+                var hasCard = TryReadJsonInt(json, PetEnchantCardItemIdProperty, out var directCardItemId);
+                var hasUpgrade = TryReadJsonInt(json, PetEnchantUpgradeCountProperty, out var directUpgradeCount);
+                if (hasCard || hasUpgrade)
+                {
+                    if (hasCard)
+                        enchantCardItemId = unchecked((uint)directCardItemId);
+                    if (hasUpgrade)
+                        enchantUpgradeCount = ClampByte(directUpgradeCount);
+
+                    if ((!hasCard || !hasUpgrade)
+                        && TryReadPetCreatureEnchantFromTail(tail, out var tailCardItemId, out var tailUpgradeCount))
+                    {
+                        if (!hasCard)
+                            enchantCardItemId = tailCardItemId;
+                        if (!hasUpgrade)
+                            enchantUpgradeCount = tailUpgradeCount;
+                    }
+
+                    return true;
+                }
+            }
+
+            return TryReadPetCreatureEnchantFromTail(tail, out enchantCardItemId, out enchantUpgradeCount);
+        }
+
+        private static bool TryReadPetCreatureEnchantFromTail(
+            byte[] tail,
+            out uint enchantCardItemId,
+            out byte enchantUpgradeCount)
+        {
+            enchantCardItemId = 0;
+            enchantUpgradeCount = 0;
+            if (tail == null || tail.Length < PetTailEnchantCardIdIndex + 4 || tail.Length <= PetTailEnchantUpgradeCountIndex)
+                return false;
+
+            enchantCardItemId = BitConverter.ToUInt32(tail, PetTailEnchantCardIdIndex);
+            enchantUpgradeCount = tail[PetTailEnchantUpgradeCountIndex];
+            return enchantCardItemId != 0 || enchantUpgradeCount != 0;
         }
 
         private static int ResolvePetCreatureSerialFromEquippedRaw(byte[] raw)

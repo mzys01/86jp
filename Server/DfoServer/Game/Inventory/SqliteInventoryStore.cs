@@ -137,6 +137,7 @@ VALUES (
                 using (var repairTransaction = connection.BeginTransaction())
                 {
                     RepairPetCreatureItemListSlotConflict(connection, repairTransaction, characterId);
+                    RepairEquippedPetCreatureExtraRaw(connection, repairTransaction, characterId);
                     repairTransaction.Commit();
                 }
 

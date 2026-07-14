@@ -102,7 +102,6 @@ namespace DfoServer.Game.Inventory
                     characterId,
                     source.ItemTemplateId,
                     petSerial);
-                UpsertPetCreatureExtraJson(connection, transaction, characterId, petSerial, sourceExtraJson);
                 UpsertPetEquippedEntry(
                     connection,
                     transaction,
@@ -112,6 +111,7 @@ namespace DfoServer.Game.Inventory
                     petSerial,
                     source.ExpireTime,
                     source.ExpireTime);
+                PersistPetCreatureExtraJson(connection, transaction, characterId, petSerial, sourceExtraJson);
                 CleanupLegacyPetCreatureStorage(
                     connection,
                     transaction,
@@ -673,7 +673,6 @@ WHERE character_id = @cid
                             characterId,
                             equipped.ItemTemplateId,
                             petSerial);
-                        UpsertPetCreatureExtraJson(connection, transaction, characterId, petSerial, equippedExtraJson);
                         UpsertPetEquippedEntry(
                             connection,
                             transaction,
@@ -683,6 +682,7 @@ WHERE character_id = @cid
                             petSerial,
                             equipped.ExpireTime,
                             equipped.ExpireTime);
+                        PersistPetCreatureExtraJson(connection, transaction, characterId, petSerial, equippedExtraJson);
                         MoveLegacyPetCreatureStorageToVisibleSlot(connection, transaction, characterId, equipped, petSerial);
                     }
                 }

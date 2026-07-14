@@ -281,13 +281,10 @@ namespace DfoServer.Game.Inventory
                         return false;
                     }
 
-                    var targetSlot = _db.FindEmptySlot(
+                    var targetSlot = _db.FindEmptyPetCreatureInventorySlot(
                         connection,
                         transaction,
-                        characterId,
-                        InventoryListType.Pet,
-                        PetInventorySlotStart,
-                        PetInventorySlotEnd);
+                        characterId);
                     if (targetSlot < 0)
                     {
                         FileLogger.Log($"  [PetSealCapsule] open failed: no pet slot cid={characterId} source=0x{source.ItemTemplateId:X8}@{slotIndex}");

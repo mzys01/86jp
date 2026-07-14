@@ -15,6 +15,8 @@ namespace DfoServer.SelfTests
         private const short EquippedPetSlot = 24;
         private const int MiniBloodPetItemId = 0x17E69F80;
         private const int PetSerial = 37;
+        private const int PetEnchantCardItemId = 920024;
+        private const byte PetEnchantUpgradeCount = 3;
 
         public static int Run()
         {
@@ -42,19 +44,50 @@ namespace DfoServer.SelfTests
                         0x00, 0x00, 0x00, 0x00,
                     }),
                 ref failures);
-            Check("compound item success ACK matches 86 client short body",
+            Check("compound item success ACK carries deleted and reward entries",
                 BytesEqual(
                     CompoundItemAckBuilder.Build(new CompoundItemRecipeResult
                     {
                         SourceSlotIndex = 106,
                         RequestedCount = 1,
+                        DeletedEntries =
+                        {
+                            new CompoundItemDeletedEntry
+                            {
+                                ListType = InventoryListType.Main,
+                                SlotIndex = 106,
+                                Count = 1,
+                                ItemTemplateId = 0x0029F420,
+                            },
+                        },
+                        Rewards =
+                        {
+                            new BoosterRewardResult
+                            {
+                                ListType = InventoryListType.Main,
+                                SlotIndex = 106,
+                                ItemTemplateId = 0x0029F42C,
+                                StackCount = 1,
+                                GrantedCount = 1,
+                            },
+                        },
                     }),
-                    new byte[] { 0x01, 0x6A, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00 }),
+                    new byte[]
+                    {
+                        0x01,
+                        0x01,
+                        0x00, 0x6A, 0x00, 0x01, 0x00, 0x00, 0x00,
+                        0x01,
+                        0x00, 0x6A, 0x00, 0x2C, 0xF4, 0x29, 0x00, 0x01, 0x00, 0x00, 0x00,
+                        0x00, 0x00, 0x00,
+                        0x00, 0x00, 0x00,
+                        0x00, 0x00, 0x00, 0x00,
+                    }),
                 ref failures);
-            Check("compound item error ACK matches 86 client short body",
+            Check("compound item error ACK is compact failure body",
                 BytesEqual(
-                    CompoundItemAckBuilder.BuildError(21, 106),
-                    new byte[] { 0x00, 0x6A, 0x00, 0x00, 0x15 }),
+                    CompoundItemAckBuilder.BuildError(21),
+                    new byte[] { 0x00, 0x15 }),
                 ref failures);
 
             var raw = MakeEquipListCodec.BuildEntryFromDisplayFields(
@@ -101,6 +134,40 @@ namespace DfoServer.SelfTests
                     ref failures);
             }
 
+            var petEnchantExtraJson = SqliteInventoryStore.SetPetCreatureEnchantExtraJson(
+                "{}",
+                PetEnchantCardItemId,
+                PetEnchantUpgradeCount);
+            var petEnchantTail = ItemExtraView.Parse(petEnchantExtraJson).Pet.TailData0A;
+            Check("pet enchant extra writes pet tail field",
+                petEnchantTail.Length > 8
+                && BitConverter.ToInt32(petEnchantTail, 4) == PetEnchantCardItemId
+                && petEnchantTail[8] == PetEnchantUpgradeCount,
+                ref failures);
+            SaveCreatureExtraJson(dbPath, petEnchantExtraJson);
+
+            var commonRefresh = store.LoadEquipmentCommonItemForRefresh(CharacterId, EquippedPetSlot);
+            Check("equipped pet common refresh carries pet enchant",
+                commonRefresh != null
+                && commonRefresh.PrefixData0E != null
+                && commonRefresh.PrefixData0E.Length >= 5
+                && BitConverter.ToInt32(commonRefresh.PrefixData0E, 0) == PetEnchantCardItemId
+                && commonRefresh.PrefixData0E[4] == PetEnchantUpgradeCount,
+                ref failures);
+
+            store.LoadCharacterItemListSnapshot(CharacterId, AccountId);
+            using (var connection = new SqliteConnection(SqliteDatabaseBootstrap.BuildConnectionString(dbPath)))
+            {
+                connection.Open();
+                var equipped = LoadEquippedEntry(connection);
+                var parsed = equipped.Raw == null ? null : InvenItem.Parse(equipped.Raw);
+                Check("load snapshot repairs equipped pet raw enchant",
+                    parsed != null
+                    && parsed.EnchantIndex == unchecked((uint)PetEnchantCardItemId)
+                    && parsed.EnchantUpgradeCount == PetEnchantUpgradeCount,
+                    ref failures);
+            }
+
             Console.WriteLine(failures == 0 ? "PASS" : $"FAIL: {failures}");
             return failures == 0 ? 0 : 1;
         }
@@ -134,6 +201,26 @@ VALUES (
                     command.Parameters.AddWithValue("@characterId", CharacterId);
                     command.Parameters.AddWithValue("@slotIndex", PetInventorySourceSlot);
                     command.Parameters.AddWithValue("@petItemId", MiniBloodPetItemId);
+                    command.Parameters.AddWithValue("@petSerial", PetSerial);
+                    command.ExecuteNonQuery();
+                }
+            }
+        }
+
+        private static void SaveCreatureExtraJson(string databasePath, string extraJson)
+        {
+            using (var connection = new SqliteConnection(SqliteDatabaseBootstrap.BuildConnectionString(databasePath)))
+            {
+                connection.Open();
+                using (var command = connection.CreateCommand())
+                {
+                    command.CommandText = @"
+UPDATE character_creatures
+SET extra_json = @extraJson
+WHERE character_id = @characterId
+  AND creature_key = @petSerial;";
+                    command.Parameters.AddWithValue("@extraJson", extraJson);
+                    command.Parameters.AddWithValue("@characterId", CharacterId);
                     command.Parameters.AddWithValue("@petSerial", PetSerial);
                     command.ExecuteNonQuery();
                 }
