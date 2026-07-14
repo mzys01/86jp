@@ -14,6 +14,7 @@ namespace DfoServer.Network.Handlers.Dungeon
         internal static void BeginRun(EnhancedClientSession session, int dungeonId, byte difficulty)
         {
             CancelAutoFlip(session);
+            CancelDeathRespawn(session);
             Game.DeathTower.DeathTowerHandler.ClearTowerState(session);
 
             session.Player.CurrentRun = new DungeonRun((short)dungeonId, difficulty);
@@ -28,6 +29,7 @@ namespace DfoServer.Network.Handlers.Dungeon
             byte difficulty = 0)
         {
             CancelAutoFlip(session);
+            CancelDeathRespawn(session);
 
             session.Player.CurrentRun = new DungeonRun((short)dungeonId, difficulty);
             session.Player.CurrentRun.Tower = tower;
@@ -38,6 +40,7 @@ namespace DfoServer.Network.Handlers.Dungeon
         internal static async Task EndRunToTownAsync(EnhancedClientSession session)
         {
             CancelAutoFlip(session);
+            CancelDeathRespawn(session);
             PersistSessionExp(session, "town");
             Game.DeathTower.DeathTowerHandler.ClearTowerState(session);
             await PetCreatureRuntimeService.EndDungeonToTownAsync(session, "town");
@@ -51,6 +54,7 @@ namespace DfoServer.Network.Handlers.Dungeon
         internal static void EndRunOnTeardown(EnhancedClientSession session, string source)
         {
             CancelAutoFlip(session);
+            CancelDeathRespawn(session);
             PersistSessionExp(session, source);
             Game.DeathTower.DeathTowerHandler.ClearTowerState(session);
             PetCreatureRuntimeService.EndCharacterSession(session, source);
@@ -88,6 +92,19 @@ namespace DfoServer.Network.Handlers.Dungeon
 
             Interlocked.Increment(ref run.AutoFlipTimerVersion);
             var handle = Interlocked.Exchange(ref run.AutoFlipTimerHandle, null);
+            handle?.Cancel();
+        }
+
+        internal static void CancelDeathRespawn(EnhancedClientSession session)
+        {
+            var run = session?.Player?.CurrentRun;
+            if (run == null)
+                return;
+
+            run.IsWaitingDeathRespawn = false;
+            run.DeathRespawnAvailableAt = System.DateTime.MinValue;
+            Interlocked.Increment(ref run.DeathRespawnTimerVersion);
+            var handle = Interlocked.Exchange(ref run.DeathRespawnTimerHandle, null);
             handle?.Cancel();
         }
     }
