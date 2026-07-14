@@ -44,10 +44,12 @@ namespace DfoServer.SelfTests
             {
                 SeedCharacter(tempDb, CharacterId);
                 var savedBody = new byte[] { 0x03, 0x01 };
-                SaveInitBody(tempDb, CharacterId, 0x0300, savedBody);
 
                 var charRepo = new Game.Characters.SqliteCharacterRepository(tempDb, ServerPaths.SchemaFilePath);
                 var dataSource = new SqliteSelectCharacterDataSource(tempDb, ServerPaths.SchemaFilePath, charRepo);
+                Check("crystal selection persists to character_crystal_contract",
+                    dataSource.TrySaveCrystalContractSelection(CharacterId, savedBody)
+                        && ByteEquals(LoadContract(tempDb, CharacterId), savedBody));
                 var snapshot = dataSource.Load(CharacterId, AccountId);
                 Check("select data source loads saved cube type", snapshot.InitializationSnapshot.CubeType == savedBody[0]);
                 Check("select data source loads saved cube grade", snapshot.InitializationSnapshot.CubeGrade == savedBody[1]);
@@ -74,13 +76,13 @@ namespace DfoServer.SelfTests
                     "0x0218 little-endian slot body is not a crystal selection",
                     !InventoryHandler.TryBuildCrystalContractBodyFromUpdateRequest(0x0218, new byte[] { 0x05, 0x00 }, out _));
                 Check(
-                    "crystal selection saves 0x0300 init body",
+                    "crystal selection saves cube selection",
                     dataSource.TrySaveCrystalContractSelection(CharacterId, crystalBody)
-                        && ByteEquals(LoadInitBody(tempDb, CharacterId, 0x0300), selectBody));
+                        && ByteEquals(LoadContract(tempDb, CharacterId), selectBody));
                 Check(
-                    "empty crystal selection overwrites previous 0x0300 init body",
+                    "empty crystal selection overwrites previous cube selection",
                     dataSource.TrySaveCrystalContractSelection(CharacterId, emptyCrystalBody)
-                        && ByteEquals(LoadInitBody(tempDb, CharacterId, 0x0300), emptyBody));
+                        && ByteEquals(LoadContract(tempDb, CharacterId), emptyBody));
 
                 snapshot = dataSource.Load(CharacterId, AccountId);
                 Check("select data source loads empty cube type", snapshot.InitializationSnapshot.CubeType == emptyBody[0]);
@@ -89,22 +91,8 @@ namespace DfoServer.SelfTests
                     builder.TryBuild(snapshot, 0, out builtBody)
                         && ByteEquals(builtBody, emptyBody));
 
-                SeedCharacter(tempDb, SeedCharacterId);
-                var seededBody = new byte[] { 0x05, 0x00 };
-                var stateRepo = new SqliteCharacterStateRepository(tempDb, ServerPaths.SchemaFilePath);
-                stateRepo.SeedRawPacketsFromTemplates(SeedCharacterId, new List<SelectCharacterPacketTemplate>
-                {
-                    new SelectCharacterPacketTemplate
-                    {
-                        Command = 0x00,
-                        Type = 0x0300,
-                        Kind = SelectCharacterPacketTemplateKind.Raw,
-                        PacketBytes = GamePacketEnvelopeBuilder.Build(0x00, 0x0300, seededBody),
-                    },
-                });
-
-                var persistedSeedBody = LoadInitBody(tempDb, SeedCharacterId, 0x0300);
-                Check("raw packet seeding persists 0x0300 body", ByteEquals(persistedSeedBody, seededBody));
+                Check("character without selection loads default cube state",
+                    SeedCharacterAndLoadDefault(tempDb, dataSource));
             }
             finally
             {
@@ -142,7 +130,7 @@ VALUES (@cid);";
             }
         }
 
-        private static void SaveInitBody(string databasePath, int characterId, int notiType, byte[] body)
+        private static byte[] LoadContract(string databasePath, int characterId)
         {
             var connectionString = SqliteDatabaseBootstrap.Initialize(databasePath, ServerPaths.SchemaFilePath);
             using (var conn = new SqliteConnection(connectionString))
@@ -150,33 +138,24 @@ VALUES (@cid);";
                 conn.Open();
                 using (var cmd = conn.CreateCommand())
                 {
-                    cmd.CommandText = @"
-INSERT INTO character_init_bodies(character_id, noti_type, occurrence_index, body)
-VALUES(@cid, @nt, 0, @body)
-ON CONFLICT(character_id, noti_type, occurrence_index)
-DO UPDATE SET body=@body;";
+                    cmd.CommandText = "SELECT cube_type, cube_grade FROM character_crystal_contract WHERE character_id=@cid;";
                     cmd.Parameters.AddWithValue("@cid", characterId);
-                    cmd.Parameters.AddWithValue("@nt", notiType);
-                    cmd.Parameters.AddWithValue("@body", body);
-                    cmd.ExecuteNonQuery();
+                    using (var reader = cmd.ExecuteReader())
+                    {
+                        if (!reader.Read())
+                            return null;
+                        return new[] { (byte)reader.GetInt32(0), (byte)reader.GetInt32(1) };
+                    }
                 }
             }
         }
 
-        private static byte[] LoadInitBody(string databasePath, int characterId, int notiType)
+        private static bool SeedCharacterAndLoadDefault(string databasePath, SqliteSelectCharacterDataSource dataSource)
         {
-            var connectionString = SqliteDatabaseBootstrap.Initialize(databasePath, ServerPaths.SchemaFilePath);
-            using (var conn = new SqliteConnection(connectionString))
-            {
-                conn.Open();
-                using (var cmd = conn.CreateCommand())
-                {
-                    cmd.CommandText = "SELECT body FROM character_init_bodies WHERE character_id=@cid AND noti_type=@nt AND occurrence_index=0;";
-                    cmd.Parameters.AddWithValue("@cid", characterId);
-                    cmd.Parameters.AddWithValue("@nt", notiType);
-                    return cmd.ExecuteScalar() as byte[];
-                }
-            }
+            SeedCharacter(databasePath, SeedCharacterId);
+            var snapshot = dataSource.Load(SeedCharacterId, AccountId);
+            return snapshot.InitializationSnapshot.CubeType == 0
+                && snapshot.InitializationSnapshot.CubeGrade == 0;
         }
 
         private static bool ByteEquals(byte[] left, byte[] right)

@@ -25,9 +25,6 @@ namespace DfoServer.Game.SelectCharacter
         
         public List<DungeonPermissionEntrySnapshot> DungeonPermissions { get; } = new List<DungeonPermissionEntrySnapshot>();
 
-        
-        public List<EventInfoEntrySnapshot> EventInfoEntries { get; } = new List<EventInfoEntrySnapshot>();
-
         public byte HotkeyKeyType { get; set; }
 
         public List<ushort> HotkeyConfigSlots { get; } = new List<ushort>();
@@ -51,7 +48,6 @@ namespace DfoServer.Game.SelectCharacter
 
         
         
-        public byte[] ServerEventPhaseBitmap { get; set; }
 
         
         public uint RacingDungeonCurrentEnterCount { get; set; }
@@ -86,16 +82,10 @@ namespace DfoServer.Game.SelectCharacter
         
         public List<SkillPointSlotEntrySnapshot> SkillPointSlots { get; } = new List<SkillPointSlotEntrySnapshot>();
 
-        
-        public CollectionBoxSnapshot CollectionBox { get; set; } = new CollectionBoxSnapshot();
 
-        
         public RentalInfoSnapshot RentalInfo { get; set; } = new RentalInfoSnapshot();
 
-        
-        public byte[] LotteryBufferBlob { get; set; }
 
-        
         public byte CubeType { get; set; }
         public byte CubeGrade { get; set; }
 
@@ -120,7 +110,6 @@ namespace DfoServer.Game.SelectCharacter
         public ushort AckFatigueGrownUpBuff { get; set; }
         public byte AckTradePunishFlag { get; set; }
         public ushort AckExtraField86JP { get; set; }
-        public byte[] AckReserved8B { get; set; }
 
         
         public ushort PremiumServiceType { get; set; }

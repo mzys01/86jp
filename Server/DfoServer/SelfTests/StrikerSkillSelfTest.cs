@@ -100,49 +100,45 @@ namespace DfoServer.SelfTests
 
         private static void CheckSelectCharacterTagLifecycle()
         {
-            var duplicateSnapshot = new SelectCharacterDataSnapshot
+            var duplicateTemplates = new List<SelectCharacterPacketTemplate>
             {
-                PacketTemplates = new List<SelectCharacterPacketTemplate>
+                new SelectCharacterPacketTemplate
                 {
-                    new SelectCharacterPacketTemplate
-                    {
-                        Kind = SelectCharacterPacketTemplateKind.Raw,
-                        Command = 0x00,
-                        Type = 0x019F,
-                        OccurrenceIndex = 7,
-                    },
-                    new SelectCharacterPacketTemplate
-                    {
-                        Kind = SelectCharacterPacketTemplateKind.Raw,
-                        Command = 0x00,
-                        Type = 0x019F,
-                        OccurrenceIndex = 9,
-                    },
+                    Kind = SelectCharacterPacketTemplateKind.Raw,
+                    Command = 0x00,
+                    Type = 0x019F,
+                    OccurrenceIndex = 7,
+                },
+                new SelectCharacterPacketTemplate
+                {
+                    Kind = SelectCharacterPacketTemplateKind.Raw,
+                    Command = 0x00,
+                    Type = 0x019F,
+                    OccurrenceIndex = 9,
                 },
             };
             var duplicatePackets = SelectCharacterPacketBuilder.BuildPacketStream(
-                new FixedSelectCharacterDataSource(duplicateSnapshot),
+                new FixedSelectCharacterDataSource(new SelectCharacterDataSnapshot()),
                 0,
-                0).ToList();
+                0,
+                duplicateTemplates).ToList();
             Check("select-character emits exactly one dynamic 0x019F when templates duplicate it",
                 CountPackets(duplicatePackets, 0x00, 0x019F) == 1);
 
-            var missingSnapshot = new SelectCharacterDataSnapshot
+            var missingTemplates = new List<SelectCharacterPacketTemplate>
             {
-                PacketTemplates = new List<SelectCharacterPacketTemplate>
+                new SelectCharacterPacketTemplate
                 {
-                    new SelectCharacterPacketTemplate
-                    {
-                        Kind = SelectCharacterPacketTemplateKind.Raw,
-                        Command = 0x00,
-                        Type = 0x0331,
-                    },
+                    Kind = SelectCharacterPacketTemplateKind.Raw,
+                    Command = 0x00,
+                    Type = 0x0331,
                 },
             };
             var missingPackets = SelectCharacterPacketBuilder.BuildPacketStream(
-                new FixedSelectCharacterDataSource(missingSnapshot),
+                new FixedSelectCharacterDataSource(new SelectCharacterDataSnapshot()),
                 0,
-                0).ToList();
+                0,
+                missingTemplates).ToList();
             Check("select-character injects one empty dynamic 0x019F when templates omit it",
                 CountPackets(missingPackets, 0x00, 0x019F) == 1
                 && missingPackets.Any(packet =>

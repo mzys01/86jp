@@ -475,9 +475,6 @@ namespace DfoServer.Game.Skills
                 persistedBodies.Count == initialBodies.Count &&
                 BytesEqual(persistedBodies[0], initialBodies[0]) &&
                 BytesEqual(persistedBodies[1], initialBodies[1]));
-            Check("dark knight combo pages are not stored in legacy init bodies",
-                CountLegacyComboInitBodies(tempDb, characterId) == 0);
-
             byte[] expectedInitBody;
             var selectPackets = new List<byte[]>(SelectCharacterPacketBuilder.BuildPacketStream(dataSource, characterId, 1));
             Check("dark knight new character select init sends default combo restore noti",
@@ -485,20 +482,6 @@ namespace DfoServer.Game.Skills
                 selectPackets.Exists(p => IsPacket(p, 0x00, 0x01C0, expectedInitBody)));
         }
 
-
-        private static int CountLegacyComboInitBodies(string databasePath, int characterId)
-        {
-            using (var conn = new SqliteConnection(SqliteDatabaseBootstrap.BuildConnectionString(databasePath)))
-            {
-                conn.Open();
-                using (var cmd = conn.CreateCommand())
-                {
-                    cmd.CommandText = "SELECT COUNT(*) FROM character_init_bodies WHERE character_id=@cid AND noti_type=0x01FD";
-                    cmd.Parameters.AddWithValue("@cid", characterId);
-                    return Convert.ToInt32(cmd.ExecuteScalar());
-                }
-            }
-        }
 
         private static byte[] BuildDarkKnightComboPage(byte page)
         {

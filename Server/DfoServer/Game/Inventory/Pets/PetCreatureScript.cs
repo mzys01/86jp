@@ -13,9 +13,7 @@ namespace DfoServer.Game.Inventory
 {
     internal static class PetCreatureScript
     {
-        private const int CreatureScriptMessageNotiType = 0x0077;
         private const int BodyOccurrenceIndex = 0;
-        private const int MetadataOccurrenceIndex = 1000;
 
         private static readonly PetCreatureScriptEntry MissingEntry =
             new PetCreatureScriptEntry(0, 0, null, null, new List<string>());
@@ -83,8 +81,7 @@ namespace DfoServer.Game.Inventory
 
             if (itemTemplateId <= 0)
             {
-                DeleteBody(connection, transaction, characterId, BodyOccurrenceIndex);
-                UpsertBody(connection, transaction, characterId, MetadataOccurrenceIndex, BitConverter.GetBytes(0));
+                UpsertCacheRow(connection, transaction, characterId, 0, null);
                 return;
             }
 
@@ -106,12 +103,12 @@ namespace DfoServer.Game.Inventory
                 FileLogger.Log($"[PetCreatureScript] cache update empty cid={characterId} item=0x{itemTemplateId:X8}: no ambient room line");
             }
 
-            if (IsValidScriptMessageBody(body))
-                UpsertBody(connection, transaction, characterId, BodyOccurrenceIndex, body);
-            else
-                DeleteBody(connection, transaction, characterId, BodyOccurrenceIndex);
-
-            UpsertBody(connection, transaction, characterId, MetadataOccurrenceIndex, BitConverter.GetBytes(itemTemplateId));
+            UpsertCacheRow(
+                connection,
+                transaction,
+                characterId,
+                itemTemplateId,
+                IsValidScriptMessageBody(body) ? body : null);
         }
 
         internal static bool TryLoadWelcomeCache(
@@ -130,20 +127,26 @@ namespace DfoServer.Game.Inventory
             using (var connection = new SqliteConnection(connectionString))
             {
                 connection.Open();
-                var metadata = LoadBody(connection, characterId, MetadataOccurrenceIndex);
-                if (metadata == null || metadata.Length < 4)
-                    return false;
+                using (var cmd = connection.CreateCommand())
+                {
+                    cmd.CommandText = @"
+SELECT item_template_id, body
+FROM character_pet_welcome_cache
+WHERE character_id = @cid;";
+                    cmd.Parameters.AddWithValue("@cid", characterId);
+                    using (var reader = cmd.ExecuteReader())
+                    {
+                        if (!reader.Read() || reader.GetInt32(0) != itemTemplateId)
+                            return false;
 
-                var cachedItemTemplateId = BitConverter.ToInt32(metadata, 0);
-                if (cachedItemTemplateId != itemTemplateId)
-                    return false;
+                        var cachedBody = reader.IsDBNull(1) ? null : (byte[])reader[1];
+                        if (!IsValidScriptMessageBody(cachedBody))
+                            return false;
 
-                var cachedBody = LoadBody(connection, characterId, BodyOccurrenceIndex);
-                if (!IsValidScriptMessageBody(cachedBody))
-                    return false;
-
-                body = cachedBody;
-                return true;
+                        body = cachedBody;
+                        return true;
+                    }
+                }
             }
         }
 
@@ -291,68 +294,25 @@ namespace DfoServer.Game.Inventory
             }
         }
 
-        private static void DeleteBody(
+        private static void UpsertCacheRow(
             SqliteConnection connection,
             SqliteTransaction transaction,
             int characterId,
-            int occurrenceIndex)
-        {
-            using (var cmd = connection.CreateCommand())
-            {
-                cmd.Transaction = transaction;
-                cmd.CommandText = @"
-DELETE FROM character_init_bodies
-WHERE character_id = @cid
-  AND noti_type = @nt
-  AND occurrence_index = @oi;";
-                cmd.Parameters.AddWithValue("@cid", characterId);
-                cmd.Parameters.AddWithValue("@nt", CreatureScriptMessageNotiType);
-                cmd.Parameters.AddWithValue("@oi", occurrenceIndex);
-                cmd.ExecuteNonQuery();
-            }
-        }
-
-        private static void UpsertBody(
-            SqliteConnection connection,
-            SqliteTransaction transaction,
-            int characterId,
-            int occurrenceIndex,
+            int itemTemplateId,
             byte[] body)
         {
             using (var cmd = connection.CreateCommand())
             {
                 cmd.Transaction = transaction;
                 cmd.CommandText = @"
-INSERT INTO character_init_bodies(character_id, noti_type, occurrence_index, body)
-VALUES(@cid, @nt, @oi, @body)
-ON CONFLICT(character_id, noti_type, occurrence_index)
-DO UPDATE SET body = excluded.body;";
+INSERT INTO character_pet_welcome_cache(character_id, item_template_id, body)
+VALUES(@cid, @item, @body)
+ON CONFLICT(character_id)
+DO UPDATE SET item_template_id = excluded.item_template_id, body = excluded.body;";
                 cmd.Parameters.AddWithValue("@cid", characterId);
-                cmd.Parameters.AddWithValue("@nt", CreatureScriptMessageNotiType);
-                cmd.Parameters.AddWithValue("@oi", occurrenceIndex);
-                cmd.Parameters.AddWithValue("@body", body ?? Array.Empty<byte>());
+                cmd.Parameters.AddWithValue("@item", itemTemplateId);
+                cmd.Parameters.AddWithValue("@body", (object)body ?? DBNull.Value);
                 cmd.ExecuteNonQuery();
-            }
-        }
-
-        private static byte[] LoadBody(SqliteConnection connection, int characterId, int occurrenceIndex)
-        {
-            using (var cmd = connection.CreateCommand())
-            {
-                cmd.CommandText = @"
-SELECT body
-FROM character_init_bodies
-WHERE character_id = @cid
-  AND noti_type = @nt
-  AND occurrence_index = @oi
-LIMIT 1;";
-                cmd.Parameters.AddWithValue("@cid", characterId);
-                cmd.Parameters.AddWithValue("@nt", CreatureScriptMessageNotiType);
-                cmd.Parameters.AddWithValue("@oi", occurrenceIndex);
-                var value = cmd.ExecuteScalar();
-                return value == null || value == DBNull.Value
-                    ? null
-                    : (byte[])value;
             }
         }
 

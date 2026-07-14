@@ -17,10 +17,9 @@ namespace DfoServer.Network.Builders
                 return true;
             }
 
-            var legacyBitmap = snapshot.InitializationSnapshot.ServerEventPhaseBitmap ?? Array.Empty<byte>();
+            // 未保存过角色选项时发空位图(u32 len=0)
             var writer = new GamePacketWriter();
-            writer.WriteInt32(legacyBitmap.Length);
-            writer.WriteBytes(legacyBitmap);
+            writer.WriteInt32(0);
             body = writer.ToArray();
             return true;
         }

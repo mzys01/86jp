@@ -81,12 +81,11 @@ namespace DfoServer.Game.SelectCharacter
             Raw(0x00, 0x02D5, 2);                   
             Raw(0x00, 0x01A8);                      
             Raw(0x00, 0x007C);                      
-            Raw(0x00, 0x0002, 2);                   
-            Raw(0x00, 0x0035);                      
-            Raw(0x00, 0x0111);                      
-            Raw(0x00, 0x0016);                      
-            
-            
+            Raw(0x00, 0x0002, 2);
+            Raw(0x00, 0x0035);
+            Raw(0x00, 0x0111);
+            Raw(0x00, 0x0016);
+            Raw(0x00, 0x0077);   // 宠物欢迎语; 无宠物或无缓存时 builder 返回 false 跳过
 
             return list;
         }

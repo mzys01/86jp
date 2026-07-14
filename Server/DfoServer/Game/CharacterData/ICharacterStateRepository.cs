@@ -1,5 +1,4 @@
 using DfoServer.Game.SelectCharacter;
-using System.Collections.Generic;
 
 namespace DfoServer.Game.CharacterData
 {
@@ -20,9 +19,5 @@ namespace DfoServer.Game.CharacterData
         void SeedFromSnapshot(int characterId, SelectCharacterInitializationSnapshot snapshot);
 
         void LoadAll(int characterId, SelectCharacterInitializationSnapshot snapshot);
-
-        byte[] LoadServerEventPhaseBitmap();
-
-        void SeedRawPacketsFromTemplates(int characterId, List<SelectCharacterPacketTemplate> templates);
     }
 }

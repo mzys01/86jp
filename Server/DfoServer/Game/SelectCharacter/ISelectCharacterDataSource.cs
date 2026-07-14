@@ -20,21 +20,12 @@ namespace DfoServer.Game.SelectCharacter
 
     public sealed class SelectCharacterDataSnapshot
     {
-        public List<SelectCharacterPacketTemplate> PacketTemplates { get; set; } = new List<SelectCharacterPacketTemplate>();
-
-        public List<byte[]> FullPacketStream { get; set; } = new List<byte[]>();
-
-        public byte[] SelectionAckBody { get; set; } = new byte[0];
-
         public CharacterItemListSnapshot ItemListSnapshot { get; set; } = new CharacterItemListSnapshot();
 
         public SelectCharacterInitializationSnapshot InitializationSnapshot { get; set; } = new SelectCharacterInitializationSnapshot();
 
-        public List<byte[]> ExactPacketStream { get; set; } = new List<byte[]>();
 
-        
-        
-        
+
         public CharacterRecord CharacterRecord { get; set; }
     }
 }

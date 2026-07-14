@@ -20,7 +20,7 @@ namespace DfoServer.Game.CharacterData
             {
                 conn.Open();
                 using (var cmd = new SqliteCommand(
-                    "SELECT param_a, mode_or_state, content_id, param_b FROM character_unknown725 WHERE character_id = @cid ORDER BY sort_order", conn))
+                    "SELECT param_a, mode_or_state, content_id, param_b FROM character_daily_schedule_states WHERE character_id = @cid ORDER BY sort_order", conn))
                 {
                     cmd.Parameters.AddWithValue("@cid", characterId);
                     using (var reader = cmd.ExecuteReader())
@@ -46,7 +46,7 @@ namespace DfoServer.Game.CharacterData
                 conn.Open();
                 using (var tx = conn.BeginTransaction())
                 {
-                    using (var cmd = new SqliteCommand("DELETE FROM character_unknown725 WHERE character_id = @cid", conn, tx))
+                    using (var cmd = new SqliteCommand("DELETE FROM character_daily_schedule_states WHERE character_id = @cid", conn, tx))
                     {
                         cmd.Parameters.AddWithValue("@cid", characterId);
                         cmd.ExecuteNonQuery();
@@ -55,7 +55,7 @@ namespace DfoServer.Game.CharacterData
                     {
                         var p = packets[i];
                         using (var cmd = new SqliteCommand(
-                            "INSERT INTO character_unknown725 (character_id, sort_order, param_a, mode_or_state, content_id, param_b) VALUES (@cid, @ord, @pa, @ms, @ci, @pb)", conn, tx))
+                            "INSERT INTO character_daily_schedule_states (character_id, sort_order, param_a, mode_or_state, content_id, param_b) VALUES (@cid, @ord, @pa, @ms, @ci, @pb)", conn, tx))
                         {
                             cmd.Parameters.AddWithValue("@cid", characterId);
                             cmd.Parameters.AddWithValue("@ord", i);
@@ -78,7 +78,7 @@ namespace DfoServer.Game.CharacterData
             {
                 conn.Open();
                 using (var cmd = new SqliteCommand(
-                    "SELECT entry_id, sentinel_or_value, flag FROM character_unknown730 WHERE character_id = @cid ORDER BY sort_order", conn))
+                    "SELECT entry_id, sentinel_or_value, flag FROM character_buy_restrict_items WHERE character_id = @cid ORDER BY sort_order", conn))
                 {
                     cmd.Parameters.AddWithValue("@cid", characterId);
                     using (var reader = cmd.ExecuteReader())
@@ -103,7 +103,7 @@ namespace DfoServer.Game.CharacterData
                 conn.Open();
                 using (var tx = conn.BeginTransaction())
                 {
-                    using (var cmd = new SqliteCommand("DELETE FROM character_unknown730 WHERE character_id = @cid", conn, tx))
+                    using (var cmd = new SqliteCommand("DELETE FROM character_buy_restrict_items WHERE character_id = @cid", conn, tx))
                     {
                         cmd.Parameters.AddWithValue("@cid", characterId);
                         cmd.ExecuteNonQuery();
@@ -112,7 +112,7 @@ namespace DfoServer.Game.CharacterData
                     {
                         var e = snapshot.Entries[i];
                         using (var cmd = new SqliteCommand(
-                            "INSERT INTO character_unknown730 (character_id, sort_order, entry_id, sentinel_or_value, flag) VALUES (@cid, @ord, @eid, @sv, @f)", conn, tx))
+                            "INSERT INTO character_buy_restrict_items (character_id, sort_order, entry_id, sentinel_or_value, flag) VALUES (@cid, @ord, @eid, @sv, @f)", conn, tx))
                         {
                             cmd.Parameters.AddWithValue("@cid", characterId);
                             cmd.Parameters.AddWithValue("@ord", i);

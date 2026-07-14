@@ -128,9 +128,7 @@ namespace DfoServer.Network.Handlers
 
         private RentalInfoSnapshot LoadRentalInfo(int characterId)
         {
-            var rental = new RentalInfoSnapshot();
-            RentalInfoSnapshot.ParseStorageBody(_dataSource.LoadCharacterInitBody(characterId, RentalInfoPanelNotifier.NotiRental), rental);
-            return rental;
+            return _dataSource.LoadRentalInfo(characterId);
         }
 
         private static async Task Send0372Error(EnhancedClientSession session)

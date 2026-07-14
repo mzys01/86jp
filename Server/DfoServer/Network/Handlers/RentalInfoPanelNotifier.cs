@@ -20,21 +20,10 @@ namespace DfoServer.Network.Handlers
             if (session == null || dataSource == null || characterId <= 0)
                 return;
 
-            var rental = LoadRentalInfo(dataSource, characterId);
+            var rental = dataSource.LoadRentalInfo(characterId);
             var now = (rentalTimeProvider ?? SystemRentalTimeProvider.Instance).UtcNowUnixSeconds();
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, NotiRental,
                 RentalInfoBodyBuilder.BuildWireBody(luckyStar, rental, now)));
-        }
-
-        private static RentalInfoSnapshot LoadRentalInfo(
-            SqliteSelectCharacterDataSource dataSource,
-            int characterId)
-        {
-            var rental = new RentalInfoSnapshot();
-            RentalInfoSnapshot.ParseStorageBody(
-                dataSource.LoadCharacterInitBody(characterId, NotiRental),
-                rental);
-            return rental;
         }
     }
 }

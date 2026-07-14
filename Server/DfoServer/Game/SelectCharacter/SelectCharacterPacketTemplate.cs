@@ -16,8 +16,6 @@ namespace DfoServer.Game.SelectCharacter
 
         public ushort Type { get; set; }
 
-        public byte[] PacketBytes { get; set; } = new byte[0];
-
         public InventoryListType ItemListType { get; set; }
 
         public int OccurrenceIndex { get; set; }

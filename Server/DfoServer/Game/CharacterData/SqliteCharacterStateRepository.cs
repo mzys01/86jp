@@ -13,7 +13,6 @@ namespace DfoServer.Game.CharacterData
         private readonly CharacterItemValueRepository _itemValue;
         private readonly CharacterItemLockRepository _itemLock;
         private readonly CharacterMiscStateRepository _miscState;
-        private readonly GlobalStateRepository _globalState;
 
         public SqliteCharacterStateRepository(string databasePath, string schemaFilePath)
         {
@@ -22,7 +21,6 @@ namespace DfoServer.Game.CharacterData
             _itemValue = new CharacterItemValueRepository(_connectionString);
             _itemLock = new CharacterItemLockRepository(_connectionString);
             _miscState = new CharacterMiscStateRepository(_connectionString);
-            _globalState = new GlobalStateRepository(_connectionString);
         }
 
 
@@ -33,11 +31,12 @@ namespace DfoServer.Game.CharacterData
             {
                 conn.Open();
                 using (var cmd = new SqliteCommand(
-                    @"SELECT pc_room_state, expert_job_blob, champion_break_blob,
+                    @"SELECT pc_room_state, expert_job_blob,
+                             champion_break_key_id, champion_break_mode, champion_break_value,
                              character_option_blob, charac_invisible_falgs_payload_len,
                              racing_dungeon_current_enter_count,
                              ack_char_slot_index, ack_fatigue_battery, ack_fatigue_grownup_buff,
-                             ack_trade_punish_flag, ack_extra_field_86jp, ack_reserved_8b,
+                             ack_trade_punish_flag, ack_extra_field_86jp,
                              ack_tutorial_skipable
                       FROM character_init_flags WHERE character_id = @cid", conn))
                 {
@@ -52,21 +51,20 @@ namespace DfoServer.Game.CharacterData
                         if (expertBlob != null)
                             DeserializeExpertJobInfo(expertBlob, snapshot.ExpertJobInfo);
 
-                        var championBlob = reader.IsDBNull(2) ? null : (byte[])reader[2];
-                        if (championBlob != null && championBlob.Length >= 9)
-                            DeserializeChampionBreak(championBlob, snapshot.ChampionBreakSystem);
+                        snapshot.ChampionBreakSystem.KeyId = reader.GetInt32(2);
+                        snapshot.ChampionBreakSystem.Mode = (byte)reader.GetInt32(3);
+                        snapshot.ChampionBreakSystem.Value = reader.GetInt32(4);
 
-                        snapshot.CharacterOptionBlob = reader.IsDBNull(3) ? null : (byte[])reader[3];
-                        snapshot.CharacInvisibleFalgsPayloadLen = reader.IsDBNull(4) ? 0u : (uint)reader.GetInt64(4);
-                        snapshot.RacingDungeonCurrentEnterCount = reader.IsDBNull(5) ? 0u : (uint)reader.GetInt64(5);
+                        snapshot.CharacterOptionBlob = reader.IsDBNull(5) ? null : (byte[])reader[5];
+                        snapshot.CharacInvisibleFalgsPayloadLen = reader.IsDBNull(6) ? 0u : (uint)reader.GetInt64(6);
+                        snapshot.RacingDungeonCurrentEnterCount = reader.IsDBNull(7) ? 0u : (uint)reader.GetInt64(7);
 
-                        snapshot.AckCharSlotIndex = reader.IsDBNull(6) ? (byte)0 : (byte)reader.GetInt32(6);
-                        snapshot.AckFatigueBattery = reader.IsDBNull(7) ? (ushort)0 : (ushort)reader.GetInt32(7);
-                        snapshot.AckFatigueGrownUpBuff = reader.IsDBNull(8) ? (ushort)0 : (ushort)reader.GetInt32(8);
-                        snapshot.AckTradePunishFlag = reader.IsDBNull(9) ? (byte)0 : (byte)reader.GetInt32(9);
-                        snapshot.AckExtraField86JP = reader.IsDBNull(10) ? (ushort)0 : (ushort)reader.GetInt32(10);
-                        snapshot.AckReserved8B = reader.IsDBNull(11) ? null : (byte[])reader[11];
-                        snapshot.AckTutorialSkipable = reader.IsDBNull(12) ? (byte)0 : (byte)reader.GetInt32(12);
+                        snapshot.AckCharSlotIndex = reader.IsDBNull(8) ? (byte)0 : (byte)reader.GetInt32(8);
+                        snapshot.AckFatigueBattery = reader.IsDBNull(9) ? (ushort)0 : (ushort)reader.GetInt32(9);
+                        snapshot.AckFatigueGrownUpBuff = reader.IsDBNull(10) ? (ushort)0 : (ushort)reader.GetInt32(10);
+                        snapshot.AckTradePunishFlag = reader.IsDBNull(11) ? (byte)0 : (byte)reader.GetInt32(11);
+                        snapshot.AckExtraField86JP = reader.IsDBNull(12) ? (ushort)0 : (ushort)reader.GetInt32(12);
+                        snapshot.AckTutorialSkipable = reader.IsDBNull(13) ? (byte)0 : (byte)reader.GetInt32(13);
                     }
                 }
 
@@ -120,29 +118,6 @@ namespace DfoServer.Game.CharacterData
                     }
                 }
 
-                snapshot.EventInfoEntries.Clear();
-                using (var cmd = new SqliteCommand(
-                    "SELECT repeat_event_index, event_data FROM character_event_info WHERE character_id = @cid ORDER BY sort_order", conn))
-                {
-                    cmd.Parameters.AddWithValue("@cid", characterId);
-                    using (var reader = cmd.ExecuteReader())
-                    {
-                        while (reader.Read())
-                        {
-                            var entry = new EventInfoEntrySnapshot
-                            {
-                                RepeatEventIndex = (ushort)reader.GetInt32(0),
-                            };
-                            if (!reader.IsDBNull(1))
-                            {
-                                var blob = (byte[])reader[1];
-                                Buffer.BlockCopy(blob, 0, entry.EventData, 0, Math.Min(blob.Length, entry.EventData.Length));
-                            }
-                            snapshot.EventInfoEntries.Add(entry);
-                        }
-                    }
-                }
-
                 snapshot.HotkeyConfigSlots.Clear();
                 using (var cmd = new SqliteCommand(
                     "SELECT hotkey_value FROM character_hotkey_slots WHERE character_id = @cid ORDER BY slot_index", conn))
@@ -168,7 +143,7 @@ namespace DfoServer.Game.CharacterData
                 snapshot.RacingDungeonGroups.Clear();
                 var racingGroupsByIndex = new Dictionary<int, RacingDungeonGroupSnapshot>();
                 using (var cmd = new SqliteCommand(
-                    "SELECT group_index, group_id FROM character_racing_dungeon_groups WHERE character_id = @cid ORDER BY group_index", conn))
+                    "SELECT group_index, group_id FROM character_daily_challenge_groups WHERE character_id = @cid ORDER BY group_index", conn))
                 {
                     cmd.Parameters.AddWithValue("@cid", characterId);
                     using (var reader = cmd.ExecuteReader())
@@ -183,7 +158,7 @@ namespace DfoServer.Game.CharacterData
                     }
                 }
                 using (var cmd = new SqliteCommand(
-                    "SELECT group_index, entry_index, track_like_id, value_a, value_b FROM character_racing_dungeon_entries WHERE character_id = @cid ORDER BY group_index, entry_index", conn))
+                    "SELECT group_index, entry_index, track_like_id, value_a, value_b FROM character_daily_challenge_entries WHERE character_id = @cid ORDER BY group_index, entry_index", conn))
                 {
                     cmd.Parameters.AddWithValue("@cid", characterId);
                     using (var reader = cmd.ExecuteReader())
@@ -205,7 +180,7 @@ namespace DfoServer.Game.CharacterData
 
                 snapshot.RacingDungeonTailIds.Clear();
                 using (var cmd = new SqliteCommand(
-                    "SELECT id_value FROM character_racing_dungeon_tail_ids WHERE character_id = @cid ORDER BY sort_order", conn))
+                    "SELECT id_value FROM character_daily_challenge_tail_ids WHERE character_id = @cid ORDER BY sort_order", conn))
                 {
                     cmd.Parameters.AddWithValue("@cid", characterId);
                     using (var reader = cmd.ExecuteReader())
@@ -270,22 +245,26 @@ VALUES (@cid, (SELECT COALESCE(MAX(sort_order),0)+1 FROM character_dungeon_permi
                 {
                     using (var cmd = new SqliteCommand(
                         @"INSERT INTO character_init_flags
-                          (character_id, pc_room_state, expert_job_blob, champion_break_blob,
+                          (character_id, pc_room_state, expert_job_blob,
+                           champion_break_key_id, champion_break_mode, champion_break_value,
                            character_option_blob, charac_invisible_falgs_payload_len,
                            racing_dungeon_current_enter_count,
                            ack_char_slot_index, ack_fatigue_battery, ack_fatigue_grownup_buff,
-                           ack_trade_punish_flag, ack_extra_field_86jp, ack_reserved_8b,
+                           ack_trade_punish_flag, ack_extra_field_86jp,
                            ack_tutorial_skipable)
-                          VALUES (@cid, @pcr, @expert, @champ,
+                          VALUES (@cid, @pcr, @expert,
+                                  @champKey, @champMode, @champValue,
                                   @charOpt, @ciplen,
                                   @rdcc,
                                   @ackSlot, @ackFatBat, @ackFatGrown,
-                                  @ackTrade, @ackExtra86, @ackRes8b,
+                                  @ackTrade, @ackExtra86,
                                   @ackTutSkip)
                           ON CONFLICT(character_id) DO UPDATE SET
                             pc_room_state=excluded.pc_room_state,
                             expert_job_blob=excluded.expert_job_blob,
-                            champion_break_blob=excluded.champion_break_blob,
+                            champion_break_key_id=excluded.champion_break_key_id,
+                            champion_break_mode=excluded.champion_break_mode,
+                            champion_break_value=excluded.champion_break_value,
                             character_option_blob=COALESCE(excluded.character_option_blob, character_init_flags.character_option_blob),
                             charac_invisible_falgs_payload_len=excluded.charac_invisible_falgs_payload_len,
                             racing_dungeon_current_enter_count=excluded.racing_dungeon_current_enter_count,
@@ -294,13 +273,14 @@ VALUES (@cid, (SELECT COALESCE(MAX(sort_order),0)+1 FROM character_dungeon_permi
                             ack_fatigue_grownup_buff=excluded.ack_fatigue_grownup_buff,
                             ack_trade_punish_flag=excluded.ack_trade_punish_flag,
                             ack_extra_field_86jp=excluded.ack_extra_field_86jp,
-                            ack_reserved_8b=excluded.ack_reserved_8b,
                             ack_tutorial_skipable=excluded.ack_tutorial_skipable", conn, tx))
                     {
                         cmd.Parameters.AddWithValue("@cid", characterId);
                         cmd.Parameters.AddWithValue("@pcr", (int)snapshot.PcRoomPlayTimeState);
                         cmd.Parameters.AddWithValue("@expert", SerializeExpertJobInfo(snapshot.ExpertJobInfo));
-                        cmd.Parameters.AddWithValue("@champ", SerializeChampionBreak(snapshot.ChampionBreakSystem));
+                        cmd.Parameters.AddWithValue("@champKey", snapshot.ChampionBreakSystem.KeyId);
+                        cmd.Parameters.AddWithValue("@champMode", (int)snapshot.ChampionBreakSystem.Mode);
+                        cmd.Parameters.AddWithValue("@champValue", snapshot.ChampionBreakSystem.Value);
                         cmd.Parameters.AddWithValue("@charOpt", (object)snapshot.CharacterOptionBlob ?? DBNull.Value);
                         cmd.Parameters.AddWithValue("@ciplen", (long)snapshot.CharacInvisibleFalgsPayloadLen);
                         cmd.Parameters.AddWithValue("@rdcc", (long)snapshot.RacingDungeonCurrentEnterCount);
@@ -309,7 +289,6 @@ VALUES (@cid, (SELECT COALESCE(MAX(sort_order),0)+1 FROM character_dungeon_permi
                         cmd.Parameters.AddWithValue("@ackFatGrown", (int)snapshot.AckFatigueGrownUpBuff);
                         cmd.Parameters.AddWithValue("@ackTrade", (int)snapshot.AckTradePunishFlag);
                         cmd.Parameters.AddWithValue("@ackExtra86", (int)snapshot.AckExtraField86JP);
-                        cmd.Parameters.AddWithValue("@ackRes8b", (object)snapshot.AckReserved8B ?? DBNull.Value);
                         cmd.Parameters.AddWithValue("@ackTutSkip", (int)snapshot.AckTutorialSkipable);
                         cmd.ExecuteNonQuery();
                     }
@@ -373,42 +352,22 @@ VALUES (@cid, (SELECT COALESCE(MAX(sort_order),0)+1 FROM character_dungeon_permi
                         }
                     }
 
-                    using (var cmd = new SqliteCommand("DELETE FROM character_event_info WHERE character_id = @cid", conn, tx))
-                    {
-                        cmd.Parameters.AddWithValue("@cid", characterId);
-                        cmd.ExecuteNonQuery();
-                    }
-
-                    var events = snapshot.EventInfoEntries;
-                    for (int i = 0; i < events.Count; i++)
-                    {
-                        using (var cmd = new SqliteCommand(
-                            "INSERT INTO character_event_info (character_id, sort_order, repeat_event_index, event_data) VALUES (@cid, @ord, @rei, @ed)", conn, tx))
-                        {
-                            cmd.Parameters.AddWithValue("@cid", characterId);
-                            cmd.Parameters.AddWithValue("@ord", i);
-                            cmd.Parameters.AddWithValue("@rei", (int)events[i].RepeatEventIndex);
-                            cmd.Parameters.AddWithValue("@ed", (object)events[i].EventData ?? DBNull.Value);
-                            cmd.ExecuteNonQuery();
-                        }
-                    }
-
                     ReplaceHotkeySlots(conn, tx, characterId, snapshot.HotkeyConfigSlots);
 
                     Game.Quests.QuestRepository.ReplaceAllClearedFlags(conn, tx, characterId,
                         snapshot.CharacInvisibleFalgs.ConvertAll(
                             entry => new KeyValuePair<int, int>(entry.SlotIndex, entry.FlagValue)));
-                    using (var cmd = new SqliteCommand("DELETE FROM character_racing_dungeon_groups WHERE character_id = @cid", conn, tx))
+                    using (var cmd = new SqliteCommand("DELETE FROM character_daily_challenge_groups WHERE character_id = @cid", conn, tx))
                     {
                         cmd.Parameters.AddWithValue("@cid", characterId);
                         cmd.ExecuteNonQuery();
                     }
-                    using (var cmd = new SqliteCommand("DELETE FROM character_racing_dungeon_entries WHERE character_id = @cid", conn, tx))
+                    using (var cmd = new SqliteCommand("DELETE FROM character_daily_challenge_entries WHERE character_id = @cid", conn, tx))
                     {
                         cmd.Parameters.AddWithValue("@cid", characterId);
                         cmd.ExecuteNonQuery();
                     }
-                    using (var cmd = new SqliteCommand("DELETE FROM character_racing_dungeon_tail_ids WHERE character_id = @cid", conn, tx))
+                    using (var cmd = new SqliteCommand("DELETE FROM character_daily_challenge_tail_ids WHERE character_id = @cid", conn, tx))
                     {
                         cmd.Parameters.AddWithValue("@cid", characterId);
                         cmd.ExecuteNonQuery();
@@ -418,7 +377,7 @@ VALUES (@cid, (SELECT COALESCE(MAX(sort_order),0)+1 FROM character_dungeon_permi
                     for (int i = 0; i < racingGroups.Count; i++)
                     {
                         using (var cmd = new SqliteCommand(
-                            "INSERT INTO character_racing_dungeon_groups (character_id, group_index, group_id) VALUES (@cid, @gi, @gid)", conn, tx))
+                            "INSERT INTO character_daily_challenge_groups (character_id, group_index, group_id) VALUES (@cid, @gi, @gid)", conn, tx))
                         {
                             cmd.Parameters.AddWithValue("@cid", characterId);
                             cmd.Parameters.AddWithValue("@gi", i);
@@ -429,7 +388,7 @@ VALUES (@cid, (SELECT COALESCE(MAX(sort_order),0)+1 FROM character_dungeon_permi
                         for (int j = 0; j < entries.Count; j++)
                         {
                             using (var cmd = new SqliteCommand(
-                                "INSERT INTO character_racing_dungeon_entries (character_id, group_index, entry_index, track_like_id, value_a, value_b) VALUES (@cid, @gi, @ei, @tid, @va, @vb)", conn, tx))
+                                "INSERT INTO character_daily_challenge_entries (character_id, group_index, entry_index, track_like_id, value_a, value_b) VALUES (@cid, @gi, @ei, @tid, @va, @vb)", conn, tx))
                             {
                                 cmd.Parameters.AddWithValue("@cid", characterId);
                                 cmd.Parameters.AddWithValue("@gi", i);
@@ -446,7 +405,7 @@ VALUES (@cid, (SELECT COALESCE(MAX(sort_order),0)+1 FROM character_dungeon_permi
                     for (int i = 0; i < tailIds.Count; i++)
                     {
                         using (var cmd = new SqliteCommand(
-                            "INSERT INTO character_racing_dungeon_tail_ids (character_id, sort_order, id_value) VALUES (@cid, @ord, @v)", conn, tx))
+                            "INSERT INTO character_daily_challenge_tail_ids (character_id, sort_order, id_value) VALUES (@cid, @ord, @v)", conn, tx))
                         {
                             cmd.Parameters.AddWithValue("@cid", characterId);
                             cmd.Parameters.AddWithValue("@ord", i);
@@ -629,11 +588,6 @@ ON CONFLICT(character_id) DO UPDATE SET
 
 
 
-        public byte[] LoadServerEventPhaseBitmap()
-            => _globalState.LoadServerEventPhaseBitmap();
-
-        public void SeedRawPacketsFromTemplates(int characterId, List<SelectCharacterPacketTemplate> templates)
-            => _globalState.SeedRawPacketsFromTemplates(characterId, templates);
 
 
 
@@ -671,22 +625,6 @@ ON CONFLICT(character_id) DO UPDATE SET
                     offset += 4;
                 }
             }
-        }
-
-        private static byte[] SerializeChampionBreak(ChampionBreakSystemSnapshot snapshot)
-        {
-            var buf = new byte[9];
-            Array.Copy(BitConverter.GetBytes(snapshot.KeyId), 0, buf, 0, 4);
-            buf[4] = snapshot.Mode;
-            Array.Copy(BitConverter.GetBytes(snapshot.Value), 0, buf, 5, 4);
-            return buf;
-        }
-
-        private static void DeserializeChampionBreak(byte[] blob, ChampionBreakSystemSnapshot snapshot)
-        {
-            snapshot.KeyId = BitConverter.ToInt32(blob, 0);
-            snapshot.Mode = blob[4];
-            snapshot.Value = BitConverter.ToInt32(blob, 5);
         }
 
     }

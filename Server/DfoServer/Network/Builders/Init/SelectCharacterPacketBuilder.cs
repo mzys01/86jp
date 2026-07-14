@@ -12,18 +12,21 @@ namespace DfoServer.Network.Builders
     {
         private static readonly InitPacketBuilderRegistry _registry = new InitPacketBuilderRegistry();
 
+        // 所有角色统一走静态 init 序列; 旧 packet_sequence 回放表已删除
         public static IEnumerable<byte[]> BuildPacketStream(ISelectCharacterDataSource dataSource, int characterId, int accountId)
+            => BuildPacketStream(dataSource, characterId, accountId, NewCharacterInitSequence.Build());
+
+        internal static IEnumerable<byte[]> BuildPacketStream(
+            ISelectCharacterDataSource dataSource,
+            int characterId,
+            int accountId,
+            List<SelectCharacterPacketTemplate> templates)
         {
             var snapshot = dataSource.Load(characterId, accountId);
-            
-            
+
+
             if (snapshot.CharacterRecord != null)
                 snapshot.InitializationSnapshot.AckCharSlotIndex = snapshot.CharacterRecord.TownId;
-
-            
-            var templates = (snapshot.PacketTemplates != null && snapshot.PacketTemplates.Count > 0)
-                ? snapshot.PacketTemplates
-                : NewCharacterInitSequence.Build();
             var darkKnightComboSent = false;
             var darkKnightComboTemplateExists = HasTemplate(templates, 0x00, 0x01C0);
             var strikerSupportSent = false;

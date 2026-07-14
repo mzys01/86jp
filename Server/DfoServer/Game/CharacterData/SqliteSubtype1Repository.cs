@@ -174,34 +174,7 @@ ORDER BY slot", conn))
                     }
                 }
 
-                
-                using (var cmd = new SqliteCommand("SELECT value_u32, value_u16a, value_u16b FROM character_pvp_results WHERE character_id=@cid ORDER BY sort_order", conn))
-                {
-                    cmd.Parameters.AddWithValue("@cid", characterId);
-                    using (var r = cmd.ExecuteReader())
-                    {
-                        while (r.Read())
-                        {
-                            snap.PvpResults.Add(new PvpResultEntrySnapshot
-                            {
-                                Value32 = (uint)r.GetInt64(0),
-                                Value16A = (ushort)r.GetInt32(1),
-                                Value16B = (ushort)r.GetInt32(2),
-                            });
-                        }
-                    }
-                }
-
-                
-                using (var cmd = new SqliteCommand("SELECT abuse_value FROM character_abuse_values WHERE character_id=@cid ORDER BY sort_order", conn))
-                {
-                    cmd.Parameters.AddWithValue("@cid", characterId);
-                    using (var r = cmd.ExecuteReader())
-                    {
-                        while (r.Read())
-                            snap.AbuseValues.Add((uint)r.GetInt64(0));
-                    }
-                }
+                // PvpResults/AbuseValues 保持空列表: 对应功能未实现, 旧表全库为空且无写入方, 已删除
             }
 
             return snap;

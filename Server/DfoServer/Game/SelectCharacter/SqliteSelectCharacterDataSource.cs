@@ -21,13 +21,11 @@ namespace DfoServer.Game.SelectCharacter
         private readonly SqliteDarkKnightComboSkillRepository _darkKnightComboSkillRepository;
         private readonly SqliteUserInfoBlobRepository _userInfoBlobRepository;
         private readonly ICharacterStateRepository _initFlagsRepository;
-        private readonly PacketSequenceRepository _packetSequenceRepository;
         private readonly ICharacterRepository _characterRepository;
         private readonly AccountSettingsRepository _accountSettingsRepository;
         private readonly CharacterTitleBookRepository _titleBookRepository;
         private readonly DailyReset.DailyResetService _dailyResetService;
         private readonly TitleBookMutationService _titleBookMutationService;
-        private readonly CharacterAchievementProgressRepository _achievementProgressRepository;
         private readonly HonorLevelSyncService _honorLevel;
         private readonly string _connectionString;
         private readonly string _databasePath;
@@ -52,13 +50,11 @@ namespace DfoServer.Game.SelectCharacter
             _darkKnightComboSkillRepository = new SqliteDarkKnightComboSkillRepository(databasePath, schemaFilePath);
             _userInfoBlobRepository = new SqliteUserInfoBlobRepository(databasePath, schemaFilePath);
             _initFlagsRepository = new SqliteCharacterStateRepository(databasePath, schemaFilePath);
-            _packetSequenceRepository = new PacketSequenceRepository(databasePath, schemaFilePath);
             _characterRepository = characterRepository;
             _accountSettingsRepository = new AccountSettingsRepository(databasePath, schemaFilePath);
             _titleBookRepository = new CharacterTitleBookRepository(_connectionString);
             _dailyResetService = new DailyReset.DailyResetService(databasePath, schemaFilePath);
             _titleBookMutationService = new TitleBookMutationService(_connectionString);
-            _achievementProgressRepository = new CharacterAchievementProgressRepository(_connectionString);
             _honorLevel = new HonorLevelSyncService(_characterRepository);
         }
 
@@ -123,7 +119,6 @@ namespace DfoServer.Game.SelectCharacter
             for (var category = 0; category < TitleBookStaticDataProvider.CategoryCapacities.Count; category++)
                 initSnapshot.TitleBookCategories.Add(
                     _titleBookRepository.LoadSnapshot(characterId, category));
-            MergeAchievementProgress(initSnapshot, _achievementProgressRepository.LoadSnapshot(characterId));
 
             
             {
@@ -198,7 +193,6 @@ namespace DfoServer.Game.SelectCharacter
             }
 
 
-            initSnapshot.ServerEventPhaseBitmap = _initFlagsRepository.LoadServerEventPhaseBitmap();
             initSnapshot.ShopCoinEventFlag = _dailyResetService.IsClaimed(characterId, ReviveCoin.ReviveCoinService.DailyClaimKey) ? (byte)1 : (byte)0;
 
             initSnapshot.PremiumServiceType = 1;
@@ -255,70 +249,12 @@ namespace DfoServer.Game.SelectCharacter
                 }
             }
 
-            var packetTemplates = _packetSequenceRepository.Load(characterId);
-            EnsurePremiumServicePacket(packetTemplates, initSnapshot);
-
             return new SelectCharacterDataSnapshot
             {
-                PacketTemplates = packetTemplates,
                 ItemListSnapshot = itemList,
                 InitializationSnapshot = initSnapshot,
                 CharacterRecord = characterRecord,
             };
-        }
-
-        private static void EnsurePremiumServicePacket(
-            List<SelectCharacterPacketTemplate> packetTemplates,
-            SelectCharacterInitializationSnapshot initSnapshot)
-        {
-            if (packetTemplates == null || packetTemplates.Count == 0 || initSnapshot?.PremiumServiceData == null)
-                return;
-
-            for (var i = 0; i < packetTemplates.Count; i++)
-            {
-                var template = packetTemplates[i];
-                if (template.Command == 0x01 && template.Type == 0x0312)
-                    return;
-            }
-
-            var insertIndex = packetTemplates.Count;
-            for (var i = 0; i < packetTemplates.Count; i++)
-            {
-                var template = packetTemplates[i];
-                if (template.Command == 0x00 && template.Type == 0x03D8)
-                {
-                    insertIndex = i;
-                    break;
-                }
-
-                if (template.Command == 0x00 && template.Type == 0x0300)
-                    insertIndex = i + 1;
-            }
-
-            packetTemplates.Insert(insertIndex, new SelectCharacterPacketTemplate
-            {
-                Kind = SelectCharacterPacketTemplateKind.Raw,
-                Command = 0x01,
-                Type = 0x0312,
-                OccurrenceIndex = 0,
-            });
-        }
-
-        private static void MergeAchievementProgress(
-            SelectCharacterInitializationSnapshot initSnapshot,
-            AchievementCompleteSnapshot progress)
-        {
-            if (progress == null || progress.Entries.Count == 0)
-                return;
-
-            var merged = new Dictionary<int, AchievementCompleteEntrySnapshot>();
-            foreach (var entry in initSnapshot.AchievementComplete.Entries)
-                merged[entry.AchievementId] = entry;
-            foreach (var entry in progress.Entries)
-                merged[entry.AchievementId] = entry;
-
-            initSnapshot.AchievementComplete = new AchievementCompleteSnapshot();
-            initSnapshot.AchievementComplete.Entries.AddRange(merged.Values);
         }
 
         private static void ApplyWallet(SelectCharacterInitializationSnapshot initSnapshot, WalletSnapshot wallet)
@@ -451,27 +387,23 @@ ON CONFLICT(character_id) DO UPDATE SET manage_level=excluded.manage_level;";
                 });
             }
         }
-        public byte[] LoadCharacterInitBody(int characterId, ushort notiType, int occurrenceIndex = 0)
-            => LoadInitBody(characterId, notiType, occurrenceIndex);
-
         public bool TrySaveCrystalContractSelection(int characterId, byte[] body)
         {
             if (characterId <= 0 || body == null || body.Length < 2)
                 return false;
 
-            var storage = new byte[] { body[0], body[1] };
             using (var conn = new SqliteConnection(_connectionString))
             {
                 conn.Open();
                 using (var cmd = new SqliteCommand(
-                    @"INSERT INTO character_init_bodies (character_id, noti_type, occurrence_index, body)
-                      VALUES (@cid, @nt, 0, @body)
-                      ON CONFLICT(character_id, noti_type, occurrence_index)
-                      DO UPDATE SET body=@body", conn))
+                    @"INSERT INTO character_crystal_contract (character_id, cube_type, cube_grade)
+                      VALUES (@cid, @t, @g)
+                      ON CONFLICT(character_id)
+                      DO UPDATE SET cube_type=@t, cube_grade=@g", conn))
                 {
                     cmd.Parameters.AddWithValue("@cid", characterId);
-                    cmd.Parameters.AddWithValue("@nt", 0x0300);
-                    cmd.Parameters.AddWithValue("@body", storage);
+                    cmd.Parameters.AddWithValue("@t", (int)body[0]);
+                    cmd.Parameters.AddWithValue("@g", (int)body[1]);
                     return cmd.ExecuteNonQuery() > 0;
                 }
             }
@@ -486,17 +418,61 @@ ON CONFLICT(character_id) DO UPDATE SET manage_level=excluded.manage_level;";
             if (characterId <= 0 || connection == null || transaction == null || rental == null)
                 return;
 
-            var storage = RentalInfoSnapshot.BuildStorageBody(rental);
-            using (var cmd = new SqliteCommand(
-                @"INSERT INTO character_init_bodies (character_id, noti_type, occurrence_index, body)
-                  VALUES (@cid, @nt, 0, @body)
-                  ON CONFLICT(character_id, noti_type, occurrence_index)
-                  DO UPDATE SET body=@body", connection, transaction))
+            using (var del = new SqliteCommand(
+                "DELETE FROM character_rental_items WHERE character_id=@cid", connection, transaction))
             {
-                cmd.Parameters.AddWithValue("@cid", characterId);
-                cmd.Parameters.AddWithValue("@nt", 0x0357);
-                cmd.Parameters.AddWithValue("@body", storage);
-                cmd.ExecuteNonQuery();
+                del.Parameters.AddWithValue("@cid", characterId);
+                del.ExecuteNonQuery();
+            }
+
+            foreach (var item in rental.Items)
+            {
+                if (item == null || item.ItemId == 0)
+                    continue;
+
+                using (var cmd = new SqliteCommand(
+                    @"INSERT INTO character_rental_items (character_id, shop_entry_id, inventory_template_id, expire_time)
+                      VALUES (@cid, @sid, @inv, @exp)", connection, transaction))
+                {
+                    cmd.Parameters.AddWithValue("@cid", characterId);
+                    cmd.Parameters.AddWithValue("@sid", (long)item.ItemId);
+                    cmd.Parameters.AddWithValue("@inv", (long)item.InventoryTemplateId);
+                    cmd.Parameters.AddWithValue("@exp", (long)item.ExpireTime);
+                    cmd.ExecuteNonQuery();
+                }
+            }
+        }
+
+        public RentalInfoSnapshot LoadRentalInfo(int characterId)
+        {
+            var rental = new RentalInfoSnapshot();
+            LoadRentalItems(characterId, rental);
+            return rental;
+        }
+
+        private void LoadRentalItems(int characterId, RentalInfoSnapshot rental)
+        {
+            rental.Items.Clear();
+            using (var conn = new SqliteConnection(_connectionString))
+            {
+                conn.Open();
+                using (var cmd = new SqliteCommand(
+                    "SELECT shop_entry_id, inventory_template_id, expire_time FROM character_rental_items WHERE character_id=@cid", conn))
+                {
+                    cmd.Parameters.AddWithValue("@cid", characterId);
+                    using (var reader = cmd.ExecuteReader())
+                    {
+                        while (reader.Read())
+                        {
+                            rental.Items.Add(new RentalItemSnapshot
+                            {
+                                ItemId = (uint)reader.GetInt64(0),
+                                InventoryTemplateId = (uint)reader.GetInt64(1),
+                                ExpireTime = (uint)reader.GetInt64(2),
+                            });
+                        }
+                    }
+                }
             }
         }
 
@@ -512,30 +488,6 @@ ON CONFLICT(character_id) DO UPDATE SET manage_level=excluded.manage_level;";
                 {
                     SaveRentalInfo(connection, transaction, characterId, rental);
                     transaction.Commit();
-                }
-            }
-        }
-
-        private void LoadFieldFromInitBody(int characterId, int notiType, Action<byte[]> parse)
-        {
-            var body = LoadInitBody(characterId, notiType, 0);
-            if (body != null) parse(body);
-        }
-
-        private byte[] LoadInitBody(int characterId, int notiType, int occurrenceIndex)
-        {
-            using (var conn = new SqliteConnection(
-                Infrastructure.SqliteDatabaseBootstrap.Initialize(
-                    _databasePath, _schemaFilePath)))
-            {
-                conn.Open();
-                using (var cmd = new SqliteCommand(
-                    "SELECT body FROM character_init_bodies WHERE character_id=@cid AND noti_type=@nt AND occurrence_index=@oi", conn))
-                {
-                    cmd.Parameters.AddWithValue("@cid", characterId);
-                    cmd.Parameters.AddWithValue("@nt", notiType);
-                    cmd.Parameters.AddWithValue("@oi", occurrenceIndex);
-                    return cmd.ExecuteScalar() as byte[];
                 }
             }
         }
@@ -627,87 +579,34 @@ ON CONFLICT(character_id) DO UPDATE SET manage_level=excluded.manage_level;";
                 }
 
                 
-                var defaults = new (int noti, byte[] body)[]
-                {
-                    (0x0035, new byte[13]),                     
-                    (0x0077, new byte[] { 0x00 }),              
-                    (0x0111, new byte[8]),                      
-                    (0x019F, new byte[] { 0x00, 0x00 }),        
-                    (0x0300, new byte[] { 0x00, 0x00 }),
-                    (0x0357, new byte[] { 0x7B, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }),
-                    (0x03D8, new byte[204]),                    
-                };
-                foreach (var d in defaults)
-                {
-                    using (var cmd = new SqliteCommand(
-                        "INSERT OR IGNORE INTO character_init_bodies(character_id, noti_type, occurrence_index, body) VALUES(@cid, @nt, 0, @b)", conn))
-                    {
-                        cmd.Parameters.AddWithValue("@cid", characterId);
-                        cmd.Parameters.AddWithValue("@nt", d.noti);
-                        cmd.Parameters.AddWithValue("@b", d.body);
-                        cmd.ExecuteNonQuery();
-                    }
-                }
-                
-                using (var cmd = new SqliteCommand(
-                    "INSERT OR IGNORE INTO character_init_bodies(character_id, noti_type, occurrence_index, body) VALUES(@cid, @nt, 1, @b)", conn))
-                {
-                    cmd.Parameters.AddWithValue("@cid", characterId);
-                    cmd.Parameters.AddWithValue("@nt", 0x0077);
-                    cmd.Parameters.AddWithValue("@b", new byte[] { 0x00 });
-                    cmd.ExecuteNonQuery();
-                }
             }
         }
 
         private void LoadInitFieldsFromPacketTemplates(int characterId, SelectCharacterInitializationSnapshot snap)
         {
-            var repo = _packetSequenceRepository;
+            LoadRentalItems(characterId, snap.RentalInfo);
+            snap.RentalInfo.RemoveExpired(_rentalTimeProvider.UtcNowUnixSeconds());
 
-            LoadFieldFromInitBody(characterId, 0x015F, body => {
-                snap.SkillPointSlots.Clear();
-                if (body == null || body.Length < 1) return;
-                int count = body[0]; int off = 1;
-                for (int i = 0; i < count && off + 3 <= body.Length; i++)
-                {
-                    snap.SkillPointSlots.Add(new SkillPointSlotEntrySnapshot
-                    { SkillType = body[off], Points = BitConverter.ToUInt16(body, off + 1) });
-                    off += 3;
-                }
-            });
+            LoadCrystalContract(characterId, snap);
+        }
 
-            LoadFieldFromInitBody(characterId, 0x0381, body => {
-                if (body == null || body.Length < 8) return;
-                snap.CollectionBox.BoxType = body[0];
-                snap.CollectionBox.DisplayMode = body[1];
-                snap.CollectionBox.CollectionId = BitConverter.ToUInt32(body, 2);
-                snap.CollectionBox.StatusFlags = body[6];
-                int count = body[7]; int off = 8;
-                snap.CollectionBox.Items.Clear();
-                for (int i = 0; i < count && off + 8 <= body.Length; i++)
-                {
-                    snap.CollectionBox.Items.Add(new CollectionBoxItemSnapshot
-                    { ItemId = BitConverter.ToUInt32(body, off), Count = BitConverter.ToUInt32(body, off + 4) });
-                    off += 8;
-                }
-            });
-
-            LoadFieldFromInitBody(characterId, 0x0357, body => {
-                if (body == null || body.Length < 8) return;
-                RentalInfoSnapshot.ParseStorageBody(body, snap.RentalInfo);
-                snap.RentalInfo.RemoveExpired(_rentalTimeProvider.UtcNowUnixSeconds());
-            });
-
-            LoadFieldFromInitBody(characterId, 0x0300, body => {
-                if (body == null || body.Length < 2) return;
-                snap.CubeType = body[0];
-                snap.CubeGrade = body[1];
-            });
-
-            
+        private void LoadCrystalContract(int characterId, SelectCharacterInitializationSnapshot snap)
+        {
+            using (var conn = new SqliteConnection(_connectionString))
             {
-                var lbBody = LoadInitBody(characterId, 0x03D8, 0);
-                if (lbBody != null) snap.LotteryBufferBlob = lbBody;
+                conn.Open();
+                using (var cmd = new SqliteCommand(
+                    "SELECT cube_type, cube_grade FROM character_crystal_contract WHERE character_id=@cid", conn))
+                {
+                    cmd.Parameters.AddWithValue("@cid", characterId);
+                    using (var reader = cmd.ExecuteReader())
+                    {
+                        if (!reader.Read())
+                            return;
+                        snap.CubeType = (byte)reader.GetInt32(0);
+                        snap.CubeGrade = (byte)reader.GetInt32(1);
+                    }
+                }
             }
         }
     }

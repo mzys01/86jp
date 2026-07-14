@@ -28,39 +28,6 @@ namespace DfoServer.Game.CharacterData
             }
         }
 
-        public byte[] LoadGetUserInfoResponseBlob()
-        {
-            using (var conn = new SqliteConnection(_connectionString))
-            {
-                conn.Open();
-                using (var cmd = new SqliteCommand("SELECT response_blob FROM get_userinfo_template WHERE id=1", conn))
-                {
-                    var result = cmd.ExecuteScalar();
-                    return result != null && result != System.DBNull.Value ? (byte[])result : null;
-                }
-            }
-        }
-
-        public void SaveGetUserInfoResponseBlob(byte[] blob)
-        {
-            using (var conn = new SqliteConnection(_connectionString))
-            {
-                conn.Open();
-                using (var cmd = new SqliteCommand("UPDATE get_userinfo_template SET response_blob=@b WHERE id=1", conn))
-                {
-                    cmd.Parameters.AddWithValue("@b", blob != null ? (object)blob : System.DBNull.Value);
-                    if (cmd.ExecuteNonQuery() == 0)
-                    {
-                        using (var ins = new SqliteCommand("INSERT OR IGNORE INTO get_userinfo_template (id, response_blob) VALUES (1, @b)", conn))
-                        {
-                            ins.Parameters.AddWithValue("@b", blob != null ? (object)blob : System.DBNull.Value);
-                            ins.ExecuteNonQuery();
-                        }
-                    }
-                }
-            }
-        }
-
         public Network.Builders.GetUserInfoTemplate LoadGetUserInfoTemplate()
         {
             using (var conn = new SqliteConnection(_connectionString))

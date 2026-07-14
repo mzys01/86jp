@@ -66,11 +66,10 @@ namespace DfoServer.Network.Builders
             
             
             
-            Register(new UserPositionBodyBuilder());   
-            Register(new CeraBodyBuilder());            
-            Register(new DbFieldBuilder(0x0036));   
+            Register(new UserPositionBodyBuilder());
+            Register(new CeraBodyBuilder());
             Register(new PetCreatureWelcomeMessageBodyBuilder());
-            Register(new DbFieldBuilder(0x0111));   
+            Register(new UnitedServerFriendInfoBodyBuilder());
             Register(new StrikerSupportTagCharacterBodyBuilder());
 
             

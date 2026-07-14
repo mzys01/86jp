@@ -1,6 +1,5 @@
 using DfoServer.Game.SelectCharacter;
 using System;
-using Microsoft.Data.Sqlite;
 
 namespace DfoServer.Network.Builders
 {
@@ -39,47 +38,19 @@ namespace DfoServer.Network.Builders
         }
     }
 
-    
-    
-    
-    
-    public sealed class DbFieldBuilder : IInitPacketBuilder
-    {
-        public ushort NotiType { get; }
-        private readonly byte _command;
 
-        public DbFieldBuilder(ushort notiType, byte command = 0x00)
-        {
-            NotiType = notiType;
-            _command = command;
-        }
+
+
+
+    // NOTI 273 (0x0111) 联合服好友信息。客户端有注册 handler(0x00D0DBB0)，
+    // 8 字节零是新角色一直在用的空态基线；跨服好友数据对单机服务端无意义，统一发空态。
+    public sealed class UnitedServerFriendInfoBodyBuilder : IInitPacketBuilder
+    {
+        public ushort NotiType => 0x0111;
 
         public bool TryBuild(SelectCharacterDataSnapshot snapshot, int occurrenceIndex, out byte[] body)
         {
-            int cid = snapshot.CharacterRecord?.CharacterId ?? 0;
-            if (cid <= 0) { body = null; return false; }
-
-            var connStr = Infrastructure.SqliteDatabaseBootstrap.Initialize(
-                Infrastructure.ServerPaths.DatabasePath, Infrastructure.ServerPaths.SchemaFilePath);
-            byte[] src = null;
-            using (var conn = new SqliteConnection(connStr))
-            {
-                conn.Open();
-                using (var cmd = new SqliteCommand(
-                    "SELECT body FROM character_init_bodies WHERE character_id=@cid AND noti_type=@nt AND occurrence_index=@oi", conn))
-                {
-                    cmd.Parameters.AddWithValue("@cid", cid);
-                    cmd.Parameters.AddWithValue("@nt", (int)NotiType);
-                    cmd.Parameters.AddWithValue("@oi", occurrenceIndex);
-                    src = cmd.ExecuteScalar() as byte[];
-                }
-            }
-            if (src == null) { body = null; return false; }
-
-            var writer = new GamePacketWriter();
-            for (int i = 0; i < src.Length; i++)
-                writer.WriteByte(src[i]);
-            body = writer.ToArray();
+            body = new byte[8];
             return true;
         }
     }

@@ -234,56 +234,6 @@ namespace DfoServer.Network.Handlers
             return packet;
         }
 
-        private async Task SendGetUserInfoResponse(EnhancedClientSession session, Game.Characters.CharacterRecord record)
-        {
-            var dbPath = Infrastructure.ServerPaths.DatabasePath;
-            var schemaPath = Infrastructure.ServerPaths.SchemaFilePath;
-
-            var entryRepo = new Game.CharacterData.AccountCharacterEntryRepository(dbPath, schemaPath);
-            var entries = entryRepo.LoadAll();
-
-            if (entries.Count > 0 && _getUserInfoTemplate != null)
-            {
-                var writer = new Network.GamePacketWriter();
-                writer.WriteByte(0x02); // type
-                writer.WriteUInt16(_getUserInfoTemplate.GateOrCount1);
-                writer.WriteUInt16(_getUserInfoTemplate.GateOrCount2);
-                writer.WriteByte(_getUserInfoTemplate.FlagOrManage);
-                writer.WriteInt32(_getUserInfoTemplate.KeyOrPoint);
-                writer.WriteUInt16(_getUserInfoTemplate.Unknown16);
-                writer.WriteInt32(_getUserInfoTemplate.Unknown32);
-                writer.WriteUInt16((ushort)entries.Count);
-
-                foreach (var entry in entries)
-                {
-                    writer.WriteUInt16(entry.SlotIndex);
-                    writer.WriteUtf8Dstr(entry.Name);
-                    for (int j = 0; j < entry.BodyAfterName.Length; j++)
-                        writer.WriteByte(entry.BodyAfterName[j]);
-                }
-
-                var type2Body = writer.ToArray();
-                var type2Pkt = BuildPacketWithRouting(0x00, 0x0002, type2Body, _getUserInfoTemplate.Pkt0RoutingByte7);
-                await session.SendPacketAsync(type2Pkt);
-
-                var extraRepo = new Game.CharacterData.GetUserInfoExtraPacketRepository(dbPath, schemaPath);
-                var extraPackets = extraRepo.LoadAll();
-                foreach (var extra in extraPackets)
-                {
-                    var body = extra.body;
-                    var pkt = GamePacketEnvelopeBuilder.Build(extra.command, extra.type, body);
-                    await session.SendPacketAsync(pkt);
-                }
-                return;
-            }
-
-            if (record != null && _getUserInfoTemplate != null)
-            {
-                foreach (var packet in GetUserInfoResponseBuilder.Build(record, _getUserInfoTemplate))
-                    await session.SendPacketAsync(packet);
-            }
-        }
-
         public async Task Handle_ENUM_CMDPACKET_CHECK_DOUBLE_CHARACTER_NAME(EnhancedClientSession session, GamePacketHeader header, byte[] body)
         {
             if (body == null || body.Length < 5)

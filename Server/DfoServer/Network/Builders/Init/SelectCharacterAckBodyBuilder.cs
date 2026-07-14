@@ -104,11 +104,10 @@ namespace DfoServer.Network.Builders
             writer.WriteUInt16(initSnap.AckFatigueGrownUpBuff);
             writer.WriteByte(initSnap.AckTradePunishFlag);
             writer.WriteUInt16(initSnap.AckExtraField86JP);
-            {
-                var r = initSnap.AckReserved8B;
-                for (int j = 0; j < 8; j++)
-                    writer.WriteByte(r != null && j < r.Length ? r[j] : (byte)0);
-            }
+            // reserved 8B: 客户端读取边界(264B)之后的尾巴, handler 不读(CMD_PACKET/4.md);
+            // 旧列存的其实是抓包切片错位的教程标记残渣, 固定写零
+            for (int j = 0; j < 8; j++)
+                writer.WriteByte(0);
             writer.WriteByte(initSnap.AckTutorialSkipable);
             // ack_post_tutorial_u16: seed=0
             writer.WriteUInt16(0);
