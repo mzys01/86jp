@@ -117,17 +117,19 @@ namespace DfoServer.Network.Handlers.Dungeon
                     rankIndex: (byte)clearRank.RankBonusIndex,
                     timeBonusPoint: (byte)Math.Max(0, Math.Min(255, clearRank.TimeBonusPoint)),
                     clientRankPoint: clearRank.ClientRankPoint)));
-            var (remainSp, remainTp) = _svc.GetRemainingSpTp(session, persist: leveledUp, logTag: "SET_PLAY_RESULT");
-
             if (clearNormalExpGain > 0 || leveledUp || clearHonorExpGain > 0)
             {
                 honorSummary = _svc.ResolveHonorLevelForExp(session, honorSummary);
                 growthCapsuleSummary = _svc.ResolveGrowthCapsuleForExp(session, growthCapsuleSummary);
-                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0025,
-                    DungeonNotificationBuilder.BuildExp(
-                        session.Player.Level, session.Player.Exp, remainSp, remainTp, honorSummary,
-                        growthCapsuleExp: GrowthCapsuleDataProvider.GetDisplayProgress(
-                            session.Player.Level, growthCapsuleSummary))));
+                if (_svc.TryGetSkillPointProtocolState(
+                        session, persist: leveledUp, logTag: "SET_PLAY_RESULT", out var skillPoints))
+                {
+                    await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0025,
+                        ExpNotificationBuilder.Build(
+                            session.Player.Level, session.Player.Exp, skillPoints, honorSummary,
+                            growthCapsuleExp: GrowthCapsuleDataProvider.GetDisplayProgress(
+                                session.Player.Level, growthCapsuleSummary))));
+                }
             }
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0023,
                 DungeonNotificationBuilder.BuildClearDungeonReward(

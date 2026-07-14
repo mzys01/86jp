@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using DfoServer.Game.Accounts;
 using DfoServer.Game.Dungeon;
 using DfoServer.GameWorld;
 using DfoServer.Network;
@@ -270,20 +269,6 @@ namespace DfoServer.Network.Builders
             writer.WriteInt32(clearTimeMs);
             writer.WriteByte(newBestClearTime ? (byte)1 : (byte)0);
             return writer.ToArray();
-        }
-
-        public static byte[] BuildExp(byte level, uint totalExp, ushort remainSp, ushort remainTp,
-            HonorLevelSummary honorLevel,
-            uint partyBonusExp = 0, uint memberBonusExp = 0, uint fatigueBuffBonusExp = 0,
-            uint seriaBufBonusExp = 0, uint growthContractBonusExp = 0,
-            uint weekendBonusExp = 0, uint premiumBonusExp = 0,
-            uint growthCapsuleExp = 0)
-        {
-            return ExpNotificationBuilder.Build(
-                level, totalExp, remainSp, remainTp, honorLevel,
-                partyBonusExp, memberBonusExp, fatigueBuffBonusExp,
-                seriaBufBonusExp, growthContractBonusExp,
-                weekendBonusExp, premiumBonusExp, growthCapsuleExp);
         }
 
         //

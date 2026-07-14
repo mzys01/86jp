@@ -180,8 +180,11 @@ namespace DfoServer.Game.Skills
                 syncedAtNextLevel.Points.RemainingSp == afterFirst + gainedSp);
             Check($"level-up sync keeps page1 SP={syncedAtNextLevel.Skills.Pages[1].HeaderValue}, expected {0x2BF2 - firstCost + gainedSp}",
                 syncedAtNextLevel.Skills.Pages[1].HeaderValue == 0x2BF2 - firstCost + gainedSp);
-            Check($"current page1 SP helper={SkillStateService.GetPageRemainingSp(syncedAtNextLevel.Skills, syncedAtNextLevel.Points, 1)}, expected {0x2BF2 - firstCost + gainedSp}",
-                SkillStateService.GetPageRemainingSp(syncedAtNextLevel.Skills, syncedAtNextLevel.Points, 1) == 0x2BF2 - firstCost + gainedSp);
+            var protocolState = SkillStateService.GetProtocolState(
+                syncedAtNextLevel.Skills,
+                syncedAtNextLevel.Points);
+            Check($"0x0025 page1 SP={protocolState.Page1Sp}, expected {0x2BF2 - firstCost + gainedSp}",
+                protocolState.Page1Sp == 0x2BF2 - firstCost + gainedSp);
 
             string tempDb2 = Path.Combine(Path.GetTempPath(), "buyskill_selftest2.db");
             DeleteSqliteFiles(tempDb2);

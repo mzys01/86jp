@@ -197,17 +197,20 @@ namespace DfoServer.Network.Handlers.Dungeon
                     CharacterProgressService.PersistLevelAndExp(session.Player.CharacterId, session.Player.Level, session.Player.Exp);
                 }
 
-                var (remainSp, remainTp) = _svc.GetRemainingSpTp(session, persist: leveledUp, logTag: "DIE_MONSTER");
-
                 if (normalExpGain > 0 || leveledUp || honorExpGain > 0)
                 {
                     honorSummary = _svc.ResolveHonorLevelForExp(session, honorSummary);
                     growthCapsuleSummary = _svc.ResolveGrowthCapsuleForExp(session, growthCapsuleSummary);
-                    await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0025,
-                        ExpNotificationBuilder.Build(session.Player.Level, session.Player.Exp, remainSp, remainTp, honorSummary,
-                            premiumBonusExp: growthContractBonusExp,
-                            growthCapsuleExp: GrowthCapsuleDataProvider.GetDisplayProgress(
-                                session.Player.Level, growthCapsuleSummary))));
+                    if (_svc.TryGetSkillPointProtocolState(
+                            session, persist: leveledUp, logTag: "DIE_MONSTER", out var skillPoints))
+                    {
+                        await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0025,
+                            ExpNotificationBuilder.Build(
+                                session.Player.Level, session.Player.Exp, skillPoints, honorSummary,
+                                growthContractBonusExp: growthContractBonusExp,
+                                growthCapsuleExp: GrowthCapsuleDataProvider.GetDisplayProgress(
+                                    session.Player.Level, growthCapsuleSummary))));
+                    }
                 }
 
                 if (leveledUp)
@@ -443,10 +446,18 @@ namespace DfoServer.Network.Handlers.Dungeon
                     var leveledUp = bs.Player.Level > prevLevel;
                     if (leveledUp)
                         CharacterProgressService.PersistLevelAndExp(bs.Player.CharacterId, bs.Player.Level, bs.Player.Exp);
-                    var (remainSp, remainTp) = _svc.GetRemainingSpTp(bs, persist: leveledUp, logTag: "PARTY_KILL_EXP");
+                    var hasSkillPoints = _svc.TryGetSkillPointProtocolState(
+                        bs, persist: leveledUp, logTag: "PARTY_KILL_EXP", out var skillPoints);
                     memberHonor = _svc.ResolveHonorLevelForExp(bs, memberHonor);
-                    await bs.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0025,
-                        ExpNotificationBuilder.Build(bs.Player.Level, bs.Player.Exp, remainSp, remainTp, memberHonor)));
+                    if (hasSkillPoints)
+                    {
+                        var memberGrowthCapsule = _svc.ResolveGrowthCapsuleForExp(bs);
+                        await bs.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0025,
+                            ExpNotificationBuilder.Build(
+                                bs.Player.Level, bs.Player.Exp, skillPoints, memberHonor,
+                                growthCapsuleExp: GrowthCapsuleDataProvider.GetDisplayProgress(
+                                    bs.Player.Level, memberGrowthCapsule))));
+                    }
                     if (leveledUp)
                         await _svc.SendInDungeonLevelUpFollowups(bs);
                 }
