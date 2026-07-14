@@ -62,7 +62,8 @@ namespace DfoServer.Network.Builders
 
         private static byte[] BuildEmptyInvenItemPacketTail()
         {
-            return new byte[] { 0, 0, 0 };
+            // Client CMD 0x0019 ACK handler (0x00CE7E80) reads 32B per reward entry.
+            return new byte[14];
         }
     }
 }

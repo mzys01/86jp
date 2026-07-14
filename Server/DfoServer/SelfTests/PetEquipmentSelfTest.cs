@@ -82,6 +82,9 @@ namespace DfoServer.SelfTests
                         0x00, 0x00, 0x00,
                         0x00, 0x00, 0x00,
                         0x00, 0x00, 0x00, 0x00,
+                        0x00, 0x00, 0x00,
+                        0x00, 0x00, 0x00, 0x00,
+                        0x00, 0x00, 0x00, 0x00,
                     }),
                 ref failures);
             Check("compound item error ACK is compact failure body",
