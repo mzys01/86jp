@@ -274,7 +274,7 @@ WHERE character_id = @cid;";
                         return EquipOutcome.ReverseError;
                     }
                     FileLogger.Log($"  [EquipMove] slot {equipSlot} 已空, 无操作");
-                    return EquipOutcome.Unequipped;
+                    return EquipOutcome.NoOp;
                 }
                 // 卸下克隆装扮时清零 raw[12..15] 克隆目标
                 if (ItemMetadataResolver.IsCloneAvatarItem(removed.ItemId))
