@@ -225,7 +225,6 @@ namespace DfoServer.Network
                     var gsConnStr = SqliteDatabaseBootstrap.Initialize(
                         ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
                     s.GameSession = new Game.Session.GameSession(s, gsConnStr, _assetService);
-                    await _inventoryRefreshSender.SendAllSortItemLockRefresh(s);
                     await _inventoryRefreshSender.SendAllEquipmentItemLockListRefresh(s);
                     await PetCreatureRuntimeService.BeginTownAsync(s, "select_character");
                 }

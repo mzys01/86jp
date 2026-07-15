@@ -614,7 +614,7 @@ VALUES (@accountId, @selectionKey, @value32, @itemCount, CURRENT_TIMESTAMP);";
             using (var cmd = connection.CreateCommand())
             {
                 cmd.Transaction = transaction;
-                cmd.CommandText = @"SELECT item_template_id, stack_count, durability, extra_json, item_kind, option_value, pet_serial_or_handle, marker_16
+                cmd.CommandText = @"SELECT item_template_id, stack_count, durability, seal_flag, extra_json, item_kind, option_value, pet_serial_or_handle, marker_16, expire_time
                                     FROM character_items WHERE character_id=@cid AND list_type=@lt AND slot_index=@si";
                 cmd.Parameters.AddWithValue("@cid", characterId);
                 cmd.Parameters.AddWithValue("@lt", (int)listType);
@@ -624,13 +624,14 @@ VALUES (@accountId, @selectionKey, @value32, @itemCount, CURRENT_TIMESTAMP);";
                     if (!reader.Read()) return null;
                     var itemTemplateId = reader.GetInt32(0);
                     var stackCount = reader.GetInt32(1);
-                    var extraJson = reader.IsDBNull(3) ? "{}" : reader.GetString(3);
-                    var itemKind = reader.IsDBNull(4) ? "" : reader.GetString(4);
+                    var sealFlag = Convert.ToByte(reader.GetInt32(3), CultureInfo.InvariantCulture);
+                    var extraJson = reader.IsDBNull(4) ? "{}" : reader.GetString(4);
+                    var itemKind = reader.IsDBNull(5) ? "" : reader.GetString(5);
                     var durabilityFromDb = (ushort)reader.GetInt32(2);
                     var isAvatar = string.Equals(itemKind, "avatar", StringComparison.Ordinal);
                     var isPet = listType == InventoryListType.Pet && string.Equals(itemKind, "pet", StringComparison.Ordinal);
-                    var petSerialOrHandle = reader.GetInt32(6);
-                    var optionValue = Convert.ToByte(reader.GetInt32(5), CultureInfo.InvariantCulture);
+                    var petSerialOrHandle = reader.GetInt32(7);
+                    var optionValue = Convert.ToByte(reader.GetInt32(6), CultureInfo.InvariantCulture);
                     var record = new SqliteInventoryStore.ItemRecord
                     {
                         ListType = listType,
@@ -639,9 +640,11 @@ VALUES (@accountId, @selectionKey, @value32, @itemCount, CURRENT_TIMESTAMP);";
                         ItemKind = itemKind,
                         StackCount = stackCount,
                         Durability = durabilityFromDb,
+                        SealFlag = sealFlag,
                         OptionValue = optionValue,
                         PetSerialOrHandle = petSerialOrHandle,
-                        Marker16 = reader.GetInt32(7),
+                        Marker16 = reader.GetInt32(8),
+                        ExpireTime = reader.IsDBNull(9) ? 0 : reader.GetInt32(9),
                         ExtraJson = extraJson,
                     };
                     var view = isAvatar
@@ -655,14 +658,20 @@ VALUES (@accountId, @selectionKey, @value32, @itemCount, CURRENT_TIMESTAMP);";
                         InstanceValue = unchecked((uint)entry.Value),
                         Durability = listType == InventoryListType.Avatar ? optionValue : durabilityFromDb,
                         Reinforce = entry.Attr,
+                        SealFlag = entry.SealFlag,
                         Enchant = unchecked((uint)entry.EnchantCardId),
                         EnchantUpgradeCount = entry.EnchantUpgradeCount,
                         AmplifyType = entry.AmplifyType,
                         AmplifyValue = entry.AmplifyValue,
+                        ExpireTime = entry.ExpireTime,
                     };
-                    if (isPet && petSerialOrHandle != 0 && CreatureExtraResolver.HasCreatureExtra(itemTemplateId))
-                        f.CreatureExtra = unchecked((uint)petSerialOrHandle);
+                    if (isPet && CreatureExtraResolver.HasCreatureExtra(itemTemplateId))
+                        f.Marker16 = unchecked((uint)entry.Marker16);
+                    f.ChronicleOptions = MakeEquipListCodec.BuildChronicleOptions(entry.MiddleData1A);
                     f.Emblem = entry.EmblemData;
+                    f.EmblemSocketCount = entry.EmblemSocketCount;
+                    f.EmblemId1 = entry.EmblemId1;
+                    f.EmblemId2 = entry.EmblemId2;
                     f.Rune = entry.Rune;
                     var randomOptions = entry.RandomOptions;
                     f.MagicSealCount = (byte)Math.Min(3, randomOptions.Count);
@@ -672,9 +681,26 @@ VALUES (@accountId, @selectionKey, @value32, @itemCount, CURRENT_TIMESTAMP);";
                         f.MagicSealVal1s = BuildRandomOptionValue1s(randomOptions);
                         f.MagicSealVal2s = BuildRandomOptionValue2s(randomOptions);
                     }
+                    f.RandomOptionState = entry.RandomOptionState;
+                    f.RandomOptionChangedIndex = entry.RandomOptionChangedIndex;
+                    f.RandomOptionChangeState = entry.RandomOptionChangeState;
+                    f.RandomOptionChangeType = entry.RandomOptionChangeType;
+                    f.RandomOptionChangeValue1 = entry.RandomOptionChangeValue1;
+                    f.RandomOptionChangeValue2 = entry.RandomOptionChangeValue2;
                     f.Forging = entry.Forging;
+                    f.EmancipateEquipmentLevel = entry.EmancipateEquipmentLevel;
+                    f.TradeRestriction = entry.TradeRestriction;
+                    f.TailUnknown0 = entry.TailUnknown0;
+                    f.TailUnknown1 = entry.TailUnknown1;
+                    f.TailUnknown2 = entry.TailUnknown2;
+                    f.TailUnknown3 = entry.TailUnknown3;
+                    f.RemainUseCount = entry.RemainUseCount;
+                    f.SortLockFlag = entry.SortLockFlag;
                     if (isAvatar)
+                    {
                         f.JewelSocket = SqliteInventoryStore.AvatarReservedToEquippedJewel(view.AvatarDetail.SocketData);
+                        f.ExpansionData = view.AvatarDetail.ColorData;
+                    }
                     else
                         f.JewelSocket = entry.JewelSocket;
                     return f;
@@ -726,19 +752,21 @@ VALUES (@accountId, @selectionKey, @value32, @itemCount, CURRENT_TIMESTAMP);";
             ushort dur = 0;
             int countOrIv = itemId;
             int expireTime = entryExpireTime;
+            byte sealFlag = 0;
             string extraJson = "{}";
             if (entryRaw != null && entryRaw.Length >= 24)
             {
                 var f = MakeEquipListCodec.ParseDisplayFields(entryRaw);
                 dur = f.Durability;
                 countOrIv = unchecked((int)f.InstanceValue);
+                sealFlag = f.SealFlag;
                 if (listType == InventoryListType.Avatar)
                 {
-                    var avatarExtraJson = BuildAvatarExtraJsonFromEquippedFields(f);
+                    var avatarExtraJson = BuildAvatarExtraJsonFromEquippedFields(f, out var avatarMarker16);
                     _db.InsertCharacterItem(
                         connection, transaction, characterId, listType, slot, itemId, "avatar",
                         stackCount: 0, instanceValue: 0, durability: 0, sealFlag: 0, optionValue: ResolveAvatarOptionValue(f),
-                        expireTime: 0, marker16: SqliteInventoryStore.DefaultAvatarUnknownFixed30, petSerialOrHandle: 0,
+                        expireTime: 0, marker16: avatarMarker16, petSerialOrHandle: 0,
                         extraJson: avatarExtraJson, equipmentLockId: equipmentLockId);
                     return;
                 }
@@ -747,12 +775,12 @@ VALUES (@accountId, @selectionKey, @value32, @itemCount, CURRENT_TIMESTAMP);";
             }
             byte ov = (byte)(listType == InventoryListType.Avatar ? dur : 0);
             _db.InsertCharacterItem(connection, transaction, characterId, listType, slot, itemId, "equipment",
-                stackCount: countOrIv, instanceValue: 0, durability: dur, sealFlag: 0, optionValue: ov,
+                stackCount: countOrIv, instanceValue: 0, durability: dur, sealFlag: sealFlag, optionValue: ov,
                 expireTime: expireTime, marker16: -1, petSerialOrHandle: 0, extraJson: extraJson, equipmentLockId: equipmentLockId);
             FileLogger.Log($"  [InsertEquipToContainer] listType={listType} slot={slot} itemId=0x{itemId:X8} durability={dur} optionValue={ov}");
         }
 
-        private static string BuildAvatarExtraJsonFromEquippedFields(MakeEquipListCodec.DisplayFields fields)
+        private static string BuildAvatarExtraJsonFromEquippedFields(MakeEquipListCodec.DisplayFields fields, out int marker16)
         {
             var record = new SqliteInventoryStore.ItemRecord
             {
@@ -763,6 +791,18 @@ VALUES (@accountId, @selectionKey, @value32, @itemCount, CURRENT_TIMESTAMP);";
             var view = InventoryItemView.ForAvatar(record);
             view.AvatarDetail.ColorDataLen = SqliteInventoryStore.DefaultAvatarUnknownFixed4;
             view.AvatarDetail.SocketData = SqliteInventoryStore.EquippedJewelToAvatarReserved(fields.JewelSocket);
+            var color = MakeEquipListCodec.NormalizeExpansionData(fields.ExpansionData);
+            view.AvatarDetail.Color1 = BitConverter.ToUInt16(color, 0);
+            view.AvatarDetail.Color2 = BitConverter.ToUInt16(color, 2);
+            view.Entry84.EmancipateEquipmentLevel = fields.EmancipateEquipmentLevel;
+            view.Entry84.TradeRestriction = fields.TradeRestriction;
+            view.Entry84.TailUnknown0 = fields.TailUnknown0;
+            view.Entry84.TailUnknown1 = fields.TailUnknown1;
+            view.Entry84.TailUnknown2 = fields.TailUnknown2;
+            view.Entry84.TailUnknown3 = fields.TailUnknown3;
+            view.Entry84.RemainUseCount = fields.RemainUseCount;
+            view.SortLockFlag = fields.SortLockFlag;
+            marker16 = record.Marker16;
             return record.ExtraJson;
         }
 
@@ -778,6 +818,7 @@ VALUES (@accountId, @selectionKey, @value32, @itemCount, CURRENT_TIMESTAMP);";
             view.EnchantUpgradeCount = fields.EnchantUpgradeCount;
             view.AmplifyType = fields.AmplifyType;
             view.AmplifyValue = fields.AmplifyValue;
+            view.Entry84.MiddleData1A = MakeEquipListCodec.BuildMiddleData1A(fields.ChronicleOptions);
             view.Entry84.EmblemData = fields.Emblem;
             view.Entry84.Rune = fields.Rune;
             if (fields.MagicSealCount > 0)
@@ -786,6 +827,14 @@ VALUES (@accountId, @selectionKey, @value32, @itemCount, CURRENT_TIMESTAMP);";
                 ApplyRandomOptionTail(view.Entry84, fields.MagicSealTail);
             }
             view.Forging = fields.Forging;
+            view.Entry84.EmancipateEquipmentLevel = fields.EmancipateEquipmentLevel;
+            view.Entry84.TradeRestriction = fields.TradeRestriction;
+            view.Entry84.TailUnknown0 = fields.TailUnknown0;
+            view.Entry84.TailUnknown1 = fields.TailUnknown1;
+            view.Entry84.TailUnknown2 = fields.TailUnknown2;
+            view.Entry84.TailUnknown3 = fields.TailUnknown3;
+            view.Entry84.RemainUseCount = fields.RemainUseCount;
+            view.SortLockFlag = fields.SortLockFlag;
             view.Entry84.JewelSocket = fields.JewelSocket;
             return record.ExtraJson;
         }

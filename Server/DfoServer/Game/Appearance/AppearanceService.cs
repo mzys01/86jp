@@ -112,7 +112,7 @@ namespace DfoServer.Game.Appearance
                     (byte)entry.Slot,
                     displayItemId,
                     4,
-                    new byte[4],
+                    BuildAppearanceExpansionData(entry.Item),
                     BuildAppearanceState(entry.Item),
                     0,
                     0u,
@@ -122,12 +122,18 @@ namespace DfoServer.Game.Appearance
             return result.ToArray();
         }
 
-        private static byte BuildAppearanceState(InvenItem item)
+        internal static byte BuildAppearanceState(InvenItem item)
         {
             if (item == null)
                 return 0;
 
-            return unchecked((byte)(item.Attr * 2 + (item.AmplifyType != 0 ? 1 : 0)));
+            var upgrade = item.Attr & 0x1F;
+            return unchecked((byte)(upgrade * 2 + (item.AmplifyType != 0 ? 1 : 0)));
+        }
+
+        private static byte[] BuildAppearanceExpansionData(InvenItem item)
+        {
+            return MakeEquipListCodec.NormalizeExpansionData(item?.Expansion);
         }
 
         public static int LoadCloneTitleItemId(int characterId)

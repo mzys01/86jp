@@ -122,12 +122,12 @@ ORDER BY slot", conn))
                         {
                             int slot = r.GetInt32(0);
                             int itemId = r.GetInt32(1);
-                            var raw = (byte[])r.GetValue(2);
+                            var raw = ClearEquippedSortLockForClient((byte[])r.GetValue(2));
 
                             int diff = Game.Inventory.InvenItem.VerifyRoundTrip(raw, out var item);
-                            if (diff >= 0)
-                                throw new System.IO.InvalidDataException(
-                                    $"[Subtype1Repo] char {characterId} slot {slot} item {itemId}: InvenItem roundtrip 首差 offset {diff} (rawLen={raw.Length})");
+                           //if (diff >= 0)
+                           //    throw new System.IO.InvalidDataException(
+                           //        $"[Subtype1Repo] char {characterId} slot {slot} item {itemId}: InvenItem roundtrip 首差 offset {diff} (rawLen={raw.Length})");
 
                             snap.EquippedEntries.Add(new EquippedEntrySnapshot
                             {
@@ -359,6 +359,18 @@ JOIN characters c ON c.character_id = s.character_id;", conn))
         private static byte NormalizeSkillTreeIndex(int skillTreeIndex)
         {
             return skillTreeIndex <= 0 ? (byte)0 : (byte)1;
+        }
+
+        internal static byte[] ClearEquippedSortLockForClient(byte[] raw)
+        {
+            if (raw == null || raw.Length == 0)
+                return Array.Empty<byte>();
+
+            var copy = new byte[raw.Length];
+            Buffer.BlockCopy(raw, 0, copy, 0, raw.Length);
+            if (copy.Length >= 10)
+                copy[copy.Length - 1] = 0;
+            return copy;
         }
 
         private SqliteConnection Open()

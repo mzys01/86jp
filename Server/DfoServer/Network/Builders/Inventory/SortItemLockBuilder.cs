@@ -16,6 +16,7 @@ namespace DfoServer.Network.Builders
         public static byte[] BuildUnlock(InventoryListType listType, short slotIndex)
         {
             var writer = new GamePacketWriter();
+            writer.WriteByte(0x01);
             writer.WriteByte((byte)listType);
             writer.WriteInt16(slotIndex);
             return writer.ToArray();

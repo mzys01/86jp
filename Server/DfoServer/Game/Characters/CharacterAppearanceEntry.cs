@@ -9,12 +9,14 @@ namespace DfoServer.Game.Characters
     
     public sealed class CharacterAppearanceEntry
     {
+        private byte[] _expansionData;
+
         public CharacterAppearanceEntry(byte slot, int displayItemId, int expansionLen, byte[] expansionData, byte state, int linkItemId, uint enchantValue, byte flag20)
         {
             Slot = slot;
             DisplayItemId = displayItemId;
             ExpansionLen = expansionLen;
-            ExpansionData = expansionData ?? new byte[4];
+            ExpansionData = expansionData;
             State = state; // 属性状态: invenitem.Attr * 2 + (invenitem.AmplifyType != 0)
             LinkItemId = linkItemId;
             EnchantValue = enchantValue;
@@ -31,7 +33,23 @@ namespace DfoServer.Game.Characters
         public int ExpansionLen { get; set; } = 4;
 
         
-        public byte[] ExpansionData { get; }
+        public byte[] ExpansionData
+        {
+            get => CopyExpansionData(_expansionData);
+            set => _expansionData = CopyExpansionData(value);
+        }
+
+        public ushort Color1
+        {
+            get => BitConverter.ToUInt16(_expansionData, 0);
+            set => BitConverter.GetBytes(value).CopyTo(_expansionData, 0);
+        }
+
+        public ushort Color2
+        {
+            get => BitConverter.ToUInt16(_expansionData, 2);
+            set => BitConverter.GetBytes(value).CopyTo(_expansionData, 2);
+        }
 
         
         public byte State { get; set; }
@@ -59,6 +77,14 @@ namespace DfoServer.Game.Characters
             var enchantValue = BitConverter.ToUInt32(buffer, offset + 18);
             var flag20 = buffer[offset + 22];
             return new CharacterAppearanceEntry(slot, itemId, expLen, expData, state, linkItemId, enchantValue, flag20);
+        }
+
+        private static byte[] CopyExpansionData(byte[] data)
+        {
+            var copy = new byte[4];
+            if (data != null && data.Length > 0)
+                Buffer.BlockCopy(data, 0, copy, 0, Math.Min(data.Length, copy.Length));
+            return copy;
         }
     }
 }
