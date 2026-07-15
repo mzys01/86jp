@@ -1,5 +1,6 @@
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
+using DfoServer.Game.DailyReset;
 using DfoServer.Game.Dungeon;
 using DfoServer.Game.Inventory;
 using DfoServer.Game.SelectCharacter;
@@ -460,7 +461,8 @@ namespace DfoServer.SelfTests
                 new ExperienceItemNotificationService(
                     characterRepository,
                     databasePath,
-                    ServerPaths.SchemaFilePath));
+                    ServerPaths.SchemaFilePath),
+                new DailyResetService(databasePath, ServerPaths.SchemaFilePath));
 
             using (var listener = new TcpListener(IPAddress.Loopback, 0))
             using (var client = new TcpClient())

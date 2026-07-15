@@ -263,9 +263,10 @@ namespace DfoServer.SelfTests
                 && BitConverter.ToInt16(avatarNativeResult, 3) == avatarReward.SlotIndex
                 && BitConverter.ToInt32(avatarNativeResult, 5) == CannedAvatarItemId,
                 ref failures);
-            Check("avatar lottery result carries avatar entry fixed fields",
-                BitConverter.ToInt32(avatarNativeResult, 86) == 0x1E00
-                && BitConverter.ToUInt16(avatarNativeResult, 120) == 4,
+            Check("avatar lottery result carries avatar extension lengths",
+                avatarNativeResult[86] == 0
+                && BitConverter.ToInt32(avatarNativeResult, 87) == 30
+                && BitConverter.ToInt32(avatarNativeResult, 121) == 4,
                 ref failures);
             Check("ordinary rare equipment is not lottery-announcement eligible",
                 !InventoryHandler.IsLotteryItemNoticeEligible(ItemMetadataResolver.Resolve(NormalRareEquipmentItemId)),
@@ -334,15 +335,10 @@ namespace DfoServer.SelfTests
             Check("lottery notice item id", BitConverter.ToInt32(notice, 4) == SampleRewardItemId, ref failures);
             Check("lottery notice upgrade level", notice[8] == 7, ref failures);
 
-            var lotteryBuffer = LotteryBufferBodyBuilder.BuildDisplaySnapshot(SampleRewardItemId);
-            Check("lottery buffer length", lotteryBuffer.Length == 204, ref failures);
-            Check("lottery buffer display item", BitConverter.ToInt32(lotteryBuffer, 12) == SampleRewardItemId, ref failures);
-            Check("lottery buffer marker start", lotteryBuffer[16] == 1, ref failures);
-            Check("lottery buffer marker end", lotteryBuffer[23] == 8, ref failures);
             var initSnapshot = new SelectCharacterDataSnapshot();
-            initSnapshot.InitializationSnapshot.LotteryBufferBlob = lotteryBuffer;
-            new LotteryBufferBodyBuilder().TryBuild(initSnapshot, 0, out var sanitizedLotteryBuffer);
-            Check("legacy lottery buffer init snapshot is cleared", sanitizedLotteryBuffer.All(x => x == 0), ref failures);
+            new LotteryBufferBodyBuilder().TryBuild(initSnapshot, 0, out var lotteryBuffer);
+            Check("lottery buffer keeps upstream empty state",
+                lotteryBuffer.Length == 204 && lotteryBuffer.All(x => x == 0), ref failures);
 
             var overflowAck = OverflowInfoAckBuilder.Build(new byte[] { 0x01, 0x1B, 0x00 });
             Check("overflow ack echoes lottery command", overflowAck.Length == 3 && overflowAck[0] == 1 && overflowAck[1] == 0x1B && overflowAck[2] == 0, ref failures);
