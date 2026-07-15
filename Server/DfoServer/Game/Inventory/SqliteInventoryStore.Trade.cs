@@ -122,9 +122,12 @@ namespace DfoServer.Game.Inventory
                 && metadata.StackableType != null
                 && metadata.StackableType.IndexOf("[waste]", System.StringComparison.OrdinalIgnoreCase) >= 0;
 
+            var placement = ItemIntake.ResolvePlacement(itemTemplateId, metadata);
+
             if (metadata.IsStackable)
             {
-                if (isConsumable)
+                // 拾取路径特有: [waste] 消耗品优先并入快捷栏(3-8)。
+                if (isConsumable && !placement.IsPet)
                 {
                     var existingQuick = _db.FindItemByTemplateIdInRange(connection, transaction, characterId, InventoryListType.Main, itemTemplateId, QuickSlotStart, QuickSlotEnd);
                     if (existingQuick != null && (metadata.StackLimit <= 0 || existingQuick.StackCount + stackCount <= metadata.StackLimit))
@@ -135,19 +138,18 @@ namespace DfoServer.Game.Inventory
                     }
                 }
 
-                var existing = _db.FindItemByTemplateId(connection, transaction, characterId, InventoryListType.Main, itemTemplateId);
-                if (existing != null && (metadata.StackLimit <= 0 || existing.StackCount + stackCount <= metadata.StackLimit))
+                if (ItemIntake.TryMergeStack(
+                        _db, connection, transaction, characterId, placement,
+                        itemTemplateId, stackCount, metadata.StackLimit,
+                        out var mergedSlot, out _))
                 {
-                    _db.UpdateStackCount(connection, transaction, existing.ItemUid, existing.StackCount + stackCount);
-                    assignedSlot = existing.SlotIndex;
+                    assignedSlot = mergedSlot;
                     return true;
                 }
             }
 
-            int slotStart, slotEnd;
-            metadata.GetSlotRange(out slotStart, out slotEnd);
-
-            if (isConsumable)
+            // 拾取路径特有: [waste] 消耗品新行优先落快捷栏。
+            if (isConsumable && !placement.IsPet)
             {
                 var quickSlot = _db.FindEmptySlot(connection, transaction, characterId, InventoryListType.Main, QuickSlotStart, QuickSlotEnd);
                 if (quickSlot >= 0)
@@ -161,20 +163,10 @@ namespace DfoServer.Game.Inventory
                 }
             }
 
-            var targetSlot = _db.FindEmptySlot(connection, transaction, characterId, InventoryListType.Main, slotStart, slotEnd);
-            if (targetSlot < 0)
-                return false;
-
-            var qualitySeed = InventoryDbPrimitives.GenerateInstanceValue(itemTemplateId, targetSlot);
-            var dbStackCount = metadata.IsStackable ? stackCount : qualitySeed;
-            var dbInstanceValue = metadata.IsStackable ? stackCount : qualitySeed;
-            var sealFlag = metadata.IsSealed ? (byte)1 : (byte)0;
-            _db.InsertCharacterItem(
-                connection, transaction, characterId, InventoryListType.Main, (short)targetSlot,
-                itemTemplateId, metadata.ItemKind, dbStackCount, dbInstanceValue,
-                metadata.Durability, sealFlag, 0, 0, metadata.IsStackable ? 0 : -1, 0, "{}");
-            assignedSlot = (short)targetSlot;
-            return true;
+            return ItemIntake.TryInsertNewRow(
+                _db, connection, transaction, characterId, placement,
+                itemTemplateId, metadata, stackCount,
+                out assignedSlot, out _, out _);
         }
 
         public bool TrySellItem(int characterId, int accountId, InventoryListType listType, short slotIndex, short sellCount, out InventoryMutationResult result)
