@@ -851,6 +851,10 @@ namespace DfoServer.SelfTests
             var errorAckBody = SelectablePackageAckBuilder.BuildError();
             Check($"0x00A0 error ACK padded length={errorAckBody.Length}", errorAckBody.Length == 22);
             Check("0x00A0 error ACK safe category sentinel", errorAckBody.Length >= 10 && BitConverter.ToInt32(errorAckBody, 2) == -1 && BitConverter.ToInt32(errorAckBody, 6) == -1);
+            Check("0x00A0 parsed selectable fallback keeps padded error ACK",
+                BytesEqual(InventoryHandler.BuildOpenSelectablePackageFallbackErrorBody(true), errorAckBody));
+            Check("0x00A0 booster-style fallback uses compact command error",
+                BytesEqual(InventoryHandler.BuildOpenSelectablePackageFallbackErrorBody(false), new byte[] { 0x00, 0x04 }));
 
             PrintSummary();
             return _fail == 0 ? 0 : 1;
@@ -1973,6 +1977,18 @@ WHERE character_id=@characterId AND list_type=0 AND slot_index=@slotIndex;";
                 offset += rowSize;
             }
 
+            return true;
+        }
+
+        private static bool BytesEqual(byte[] left, byte[] right)
+        {
+            if (ReferenceEquals(left, right))
+                return true;
+            if (left == null || right == null || left.Length != right.Length)
+                return false;
+            for (var index = 0; index < left.Length; index++)
+                if (left[index] != right[index])
+                    return false;
             return true;
         }
 

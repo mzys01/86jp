@@ -2,6 +2,7 @@ using DfoServer.Game.Accounts;
 using DfoServer.Game.CharacterData;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Dungeon;
+using DfoServer.Game.Inventory;
 using DfoServer.Game.Quests;
 using DfoServer.GameWorld;
 using DfoServer.Infrastructure;
@@ -48,6 +49,18 @@ namespace DfoServer.Network.Handlers.Dungeon
                 else
                 {
                     var record = _svc.CharacterRepository.GetById(cid);
+                    try
+                    {
+                        SqliteInventoryStore.RepairEquippedPetCreatureExtraRaw(
+                            ServerPaths.DatabasePath,
+                            ServerPaths.SchemaFilePath,
+                            cid);
+                    }
+                    catch (Exception ex)
+                    {
+                        FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] ENTER_SELECT_DUNGEON pet enchant raw repair skipped cid={cid}: {ex.Message}");
+                    }
+
                     var addition = _svc.Subtype1Repository.HasData(cid) ? _svc.Subtype1Repository.Load(cid) : null;
                     if (record != null && addition != null)
                     {

@@ -104,9 +104,10 @@ namespace DfoServer.Network.Handlers
                     await _refresh.SendUpdateItemList(session, InventoryListType.Equipment, result.EquipmentRefreshSlots);
             }
 
+            // In dungeon, weapon/title moves rely on the normal move ACK only; NOTI2 appearance rebuilds the pet actor.
             if (!result.PetCreatureStateChanged
                 && !result.PetItemStateChanged
-                && ShouldSendSubtype0AppearanceUpdate(result))
+                && ShouldSendSubtype0AppearanceUpdate(session, result))
             {
                 // 先重载宠物字段再发 subtype0: 宠物ID不变时客户端只做原地更新,
                 // 不会重建宠物或重置技能冷却, 因此副本内也可以安全发送。
@@ -115,11 +116,19 @@ namespace DfoServer.Network.Handlers
             }
         }
 
-        private static bool ShouldSendSubtype0AppearanceUpdate(InventoryMoveResult result)
+        private static bool ShouldSendSubtype0AppearanceUpdate(EnhancedClientSession session, InventoryMoveResult result)
         {
             return result != null
                 && result.Mutated
+                && !ShouldUseDungeonEquipmentOnlyRefresh(session, result.AffectedEquipmentSlot)
                 && IsAppearanceEquipmentSlot(result.AffectedEquipmentSlot);
+        }
+
+        private static bool ShouldUseDungeonEquipmentOnlyRefresh(EnhancedClientSession session, short slot)
+        {
+            return session?.Player?.CurrentRun != null
+                && (slot == (short)EquipmentType.Weapon
+                    || slot == (short)EquipmentType.TitleName);
         }
 
         private static bool IsAppearanceEquipmentSlot(short slot)
