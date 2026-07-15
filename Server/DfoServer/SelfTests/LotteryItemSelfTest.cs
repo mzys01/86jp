@@ -8,6 +8,7 @@ using DfoServer.Network.Handlers;
 using DfoServer.Network.Parsers.Inventory;
 using Microsoft.Data.Sqlite;
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 
@@ -25,12 +26,20 @@ namespace DfoServer.SelfTests
         private const short RewardSlot = 120;
         private const int SampleBoosterItemId = 10007997;
         private const int SampleRewardItemId = 400360011;
+        private const int DoubleRewardBoosterItemId = 10007477;
+        private const int DoubleRewardMagicBoxItemId = 10007368;
+        private const int DoubleRewardMagicHammerItemId = 10007367;
+        private const int DoubleRewardPerItemCount = 100;
         private const int SampleUpgradableLegacyItemId = 10014964;
         private const int SampleHeroLotteryItemId = 8095;
         private const int SampleAncientHeroLotteryItemId = 8213;
         private const int OrdinaryStackableItemId = 2600014;
         private const int HeroLotteryGoldCost = 40000000;
         private const int AncientHeroLotteryGoldCost = 5000000;
+        private const int CannedAvatarItemId = 39075;
+        private const int NormalRareEquipmentItemId = 100150193;
+        private const int LegacyEquipmentItemId = 100150516;
+        private const int EpicEquipmentItemId = 101000004;
 
         public static int Run()
         {
@@ -79,21 +88,14 @@ namespace DfoServer.SelfTests
             Check("phase start without preview item", BitConverter.ToInt32(phaseStartWithoutPreview, 5) == 0, ref failures);
             Check("phase start without preview mirrored item", BitConverter.ToInt32(phaseStartWithoutPreview, 9) == 0, ref failures);
             Check("lottery result keeps gold refresh packet",
-                InventoryHandler.ShouldSendBoosterGoldRefresh(0x001B, new BoosterUseResult
+                InventoryHandler.ShouldSendLotteryGoldRefresh(new BoosterUseResult
                 {
                     ConsumedGold = HeroLotteryGoldCost,
                     UpdatedGold = 123456,
                 }),
                 ref failures);
-            Check("non-lottery gold-cost result keeps gold refresh helper available",
-                InventoryHandler.ShouldSendBoosterGoldRefresh(0x0218, new BoosterUseResult
-                {
-                    ConsumedGold = 1,
-                    UpdatedGold = 123456,
-                }),
-                ref failures);
             Check("zero-cost result suppresses gold refresh packet",
-                !InventoryHandler.ShouldSendBoosterGoldRefresh(0x0218, new BoosterUseResult
+                !InventoryHandler.ShouldSendLotteryGoldRefresh(new BoosterUseResult
                 {
                     ConsumedGold = 0,
                     UpdatedGold = 123456,
@@ -219,10 +221,87 @@ namespace DfoServer.SelfTests
             Check("regular multi reward keeps native single result",
                 !InventoryHandler.ShouldUseLotteryDoubleRewardResultFlow(false, duplicateEquipmentRewards),
                 ref failures);
+            Check("double reward native result carries x2 marker",
+                InventoryHandler.ResolveLotteryNativeDisplayValue(1, true) == 2,
+                ref failures);
+            Check("regular reward native result preserves display value",
+                InventoryHandler.ResolveLotteryNativeDisplayValue(1, false) == 1,
+                ref failures);
+            Check("empty double reward native result stays empty",
+                InventoryHandler.ResolveLotteryNativeDisplayValue(0, true) == 0,
+                ref failures);
+            var avatarReward = new BoosterRewardResult
+            {
+                ListType = InventoryListType.Avatar,
+                SlotIndex = 3,
+                ItemTemplateId = CannedAvatarItemId,
+                GrantedCount = 1,
+            };
+            var avatarDisplayRewards = InventoryHandler.ResolveLotteryDisplayRewards(new[] { avatarReward });
+            var avatarSnapshot = new CharacterItemListSnapshot();
+            avatarSnapshot.AvatarItems.Add(new AvatarInventoryItem
+            {
+                SlotIndex = avatarReward.SlotIndex,
+                AvatarItemId = avatarReward.ItemTemplateId,
+                UnknownFixed30 = 0x1E00,
+                UnknownFixed4 = 4,
+            });
+            var avatarResultItem = InventoryHandler.ResolveLotteryAvatarResultItem(avatarSnapshot, avatarReward);
+            var avatarNativeResult = LotteryItemAckBuilder.BuildAvatarItemResult(
+                LotterySlot,
+                avatarResultItem);
+            Check("lottery display includes avatar reward",
+                avatarDisplayRewards.Count == 1
+                && avatarDisplayRewards[0].ListType == InventoryListType.Avatar,
+                ref failures);
+            Check("avatar reward cannot be resolved as a common result item",
+                InventoryHandler.ResolveLotteryResultItem(avatarSnapshot, avatarReward) == null,
+                ref failures);
+            Check("avatar lottery result remains a success packet",
+                avatarNativeResult.Length == 129
+                && avatarNativeResult[0] == 1
+                && BitConverter.ToInt16(avatarNativeResult, 3) == avatarReward.SlotIndex
+                && BitConverter.ToInt32(avatarNativeResult, 5) == CannedAvatarItemId,
+                ref failures);
+            Check("avatar lottery result carries avatar entry fixed fields",
+                BitConverter.ToInt32(avatarNativeResult, 86) == 0x1E00
+                && BitConverter.ToUInt16(avatarNativeResult, 120) == 4,
+                ref failures);
+            Check("ordinary rare equipment is not lottery-announcement eligible",
+                !InventoryHandler.IsLotteryItemNoticeEligible(ItemMetadataResolver.Resolve(NormalRareEquipmentItemId)),
+                ref failures);
+            Check("PVF legacy equipment is lottery-announcement eligible",
+                InventoryHandler.IsLotteryItemNoticeEligible(ItemMetadataResolver.Resolve(LegacyEquipmentItemId)),
+                ref failures);
+            Check("epic equipment is lottery-announcement eligible",
+                InventoryHandler.IsLotteryItemNoticeEligible(ItemMetadataResolver.Resolve(EpicEquipmentItemId)),
+                ref failures);
+            Check("regular single reward does not refresh display slot after native result",
+                InventoryHandler.ResolveLotteryRegularPostResultRefreshRewards(
+                    new[] { duplicateEquipmentRewards[0] }).Count == 0,
+                ref failures);
             var doubleExtraRefreshRewards = InventoryHandler.ResolveLotteryDoubleRewardExtraRefreshRewards(duplicateEquipmentRewards);
-            Check("double reward refresh delays only extra slots",
+            Check("double reward refreshes only extra slots",
                 doubleExtraRefreshRewards.Count == 1
                 && doubleExtraRefreshRewards[0].SlotIndex == RewardSlot + 1,
+                ref failures);
+            var avatarDisplayedMainRefreshRewards =
+                InventoryHandler.ResolveLotteryPostResultMainRefreshRewards(
+                    avatarReward,
+                    new[] { duplicateEquipmentRewards[0] },
+                    useDoubleRewardResultFlow: true);
+            Check("avatar display refreshes every undisplayed main reward",
+                avatarDisplayedMainRefreshRewards.Count == 1
+                && avatarDisplayedMainRefreshRewards[0].SlotIndex == RewardSlot,
+                ref failures);
+            var mainDisplayedDoubleRefreshRewards =
+                InventoryHandler.ResolveLotteryPostResultMainRefreshRewards(
+                    duplicateEquipmentRewards[0],
+                    duplicateEquipmentRewards,
+                    useDoubleRewardResultFlow: true);
+            Check("main display keeps double refresh limited to extra slots",
+                mainDisplayedDoubleRefreshRewards.Count == 1
+                && mainDisplayedDoubleRefreshRewards[0].SlotIndex == RewardSlot + 1,
                 ref failures);
             var distinctEquipmentRewards = new[]
             {
@@ -242,7 +321,12 @@ namespace DfoServer.SelfTests
             Check("distinct equipment refresh skips display slot",
                 distinctRefreshRewards.Count == 1 && distinctRefreshRewards[0].SlotIndex == RewardSlot + 1,
                 ref failures);
-
+            var regularMultiRefreshRewards = InventoryHandler.ResolveLotteryRegularPostResultRefreshRewards(
+                distinctEquipmentRewards);
+            Check("regular multi reward keeps existing additional-slot refresh policy",
+                regularMultiRefreshRewards.Count == 1
+                && regularMultiRefreshRewards[0].SlotIndex == RewardSlot + 1,
+                ref failures);
             var notice = LotteryItemNoticeBuilder.Build(0x03EA, SampleRewardItemId, 7);
             Check("lottery notice length", notice.Length == 9, ref failures);
             Check("lottery notice kind", notice[0] == 2 && notice[1] == 1, ref failures);
@@ -262,6 +346,12 @@ namespace DfoServer.SelfTests
 
             var overflowAck = OverflowInfoAckBuilder.Build(new byte[] { 0x01, 0x1B, 0x00 });
             Check("overflow ack echoes lottery command", overflowAck.Length == 3 && overflowAck[0] == 1 && overflowAck[1] == 0x1B && overflowAck[2] == 0, ref failures);
+            Check("overflow confirm accepts only captured lottery body",
+                InventoryHandler.IsLotteryOverflowConfirm(new byte[] { 0x01, 0x1B, 0x00 }), ref failures);
+            Check("overflow confirm rejects another command",
+                !InventoryHandler.IsLotteryOverflowConfirm(new byte[] { 0x01, 0x1C, 0x00 }), ref failures);
+            Check("overflow confirm rejects prefixed non-lottery payload",
+                !InventoryHandler.IsLotteryOverflowConfirm(new byte[] { 0x01, 0x1B, 0x00, 0x00 }), ref failures);
 
             var clearedSlot = ItemListUpdateBuilder.BuildCommonUpdates(new[] { ItemListUpdateBuilder.CreateClearedCommonSlot(LotterySlot) });
             Check("cleared source update uses empty slot sentinel", BitConverter.ToInt32(clearedSlot, 5) == -1, ref failures);
@@ -327,6 +417,12 @@ namespace DfoServer.SelfTests
                     ListType = InventoryListType.Main,
                     ItemTemplateId = SampleUpgradableLegacyItemId,
                 }), ref failures);
+            Check("NPC buy non-lottery booster summary is not hidden",
+                !InventoryHandler.ShouldHideNpcBuyItemSummary(SampleBoosterItemId, new InventoryMutationResult
+                {
+                    ListType = InventoryListType.Main,
+                    ItemTemplateId = SampleBoosterItemId,
+                }), ref failures);
             var hiddenPackageBuyAck = BuyItemAckBuilder.Build(new InventoryMutationResult
             {
                 SlotIndex = LotterySlot,
@@ -357,6 +453,31 @@ namespace DfoServer.SelfTests
             var dailyReset = new DailyResetService(tempDb, ServerPaths.SchemaFilePath);
             var store = new SqliteInventoryStore(tempDb, ServerPaths.SchemaFilePath, dailyReset);
             Seed(tempDb);
+
+            List<BoosterRewardResult> cannedAvatarResults = null;
+            using (var connection = new SqliteConnection(SqliteDatabaseBootstrap.BuildConnectionString(tempDb)))
+            {
+                connection.Open();
+                using (var transaction = connection.BeginTransaction())
+                {
+                    Check("canned avatar reward inserts through booster inventory routing",
+                        store._db.TryAddBoosterRewardItems(
+                            connection,
+                            transaction,
+                            CharacterId,
+                            AccountId,
+                            CannedAvatarItemId,
+                            1,
+                            out cannedAvatarResults),
+                        ref failures);
+                    transaction.Commit();
+                }
+            }
+            Check("canned avatar reward is stored in avatar inventory",
+                cannedAvatarResults != null
+                && cannedAvatarResults.Count == 1
+                && cannedAvatarResults[0].ListType == InventoryListType.Avatar,
+                ref failures);
 
             InventoryMutationResult ordinaryBuyResult = null;
             Check("ordinary stackable NPC buy succeeds", store.TryBuyItem(CharacterId, AccountId, OrdinaryStackableItemId, 2, out ordinaryBuyResult), ref failures);
@@ -459,11 +580,14 @@ namespace DfoServer.SelfTests
             if (doubleResult != null)
             {
                 Check("double source consumes one pot", doubleResult.SourceRemainingStackCount == 1, ref failures);
-                var grantedCount = doubleResult.Rewards.Where(x => x.ItemTemplateId == SampleRewardItemId).Sum(x => Math.Max(1, x.GrantedCount));
-                Check("double reward grants two copies", grantedCount == 2, ref failures);
-
-                if (!ItemMetadataResolver.Resolve(SampleRewardItemId).IsStackable)
-                    Check("non-stackable double reward uses two inventory instances", doubleResult.Rewards.Count(x => x.ItemTemplateId == SampleRewardItemId) == 2, ref failures);
+                Check("double reward doubles magic boxes",
+                    doubleResult.Rewards.Where(x => x.ItemTemplateId == DoubleRewardMagicBoxItemId)
+                        .Sum(x => Math.Max(1, x.GrantedCount)) == DoubleRewardPerItemCount * 2,
+                    ref failures);
+                Check("double reward doubles magic hammers",
+                    doubleResult.Rewards.Where(x => x.ItemTemplateId == DoubleRewardMagicHammerItemId)
+                        .Sum(x => Math.Max(1, x.GrantedCount)) == DoubleRewardPerItemCount * 2,
+                    ref failures);
             }
 
             using (var conn = new SqliteConnection(SqliteDatabaseBootstrap.BuildConnectionString(tempDb)))
@@ -472,7 +596,7 @@ namespace DfoServer.SelfTests
                 Check("hero source stack decremented to one", LoadStackCount(conn, HeroLotterySlot, SampleHeroLotteryItemId) == 1, ref failures);
                 Check("ancient hero source consumed", LoadStackCount(conn, AncientHeroLotterySlot, SampleAncientHeroLotteryItemId) == -1, ref failures);
                 Check("hero lottery gold deducted", LoadStackCount(conn, 0, 0) == 0, ref failures);
-                Check("double source stack decremented to one", LoadStackCount(conn, DoubleLotterySlot, SampleBoosterItemId) == 1, ref failures);
+                Check("double source stack decremented to one", LoadStackCount(conn, DoubleLotterySlot, DoubleRewardBoosterItemId) == 1, ref failures);
                 using (var tx = conn.BeginTransaction())
                 {
                     Check("premium use count persisted in daily reset counter",
@@ -525,7 +649,10 @@ namespace DfoServer.SelfTests
             {
                 Check("normal fast lottery after cap consumes one source", cappedNormalResult.SourceRemainingStackCount == 0, ref failures);
                 Check("normal fast lottery after cap grants single reward",
-                    cappedNormalResult.Rewards.Where(x => x.ItemTemplateId == SampleRewardItemId).Sum(x => Math.Max(1, x.GrantedCount)) == 1,
+                    cappedNormalResult.Rewards.Where(x => x.ItemTemplateId == DoubleRewardMagicBoxItemId)
+                        .Sum(x => Math.Max(1, x.GrantedCount)) == DoubleRewardPerItemCount
+                    && cappedNormalResult.Rewards.Where(x => x.ItemTemplateId == DoubleRewardMagicHammerItemId)
+                        .Sum(x => Math.Max(1, x.GrantedCount)) == DoubleRewardPerItemCount,
                     ref failures);
             }
 
@@ -571,7 +698,7 @@ VALUES
      1, 1, 0, 0, 0, 0, 0, 0, '{}'),
     ('character', @characterId, @characterId, 0, @ordinaryStackableSlot, @ordinaryStackableItemId, 'stackable',
      5, 5, 0, 0, 0, 0, 0, 0, '{}'),
-    ('character', @characterId, @characterId, 0, @doubleLotterySlot, @lotteryItemId, 'stackable',
+    ('character', @characterId, @characterId, 0, @doubleLotterySlot, @doubleLotteryItemId, 'stackable',
      2, 2, 0, 0, 0, 0, 0, 0, '{}');";
                     command.Parameters.AddWithValue("@accountId", AccountId);
                     command.Parameters.AddWithValue("@characterId", CharacterId);
@@ -588,6 +715,7 @@ VALUES
                     command.Parameters.AddWithValue("@ancientHeroLotteryItemId", SampleAncientHeroLotteryItemId);
                     command.Parameters.AddWithValue("@ordinaryStackableItemId", OrdinaryStackableItemId);
                     command.Parameters.AddWithValue("@lotteryItemId", SampleBoosterItemId);
+                    command.Parameters.AddWithValue("@doubleLotteryItemId", DoubleRewardBoosterItemId);
                     command.Parameters.AddWithValue("@initialGold", HeroLotteryGoldCost - 1);
                     command.ExecuteNonQuery();
                 }

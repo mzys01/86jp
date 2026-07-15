@@ -122,22 +122,14 @@ namespace DfoServer.Network.Handlers
             if (result == null)
                 return items;
 
-            foreach (var reward in result.Rewards
-                .GroupBy(reward => new { reward.ListType, reward.ItemTemplateId })
-                .Select(group => new
-                {
-                    group.Key.ListType,
-                    group.Key.ItemTemplateId,
-                    SlotIndex = group.First().SlotIndex,
-                    DisplayCount = group.Sum(reward => reward.GrantedCount <= 0 ? 1 : reward.GrantedCount),
-                }))
+            foreach (var reward in result.Rewards)
             {
                 items.Add(new PackageGrantedItem
                 {
                     ListType = reward.ListType,
                     SlotIndex = reward.SlotIndex,
                     ItemTemplateId = reward.ItemTemplateId,
-                    DisplayCount = reward.DisplayCount,
+                    DisplayCount = reward.GrantedCount <= 0 ? 1 : reward.GrantedCount,
                     Durability = 0,
                 });
             }

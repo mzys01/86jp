@@ -608,7 +608,7 @@ namespace DfoServer.Network.Handlers
 
         internal static bool ShouldSendSourceAckForBoosterResponse(ushort responseType)
         {
-            return responseType != 0x001B && responseType != 0x00D0 && responseType != 0x03F3;
+            return responseType != 0x00D0 && responseType != 0x03F3;
         }
 
         internal static bool ShouldUseNativeMagicBoxBatchAck(BoosterUseResult result)

@@ -46,6 +46,18 @@ namespace DfoServer.Network.Builders
             return writer.ToArray();
         }
 
+        public static byte[] BuildAvatarItemResult(short sourceSlotIndex, AvatarInventoryItem rewardItem)
+        {
+            if (rewardItem == null || rewardItem.AvatarItemId <= 0)
+                return BuildError();
+
+            var writer = new GamePacketWriter();
+            writer.WriteByte(0x01);
+            writer.WriteInt16(sourceSlotIndex);
+            ItemListPacketBuilder.WriteAvatarEntry(writer, rewardItem);
+            return writer.ToArray();
+        }
+
         public static byte[] BuildError()
         {
             var writer = new GamePacketWriter();

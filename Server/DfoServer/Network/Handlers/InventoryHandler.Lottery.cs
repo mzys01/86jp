@@ -103,15 +103,11 @@ namespace DfoServer.Network.Handlers
         {
             FileLogger.Log($"[{ProtocolName}] OVERFLOW_INFO raw({body?.Length ?? 0}B): {(body != null ? BitConverter.ToString(body) : "null")}");
             if (!IsLotteryOverflowConfirm(body))
-            {
-                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x00D9, OverflowInfoAckBuilder.Build(body)));
                 return;
-            }
 
             if (!TryTakePendingLotteryOpen(session.SessionId, null, out var pending))
             {
-                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x00D9, OverflowInfoAckBuilder.Build(body)));
-                FileLogger.Log($"[{ProtocolName}] OVERFLOW_INFO: lottery confirm without pending phase0");
+                FileLogger.Log($"[{ProtocolName}] OVERFLOW_INFO: ignored lottery-shaped confirm without pending phase0");
                 return;
             }
 
@@ -150,52 +146,66 @@ namespace DfoServer.Network.Handlers
         private async Task SendLotteryItemOpenResult(EnhancedClientSession session, int characterId, int accountId, BoosterUseResult result, bool useDoubleReward)
         {
             var snapshot = _inventoryStore.LoadCharacterItemListSnapshot(characterId, accountId);
-            var mainRewards = result.Rewards
+            var displayRewards = ResolveLotteryDisplayRewards(result?.Rewards);
+            var mainRewards = displayRewards
                 .Where(x => x.ListType == InventoryListType.Main)
                 .ToList();
-            var displayReward = mainRewards.FirstOrDefault();
+            var displayReward = displayRewards.FirstOrDefault();
             var displayItem = ResolveLotteryResultItem(snapshot, displayReward);
-            var displayValue = ResolveLotteryDisplayValue(displayItem, displayReward, mainRewards);
-            var useDoubleRewardResultFlow = ShouldUseLotteryDoubleRewardResultFlow(useDoubleReward, mainRewards);
-            if (useDoubleRewardResultFlow)
-            {
-                displayValue = displayValue > 0 ? 1 : 0;
-            }
+            var displayValue = ResolveLotteryDisplayValue(displayItem, displayReward, displayRewards);
+            var useDoubleRewardResultFlow = ShouldUseLotteryDoubleRewardResultFlow(useDoubleReward, displayRewards);
+            displayValue = ResolveLotteryNativeDisplayValue(displayValue, useDoubleRewardResultFlow);
 
             await SendLotteryNativeResult(
                 session,
                 result,
+                snapshot,
+                displayReward,
                 displayItem,
                 displayValue);
 
             var refreshRewards = useDoubleRewardResultFlow
-                ? ResolveLotteryDoubleRewardExtraRefreshRewards(mainRewards)
-                : ResolveLotteryMainRefreshRewards(mainRewards);
-            if (useDoubleRewardResultFlow)
-                ScheduleDelayedAdditionalLotteryRewardUpdates(session, characterId, accountId, refreshRewards);
-            else
-                await SendAdditionalLotteryRewardUpdates(session, snapshot, refreshRewards);
+                ? ResolveLotteryPostResultMainRefreshRewards(displayReward, mainRewards, true)
+                : ResolveLotteryPostResultMainRefreshRewards(displayReward, mainRewards, false);
+            await SendLotteryRewardUpdates(session, snapshot, refreshRewards);
 
+            var firstNoticeItem = ResolveLotteryResultItem(snapshot, mainRewards.FirstOrDefault());
             if (useDoubleRewardResultFlow)
-                await BroadcastLotteryItemNotices(session, snapshot, mainRewards, displayItem, suppressDuplicateNotices: false);
+                await BroadcastLotteryItemNotices(session, snapshot, mainRewards, firstNoticeItem, suppressDuplicateNotices: false);
             else
-                await BroadcastLotteryItemNotices(session, snapshot, mainRewards, displayItem);
+                await BroadcastLotteryItemNotices(session, snapshot, mainRewards, firstNoticeItem);
             await SendAvatarOrPetUpdateListForBoosterRewards(session, result);
-            if (ShouldSendBoosterGoldRefresh(0x001B, result))
+            if (ShouldSendLotteryGoldRefresh(result))
                 await SendBoosterGoldRefresh(session, result);
         }
 
         private async Task SendLotteryNativeResult(
             EnhancedClientSession session,
             BoosterUseResult result,
+            CharacterItemListSnapshot snapshot,
+            BoosterRewardResult displayReward,
             CommonInventoryItem displayItem,
             int displayValue)
         {
-            var resultBody = LotteryItemAckBuilder.BuildCommonItemResult(ResolveLotteryResultSourceSlot(result), displayItem, displayValue);
+            byte[] resultBody;
+            if (displayReward?.ListType == InventoryListType.Avatar)
+            {
+                var avatarItem = ResolveLotteryAvatarResultItem(snapshot, displayReward);
+                resultBody = LotteryItemAckBuilder.BuildAvatarItemResult(
+                    ResolveLotteryResultSourceSlot(result),
+                    avatarItem);
+            }
+            else
+            {
+                resultBody = LotteryItemAckBuilder.BuildCommonItemResult(
+                    ResolveLotteryResultSourceSlot(result),
+                    displayItem,
+                    displayValue);
+            }
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x001B, resultBody));
         }
 
-        internal static bool ShouldSendBoosterGoldRefresh(ushort responseType, BoosterUseResult result)
+        internal static bool ShouldSendLotteryGoldRefresh(BoosterUseResult result)
         {
             return result != null && result.ConsumedGold > 0;
         }
@@ -214,9 +224,9 @@ namespace DfoServer.Network.Handlers
             return result != null ? result.SourceSlotIndex : (short)-1;
         }
 
-        private static CommonInventoryItem ResolveLotteryResultItem(CharacterItemListSnapshot snapshot, BoosterRewardResult reward)
+        internal static CommonInventoryItem ResolveLotteryResultItem(CharacterItemListSnapshot snapshot, BoosterRewardResult reward)
         {
-            if (reward == null || reward.ItemTemplateId <= 0)
+            if (reward == null || reward.ListType != InventoryListType.Main || reward.ItemTemplateId <= 0)
                 return null;
 
             var item = FindLotteryResultItem(snapshot, reward);
@@ -237,11 +247,45 @@ namespace DfoServer.Network.Handlers
 
         internal static bool ShouldUseLotteryDoubleRewardResultFlow(
             bool useDoubleReward,
-            IReadOnlyList<BoosterRewardResult> mainRewards)
+            IReadOnlyList<BoosterRewardResult> displayRewards)
         {
             return useDoubleReward
-                && mainRewards != null
-                && mainRewards.Count > 1;
+                && displayRewards != null
+                && displayRewards.Count > 1;
+        }
+
+        internal static AvatarInventoryItem ResolveLotteryAvatarResultItem(
+            CharacterItemListSnapshot snapshot,
+            BoosterRewardResult reward)
+        {
+            if (reward == null || reward.ListType != InventoryListType.Avatar || reward.ItemTemplateId <= 0)
+                return null;
+
+            return snapshot?.AvatarItems?.FirstOrDefault(item => item != null
+                && item.SlotIndex == reward.SlotIndex
+                && item.AvatarItemId == reward.ItemTemplateId);
+        }
+
+        internal static IReadOnlyList<BoosterRewardResult> ResolveLotteryDisplayRewards(
+            IReadOnlyList<BoosterRewardResult> rewards)
+        {
+            if (rewards == null || rewards.Count == 0)
+                return Array.Empty<BoosterRewardResult>();
+
+            return rewards
+                .Where(reward => reward != null
+                    && reward.ItemTemplateId > 0
+                    && (reward.ListType == InventoryListType.Main
+                        || reward.ListType == InventoryListType.Avatar))
+                .ToList();
+        }
+
+        internal static int ResolveLotteryNativeDisplayValue(int resolvedDisplayValue, bool useDoubleRewardResultFlow)
+        {
+            if (!useDoubleRewardResultFlow)
+                return resolvedDisplayValue;
+
+            return resolvedDisplayValue > 0 ? 2 : 0;
         }
 
         internal static IReadOnlyList<BoosterRewardResult> ResolveLotteryDoubleRewardExtraRefreshRewards(
@@ -251,6 +295,31 @@ namespace DfoServer.Network.Handlers
                 return Array.Empty<BoosterRewardResult>();
 
             return mainRewards.Skip(1).ToList();
+        }
+
+        internal static IReadOnlyList<BoosterRewardResult> ResolveLotteryRegularPostResultRefreshRewards(
+            IReadOnlyList<BoosterRewardResult> mainRewards)
+        {
+            if (mainRewards == null || mainRewards.Count <= 1)
+                return Array.Empty<BoosterRewardResult>();
+
+            return ResolveLotteryMainRefreshRewards(mainRewards);
+        }
+
+        internal static IReadOnlyList<BoosterRewardResult> ResolveLotteryPostResultMainRefreshRewards(
+            BoosterRewardResult displayReward,
+            IReadOnlyList<BoosterRewardResult> mainRewards,
+            bool useDoubleRewardResultFlow)
+        {
+            if (mainRewards == null || mainRewards.Count == 0)
+                return Array.Empty<BoosterRewardResult>();
+
+            if (displayReward == null || displayReward.ListType != InventoryListType.Main)
+                return mainRewards.ToList();
+
+            return useDoubleRewardResultFlow
+                ? ResolveLotteryDoubleRewardExtraRefreshRewards(mainRewards)
+                : ResolveLotteryRegularPostResultRefreshRewards(mainRewards);
         }
 
         internal static int ResolveLotteryDisplayValue(
@@ -296,16 +365,16 @@ namespace DfoServer.Network.Handlers
                 x.SlotIndex == reward.SlotIndex && x.ItemTemplateId == reward.ItemTemplateId);
         }
 
-        private async Task SendAdditionalLotteryRewardUpdates(
+        private async Task SendLotteryRewardUpdates(
             EnhancedClientSession session,
             CharacterItemListSnapshot snapshot,
-            IReadOnlyList<BoosterRewardResult> additionalMainRewards)
+            IReadOnlyList<BoosterRewardResult> mainRewardsToRefresh)
         {
-            if (additionalMainRewards == null || additionalMainRewards.Count == 0)
+            if (mainRewardsToRefresh == null || mainRewardsToRefresh.Count == 0)
                 return;
 
             var updates = new List<CommonInventoryItem>();
-            foreach (var reward in additionalMainRewards)
+            foreach (var reward in mainRewardsToRefresh)
             {
                 var item = FindLotteryResultItem(snapshot, reward);
                 if (item != null)
@@ -317,28 +386,7 @@ namespace DfoServer.Network.Handlers
 
             var body = ItemListUpdateBuilder.BuildCommonUpdates(updates);
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000E, body));
-            FileLogger.Log($"[{ProtocolName}] USE_LOTTERY_ITEM: refreshed additional rewards {string.Join(",", updates.Select(x => $"0x{x.ItemTemplateId:X8}@{x.SlotIndex}"))}");
-        }
-
-        private void ScheduleDelayedAdditionalLotteryRewardUpdates(
-            EnhancedClientSession session,
-            int characterId,
-            int accountId,
-            IReadOnlyList<BoosterRewardResult> additionalMainRewards)
-        {
-            _ = Task.Run(async () =>
-            {
-                try
-                {
-                    await Task.Delay(800);
-                    var snapshot = _inventoryStore.LoadCharacterItemListSnapshot(characterId, accountId);
-                    await SendAdditionalLotteryRewardUpdates(session, snapshot, additionalMainRewards);
-                }
-                catch (Exception ex)
-                {
-                    FileLogger.Log($"[{ProtocolName}] USE_LOTTERY_ITEM: delayed additional reward refresh failed: {ex.Message}");
-                }
-            });
+            FileLogger.Log($"[{ProtocolName}] USE_LOTTERY_ITEM: refreshed reward slots {string.Join(",", updates.Select(x => $"0x{x.ItemTemplateId:X8}@{x.SlotIndex}"))}");
         }
 
         private async Task BroadcastLotteryItemNotices(
@@ -411,7 +459,7 @@ namespace DfoServer.Network.Handlers
                 return;
 
             var metadata = ItemMetadataResolver.Resolve(displayItem.ItemTemplateId);
-            if (metadata.IsStackable)
+            if (!IsLotteryItemNoticeEligible(metadata))
                 return;
 
             try
@@ -429,6 +477,15 @@ namespace DfoServer.Network.Handlers
             {
                 FileLogger.Log($"[{ProtocolName}] USE_LOTTERY_ITEM: notice broadcast failed: {ex.Message}");
             }
+        }
+
+        internal static bool IsLotteryItemNoticeEligible(ItemMetadata metadata)
+        {
+            if (metadata == null || metadata.IsStackable)
+                return false;
+
+            return metadata.Rarity >= 3
+                || string.Equals(metadata.ItemCategory, "legacy", StringComparison.OrdinalIgnoreCase);
         }
 
         private bool CanOpenLotteryItem(EnhancedClientSession session, short slotIndex, int sourceItemTemplateId)
@@ -484,10 +541,10 @@ namespace DfoServer.Network.Handlers
             }
         }
 
-        private static bool IsLotteryOverflowConfirm(byte[] body)
+        internal static bool IsLotteryOverflowConfirm(byte[] body)
         {
             return body != null
-                && body.Length >= 3
+                && body.Length == 3
                 && body[0] == 0x01
                 && body[1] == 0x1B
                 && body[2] == 0x00;

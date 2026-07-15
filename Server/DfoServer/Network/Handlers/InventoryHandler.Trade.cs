@@ -117,7 +117,8 @@ namespace DfoServer.Network.Handlers
                 return false;
 
             var stackableType = InventoryPackageStore.NormalizeStackableType(stackable.StackableType);
-            return InventoryPackageStore.IsSupportedPackageType(stackableType);
+            return stackableType.Equals("[upgradable legacy]", StringComparison.OrdinalIgnoreCase)
+                || stackableType.Equals("[random upgradable legacy]", StringComparison.OrdinalIgnoreCase);
         }
 
         private async Task SendPurchasedMainItemRefresh(EnhancedClientSession session, int characterId, int accountId, InventoryMutationResult result)
