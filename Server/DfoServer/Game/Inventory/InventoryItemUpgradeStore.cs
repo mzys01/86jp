@@ -48,8 +48,8 @@ namespace DfoServer.Game.Inventory
                 return false;
             }
 
-            var targetExtra = ItemExtraView.Parse(target.ExtraJson);
-            var targetItem = BuildUpgradeTargetItem(target, targetExtra);
+            var targetView = InventoryItemView.ForCommon(target);
+            var targetItem = BuildUpgradeTargetItem(targetView);
 
             var targetMetadata = ItemMetadataResolver.Resolve(target.ItemTemplateId);
             if (targetMetadata == null
@@ -209,9 +209,10 @@ namespace DfoServer.Game.Inventory
                 return false;
             }
 
+            ItemUpgradeSlotCount protectTicketUpdate = null;
             if (protectedByTicket)
             {
-                if (!ConsumeMaterial(connection, transaction, characterId, accountId, protectTicket.Item.SlotIndex, protectTicket.Item, protectTicket.Config.Cost, out _))
+                if (!ConsumeMaterial(connection, transaction, characterId, accountId, protectTicket.Item.SlotIndex, protectTicket.Item, protectTicket.Config.Cost, out protectTicketUpdate))
                 {
                     LogUpgradeReject("扣除保护券失败", ItemUpgradeResult.ErrorInvalidMaterial, command, context, row, protectTicket.Item);
                     result = ItemUpgradeResult.Error(command, ItemUpgradeResult.ErrorInvalidMaterial);
@@ -235,8 +236,7 @@ namespace DfoServer.Game.Inventory
             }
             else
             {
-                var updatedExtra = BuildUpgradeExtraView(targetExtra, newLevel);
-                target.ExtraJson = updatedExtra.Serialize();
+                targetView.Upgrade = newLevel;
                 _db.UpdateItemExtraJson(connection, transaction, target.ItemUid, target.ExtraJson);
             }
 
@@ -285,6 +285,14 @@ namespace DfoServer.Game.Inventory
                     : ItemUpgradeTableProvider.IsNoticeLevel(tableKind, oldLevel),
             };
 
+            AddRefreshSlot(upgradeResult.MainRefreshSlots, target.SlotIndex);
+            if (materialUpdate != null)
+                AddRefreshSlot(upgradeResult.MainRefreshSlots, materialUpdate.SlotIndex);
+            if (protectTicketUpdate != null)
+                AddRefreshSlot(upgradeResult.MainRefreshSlots, protectTicketUpdate.SlotIndex);
+            if (destroyRewardUpdate != null)
+                AddRefreshSlot(upgradeResult.MainRefreshSlots, destroyRewardUpdate.SlotIndex);
+
             if (destroyRewardUpdate != null)
             {
                 upgradeResult.DestroyRewardItems.Add(new ItemUpgradeRewardItem
@@ -297,6 +305,14 @@ namespace DfoServer.Game.Inventory
 
             result = upgradeResult;
             return true;
+        }
+
+        private static void AddRefreshSlot(ICollection<short> slots, short slotIndex)
+        {
+            if (slots == null || slotIndex < 0 || slots.Contains(slotIndex))
+                return;
+
+            slots.Add(slotIndex);
         }
 
         private static void LogUpgradeContext(
@@ -1063,27 +1079,20 @@ namespace DfoServer.Game.Inventory
             return oldLevel;
         }
 
-        private static InvenItem BuildUpgradeTargetItem(SqliteInventoryStore.ItemRecord record, ItemExtraView extra)
+        private static InvenItem BuildUpgradeTargetItem(InventoryItemView view)
         {
             return new InvenItem
             {
-                Slot = (byte)Math.Max(0, Math.Min(255, (int)record.SlotIndex)),
-                ItemId = record.ItemTemplateId,
-                Value = unchecked((uint)record.StackCount),
-                Attr = extra.Equipment.Upgrade,
-                Durability = record.Durability,
+                Slot = (byte)Math.Max(0, Math.Min(255, (int)view.Entry84.SlotIndex)),
+                ItemId = view.Entry84.ItemTemplateId,
+                Value = unchecked((uint)view.Entry84.Value),
+                Attr = view.Upgrade,
+                Durability = view.Durability,
                 EnchantIndex = 0,
-                EnchantUpgradeCount = extra.Equipment.EnchantUpgradeCount,
-                AmplifyType = extra.Equipment.AmplifyType,
-                AmplifyValue = extra.Equipment.AmplifyValue,
+                EnchantUpgradeCount = view.EnchantUpgradeCount,
+                AmplifyType = view.AmplifyType,
+                AmplifyValue = view.AmplifyValue,
             };
-        }
-
-        private static ItemExtraView BuildUpgradeExtraView(ItemExtraView original, byte newLevel)
-        {
-            var builder = ItemExtraViewBuilder.FromView(original);
-            builder.Equipment.Upgrade = newLevel;
-            return builder.Build();
         }
 
         private static PvfLib.StackableItemFile LoadMaterialStackable(SqliteInventoryStore.ItemRecord material)

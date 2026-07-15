@@ -141,7 +141,10 @@ namespace DfoServer.SelfTests
                 "{}",
                 PetEnchantCardItemId,
                 PetEnchantUpgradeCount);
-            var petEnchantTail = ItemExtraView.Parse(petEnchantExtraJson).Pet.TailData0A;
+            var petEnchantTail = InventoryItemView.ForPet(new SqliteInventoryStore.ItemRecord
+            {
+                ExtraJson = petEnchantExtraJson,
+            }).PetTailData0A;
             Check("pet enchant extra writes pet tail field",
                 petEnchantTail.Length > 8
                 && BitConverter.ToInt32(petEnchantTail, 4) == PetEnchantCardItemId

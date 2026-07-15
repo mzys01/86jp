@@ -13,7 +13,8 @@ namespace DfoServer.Game.TitleBook
         {
             if (record == null) throw new ArgumentNullException(nameof(record));
 
-            var extra = ItemExtraView.Parse(record.ExtraJson);
+            var view = InventoryItemView.ForCommon(record);
+            var entry = view.Entry84;
 
             return new TitleBookInventoryItem
             {
@@ -22,17 +23,17 @@ namespace DfoServer.Game.TitleBook
                 Slot = unchecked((ushort)record.SlotIndex),
                 ItemId = record.ItemTemplateId,
                 Value = record.StackCount,
-                Attr = extra.Equipment.ExtData0,
+                Attr = entry.Attr,
                 Durability = record.Durability,
                 SealFlag = record.SealFlag,
-                EnchantIndex = extra.Equipment.EnchantCardId,
-                EnchantUpgradeCount = extra.Equipment.EnchantUpgradeCount,
-                AmplifyType = extra.Equipment.AmplifyType,
-                AmplifyValue = extra.Equipment.AmplifyValue,
+                EnchantIndex = entry.EnchantCardId,
+                EnchantUpgradeCount = entry.EnchantUpgradeCount,
+                AmplifyType = entry.AmplifyType,
+                AmplifyValue = entry.AmplifyValue,
                 Marker16 = record.Marker16,
-                Chronicle = DecodeChronicle(extra.Raw84.MiddleData1A),
+                Chronicle = DecodeChronicle(entry.MiddleData1A),
                 ExpireTime = record.ExpireTime,
-                TailData = Normalize(extra.Raw84.TailData2F, 37),
+                TailData = Normalize(entry.TailData2F, 37),
                 EquipmentLockId = record.EquipmentLockId,
             };
         }
@@ -41,16 +42,20 @@ namespace DfoServer.Game.TitleBook
         {
             if (item == null) throw new ArgumentNullException(nameof(item));
 
-            var builder = new ItemExtraViewBuilder();
-            builder.Equipment.ExtData0 = item.Attr;
-            builder.Equipment.EnchantCardId = item.EnchantIndex;
-            builder.Equipment.EnchantUpgradeCount = item.EnchantUpgradeCount;
-            builder.Equipment.AmplifyType = item.AmplifyType;
-            builder.Equipment.AmplifyValue = item.AmplifyValue;
-            builder.Equipment.MiddleData1A = EncodeChronicle(item.Chronicle);
-            builder.Equipment.TailData2F = Normalize(item.TailData, 37);
-            builder.Equipment.JewelSocket = new byte[30];
-            return builder.Build().Serialize();
+            var record = new SqliteInventoryStore.ItemRecord
+            {
+                ExtraJson = "{}",
+            };
+            var view = InventoryItemView.ForCommon(record);
+            view.Attr = item.Attr;
+            view.EnchantCardId = item.EnchantIndex;
+            view.EnchantUpgradeCount = item.EnchantUpgradeCount;
+            view.AmplifyType = item.AmplifyType;
+            view.AmplifyValue = item.AmplifyValue;
+            view.Entry84.MiddleData1A = EncodeChronicle(item.Chronicle);
+            view.Entry84.TailData2F = Normalize(item.TailData, 37);
+            view.Entry84.JewelSocket = new byte[30];
+            return record.ExtraJson;
         }
 
         internal static string InferItemKind(TitleBookInventoryItem item)

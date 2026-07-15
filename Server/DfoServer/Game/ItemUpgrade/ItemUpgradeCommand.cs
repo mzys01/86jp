@@ -43,6 +43,7 @@ namespace DfoServer.Game.ItemUpgrade
         public int FinalSuccessWeight { get; set; }
         public int MaterialRemainingStackCount { get; set; }
         public List<ItemUpgradeRewardItem> DestroyRewardItems { get; } = new List<ItemUpgradeRewardItem>();
+        public List<short> MainRefreshSlots { get; } = new List<short>();
         public int GoldCost { get; set; }
         public int UpdatedGold { get; set; }
         public bool NoticeRequired { get; set; }

@@ -521,7 +521,8 @@ ORDER BY sort_order;";
                     extraJson = MergePetCreatureInstanceExtraJsonForRead(storedExtraJson, extraJson);
                 }
 
-                return InventoryProtocolMapper.ToPetItem(item, ItemExtraView.Parse(extraJson));
+                item.ExtraJson = extraJson;
+                return InventoryProtocolMapper.ToPetItem(item);
             }
         }
 
@@ -879,7 +880,7 @@ WHERE character_id = @cid AND list_type = @lt
 
             try
             {
-                return ItemExtraView.Parse(item.ExtraJson).Equipment.Forging;
+                return InventoryItemView.ForCommon(item).Entry84.Forging;
             }
             catch
             {

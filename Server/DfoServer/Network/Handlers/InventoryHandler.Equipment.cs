@@ -66,6 +66,12 @@ namespace DfoServer.Network.Handlers
 
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0050, ItemUpgradeAckBuilder.BuildSuccess(result)));
 
+            if (result.MainRefreshSlots.Count > 0)
+            {
+                await _refresh.SendUpdateItemList(session, InventoryListType.Main, result.MainRefreshSlots);
+                FileLogger.Log($"[{ProtocolName}] UPGRADE_ITEM: item refresh queued slots={string.Join(",", result.MainRefreshSlots)}");
+            }
+
             if (result.GoldCost > 0)
             {
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000E,
