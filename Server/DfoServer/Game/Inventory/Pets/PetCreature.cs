@@ -1527,50 +1527,31 @@ LIMIT 1;";
             byte equipmentLockId,
             string petCreatureExtraJson = null)
         {
-            var fields = raw != null && raw.Length >= 24
-                ? MakeEquipListCodec.ParseDisplayFields(raw)
-                : new MakeEquipListCodec.DisplayFields();
-
-            var prefix = new byte[8];
-            BitConverter.GetBytes(fields.Enchant).CopyTo(prefix, 0);
-            prefix[4] = fields.EnchantUpgradeCount;
-            prefix[5] = fields.AmplifyType;
-            BitConverter.GetBytes(fields.AmplifyValue).CopyTo(prefix, 6);
-
-            var tail = new byte[37];
-            if (fields.Emblem != null && fields.Emblem.Length > 0)
-                Buffer.BlockCopy(fields.Emblem, 0, tail, 0, Math.Min(fields.Emblem.Length, 9));
-            BitConverter.GetBytes(fields.Rune).CopyTo(tail, 9);
-            tail[27] = fields.Forging;
-            if (fields.MagicSealCount > 0 && fields.MagicSealTypes != null)
+            var view = EquippedItemView.FromRecord(new MakeEquipListCodec.Entry
             {
-                tail[11] = fields.MagicSealCount;
-                for (var index = 0; index < fields.MagicSealCount && index < 3; index++)
-                {
-                    tail[12 + index] = fields.MagicSealTypes[index];
-                    tail[15 + index] = fields.MagicSealVal1s[index];
-                    tail[18 + index] = fields.MagicSealVal2s[index];
-                }
-
-                if (fields.MagicSealTail != null)
-                {
-                    for (var index = 0; index < fields.MagicSealTail.Length && 21 + index < tail.Length; index++)
-                        tail[21 + index] = fields.MagicSealTail[index];
-                }
-            }
+                Slot = slot,
+                ItemId = itemId,
+                Raw = raw,
+                ExpireTime = expireTime,
+                EquipmentLockId = equipmentLockId,
+            });
+            var entry = view.Entry84;
+            var prefix = entry.PrefixData0E;
+            var tail = entry.TailData2F;
             if (!string.IsNullOrWhiteSpace(petCreatureExtraJson))
             {
                 ApplyPetCreatureExtraToCommonPrefix(prefix, petCreatureExtraJson);
                 ApplyPetCreatureExtraToCommonTail(tail, petCreatureExtraJson);
             }
+            tail[36] = entry.SortLockFlag == 1 ? (byte)1 : (byte)0;
 
             return new CommonInventoryItem
             {
                 SlotIndex = slot,
                 ItemTemplateId = itemId,
-                CountOrInstanceValue = unchecked((int)fields.InstanceValue),
-                ExtData0 = fields.Reinforce,
-                Durability = fields.Durability,
+                CountOrInstanceValue = entry.Value,
+                ExtData0 = entry.Attr,
+                Durability = entry.Durability,
                 // 0x000E 装备条目这里保留原始 Inven_Item 槽位字节。
                 SealFlag = raw != null && raw.Length > 0 ? raw[0] : unchecked((byte)slot),
                 PrefixData0E = prefix,
@@ -1578,7 +1559,7 @@ LIMIT 1;";
                 MiddleData1A = new byte[17],
                 ExpireTime = expireTime,
                 TailData2F = tail,
-                JewelSocket = fields.JewelSocket ?? new byte[30],
+                JewelSocket = entry.JewelSocket,
                 EquipmentLockId = equipmentLockId,
             };
         }

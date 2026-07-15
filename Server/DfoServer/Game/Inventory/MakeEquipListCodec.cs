@@ -87,14 +87,20 @@ namespace DfoServer.Game.Inventory
             public uint InstanceValue;  
             public byte Reinforce;      
             public ushort Durability;   
+            public uint ClearAvatar;
+            public byte SealFlag;
             public uint Enchant;        
             public byte EnchantUpgradeCount;
-            public byte AmplifyType;     // 低4位=增幅方向(1力量2智力3体力4精神), bit7=异界气息污染(0x80); 污染与增幅互斥, 净化前不可增幅
+            public byte AmplifyType;     // 低4位=增幅方向(1体力2精神3力量4智力), bit7=异界气息污染(0x80); 污染与增幅互斥, 净化前不可增幅
             public ushort AmplifyValue; 
             public ushort Rune;         
             public byte Forging;        
+            public byte EmancipateEquipmentLevel;
+            public byte TradeRestriction;
+            public byte SortLockFlag;
             public byte[] Emblem;       
             public byte[] JewelSocket;  
+            public byte[] ExpansionData;
             public uint CreatureExtra;
             public byte MagicSealCount;      
             public byte[] MagicSealTypes;    
@@ -111,11 +117,16 @@ namespace DfoServer.Game.Inventory
                 InstanceValue = raw.Length >= 9 ? BitConverter.ToUInt32(raw, 5) : 0u,
                 Reinforce = raw.Length > 9 ? raw[9] : (byte)0,
                 Durability = raw.Length >= 12 ? BitConverter.ToUInt16(raw, 10) : (ushort)0,
+                ClearAvatar = raw.Length >= 16 ? BitConverter.ToUInt32(raw, 12) : 0u,
+                SealFlag = raw.Length > 12 ? raw[12] : (byte)0,
                 Enchant = raw.Length >= 20 ? BitConverter.ToUInt32(raw, 16) : 0u,
                 EnchantUpgradeCount = raw.Length > 20 ? raw[20] : (byte)0,
                 AmplifyType = raw.Length > 21 ? raw[21] : (byte)0,
                 AmplifyValue = raw.Length >= 24 ? BitConverter.ToUInt16(raw, 22) : (ushort)0,
                 Forging = raw.Length >= 10 ? raw[raw.Length - 10] : (byte)0, 
+                EmancipateEquipmentLevel = raw.Length >= 10 ? raw[raw.Length - 9] : (byte)0,
+                TradeRestriction = raw.Length >= 10 ? raw[raw.Length - 8] : (byte)0,
+                SortLockFlag = raw.Length >= 10 ? raw[raw.Length - 1] : (byte)0,
             };
             
             try
@@ -132,7 +143,14 @@ namespace DfoServer.Game.Inventory
                         Buffer.BlockCopy(raw, off + 4, f.JewelSocket, 0, jl);
                     }
                     off += 4 + jl;
-                    int el = BitConverter.ToInt32(raw, off); off += 4 + el;
+                    int el = BitConverter.ToInt32(raw, off);
+                    off += 4;
+                    if (el > 0 && off + el <= raw.Length)
+                    {
+                        f.ExpansionData = new byte[el];
+                        Buffer.BlockCopy(raw, off, f.ExpansionData, 0, el);
+                    }
+                    off += el;
                 }
                 if (slot >= 24 && CreatureExtraResolver.HasCreatureExtra(BitConverter.ToInt32(raw, 1)))
                 {
@@ -247,7 +265,7 @@ namespace DfoServer.Game.Inventory
                 bw.Write(f.InstanceValue);
                 bw.Write(f.Reinforce);
                 bw.Write(f.Durability);
-                bw.Write((uint)0);           
+                bw.Write(f.ClearAvatar != 0 ? f.ClearAvatar : f.SealFlag);
                 bw.Write(f.Enchant);
                 bw.Write(f.EnchantUpgradeCount);
                 bw.Write(f.AmplifyType);
@@ -264,8 +282,9 @@ namespace DfoServer.Game.Inventory
                     {
                         bw.Write(0); 
                     }
-                    bw.Write(4);             
-                    bw.Write((int)0);        
+                    var expansion = NormalizeExpansionData(f.ExpansionData);
+                    bw.Write(expansion.Length);
+                    bw.Write(expansion);
                 }
                 if (slot >= 24 && CreatureExtraResolver.HasCreatureExtra(itemId))
                 {
@@ -301,6 +320,9 @@ namespace DfoServer.Game.Inventory
                 
                 var tail10 = new byte[10];
                 tail10[0] = f.Forging;
+                tail10[1] = f.EmancipateEquipmentLevel;
+                tail10[2] = f.TradeRestriction;
+                tail10[9] = f.SortLockFlag == 1 ? (byte)1 : (byte)0;
                 bw.Write(tail10);
                 return w.ToArray();
             }
@@ -324,6 +346,14 @@ namespace DfoServer.Game.Inventory
                 parsed.Entries.Add(entry);
             else
                 parsed.Entries.Insert(insertAt, entry);
+        }
+
+        internal static byte[] NormalizeExpansionData(byte[] data)
+        {
+            var copy = new byte[4];
+            if (data != null && data.Length > 0)
+                Buffer.BlockCopy(data, 0, copy, 0, Math.Min(data.Length, copy.Length));
+            return copy;
         }
     }
 }

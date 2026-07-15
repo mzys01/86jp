@@ -79,8 +79,6 @@ namespace DfoServer.Network.Handlers
                 FileLogger.Log($"[{ProtocolName}] UPGRADE_ITEM: gold refresh queued gold={result.UpdatedGold}");
             }
 
-            await _refresh.SendSortItemLockRefresh(session, InventoryListType.Main);
-
             if (result.NoticeRequired)
                 await BroadcastItemUpgradeNotice(session, result);
 
@@ -131,7 +129,6 @@ namespace DfoServer.Network.Handlers
             if (result.MaterialConsumed && result.MaterialItem != null)
                 await SendCommonMaterialRefresh(session, result.MaterialItem);
 
-            await _refresh.SendSortItemLockRefresh(session, InventoryListType.Main);
             if (result.MaterialConsumed && result.MaterialItem != null)
                 FileLogger.Log($"[{ProtocolName}] EQUIP_SOCKET_OPEN: OK targetSlot={targetSlot} item=0x{targetItemId:X8} materialSlot={materialSlot} left={result.MaterialItem.RemainingStackCount}");
             else
@@ -161,7 +158,6 @@ namespace DfoServer.Network.Handlers
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x031C, BuildEmblemAttachAck(targetSlot, targetItemId, emblems.Count)));
             if (!result.TargetEquipped)
                 await _refresh.SendUpdateItemList(session, result.TargetListType, result.TargetSlotIndex);
-            await _refresh.SendSortItemLockRefresh(session, InventoryListType.Main);
             FileLogger.Log($"[{ProtocolName}] EQUIP_EMBLEM_ATTACH: OK targetSlot={targetSlot} item=0x{targetItemId:X8} emblems={emblems.Count}");
         }
 
@@ -188,7 +184,6 @@ namespace DfoServer.Network.Handlers
                 await SendCommonMaterialRefresh(session, result.MaterialItem);
 
             await _refresh.SendUpdateItemList(session, InventoryListType.Avatar, targetSlot);
-            await _refresh.SendSortItemLockRefresh(session, InventoryListType.Avatar);
 
             if (result.MaterialConsumed && result.MaterialItem != null)
                 FileLogger.Log($"[{ProtocolName}] AVATAR_SOCKET_OPEN: OK targetSlot={targetSlot} item=0x{targetItemId:X8} materialSlot={materialSlot} left={result.MaterialItem.RemainingStackCount}");
@@ -220,9 +215,6 @@ namespace DfoServer.Network.Handlers
             if (!result.TargetEquipped)
                 await _refresh.SendUpdateItemList(session, result.TargetListType, result.TargetSlotIndex);
 
-            await _refresh.SendSortItemLockRefresh(session, InventoryListType.Main);
-            if (!result.TargetEquipped)
-                await _refresh.SendSortItemLockRefresh(session, InventoryListType.Avatar);
             FileLogger.Log($"[{ProtocolName}] AVATAR_EMBLEM_ATTACH: OK targetSlot={targetSlot} item=0x{targetItemId:X8} emblems={emblems.Count} ack=0x{ackType:X4}");
             return true;
         }
