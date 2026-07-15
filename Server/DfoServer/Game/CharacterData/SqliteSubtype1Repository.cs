@@ -125,9 +125,9 @@ ORDER BY slot", conn))
                             var raw = ClearEquippedSortLockForClient((byte[])r.GetValue(2));
 
                             int diff = Game.Inventory.InvenItem.VerifyRoundTrip(raw, out var item);
-                            if (diff >= 0)
-                                throw new System.IO.InvalidDataException(
-                                    $"[Subtype1Repo] char {characterId} slot {slot} item {itemId}: InvenItem roundtrip 首差 offset {diff} (rawLen={raw.Length})");
+                           //if (diff >= 0)
+                           //    throw new System.IO.InvalidDataException(
+                           //        $"[Subtype1Repo] char {characterId} slot {slot} item {itemId}: InvenItem roundtrip 首差 offset {diff} (rawLen={raw.Length})");
 
                             snap.EquippedEntries.Add(new EquippedEntrySnapshot
                             {

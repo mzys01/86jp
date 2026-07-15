@@ -614,7 +614,7 @@ VALUES (@accountId, @selectionKey, @value32, @itemCount, CURRENT_TIMESTAMP);";
             using (var cmd = connection.CreateCommand())
             {
                 cmd.Transaction = transaction;
-                cmd.CommandText = @"SELECT item_template_id, stack_count, durability, seal_flag, extra_json, item_kind, option_value, pet_serial_or_handle, marker_16
+                cmd.CommandText = @"SELECT item_template_id, stack_count, durability, seal_flag, extra_json, item_kind, option_value, pet_serial_or_handle, marker_16, expire_time
                                     FROM character_items WHERE character_id=@cid AND list_type=@lt AND slot_index=@si";
                 cmd.Parameters.AddWithValue("@cid", characterId);
                 cmd.Parameters.AddWithValue("@lt", (int)listType);
@@ -644,6 +644,7 @@ VALUES (@accountId, @selectionKey, @value32, @itemCount, CURRENT_TIMESTAMP);";
                         OptionValue = optionValue,
                         PetSerialOrHandle = petSerialOrHandle,
                         Marker16 = reader.GetInt32(8),
+                        ExpireTime = reader.IsDBNull(9) ? 0 : reader.GetInt32(9),
                         ExtraJson = extraJson,
                     };
                     var view = isAvatar
@@ -662,10 +663,15 @@ VALUES (@accountId, @selectionKey, @value32, @itemCount, CURRENT_TIMESTAMP);";
                         EnchantUpgradeCount = entry.EnchantUpgradeCount,
                         AmplifyType = entry.AmplifyType,
                         AmplifyValue = entry.AmplifyValue,
+                        ExpireTime = entry.ExpireTime,
                     };
-                    if (isPet && petSerialOrHandle != 0 && CreatureExtraResolver.HasCreatureExtra(itemTemplateId))
-                        f.CreatureExtra = unchecked((uint)petSerialOrHandle);
+                    if (isPet && CreatureExtraResolver.HasCreatureExtra(itemTemplateId))
+                        f.Marker16 = unchecked((uint)entry.Marker16);
+                    f.ChronicleOptions = MakeEquipListCodec.BuildChronicleOptions(entry.MiddleData1A);
                     f.Emblem = entry.EmblemData;
+                    f.EmblemSocketCount = entry.EmblemSocketCount;
+                    f.EmblemId1 = entry.EmblemId1;
+                    f.EmblemId2 = entry.EmblemId2;
                     f.Rune = entry.Rune;
                     var randomOptions = entry.RandomOptions;
                     f.MagicSealCount = (byte)Math.Min(3, randomOptions.Count);
@@ -675,9 +681,20 @@ VALUES (@accountId, @selectionKey, @value32, @itemCount, CURRENT_TIMESTAMP);";
                         f.MagicSealVal1s = BuildRandomOptionValue1s(randomOptions);
                         f.MagicSealVal2s = BuildRandomOptionValue2s(randomOptions);
                     }
+                    f.RandomOptionState = entry.RandomOptionState;
+                    f.RandomOptionChangedIndex = entry.RandomOptionChangedIndex;
+                    f.RandomOptionChangeState = entry.RandomOptionChangeState;
+                    f.RandomOptionChangeType = entry.RandomOptionChangeType;
+                    f.RandomOptionChangeValue1 = entry.RandomOptionChangeValue1;
+                    f.RandomOptionChangeValue2 = entry.RandomOptionChangeValue2;
                     f.Forging = entry.Forging;
                     f.EmancipateEquipmentLevel = entry.EmancipateEquipmentLevel;
                     f.TradeRestriction = entry.TradeRestriction;
+                    f.TailUnknown0 = entry.TailUnknown0;
+                    f.TailUnknown1 = entry.TailUnknown1;
+                    f.TailUnknown2 = entry.TailUnknown2;
+                    f.TailUnknown3 = entry.TailUnknown3;
+                    f.RemainUseCount = entry.RemainUseCount;
                     f.SortLockFlag = entry.SortLockFlag;
                     if (isAvatar)
                     {
@@ -779,6 +796,11 @@ VALUES (@accountId, @selectionKey, @value32, @itemCount, CURRENT_TIMESTAMP);";
             view.AvatarDetail.Color2 = BitConverter.ToUInt16(color, 2);
             view.Entry84.EmancipateEquipmentLevel = fields.EmancipateEquipmentLevel;
             view.Entry84.TradeRestriction = fields.TradeRestriction;
+            view.Entry84.TailUnknown0 = fields.TailUnknown0;
+            view.Entry84.TailUnknown1 = fields.TailUnknown1;
+            view.Entry84.TailUnknown2 = fields.TailUnknown2;
+            view.Entry84.TailUnknown3 = fields.TailUnknown3;
+            view.Entry84.RemainUseCount = fields.RemainUseCount;
             view.SortLockFlag = fields.SortLockFlag;
             marker16 = record.Marker16;
             return record.ExtraJson;
@@ -796,6 +818,7 @@ VALUES (@accountId, @selectionKey, @value32, @itemCount, CURRENT_TIMESTAMP);";
             view.EnchantUpgradeCount = fields.EnchantUpgradeCount;
             view.AmplifyType = fields.AmplifyType;
             view.AmplifyValue = fields.AmplifyValue;
+            view.Entry84.MiddleData1A = MakeEquipListCodec.BuildMiddleData1A(fields.ChronicleOptions);
             view.Entry84.EmblemData = fields.Emblem;
             view.Entry84.Rune = fields.Rune;
             if (fields.MagicSealCount > 0)
@@ -806,6 +829,11 @@ VALUES (@accountId, @selectionKey, @value32, @itemCount, CURRENT_TIMESTAMP);";
             view.Forging = fields.Forging;
             view.Entry84.EmancipateEquipmentLevel = fields.EmancipateEquipmentLevel;
             view.Entry84.TradeRestriction = fields.TradeRestriction;
+            view.Entry84.TailUnknown0 = fields.TailUnknown0;
+            view.Entry84.TailUnknown1 = fields.TailUnknown1;
+            view.Entry84.TailUnknown2 = fields.TailUnknown2;
+            view.Entry84.TailUnknown3 = fields.TailUnknown3;
+            view.Entry84.RemainUseCount = fields.RemainUseCount;
             view.SortLockFlag = fields.SortLockFlag;
             view.Entry84.JewelSocket = fields.JewelSocket;
             return record.ExtraJson;

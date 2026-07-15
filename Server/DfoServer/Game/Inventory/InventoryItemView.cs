@@ -837,11 +837,35 @@ namespace DfoServer.Game.Inventory
             }
         }
 
-        public byte TailUnknown1 => InventoryItemViewBytes.ReadByte(_tailData2F, 32);
+        public byte TailUnknown1
+        {
+            get => InventoryItemViewBytes.ReadByte(_tailData2F, 32);
+            set
+            {
+                _tailData2F[32] = value;
+                Notify(InventoryItemEntry84Field.TailData2F);
+            }
+        }
 
-        public byte TailUnknown2 => InventoryItemViewBytes.ReadByte(_tailData2F, 33);
+        public byte TailUnknown2
+        {
+            get => InventoryItemViewBytes.ReadByte(_tailData2F, 33);
+            set
+            {
+                _tailData2F[33] = value;
+                Notify(InventoryItemEntry84Field.TailData2F);
+            }
+        }
 
-        public byte TailUnknown3 => InventoryItemViewBytes.ReadByte(_tailData2F, 34);
+        public byte TailUnknown3
+        {
+            get => InventoryItemViewBytes.ReadByte(_tailData2F, 34);
+            set
+            {
+                _tailData2F[34] = value;
+                Notify(InventoryItemEntry84Field.TailData2F);
+            }
+        }
 
         public byte RemainUseCount
         {

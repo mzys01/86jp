@@ -280,15 +280,35 @@ namespace DfoServer.SelfTests
                 EnchantUpgradeCount = 5,
                 AmplifyType = 2,
                 AmplifyValue = 0x4567,
+                ChronicleOptions = new[]
+                {
+                    new MakeEquipListCodec.ChronicleOptionFields { OptionId = 0x10203040, CharacJob = 1, FirstGrowType = 2, EquipmentType = 3, OptionNo = 4 },
+                    new MakeEquipListCodec.ChronicleOptionFields { OptionId = 0x50607080, CharacJob = 5, FirstGrowType = 6, EquipmentType = 7, OptionNo = 8 },
+                },
+                ExpireTime = 0x01020304,
+                EmblemSocketCount = 2,
+                EmblemId1 = 0x11121314,
+                EmblemId2 = 0x21222324,
                 Rune = 0x7788,
                 Forging = 9,
                 EmancipateEquipmentLevel = 2,
                 TradeRestriction = 3,
+                TailUnknown0 = 0x4567,
+                TailUnknown1 = 0x68,
+                TailUnknown2 = 0x69,
+                TailUnknown3 = 0x6A,
+                RemainUseCount = 0x6B,
                 SortLockFlag = 1,
                 MagicSealCount = 3,
                 MagicSealTypes = new byte[] { 0x31, 0x32, 0x33 },
                 MagicSealVal1s = new byte[] { 0x41, 0x42, 0x43 },
                 MagicSealVal2s = new byte[] { 0x51, 0x52, 0x53 },
+                RandomOptionState = 0x61,
+                RandomOptionChangedIndex = 1,
+                RandomOptionChangeState = 0x62,
+                RandomOptionChangeType = 0x63,
+                RandomOptionChangeValue1 = 0x64,
+                RandomOptionChangeValue2 = 0x65,
             });
             var equippedFields = MakeEquipListCodec.ParseDisplayFields(equippedRaw);
             var roundtripDiff = InvenItem.VerifyRoundTrip(equippedRaw, out var equippedItem);
@@ -306,7 +326,28 @@ namespace DfoServer.SelfTests
                 && equippedFields.MagicSealVal2s[1] == 0x52
                 && equippedItem.Seals[2].Type == 0x33
                 && equippedItem.Seals[2].Val1 == 0x43
-                && equippedItem.Seals[2].Val2 == 0x53);
+                && equippedItem.Seals[2].Val2 == 0x53
+                && equippedItem.SealGenuineUpgrade == 0x61
+                && equippedItem.SealCheck == 1
+                && equippedItem.SealExtra == 0x65646362);
+            Check("raw_entry 穿戴动态块拆分语义", equippedFields.ChronicleOptions.Length == 2
+                && equippedFields.ChronicleOptions[0].OptionId == 0x10203040
+                && equippedFields.ChronicleOptions[1].OptionNo == 8
+                && equippedFields.ExpireTime == 0x01020304
+                && equippedFields.EmblemSocketCount == 2
+                && equippedFields.EmblemId1 == 0x11121314
+                && equippedFields.EmblemId2 == 0x21222324
+                && equippedFields.RandomOptionState == 0x61
+                && equippedFields.RandomOptionChangedIndex == 1
+                && equippedFields.RandomOptionChangeState == 0x62
+                && equippedFields.RandomOptionChangeType == 0x63
+                && equippedFields.RandomOptionChangeValue1 == 0x64
+                && equippedFields.RandomOptionChangeValue2 == 0x65
+                && equippedFields.TailUnknown0 == 0x4567
+                && equippedFields.TailUnknown1 == 0x68
+                && equippedFields.TailUnknown2 == 0x69
+                && equippedFields.TailUnknown3 == 0x6A
+                && equippedFields.RemainUseCount == 0x6B);
             Check("raw_entry 穿戴尾部保留排序锁", equippedFields.SortLockFlag == 1
                 && equippedFields.SealFlag == 1
                 && equippedFields.EmancipateEquipmentLevel == 2
@@ -318,6 +359,7 @@ namespace DfoServer.SelfTests
                 && equippedDisplayFields.Forging == 9
                 && equippedDisplayFields.EmancipateEquipmentLevel == 2
                 && equippedDisplayFields.TradeRestriction == 3
+                && equippedDisplayFields.RemainUseCount == 0x6B
                 && equippedRaw[equippedRaw.Length - 1] == 1);
             var equippedView = EquippedItemView.FromRecord(new MakeEquipListCodec.Entry
             {
@@ -341,10 +383,12 @@ namespace DfoServer.SelfTests
                 && equippedView.Entry84.Forging == 9
                 && equippedView.Entry84.EmancipateEquipmentLevel == 2
                 && equippedView.Entry84.TradeRestriction == 3
+                && equippedView.Entry84.RemainUseCount == 0x6B
                 && equippedView.Entry84.Rune == 0x7788);
             equippedView.SortLockFlag = 0;
             equippedView.EmancipateEquipmentLevel = 4;
             equippedView.TradeRestriction = 5;
+            equippedView.Entry84.RemainUseCount = 6;
             equippedView.SealFlag = 0;
             equippedView.EquipmentLockId = 7;
             var updatedEquippedFields = MakeEquipListCodec.ParseDisplayFields(equippedView.Record.Raw);
@@ -352,6 +396,7 @@ namespace DfoServer.SelfTests
                 && updatedEquippedFields.SortLockFlag == 0
                 && updatedEquippedFields.EmancipateEquipmentLevel == 4
                 && updatedEquippedFields.TradeRestriction == 5
+                && updatedEquippedFields.RemainUseCount == 6
                 && updatedEquippedFields.SealFlag == 0
                 && equippedView.EquipmentLockId == 7);
 

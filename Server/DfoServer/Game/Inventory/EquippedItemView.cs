@@ -281,6 +281,11 @@ namespace DfoServer.Game.Inventory
             _fields.Forging = InventoryItemViewBytes.ReadByte(tail, 27);
             _fields.EmancipateEquipmentLevel = InventoryItemViewBytes.ReadByte(tail, 28);
             _fields.TradeRestriction = InventoryItemViewBytes.ReadByte(tail, 29);
+            _fields.TailUnknown0 = InventoryItemViewBytes.ReadUInt16(tail, 30);
+            _fields.TailUnknown1 = InventoryItemViewBytes.ReadByte(tail, 32);
+            _fields.TailUnknown2 = InventoryItemViewBytes.ReadByte(tail, 33);
+            _fields.TailUnknown3 = InventoryItemViewBytes.ReadByte(tail, 34);
+            _fields.RemainUseCount = InventoryItemViewBytes.ReadByte(tail, 35);
             _fields.SortLockFlag = InventoryItemViewBytes.ReadByte(tail, 36) == 1 ? (byte)1 : (byte)0;
 
             var randomOptions = InventoryItemViewBytes.ParseRandomOptions(tail);
@@ -288,6 +293,12 @@ namespace DfoServer.Game.Inventory
             _fields.MagicSealTypes = BuildRandomOptionBytes(randomOptions, option => option.Type);
             _fields.MagicSealVal1s = BuildRandomOptionBytes(randomOptions, option => option.Value1);
             _fields.MagicSealVal2s = BuildRandomOptionBytes(randomOptions, option => option.Value2);
+            _fields.RandomOptionState = InventoryItemViewBytes.ReadByte(tail, 21);
+            _fields.RandomOptionChangedIndex = InventoryItemViewBytes.ReadByte(tail, 22);
+            _fields.RandomOptionChangeState = InventoryItemViewBytes.ReadByte(tail, 23);
+            _fields.RandomOptionChangeType = InventoryItemViewBytes.ReadByte(tail, 24);
+            _fields.RandomOptionChangeValue1 = InventoryItemViewBytes.ReadByte(tail, 25);
+            _fields.RandomOptionChangeValue2 = InventoryItemViewBytes.ReadByte(tail, 26);
             _fields.MagicSealTail = ExtractMagicSealTail(tail);
         }
 
@@ -326,6 +337,11 @@ namespace DfoServer.Game.Inventory
             tail[27] = fields.Forging;
             tail[28] = fields.EmancipateEquipmentLevel;
             tail[29] = fields.TradeRestriction;
+            BitConverter.GetBytes(fields.TailUnknown0).CopyTo(tail, 30);
+            tail[32] = fields.TailUnknown1;
+            tail[33] = fields.TailUnknown2;
+            tail[34] = fields.TailUnknown3;
+            tail[35] = fields.RemainUseCount;
             tail[36] = fields.SortLockFlag == 1 ? (byte)1 : (byte)0;
             return tail;
         }
