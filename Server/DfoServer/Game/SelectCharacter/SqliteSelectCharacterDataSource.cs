@@ -106,7 +106,21 @@ namespace DfoServer.Game.SelectCharacter
             var initSnapshot = new SelectCharacterInitializationSnapshot();
 
             if (_initDataRepository.HasSkills(characterId))
+            {
                 initSnapshot.SkillInfo = _initDataRepository.LoadSkills(characterId);
+            }
+            else
+            {
+                var seedRec = _characterRepository?.GetById(characterId);
+                if (seedRec != null)
+                {
+                    Characters.CharacterStatComputer.DecodeGrowType(seedRec.GrowType, out var seedFirst, out var seedSecond);
+                    var seedSkills = Skills.CharacterSkillProfile.BuildSnapshot(seedRec.Job, seedFirst, seedSecond, seedRec.Level);
+                    Skills.SkillStateService.ResolveAndPersist(_initDataRepository, characterId, seedSkills, seedRec.Job, seedRec.Level, seedRec.BonusSp, seedRec.BonusTp, seedFirst, seedSecond);
+                    initSnapshot.SkillInfo = seedSkills;
+                    FileLogger.Log($"[SelectCharacterDataSource] auto-seeded skills for cid={characterId} job={seedRec.Job} gt=0x{seedRec.GrowType:X2} entries={seedSkills.Pages[0].Entries.Count}+{seedSkills.Pages[1].Entries.Count}");
+                }
+            }
             var comboSkillBodies = _darkKnightComboSkillRepository.LoadPageBodies(characterId);
             foreach (var comboSkillBody in comboSkillBodies)
                 initSnapshot.DarkKnightComboSkillInfoBodies.Add(comboSkillBody);
@@ -125,6 +139,7 @@ namespace DfoServer.Game.SelectCharacter
                 var rec = _characterRepository?.GetById(characterId);
                 if (rec != null && initSnapshot.SkillInfo != null && initSnapshot.SkillInfo.Pages.Count > 0)
                 {
+                    Characters.CharacterStatComputer.DecodeGrowType(rec.GrowType, out var firstGrow, out var secondGrow);
                     var synced = Skills.SkillStateService.LoadAndSync(
                         _initDataRepository,
                         characterId,
@@ -132,7 +147,9 @@ namespace DfoServer.Game.SelectCharacter
                         rec.Level,
                         rec.BonusSp,
                         rec.BonusTp,
-                        persist: false);
+                        persist: false,
+                        growType: firstGrow,
+                        secondGrowType: secondGrow);
                     initSnapshot.SkillInfo = synced.Skills;
                     SanitizeDarkKnightComboSkillInfo(initSnapshot);
                 }
@@ -499,17 +516,13 @@ ON CONFLICT(character_id) DO UPDATE SET manage_level=excluded.manage_level;";
             var emptySnapshot = new SelectCharacterInitializationSnapshot();
             _initFlagsRepository.SeedFromSnapshot(characterId, emptySnapshot);
 
-            var initialSkills = InitialCharacterSkills.Build(job);
+            var initialSkills = Skills.CharacterSkillProfile.BuildSnapshot(job, 0, 0, 1);
             if (initialSkills != null)
             {
                 var initialDarkKnightComboBodies = job == 9
                     ? DarkKnightInitialSkillLayout.BuildDefaultComboSkillInfoBodies(initialSkills)
                     : null;
-                var points = Skills.SkillStateService.ResolvePointState(
-                    initialSkills, null, job, 1, 0, 0);
-                points.RemainingSp = points.TotalSp;
-                points.RemainingTp = points.TotalTp;
-                Skills.SkillStateService.Persist(_initDataRepository, characterId, initialSkills, points);
+                Skills.SkillStateService.ResolveAndPersist(_initDataRepository, characterId, initialSkills, job, 1, 0, 0);
                 if (initialDarkKnightComboBodies != null)
                     _darkKnightComboSkillRepository.SavePageBodies(characterId, initialDarkKnightComboBodies);
             }

@@ -9,7 +9,12 @@ namespace DfoServer.Network.Builders
 
         public bool TryBuild(SelectCharacterDataSnapshot snapshot, int occurrenceIndex, out byte[] body)
         {
-            var skill = snapshot.InitializationSnapshot.SkillInfo;
+            body = BuildFrom(snapshot.InitializationSnapshot.SkillInfo);
+            return true;
+        }
+
+        public static byte[] BuildFrom(SkillInfoSnapshot skill)
+        {
             var writer = new GamePacketWriter();
             foreach (var page in skill.Pages)
             {
@@ -27,8 +32,7 @@ namespace DfoServer.Network.Builders
             }
             writer.WriteUInt16(skill.Tail0);
             writer.WriteUInt16(skill.Tail1);
-            body = writer.ToArray();
-            return true;
+            return writer.ToArray();
         }
     }
 }

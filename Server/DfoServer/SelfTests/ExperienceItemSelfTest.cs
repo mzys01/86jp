@@ -349,8 +349,7 @@ namespace DfoServer.SelfTests
                     && LoadDeleteAuditDelta(connectionString, BookCharacterId) == -1);
                 Check("transaction result carries the four-field skill snapshot",
                     bookResult.SkillPoints.Page0Sp > 0
-                    && bookResult.SkillPoints.Page1Sp == 0
-                    && bookResult.SkillPoints.Page1Tp == 0);
+                    && bookResult.SkillPoints.Page1Sp > 0);
 
                 var largeBefore = LoadCharacterExp(connectionString, LargeCapsuleCharacterId);
                 var largeResult = service.UseBySlot(
@@ -583,7 +582,7 @@ namespace DfoServer.SelfTests
 
                 Execute(connection, $@"
 CREATE TRIGGER reject_experience_item_skill_persistence
-BEFORE INSERT ON character_skill_points
+BEFORE UPDATE ON characters
 WHEN NEW.character_id = {RollbackCharacterId}
 BEGIN
     SELECT RAISE(ABORT, 'experience-item rollback test');

@@ -103,6 +103,12 @@ namespace DfoServer
                 }
             }
 
+            if (Array.IndexOf(args, "--probe-skill-state") >= 0 || Array.IndexOf(args, "--probe-skill-csv") >= 0)
+            {
+                Environment.Exit(SelfTests.SkillStateProbe.Run(args));
+                return;
+            }
+
             GameNetworkConfig.Configure(args);
 
             PacketFileLogger.Initialize();

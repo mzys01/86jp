@@ -6,21 +6,20 @@ using System.Collections.Generic;
 
 namespace DfoServer.Game.Skills
 {
-    
     public sealed class BuySkillEntry
     {
-        public byte SkillIndex;   
-        public byte IsRefund;     
-        public byte Level;        
+        // 双字节技能编号(部分职业的技能表超过 255, 如战斗法师 使徒封印)。
+        public ushort SkillIndex;
+        public byte IsRefund;
+        public byte Level;
     }
 
-    
     public sealed class BuySkillResultEntry
     {
-        public byte Slot;         
+        public byte Slot;
         public ushort SkillId;
         public byte Level;
-        public bool HasCmd;       
+        public bool HasCmd;
     }
 
     public sealed class BuySkillResult
@@ -30,27 +29,21 @@ namespace DfoServer.Game.Skills
         public ushort RemainSp;
         public ushort RemainTp;
         public readonly List<BuySkillResultEntry> Entries = new List<BuySkillResultEntry>();
-        public byte ErrorCode;    
+        public byte ErrorCode;
         public bool ConsumedForgetRiverWater;
         public short ConsumedForgetRiverWaterSlot = -1;
         public InventoryMutationResult ConsumedForgetRiverWaterItem;
     }
 
-    
-    
-    
-    
-    
-    
-    
     public static class BuySkillService
     {
         public static BuySkillResult Execute(SqliteCharacterProgressRepository repo, int cid, int job, int skillTree, IList<BuySkillEntry> entries,
-            int bonusSp = 0, byte level = 1, int bonusTp = 0)
+            int bonusSp = 0, byte level = 1, int bonusTp = 0, byte growType = 0)
         {
-            var plan = BuildExecutionPlan(repo, cid, job, skillTree, entries, bonusSp, level, bonusTp);
+            Characters.CharacterStatComputer.DecodeGrowType(growType, out var firstGrow, out var secondGrow);
+            var plan = BuildExecutionPlan(repo, cid, job, skillTree, entries, bonusSp, level, bonusTp, firstGrow, secondGrow);
             if (plan.Result.Success)
-                repo.SaveSkillProgress(cid, plan.Snapshot, plan.PersistedPointState);
+                repo.SaveSkillProgress(cid, plan.Snapshot);
             return plan.Result;
         }
 
@@ -64,15 +57,17 @@ namespace DfoServer.Game.Skills
             IList<BuySkillEntry> entries,
             int bonusSp = 0,
             byte level = 1,
-            int bonusTp = 0)
+            int bonusTp = 0,
+            byte growType = 0)
         {
-            var plan = BuildExecutionPlan(repo, cid, job, skillTree, entries, bonusSp, level, bonusTp);
+            Characters.CharacterStatComputer.DecodeGrowType(growType, out var firstGrow, out var secondGrow);
+            var plan = BuildExecutionPlan(repo, cid, job, skillTree, entries, bonusSp, level, bonusTp, firstGrow, secondGrow);
             if (!plan.Result.Success)
                 return plan.Result;
 
             if (!plan.HasEffectiveRefund)
             {
-                repo.SaveSkillProgress(cid, plan.Snapshot, plan.PersistedPointState);
+                repo.SaveSkillProgress(cid, plan.Snapshot);
                 return plan.Result;
             }
 
@@ -93,7 +88,7 @@ namespace DfoServer.Game.Skills
                 out consumedItem,
                 (connection, transaction) =>
                 {
-                    repo.SaveSkillProgress(connection, transaction, cid, plan.Snapshot, plan.PersistedPointState);
+                    repo.SaveSkillProgress(connection, transaction, cid, plan.Snapshot);
                 });
 
             if (!consumed)
@@ -113,12 +108,11 @@ namespace DfoServer.Game.Skills
         {
             public BuySkillResult Result;
             public SkillInfoSnapshot Snapshot;
-            public SkillPointState PersistedPointState;
             public bool HasEffectiveRefund;
         }
 
         private static BuySkillExecutionPlan BuildExecutionPlan(SqliteCharacterProgressRepository repo, int cid, int job, int skillTree, IList<BuySkillEntry> entries,
-            int bonusSp = 0, byte level = 1, int bonusTp = 0)
+            int bonusSp, byte level, int bonusTp, int firstGrow, int secondGrow)
         {
             var snapshot = repo.LoadSkills(cid);
             int pageIdx = skillTree == 1 ? 1 : 0;
@@ -126,23 +120,21 @@ namespace DfoServer.Game.Skills
                 snapshot.Pages.Add(new SkillInfoPageSnapshot());
             var page = snapshot.Pages[pageIdx];
 
-            var persistedPoints = repo.LoadSkillPointState(cid);
-            var points = ResolvePagePointState(
-                snapshot, persistedPoints, (byte)job, level, bonusSp, bonusTp, pageIdx);
-            int remainSp = points.RemainingSp;
-            int remainTp = points.RemainingTp;
+            // SP/TP 余额从已学技能列表全量派生——不再有持久化余额、不读协议镜像。
+            var ledger = SkillPointLedger.Compute((byte)job, level, bonusSp, bonusTp, snapshot, pageIdx, firstGrow, secondGrow);
+            int remainSp = ledger.RemainingSp;
+            int remainTp = ledger.RemainingTp;
 
             var result = new BuySkillResult { Success = true, SkillTree = (byte)skillTree };
             var hasEffectiveRefund = false;
 
-            
             var occupied = new HashSet<int>();
             foreach (var e in page.Entries) occupied.Add(e.Slot);
 
             foreach (var req in entries)
             {
                 var sd = SkillDataProvider.GetSkill(job, req.SkillIndex);
-                if (sd == null) continue; 
+                if (sd == null) continue;
 
                 int levels = req.Level <= 0 ? 1 : req.Level;
                 var existing = page.Entries.Find(x => x.SkillId == req.SkillIndex);
@@ -150,10 +142,50 @@ namespace DfoServer.Game.Skills
 
                 if (req.IsRefund == 0)
                 {
-                    
+                    // 校验1: growType 等级上限门禁
+                    var growtypeMaxLevel = sd.GetMaxLevelFor(firstGrow, secondGrow);
+                    if (growtypeMaxLevel <= 0)
+                        continue; // 该方向不可学
+
                     int newLevel = curLevel + levels;
-                    if (sd.MaxLevel > 0 && newLevel > sd.MaxLevel) newLevel = sd.MaxLevel;
-                    if (newLevel <= curLevel) continue; 
+                    var effectiveMaxLevel = Math.Min(sd.MaxLevel > 0 ? sd.MaxLevel : int.MaxValue, growtypeMaxLevel);
+                    if (newLevel > effectiveMaxLevel) newLevel = effectiveMaxLevel;
+                    if (newLevel <= curLevel) continue;
+
+                    // 校验2: 等级门槛 reqLevel + (targetLv-1)*interval <= characLevel
+                    if (sd.RequiredLevel > 0)
+                    {
+                        var reqLevelForTarget = sd.RequiredLevel + (newLevel - 1) * sd.LevelInterval;
+                        if (reqLevelForTarget > level)
+                        {
+                            result.Success = false;
+                            result.ErrorCode = 18;
+                            return new BuySkillExecutionPlan { Result = result, Snapshot = snapshot };
+                        }
+                    }
+
+                    // 校验3: 前置技能
+                    if (sd.PreRequiredSkills != null && sd.PreRequiredSkills.Length >= 2)
+                    {
+                        var preOk = true;
+                        for (var pi = 0; pi + 1 < sd.PreRequiredSkills.Length; pi += 2)
+                        {
+                            var preSkillIndex = sd.PreRequiredSkills[pi];
+                            var preSkillLevel = sd.PreRequiredSkills[pi + 1];
+                            var preEntry = page.Entries.Find(x => x.SkillId == preSkillIndex);
+                            if (preEntry == null || preEntry.Level < preSkillLevel)
+                            {
+                                preOk = false;
+                                break;
+                            }
+                        }
+                        if (!preOk)
+                        {
+                            result.Success = false;
+                            result.ErrorCode = 18;
+                            return new BuySkillExecutionPlan { Result = result, Snapshot = snapshot };
+                        }
+                    }
 
                     byte slotForEntry;
                     int allocatedSlot = -1;
@@ -174,6 +206,8 @@ namespace DfoServer.Game.Skills
                         slotForEntry = (byte)allocatedSlot;
                     }
 
+                    // 校验4+5: SP/TP 成本按费用表原值分池扣减, 无百分比折扣
+                    // ([skill fitness ...] 是从属标记非折扣, 斩铁式+1 成本 45 整实测定案)。
                     if (sd.IsTpSkill)
                     {
                         int tpCost = sd.TpCostFor(curLevel, newLevel);
@@ -212,24 +246,22 @@ namespace DfoServer.Game.Skills
                 }
                 else
                 {
-                    
                     if (existing == null || curLevel == 0) continue;
                     byte refundSlot = existing.Slot;
-                    int baseLevel = GetInitialLevel((byte)job, req.SkillIndex);
+                    int baseLevel = GetFreeBaselineLevel((byte)job, req.SkillIndex, firstGrow, secondGrow);
                     int newLevel = curLevel - levels;
                     if (newLevel < baseLevel) newLevel = baseLevel;
                     if (newLevel >= curLevel) continue;
                     hasEffectiveRefund = true;
 
+                    // 退点 100% 返还费用表原值。
                     if (sd.IsTpSkill)
                     {
-                        int refund = sd.TpCostFor(newLevel, curLevel);
-                        remainTp += refund;
+                        remainTp += sd.TpCostFor(newLevel, curLevel);
                     }
                     else
                     {
-                        int refund = sd.SpCostFor(newLevel, curLevel);
-                        remainSp += refund;
+                        remainSp += sd.SpCostFor(newLevel, curLevel);
                     }
 
                     if (newLevel == 0)
@@ -252,139 +284,30 @@ namespace DfoServer.Game.Skills
                 }
             }
 
-            points.RemainingSp = Math.Max(0, Math.Min(remainSp, points.TotalSp));
-            points.RemainingTp = Math.Max(0, Math.Min(remainTp, points.TotalTp));
-            page.HeaderValue = ToUInt16(points.RemainingSp);
-            var persistedPointState = BuildPersistedPointState(
-                snapshot, points, pageIdx, (byte)job, level, bonusSp, bonusTp);
-
-            result.RemainSp = (ushort)points.RemainingSp;
-            result.RemainTp = (ushort)points.RemainingTp;
+            result.RemainSp = ToUInt16(remainSp);
+            result.RemainTp = ToUInt16(remainTp);
+            // 写协议镜像: 保存前将两页 SP/TP 派生值写入 snapshot 的 HeaderValue/Tail,
+            // 使 SaveSkillsCore 持久化的镜像值与 Ledger 派生一致。
+            var finalPoints = SkillStateService.ResolvePointState(snapshot, (byte)job, level, bonusSp, bonusTp, firstGrow, secondGrow);
+            SkillStateService.ApplyProtocolMirrors(snapshot, finalPoints);
             return new BuySkillExecutionPlan
             {
                 Result = result,
                 Snapshot = snapshot,
-                PersistedPointState = persistedPointState,
                 HasEffectiveRefund = hasEffectiveRefund,
             };
         }
 
-        private static SkillPointState ResolvePagePointState(
-            SkillInfoSnapshot snapshot,
-            SkillPointState persisted,
-            byte job,
-            byte level,
-            int bonusSp,
-            int bonusTp,
-            int pageIdx)
-        {
-            var calculated = SkillPointCalculator.Calculate(job, level, bonusSp, bonusTp, snapshot, pageIdx);
-            var page = snapshot != null && pageIdx >= 0 && pageIdx < snapshot.Pages.Count
-                ? snapshot.Pages[pageIdx]
-                : null;
-            var pageRemainingSp = ResolvePageRemainingSp(page, calculated.RemainingSp);
-            var totalSp = Math.Max(calculated.TotalSp, pageRemainingSp);
-
-            var state = new SkillPointState
-            {
-                TotalSp = totalSp,
-                TotalTp = calculated.TotalTp,
-                SyncedLevel = level,
-                HasPersistedState = persisted != null && persisted.HasPersistedState
-            };
-
-            if (pageIdx == 0 && persisted != null && persisted.HasPersistedState && (page == null || page.HeaderValue == 0))
-            {
-                var gainedSp = calculated.TotalSp - persisted.TotalSp;
-                state.RemainingSp = Clamp(persisted.RemainingSp + gainedSp, 0, totalSp);
-            }
-            else
-            {
-                state.RemainingSp = Clamp(pageRemainingSp, 0, totalSp);
-            }
-
-            if (persisted != null && persisted.HasPersistedState)
-            {
-                var gainedTp = calculated.TotalTp - persisted.TotalTp;
-                state.RemainingTp = Clamp(persisted.RemainingTp + gainedTp, 0, calculated.TotalTp);
-            }
-            else
-            {
-                state.RemainingTp = ResolveRemainingTp(snapshot, calculated.RemainingTp);
-            }
-
-            return state;
-        }
-
-        private static SkillPointState BuildPersistedPointState(
-            SkillInfoSnapshot snapshot,
-            SkillPointState currentPagePoints,
-            int pageIdx,
-            byte job,
-            byte level,
-            int bonusSp,
-            int bonusTp)
-        {
-            var page0Calculated = SkillPointCalculator.Calculate(job, level, bonusSp, bonusTp, snapshot, 0);
-            var page0 = snapshot != null && snapshot.Pages.Count > 0 ? snapshot.Pages[0] : null;
-            var remainingSp = pageIdx == 0
-                ? currentPagePoints.RemainingSp
-                : ResolvePageRemainingSp(page0, page0Calculated.RemainingSp);
-            var totalSp = Math.Max(page0Calculated.TotalSp, remainingSp);
-
-            return new SkillPointState
-            {
-                TotalSp = totalSp,
-                RemainingSp = Clamp(remainingSp, 0, totalSp),
-                TotalTp = currentPagePoints.TotalTp,
-                RemainingTp = Clamp(currentPagePoints.RemainingTp, 0, currentPagePoints.TotalTp),
-                SyncedLevel = level,
-                HasPersistedState = true,
-            };
-        }
-
-        private static int ResolvePageRemainingSp(SkillInfoPageSnapshot page, int calculatedRemainingSp)
-        {
-            if (page == null)
-                return Math.Max(0, calculatedRemainingSp);
-            if (page.HeaderValue > 0 || calculatedRemainingSp == 0)
-                return page.HeaderValue;
-            return calculatedRemainingSp;
-        }
-
-        private static int ResolveRemainingTp(SkillInfoSnapshot snapshot, int calculatedRemainingTp)
-        {
-            if (snapshot != null && snapshot.HasTailValues)
-            {
-                if (snapshot.Tail1 > 0)
-                    return snapshot.Tail1;
-                if (snapshot.Tail0 > 0)
-                    return snapshot.Tail0;
-            }
-            return Math.Max(0, calculatedRemainingTp);
-        }
-
         private static ushort ToUInt16(int value)
         {
-            return (ushort)Clamp(value, 0, ushort.MaxValue);
+            if (value < 0) return 0;
+            return value > ushort.MaxValue ? (ushort)ushort.MaxValue : (ushort)value;
         }
 
-        private static int Clamp(int value, int min, int max)
+        private static int GetFreeBaselineLevel(byte job, int skillId, int growType, int secondGrowType)
         {
-            if (value < min) return min;
-            if (value > max) return max;
-            return value;
-        }
-
-        private static int GetInitialLevel(byte job, int skillId)
-        {
-            var initial = InitialCharacterSkills.Build(job);
-            if (initial == null || initial.Pages.Count == 0) return 0;
-
-            foreach (var entry in initial.Pages[0].Entries)
-                if (entry.SkillId == skillId)
-                    return entry.Level;
-            return 0;
+            var baseline = SkillPointLedger.BuildFreeBaseline(job, growType, secondGrowType);
+            return baseline.TryGetValue((ushort)skillId, out var lv) ? lv : 0;
         }
     }
 }

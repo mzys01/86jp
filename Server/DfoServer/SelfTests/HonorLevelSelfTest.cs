@@ -147,12 +147,13 @@ INSERT INTO character_subtype1_fields(character_id, progress1, progress2) VALUES
                         Tail1 = 10770,
                         HasTailValues = true,
                     },
-                    new SkillPointState { RemainingSp = 321, RemainingTp = 7 });
+                    new SkillPointState { RemainingSp = 321, RemainingTp = 7, RemainingTpPage1 = 3 });
+                // 四池独立: Page1Tp 来自派生的 PVP 树 TP, 绝不回读镜像 Tail1。
                 Check("missing skill pages do not copy page0 SP and legacy Tail1 is never used as TP",
                     missingSkillPages.Page0Sp == 321
                     && missingSkillPages.Page1Sp == 0
                     && missingSkillPages.Page0Tp == 7
-                    && missingSkillPages.Page1Tp == 7);
+                    && missingSkillPages.Page1Tp == 3);
 
                 var ordinaryExpBody = ExpNotificationBuilder.Build(
                     86, 0, default, mixed);

@@ -163,6 +163,7 @@ namespace DfoServer.Game.Inventory
                                 "level/experience persistence failed");
                         }
 
+                        Characters.CharacterStatComputer.DecodeGrowType(character.GrowType, out var expFirstGrow, out var expSecondGrow);
                         var syncedSkills = SkillStateService.LoadAndSync(
                             _progressRepository,
                             connection,
@@ -172,7 +173,9 @@ namespace DfoServer.Game.Inventory
                             grant.NewLevel,
                             character.BonusSp,
                             character.BonusTp,
-                            persist: grant.LeveledUp);
+                            persist: grant.LeveledUp,
+                            growType: expFirstGrow,
+                            secondGrowType: expSecondGrow);
                         if (syncedSkills.Points == null)
                         {
                             return Reject(

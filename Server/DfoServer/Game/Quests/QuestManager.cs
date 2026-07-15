@@ -97,6 +97,11 @@ namespace DfoServer.Game.Quests
             int cid = _sender.CharacterId;
             if (cid <= 0) return;
             var result = _service.HandleFinishQuest(cid, qBody, _sender.Player?.Exp);
+
+            // 转职/觉醒后在 ACK 之前重发全量技能表(0x0013), 客户端整体替换, 面板即时刷新。
+            if (result.Success && (result.ChainType == 1 || result.ChainType == 2))
+                await SendSkillInfoRefreshAsync(cid);
+
             await _sender.SendCmdAckAsync(wireType, QuestAckBuilder.BuildFinish(result));
 
             if (!result.Success)
@@ -123,6 +128,7 @@ namespace DfoServer.Game.Quests
                     var rec = _characterRepository.GetById(cid);
                     if (rec != null)
                     {
+                        Characters.CharacterStatComputer.DecodeGrowType(rec.GrowType, out var fGrow, out var sGrow);
                         skillPoints = SkillStateService.LoadProtocolState(
                             _progressRepository,
                             cid,
@@ -130,7 +136,9 @@ namespace DfoServer.Game.Quests
                             player.Level,
                             rec.BonusSp,
                             rec.BonusTp,
-                            persist: leveledUp);
+                            persist: leveledUp,
+                            growType: fGrow,
+                            secondGrowType: sGrow);
                     }
                 }
                 catch (Exception ex)
@@ -361,8 +369,10 @@ namespace DfoServer.Game.Quests
                     var accountCharacters = _characterRepository.ListByAccount(record.AccountId);
                     honorLevel = honorLevel
                         ?? _honorLevel.LoadSummary(record.AccountId, accountCharacters);
+                    Characters.CharacterStatComputer.DecodeGrowType(record.GrowType, out var fGrow2, out var sGrow2);
                     var synced = SkillStateService.LoadAndSync(
-                        _progressRepository, characterId, record.Job, record.Level, record.BonusSp, record.BonusTp, persist: false);
+                        _progressRepository, characterId, record.Job, record.Level, record.BonusSp, record.BonusTp, persist: false,
+                        growType: fGrow2, secondGrowType: sGrow2);
                     await _sender.SendNotiAsync(0x0002,
                         Network.Handlers.UserInfoBroadcastService.BuildSubtype1Body(
                             record, addition, accountCharacters, honorLevel, synced.Skills));
@@ -390,6 +400,24 @@ namespace DfoServer.Game.Quests
                 honorLevel);
             if (sent)
                 FileLogger.Log($"[QuestManager] {reason} NOTI 2 subtype0 sent: cid={_sender.CharacterId}");
+        }
+
+        // 会话内重发全量技能表(NOTI 0x0013), 客户端整体替换技能状态。
+        private async Task SendSkillInfoRefreshAsync(int characterId)
+        {
+            try
+            {
+                var dataSource = new SqliteSelectCharacterDataSource(
+                    _databasePath, ServerPaths.SchemaFilePath, _characterRepository);
+                var snapshot = dataSource.Load(characterId, _sender.AccountId);
+                var skillBytes = SkillInfoBodyBuilder.BuildFrom(snapshot.InitializationSnapshot.SkillInfo);
+                await _sender.SendNotiAsync(0x0013, skillBytes);
+                FileLogger.Log($"[QuestManager] JobChange skill info refresh sent: cid={characterId} len={skillBytes.Length}");
+            }
+            catch (Exception ex)
+            {
+                FileLogger.Log($"[QuestManager] SendSkillInfoRefresh ERROR: {ex.Message}");
+            }
         }
 
         private async Task SendJobChangeNotification(

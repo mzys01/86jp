@@ -125,6 +125,7 @@ namespace DfoServer.Network.Handlers.Dungeon
             if (record == null)
                 return (ProgressRepository.LoadSkills(characterId), null);
 
+            CharacterStatComputer.DecodeGrowType(record.GrowType, out var firstGrow, out var secondGrow);
             return SkillStateService.LoadAndSync(
                 ProgressRepository,
                 characterId,
@@ -132,7 +133,9 @@ namespace DfoServer.Network.Handlers.Dungeon
                 currentLevel > 0 ? currentLevel : record.Level,
                 record.BonusSp,
                 record.BonusTp,
-                persist: persist);
+                persist: persist,
+                growType: firstGrow,
+                secondGrowType: secondGrow);
         }
 
         // 经验入口共用：返回 0x0025 所需的两页 SP 和共享 TP 绝对状态。

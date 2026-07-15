@@ -209,7 +209,10 @@ namespace DfoServer.Network.Handlers
                 if (off + 3 >= body.Length) break;
                 entries.Add(new Game.Skills.BuySkillEntry
                 {
-                    SkillIndex = body[off],
+                    // 请求条目为 4 字节 {u16 skillIndex, u8 isRefund, u8 level}:
+                    // 技能编号是双字节, 只读低位会把编号>255 的技能截断学错
+                    // (实例: 战斗法师二觉被动 使徒封印, 见 PR589)。
+                    SkillIndex = (ushort)(body[off] | (body[off + 1] << 8)),
                     IsRefund = body[off + 2],
                     Level = body[off + 3],
                 });
@@ -227,7 +230,7 @@ namespace DfoServer.Network.Handlers
                         Infrastructure.ServerPaths.DatabasePath, Infrastructure.ServerPaths.SchemaFilePath);
                     var rec = charRepo.GetById(cid);
                     var result = Game.Skills.BuySkillService.ExecuteWithRefundConsumable(_inventoryStore, repo, cid, session.Account?.AccountId ?? 1, job, skillTree, entries,
-                        rec?.BonusSp ?? 0, rec?.Level ?? (byte)1, rec?.BonusTp ?? 0);
+                        rec?.BonusSp ?? 0, rec?.Level ?? (byte)1, rec?.BonusTp ?? 0, rec?.GrowType ?? 0);
                     var ack = BuySkillAckBuilder.Build(result);
                     await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x001D, ack));
                     if (result != null && result.Success && result.ConsumedForgetRiverWater && result.ConsumedForgetRiverWaterItem != null)
@@ -253,9 +256,8 @@ namespace DfoServer.Network.Handlers
                     Infrastructure.ServerPaths.DatabasePath, Infrastructure.ServerPaths.SchemaFilePath,
                     _characterRepository);
                 var snapshot = dataSource.Load(cid, session.Account?.AccountId ?? 1);
-                var skillBody = new SkillInfoBodyBuilder();
-                if (skillBody.TryBuild(snapshot, 0, out var skillBytes))
-                    await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0013, skillBytes));
+                var skillBytes = SkillInfoBodyBuilder.BuildFrom(snapshot.InitializationSnapshot.SkillInfo);
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0013, skillBytes));
 
                 FileLogger.Log($"[SkillHandler] SKILL_INIT refresh char={cid}");
             }
@@ -369,12 +371,8 @@ namespace DfoServer.Network.Handlers
                 if (cleanup.QuickSlotsCleaned <= 0)
                     return;
 
-                var snapshot = new SelectCharacterDataSnapshot();
-                snapshot.InitializationSnapshot.SkillInfo = repo.LoadSkills(characterId);
-                var skillBody = new SkillInfoBodyBuilder();
-                if (!skillBody.TryBuild(snapshot, 0, out var skillBytes))
-                    return;
-
+                var skills = repo.LoadSkills(characterId);
+                var skillBytes = SkillInfoBodyBuilder.BuildFrom(skills);
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0013, skillBytes));
                 FileLogger.Log(
                     $"[SkillHandler] COMBO_SKILL_EXTENSION_QUICK_SLOT_RESET pre-clean " +

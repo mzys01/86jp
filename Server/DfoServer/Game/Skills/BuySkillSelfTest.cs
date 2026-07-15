@@ -38,9 +38,18 @@ namespace DfoServer.Game.Skills
             var secondCost = sd != null ? sd.SpCostFor(1, 2) : firstCost;
             const byte testLevel = 86;
             const int cid = 999001;
-            var startingSp = firstCost + secondCost + 7;
+            // SP 由 Ledger 全量派生: seed 技能全是初始技(免费), startingSp = TotalSp(86)。
+            var seedSnapshot = new SkillInfoSnapshot();
+            var seedPage0 = new SkillInfoPageSnapshot();
+            seedPage0.Entries.Add(new SkillInfoEntrySnapshot { Slot = 0, SkillId = 5, Level = 1 });
+            seedPage0.Entries.Add(new SkillInfoEntrySnapshot { Slot = 1, SkillId = 46, Level = 1 });
+            seedPage0.Entries.Add(new SkillInfoEntrySnapshot { Slot = 2, SkillId = 169, Level = 1 });
+            seedSnapshot.Pages.Add(seedPage0);
+            seedSnapshot.Pages.Add(new SkillInfoPageSnapshot());
+            var startingSp = SkillPointLedger.Compute(0, testLevel, 0, 0, seedSnapshot, 0).RemainingSp;
             var afterFirst = startingSp - firstCost;
             var afterSecond = afterFirst - secondCost;
+            var page1StartingSp = SkillPointLedger.Compute(0, testLevel, 0, 0, seedSnapshot, 1).RemainingSp;
 
             byte[] reqBody = { 0x00, 0x01, 0x40, 0x00, 0x00, 0x01, 0x00, 0xB7, 0x8D, 0x0A, 0x8C };
             Check("request skillTree=0", reqBody[0] == 0);
@@ -61,14 +70,7 @@ namespace DfoServer.Game.Skills
             var repo = new SqliteCharacterProgressRepository(tempDb, ServerPaths.SchemaFilePath);
             var charRepo = new Game.Characters.SqliteCharacterRepository(tempDb, ServerPaths.SchemaFilePath);
             EnsureTestCharacter(tempDb, cid, testLevel);
-            var seed = new SkillInfoSnapshot();
-            var p0 = new SkillInfoPageSnapshot { HeaderValue = 0x0005 };
-            p0.Entries.Add(new SkillInfoEntrySnapshot { Slot = 0, SkillId = 5, Level = 1 });
-            p0.Entries.Add(new SkillInfoEntrySnapshot { Slot = 1, SkillId = 46, Level = 1 });
-            p0.Entries.Add(new SkillInfoEntrySnapshot { Slot = 2, SkillId = 169, Level = 1 });
-            seed.Pages.Add(p0);
-            seed.Pages.Add(new SkillInfoPageSnapshot { HeaderValue = 0x2BF2 });
-            SeedSkillProgress(repo, cid, seed, testLevel, startingSp);
+            SeedSkillProgress(repo, cid, seedSnapshot, testLevel, startingSp);
 
             var entries = new List<BuySkillEntry>
             {
@@ -111,24 +113,26 @@ namespace DfoServer.Game.Skills
                 Check("persisted skill64 slot=3", learned.Slot == 3);
                 Check("persisted skill64 level=1", learned.Level == 1);
             }
-            Check($"protocol Tail0 mirror={reload.Tail0}, expected 37", reload.Tail0 == 37);
-            Check($"protocol Tail1 mirror={reload.Tail1}, expected 0", reload.Tail1 == 0);
-            Check($"page0 header mirror={page0?.HeaderValue ?? 0}, expected {afterFirst}", page0 != null && page0.HeaderValue == afterFirst);
-            Check($"page1 header preserved={page1?.HeaderValue ?? 0}, expected 0x2BF2", page1 != null && page1.HeaderValue == 0x2BF2);
+            // 镜像不落库(write-only)——从 Ledger 全量派生验证 SP/TP 正确性。
+            var derivedPoints = SkillPointLedger.Compute(0, testLevel, 0, 0, reload, 0);
+            Check($"derived remaining SP={derivedPoints.RemainingSp}, expected {afterFirst}",
+                derivedPoints.RemainingSp == afterFirst);
+            Check($"derived remaining TP={derivedPoints.RemainingTp}, expected 37", derivedPoints.RemainingTp == 37);
+            var derivedPage1 = SkillPointLedger.Compute(0, testLevel, 0, 0, reload, 1);
+            Check($"derived page1 SP={derivedPage1.RemainingSp}, expected {page1StartingSp}",
+                derivedPage1.RemainingSp == page1StartingSp);
 
-            var pointsAfterFirst = repo.LoadSkillPointState(cid);
-            Check("skill point state exists", pointsAfterFirst != null);
-            Check($"state remaining SP={pointsAfterFirst?.RemainingSp ?? -1}, expected {afterFirst}",
-                pointsAfterFirst != null && pointsAfterFirst.RemainingSp == afterFirst);
-
+            // 选角加载走 LoadAndSync 会重算并写入镜像——验证 Synchronize 后 snapshot 一致。
             var selectData = new SqliteSelectCharacterDataSource(tempDb, ServerPaths.SchemaFilePath, charRepo);
             var selectSnapshot = selectData.Load(cid, 1);
-            Check($"select init Tail0={selectSnapshot.InitializationSnapshot.SkillInfo.Tail0}, expected 37",
-                selectSnapshot.InitializationSnapshot.SkillInfo.Tail0 == 37);
-            Check($"select init Tail1={selectSnapshot.InitializationSnapshot.SkillInfo.Tail1}, expected 0",
-                selectSnapshot.InitializationSnapshot.SkillInfo.Tail1 == 0);
-            Check($"select init page1 header={selectSnapshot.InitializationSnapshot.SkillInfo.Pages[1].HeaderValue}, expected 0x2BF2",
-                selectSnapshot.InitializationSnapshot.SkillInfo.Pages[1].HeaderValue == 0x2BF2);
+            var selectSkillInfo = selectSnapshot.InitializationSnapshot.SkillInfo;
+            Check($"select init Tail0={selectSkillInfo.Tail0}, expected {derivedPoints.RemainingTp}",
+                selectSkillInfo.Tail0 == derivedPoints.RemainingTp);
+            // Tail1 = 第二页剩余 TP(四池独立)。
+            Check($"select init Tail1={selectSkillInfo.Tail1}, expected {derivedPage1.RemainingTp} (PVP TP)",
+                selectSkillInfo.Tail1 == derivedPage1.RemainingTp);
+            Check($"select init page1 header={selectSkillInfo.Pages[1].HeaderValue}, expected {page1StartingSp}",
+                selectSkillInfo.Pages[1].HeaderValue == page1StartingSp);
 
             var refundInitial = RunBuy(repo, cid, new List<BuySkillEntry>
             {
@@ -165,38 +169,43 @@ namespace DfoServer.Game.Skills
 
             var page1Learned = BuySkillService.Execute(repo, cid, 0, 1, entries, level: testLevel);
             Check("page1 learn success uses page1 SP", page1Learned != null && page1Learned.Success);
-            Check($"page1 learn remaining SP={page1Learned?.RemainSp ?? 0}, expected {0x2BF2 - firstCost}",
-                page1Learned != null && page1Learned.RemainSp == 0x2BF2 - firstCost);
+            Check($"page1 learn remaining SP={page1Learned?.RemainSp ?? 0}, expected {page1StartingSp - firstCost}",
+                page1Learned != null && page1Learned.RemainSp == page1StartingSp - firstCost);
             var reloadPage1 = repo.LoadSkills(cid);
-            Check($"page1 header updated={reloadPage1.Pages[1].HeaderValue}, expected {0x2BF2 - firstCost}",
-                reloadPage1.Pages[1].HeaderValue == 0x2BF2 - firstCost);
-            Check($"page0 header preserved after page1 learn={reloadPage1.Pages[0].HeaderValue}, expected {afterFirst}",
-                reloadPage1.Pages[0].HeaderValue == afterFirst);
+            var derivedPage1AfterLearn = SkillPointLedger.Compute(0, testLevel, 0, 0, reloadPage1, 1);
+            Check($"page1 derived SP after learn={derivedPage1AfterLearn.RemainingSp}, expected {page1StartingSp - firstCost}",
+                derivedPage1AfterLearn.RemainingSp == page1StartingSp - firstCost);
+            var derivedPage0AfterPage1Learn = SkillPointLedger.Compute(0, testLevel, 0, 0, reloadPage1, 0);
+            Check($"page0 SP preserved after page1 learn={derivedPage0AfterPage1Learn.RemainingSp}, expected {afterFirst}",
+                derivedPage0AfterPage1Learn.RemainingSp == afterFirst);
 
             var syncedAtNextLevel = SkillStateService.LoadAndSync(
                 repo, cid, 0, (byte)(testLevel + 1), 0, 0, persist: true);
             var gainedSp = SpTableProvider.GetSpAtLevel(testLevel + 1);
             Check($"level-up sync adds SP: {syncedAtNextLevel.Points.RemainingSp}, expected {afterFirst + gainedSp}",
                 syncedAtNextLevel.Points.RemainingSp == afterFirst + gainedSp);
-            Check($"level-up sync keeps page1 SP={syncedAtNextLevel.Skills.Pages[1].HeaderValue}, expected {0x2BF2 - firstCost + gainedSp}",
-                syncedAtNextLevel.Skills.Pages[1].HeaderValue == 0x2BF2 - firstCost + gainedSp);
+            Check($"level-up sync keeps page1 SP={syncedAtNextLevel.Skills.Pages[1].HeaderValue}, expected {page1StartingSp - firstCost + gainedSp}",
+                syncedAtNextLevel.Skills.Pages[1].HeaderValue == page1StartingSp - firstCost + gainedSp);
             var protocolState = SkillStateService.GetProtocolState(
                 syncedAtNextLevel.Skills,
                 syncedAtNextLevel.Points);
-            Check($"0x0025 page1 SP={protocolState.Page1Sp}, expected {0x2BF2 - firstCost + gainedSp}",
-                protocolState.Page1Sp == 0x2BF2 - firstCost + gainedSp);
+            Check($"0x0025 page1 SP={protocolState.Page1Sp}, expected {page1StartingSp - firstCost + gainedSp}",
+                protocolState.Page1Sp == page1StartingSp - firstCost + gainedSp);
 
+            // SP 不足测试: 用低等级角色(level=1), TotalSp 远小于 firstCost=15。
+            const byte poorLevel = 1;
             string tempDb2 = Path.Combine(Path.GetTempPath(), "buyskill_selftest2.db");
             DeleteSqliteFiles(tempDb2);
             var repo2 = new SqliteCharacterProgressRepository(tempDb2, ServerPaths.SchemaFilePath);
             _ = new Game.Characters.SqliteCharacterRepository(tempDb2, ServerPaths.SchemaFilePath);
-            EnsureTestCharacter(tempDb2, cid, testLevel);
-            var poorSp = Math.Max(0, firstCost - 1);
+            EnsureTestCharacter(tempDb2, cid, poorLevel);
             var poorSeed = new SkillInfoSnapshot();
-            poorSeed.Pages.Add(new SkillInfoPageSnapshot { HeaderValue = 0x0005 });
-            poorSeed.Pages.Add(new SkillInfoPageSnapshot { HeaderValue = 0x2BF2 });
-            SeedSkillProgress(repo2, cid, poorSeed, testLevel, poorSp);
-            var poor = RunBuy(repo2, cid, entries, testLevel);
+            poorSeed.Pages.Add(new SkillInfoPageSnapshot());
+            poorSeed.Pages.Add(new SkillInfoPageSnapshot());
+            SeedSkillProgress(repo2, cid, poorSeed, poorLevel, 0);
+            var poorTotalSp = SkillPointLedger.Compute(0, poorLevel, 0, 0, poorSeed, 0).RemainingSp;
+            Check($"poor level SP={poorTotalSp} < firstCost={firstCost}", poorTotalSp < firstCost);
+            var poor = RunBuy(repo2, cid, entries, poorLevel);
             Check("SP-insufficient purchase fails", poor != null && !poor.Success);
             var reload3 = repo2.LoadSkills(cid);
             var notLearned = reload3.Pages.Count > 0 ? reload3.Pages[0].Entries.Find(x => x.SkillId == 64) : null;
@@ -208,10 +217,10 @@ namespace DfoServer.Game.Skills
             var repo5 = new SqliteCharacterProgressRepository(tempDb5, ServerPaths.SchemaFilePath);
             EnsureTestCharacter(tempDb5, cid, testLevel);
             var noWaterSeed = new SkillInfoSnapshot();
-            noWaterSeed.Pages.Add(new SkillInfoPageSnapshot { HeaderValue = (ushort)afterSecond });
+            noWaterSeed.Pages.Add(new SkillInfoPageSnapshot());
             noWaterSeed.Pages[0].Entries.Add(new SkillInfoEntrySnapshot { Slot = 3, SkillId = 64, Level = 2 });
-            noWaterSeed.Pages.Add(new SkillInfoPageSnapshot { HeaderValue = 0x2BF2 });
-            SeedSkillProgress(repo5, cid, noWaterSeed, testLevel, afterSecond);
+            noWaterSeed.Pages.Add(new SkillInfoPageSnapshot());
+            SeedSkillProgress(repo5, cid, noWaterSeed, testLevel, 0);
             var noWaterStore = new SqliteInventoryStore(tempDb5, ServerPaths.SchemaFilePath);
             var noWaterRefund = RunBuyWithRefundConsumable(noWaterStore, repo5, cid, new List<BuySkillEntry>
             {
@@ -271,10 +280,10 @@ namespace DfoServer.Game.Skills
         {
             var skills = new SkillInfoSnapshot { Tail1 = ushort.MaxValue, HasTailValues = true };
             skills.Pages.Add(new SkillInfoPageSnapshot { HeaderValue = ushort.MaxValue });
-            var calculated = SkillPointCalculator.Calculate(0, level, 0, 0, skills);
-            var resolved = SkillStateService.ResolvePointState(skills, null, 0, level, 0, 0);
+            var ledger = SkillPointLedger.Compute(0, level, 0, 0, skills, 0);
+            var resolved = SkillStateService.ResolvePointState(skills, 0, level, 0, 0);
             Check($"missing point row bootstraps calculated SP={resolved.RemainingSp}",
-                resolved.RemainingSp == calculated.RemainingSp);
+                resolved.RemainingSp == ledger.RemainingSp);
         }
 
         private static void CheckSeedFromSnapshotCreatesPointState(byte level)
@@ -291,14 +300,14 @@ namespace DfoServer.Game.Skills
 
             repo.SeedFromSnapshot(seedCid, snapshot);
 
-            var points = repo.LoadSkillPointState(seedCid);
             var reloaded = repo.LoadSkills(seedCid);
-            var calculated = SkillPointCalculator.Calculate(0, level, 0, 0, reloaded);
-            Check("seed snapshot creates skill point state", points != null && points.HasPersistedState);
-            Check($"seed snapshot remaining SP={points?.RemainingSp ?? -1}, expected {calculated.RemainingSp}",
-                points != null && points.RemainingSp == calculated.RemainingSp);
-            Check($"seed snapshot Tail0 mirror={reloaded.Tail0}, expected TP={calculated.RemainingTp}",
-                reloaded.Tail0 == calculated.RemainingTp);
+            var ledger = SkillPointLedger.Compute(0, level, 0, 0, reloaded, 0);
+            var resolvedPoints = SkillStateService.ResolvePointState(reloaded, 0, level, 0, 0);
+            Check($"seed snapshot remaining SP={resolvedPoints.RemainingSp}, expected {ledger.RemainingSp}",
+                resolvedPoints.RemainingSp == ledger.RemainingSp);
+            SkillStateService.ApplyProtocolMirrors(reloaded, resolvedPoints);
+            Check($"seed snapshot Tail0 after sync={reloaded.Tail0}, expected TP={ledger.RemainingTp}",
+                reloaded.Tail0 == ledger.RemainingTp);
         }
 
         private static void CheckSkillTreeIndexSurvivesSelectLoad(byte level)
@@ -311,7 +320,7 @@ namespace DfoServer.Game.Skills
             var charRepo = new Game.Characters.SqliteCharacterRepository(tempDb, ServerPaths.SchemaFilePath);
             EnsureTestCharacter(tempDb, skillTreeCid, level);
             var skills = InitialCharacterSkills.Build(0);
-            var points = SkillStateService.ResolvePointState(skills, null, 0, level, 0, 0);
+            var points = SkillStateService.ResolvePointState(skills, 0, level, 0, 0);
             SkillStateService.Persist(repo, skillTreeCid, skills, points);
 
             var subtype1Repo = new SqliteSubtype1Repository(tempDb, ServerPaths.SchemaFilePath);
@@ -545,16 +554,9 @@ namespace DfoServer.Game.Skills
             byte level,
             int remainingSp)
         {
-            var calculated = SkillPointCalculator.Calculate(0, level, 0, 0, skills);
-            var points = new SkillPointState
-            {
-                TotalSp = calculated.TotalSp,
-                RemainingSp = remainingSp,
-                TotalTp = calculated.TotalTp,
-                RemainingTp = calculated.TotalTp,
-                SyncedLevel = level,
-                HasPersistedState = true,
-            };
+            // 点数由 Ledger 从已学技能派生, 不再直接构造——只保存技能条目,
+            // 发包时 Ledger 会算出与 remainingSp 一致的值(前提: 传入的 skills 状态自洽)。
+            var points = SkillStateService.ResolvePointState(skills, 0, level, 0, 0);
             SkillStateService.Persist(repo, cid, skills, points);
         }
 

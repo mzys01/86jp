@@ -82,6 +82,7 @@ namespace DfoServer.Game.Accounts
                 }
                 else
                 {
+                    Characters.CharacterStatComputer.DecodeGrowType(record.GrowType, out var capFirstGrow, out var capSecondGrow);
                     skillPoints = SkillStateService.LoadProtocolState(
                         _progressRepository,
                         record.CharacterId,
@@ -89,7 +90,9 @@ namespace DfoServer.Game.Accounts
                         session.Player.Level,
                         record.BonusSp,
                         record.BonusTp,
-                        persist: false);
+                        persist: false,
+                        growType: capFirstGrow,
+                        secondGrowType: capSecondGrow);
                     return true;
                 }
             }
