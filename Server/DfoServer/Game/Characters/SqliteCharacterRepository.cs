@@ -151,7 +151,9 @@ SELECT character_id FROM characters WHERE rowid = last_insert_rowid();";
             }
         }
 
-        public void UpdateLevelAndExp(int characterId, byte level, uint exp)
+        // 仅供自测 setup 使用: 裸写 level/exp, 绕过战斗属性重算。
+        // 业务代码一律走经验系统(Game/Progression), 已从 ICharacterRepository 撤下。
+        internal void UpdateLevelAndExp(int characterId, byte level, uint exp)
         {
             using (var conn = Open())
             using (var cmd = conn.CreateCommand())

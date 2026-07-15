@@ -693,26 +693,21 @@ namespace DfoServer.Game.Quests
                 newExp = currentExp ?? GetCharacterExp(scope.Connection, scope.Transaction, characterId);
                 if (expReward > 0)
                 {
-                    honorExpReward = HonorLevelDataProvider.CalculateHonorExpGain(newLevel, newExp, expReward);
-                    normalExpReward = expReward > honorExpReward ? expReward - honorExpReward : 0;
-                    if (normalExpReward > 0)
-                    {
-                        newExp = newExp > uint.MaxValue - normalExpReward
-                            ? uint.MaxValue
-                            : newExp + normalExpReward;
-                        newLevel = Dungeon.ExpTableProvider.ApplyLevelUps(newLevel, newExp);
-                        Characters.CharacterProgressService.PersistLevelAndExp(
-                            scope.Connection, scope.Transaction, characterId, newLevel, newExp);
-                    }
-
-                    if (honorExpReward > 0)
-                    {
-                        var accountProgress = AccountExperienceProgressService.AddInTransaction(
-                            scope.Connection, scope.Transaction, accountId, honorExpReward);
-                        totalHonorExp = accountProgress.TotalHonorExp;
-                        growthCapsuleExpReward = accountProgress.GrowthCapsuleExpGain;
-                        totalGrowthCapsuleExp = accountProgress.TotalGrowthCapsuleExp;
-                    }
+                    var grant = Progression.CharacterExperienceService.GrantInTransaction(
+                        scope.Connection,
+                        scope.Transaction,
+                        characterId,
+                        accountId,
+                        newLevel,
+                        newExp,
+                        expReward);
+                    newLevel = grant.NewLevel;
+                    newExp = grant.NewExp;
+                    honorExpReward = grant.HonorExpGain;
+                    normalExpReward = grant.NormalExpGain;
+                    totalHonorExp = grant.TotalHonorExp;
+                    growthCapsuleExpReward = grant.GrowthCapsuleExpGain;
+                    totalGrowthCapsuleExp = grant.TotalGrowthCapsuleExp;
                 }
 
                 scope.Commit();

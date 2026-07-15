@@ -159,7 +159,7 @@ namespace DfoServer.Network.Handlers
             await s.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0017, TownAreaNotificationBuilder.BuildUserArea(snap)));
             await s.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0018, TownAreaNotificationBuilder.BuildAreaUsers(snap)));
             await s.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x00CA, new byte[] { 0x00 }));
-            await Dungeon.DungeonSharedServices.SendUserInfoSubtype0BroadcastAsync(
+            await UserInfoBroadcastService.SendSubtype0Async(
                 s,
                 _characterRepository,
                 _subtype0Repository,

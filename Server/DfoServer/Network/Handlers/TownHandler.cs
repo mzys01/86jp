@@ -357,7 +357,7 @@ namespace DfoServer.Network.Handlers
                 return;
 
             var summary = _honorLevel.LoadSummary(accountId);
-            await Dungeon.DungeonSharedServices.SendUserInfoSubtype0BroadcastAsync(
+            await UserInfoBroadcastService.SendSubtype0Async(
                 session,
                 _characterRepository,
                 _subtype0Repository,

@@ -38,11 +38,6 @@ namespace DfoServer.Game.Accounts
             return _repository.LoadSummary(accountId, accountCharacters);
         }
 
-        public HonorLevelSummary AddExp(int accountId, uint delta)
-        {
-            return _repository.AddHonorExp(accountId, delta);
-        }
-
         public async Task SendInfoAsync(EnhancedClientSession session, string protocolName, string reason, HonorLevelSummary summary = null)
         {
             var accountId = session?.Account?.AccountId ?? 0;

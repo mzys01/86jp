@@ -3,6 +3,7 @@ using DfoServer.Game.Characters;
 using DfoServer.Game.Dungeon;
 using DfoServer.Game.Inventory;
 using DfoServer.Game.Premium;
+using DfoServer.Game.Progression;
 using DfoServer.Game.SecretShop;
 using DfoServer.Game.Skills;
 using DfoServer.Infrastructure;
@@ -46,42 +47,15 @@ namespace DfoServer.Network.Handlers.Dungeon
             var clearRank = CalculateClearRank(body);
             var clearExp = CalculateClearRewardExp(session, clearRank.RankBonusIndex);
             var prevLevel = session.Player.Level;
-            var prevExp = session.Player.Exp;
-            var clearHonorExpGain = 0u;
-            var clearNormalExpGain = clearExp.Total;
-            HonorLevelSummary honorSummary = null;
-            GrowthCapsuleSummary growthCapsuleSummary = null;
-            var normalizedMaxExp = false;
-            if (clearExp.Total > 0)
-            {
-                clearHonorExpGain = HonorLevelDataProvider.CalculateHonorExpGain(prevLevel, prevExp, clearExp.Total);
-                clearNormalExpGain = clearExp.Total > clearHonorExpGain ? clearExp.Total - clearHonorExpGain : 0u;
-                if (prevLevel >= ExpTableProvider.MaxLevel)
-                {
-                    var maxLevelEntryExp = (uint)Math.Max(0, ExpTableProvider.GetLevelThreshold(ExpTableProvider.MaxLevel - 1));
-                    if (session.Player.Exp != maxLevelEntryExp)
-                    {
-                        session.Player.Exp = maxLevelEntryExp;
-                        normalizedMaxExp = true;
-                    }
-                }
-                else if (clearNormalExpGain > 0)
-                {
-                    session.Player.Exp = AddSaturating(session.Player.Exp, clearNormalExpGain);
-                }
-                if (clearHonorExpGain > 0 && (session.Account?.AccountId ?? 0) > 0)
-                {
-                    var accountProgress = _svc.AccountExperience.AddHonorAndGrowthCapsuleExp(
-                        session.Account.AccountId, clearHonorExpGain);
-                    honorSummary = accountProgress.Honor;
-                    growthCapsuleSummary = accountProgress.GrowthCapsule;
-                    FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] ACCOUNT_EXP_GAIN clear: account={session.Account.AccountId} cid={session.Player.CharacterId} honor={clearHonorExpGain} capsule={accountProgress.GrowthCapsuleExpGain} capsuleTotal={growthCapsuleSummary.TotalExp}");
-                }
-                session.Player.Level = ExpTableProvider.ApplyLevelUps(session.Player.Level, session.Player.Exp);
-            }
-            var leveledUp = session.Player.Level > prevLevel;
-            if (leveledUp || clearNormalExpGain > 0 || normalizedMaxExp)
-                CharacterProgressService.PersistLevelAndExp(session.Player.CharacterId, session.Player.Level, session.Player.Exp);
+            var grant = clearExp.Total > 0
+                ? _svc.CharacterExperience.Grant(
+                    session.Player,
+                    session.Account?.AccountId ?? 0,
+                    clearExp.Total,
+                    ExperiencePersistMode.OnAnyChange,
+                    "clear")
+                : null;
+            var leveledUp = grant != null && grant.LeveledUp;
 
             // Pre-generate card rewards (df_game_r: clear_reward generated before NOTI 35)
             int dungeonLevel = 85;
@@ -117,20 +91,7 @@ namespace DfoServer.Network.Handlers.Dungeon
                     rankIndex: (byte)clearRank.RankBonusIndex,
                     timeBonusPoint: (byte)Math.Max(0, Math.Min(255, clearRank.TimeBonusPoint)),
                     clientRankPoint: clearRank.ClientRankPoint)));
-            if (clearNormalExpGain > 0 || leveledUp || clearHonorExpGain > 0)
-            {
-                honorSummary = _svc.ResolveHonorLevelForExp(session, honorSummary);
-                growthCapsuleSummary = _svc.ResolveGrowthCapsuleForExp(session, growthCapsuleSummary);
-                if (_svc.TryGetSkillPointProtocolState(
-                        session, persist: leveledUp, logTag: "SET_PLAY_RESULT", out var skillPoints))
-                {
-                    await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0025,
-                        ExpNotificationBuilder.Build(
-                            session.Player.Level, session.Player.Exp, skillPoints, honorSummary,
-                            growthCapsuleExp: GrowthCapsuleDataProvider.GetDisplayProgress(
-                                session.Player.Level, growthCapsuleSummary))));
-                }
-            }
+            await _svc.SendExpGrantNotificationAsync(session, grant, "SET_PLAY_RESULT");
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0023,
                 DungeonNotificationBuilder.BuildClearDungeonReward(
                     clearExp.Base, scoreBonusExp: ToInt32Saturated(clearExp.ScoreBonus), clearBonusExp: 0,
@@ -288,12 +249,6 @@ namespace DfoServer.Network.Handlers.Dungeon
             return value >= uint.MaxValue ? uint.MaxValue : (uint)value;
         }
 
-        private static uint AddSaturating(uint current, uint add)
-        {
-            var value = (ulong)current + add;
-            return value > uint.MaxValue ? uint.MaxValue : (uint)value;
-        }
-
         private static int ToInt32Saturated(uint value)
         {
             return value > int.MaxValue ? int.MaxValue : (int)value;
@@ -333,8 +288,8 @@ namespace DfoServer.Network.Handlers.Dungeon
             internal uint GrowthContractBonus { get; }
             internal uint BlackDiamondBonus { get; }
             internal uint AdventureGroupBonus { get; }
-            internal uint Bonus => AddSaturating(AddSaturating(AddSaturating(ScoreBonus, GrowthContractBonus), BlackDiamondBonus), AdventureGroupBonus);
-            internal uint Total => AddSaturating(Base, Bonus);
+            internal uint Bonus => CharacterExperienceService.AddSaturating(CharacterExperienceService.AddSaturating(CharacterExperienceService.AddSaturating(ScoreBonus, GrowthContractBonus), BlackDiamondBonus), AdventureGroupBonus);
+            internal uint Total => CharacterExperienceService.AddSaturating(Base, Bonus);
         }
 
         internal async Task HandleSelectCard(EnhancedClientSession session, GamePacketHeader header, byte[] body)

@@ -2,6 +2,7 @@ using DfoServer.Game.Accounts;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Dungeon;
 using DfoServer.Game.Premium;
+using DfoServer.Game.Progression;
 using DfoServer.Game.Skills;
 using DfoServer.Infrastructure;
 using DfoServer.Network.Builders;
@@ -112,7 +113,7 @@ namespace DfoServer.Network.Handlers.Dungeon
                 float killerExpRate = MonsterRewardTable.BaseExpPenalty(session.Player.Level, monsterLevel);
                 uint killerScaledExp = (uint)(gainedExp * killerExpRate);
                 var growthContractBonusExp = CalculateGrowthContractMonsterBonus(session, killerScaledExp);
-                var totalGainedExp = AddSaturating(killerScaledExp, growthContractBonusExp);
+                var totalGainedExp = CharacterExperienceService.AddSaturating(killerScaledExp, growthContractBonusExp);
 
                 int dungeonBasisLevel = monsterLevel;
                 try { dungeonBasisLevel = DungeonData.GetDungeonBasicLv(run.DungeonId); } catch (Exception ex) { FileLogger.Log($"[DungeonHandler] DIE_MONSTER ERROR: basic level fallback dungeon={run.DungeonId} default={dungeonBasisLevel}: {ex.Message}"); }
@@ -142,37 +143,15 @@ namespace DfoServer.Network.Handlers.Dungeon
                     generatedDrops = dropResult.Drops;
                 }
 
-                var prevLevel = session.Player.Level;
-                var prevExp = session.Player.Exp;
-                var honorExpGain = HonorLevelDataProvider.CalculateHonorExpGain(prevLevel, prevExp, totalGainedExp);
-                var normalExpGain = totalGainedExp > honorExpGain ? totalGainedExp - honorExpGain : 0u;
-                HonorLevelSummary honorSummary = null;
-                GrowthCapsuleSummary growthCapsuleSummary = null;
-                var normalizedMaxExp = false;
-                if (prevLevel >= ExpTableProvider.MaxLevel)
-                {
-                    var maxLevelEntryExp = (uint)Math.Max(0, ExpTableProvider.GetLevelThreshold(ExpTableProvider.MaxLevel - 1));
-                    if (session.Player.Exp != maxLevelEntryExp)
-                    {
-                        session.Player.Exp = maxLevelEntryExp;
-                        normalizedMaxExp = true;
-                    }
-                }
-                else if (normalExpGain > 0)
-                {
-                    session.Player.Exp = AddSaturating(session.Player.Exp, normalExpGain);
-                }
-                if (honorExpGain > 0 && (session.Account?.AccountId ?? 0) > 0)
-                {
-                    var accountProgress = _svc.AccountExperience.AddHonorAndGrowthCapsuleExp(
-                        session.Account.AccountId, honorExpGain);
-                    honorSummary = accountProgress.Honor;
-                    growthCapsuleSummary = accountProgress.GrowthCapsule;
-                    FileLogger.Log($"[DungeonHandler] ACCOUNT_EXP_GAIN monster: account={session.Account.AccountId} cid={session.Player.CharacterId} honor={honorExpGain} capsule={accountProgress.GrowthCapsuleExpGain} capsuleTotal={growthCapsuleSummary.TotalExp}");
-                }
+                var grant = _svc.CharacterExperience.Grant(
+                    session.Player,
+                    session.Account?.AccountId ?? 0,
+                    totalGainedExp,
+                    ExperiencePersistMode.OnLevelUpOnly,
+                    "monster");
                 run.TotalExp += gainedExp;
                 run.MonsterGrowthContractBonusExp =
-                    AddSaturating(run.MonsterGrowthContractBonusExp, growthContractBonusExp);
+                    CharacterExperienceService.AddSaturating(run.MonsterGrowthContractBonusExp, growthContractBonusExp);
                 if (isBossMonster)
                     run.BossTotalExp += gainedExp;
                 if (isChampionMonster)
@@ -191,33 +170,11 @@ namespace DfoServer.Network.Handlers.Dungeon
                     FileLogger.Log($"[DungeonHandler] DROP: {generatedDrops.Count} items, seqId={req.LocalIndex} seed={run.RoomLcg.Seed:X8}");
                 }
 
-                session.Player.Level = ExpTableProvider.ApplyLevelUps(session.Player.Level, session.Player.Exp);
+                await _svc.SendExpGrantNotificationAsync(session, grant, "DIE_MONSTER", growthContractBonusExp);
 
-                var leveledUp = session.Player.Level > prevLevel;
-                if (leveledUp || normalizedMaxExp)
+                if (grant.LeveledUp)
                 {
-                    CharacterProgressService.PersistLevelAndExp(session.Player.CharacterId, session.Player.Level, session.Player.Exp);
-                }
-
-                if (normalExpGain > 0 || leveledUp || honorExpGain > 0)
-                {
-                    honorSummary = _svc.ResolveHonorLevelForExp(session, honorSummary);
-                    growthCapsuleSummary = _svc.ResolveGrowthCapsuleForExp(session, growthCapsuleSummary);
-                    if (_svc.TryGetSkillPointProtocolState(
-                            session, persist: leveledUp, logTag: "DIE_MONSTER", out var skillPoints))
-                    {
-                        await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0025,
-                            ExpNotificationBuilder.Build(
-                                session.Player.Level, session.Player.Exp, skillPoints, honorSummary,
-                                growthContractBonusExp: growthContractBonusExp,
-                                growthCapsuleExp: GrowthCapsuleDataProvider.GetDisplayProgress(
-                                    session.Player.Level, growthCapsuleSummary))));
-                    }
-                }
-
-                if (leveledUp)
-                {
-                    FileLogger.Log($"[DungeonHandler] LEVEL UP: cid={session.Player.CharacterId} {prevLevel}->{session.Player.Level} exp={session.Player.Exp}");
+                    FileLogger.Log($"[DungeonHandler] LEVEL UP: cid={session.Player.CharacterId} {grant.PreviousLevel}->{session.Player.Level} exp={session.Player.Exp}");
                     await _svc.SendInDungeonLevelUpFollowups(session);
                 }
 
@@ -424,43 +381,20 @@ namespace DfoServer.Network.Handlers.Dungeon
                 if (bs?.Player?.CurrentRun == null || bs.TcpClient == null || !bs.TcpClient.Connected) continue;
                 try
                 {
-                    var prevLevel = bs.Player.Level;
-                    var prevExp = bs.Player.Exp;
                     // 队友按【自己等级】缩放同一份怪物经验(不是照搬击杀者的量)。
                     float memberRate = MonsterRewardTable.BaseExpPenalty(bs.Player.Level, monsterLevel);
                     uint memberExp = (uint)(exp * memberRate);
                     if (memberExp == 0) continue;
 
-                    // 与击杀者本人相同的荣誉拆分: 满级溢出部分转入账号荣誉经验。
-                    var memberHonorGain = HonorLevelDataProvider.CalculateHonorExpGain(prevLevel, prevExp, memberExp);
-                    var memberNormalGain = memberExp > memberHonorGain ? memberExp - memberHonorGain : 0u;
-                    HonorLevelSummary memberHonor = null;
-                    if (memberNormalGain > 0)
-                    {
-                        bs.Player.Exp = AddSaturating(bs.Player.Exp, memberNormalGain);
-                        bs.Player.Level = ExpTableProvider.ApplyLevelUps(bs.Player.Level, bs.Player.Exp);
-                    }
-                    if (memberHonorGain > 0 && (bs.Account?.AccountId ?? 0) > 0)
-                    {
-                        memberHonor = _svc.HonorLevel.AddExp(bs.Account.AccountId, memberHonorGain);
-                        FileLogger.Log($"[DungeonHandler] HONOR_EXP_GAIN party-kill: account={bs.Account.AccountId} cid={bs.Player.CharacterId} gain={memberHonorGain}");
-                    }
-                    var leveledUp = bs.Player.Level > prevLevel;
-                    if (leveledUp)
-                        CharacterProgressService.PersistLevelAndExp(bs.Player.CharacterId, bs.Player.Level, bs.Player.Exp);
-                    var hasSkillPoints = _svc.TryGetSkillPointProtocolState(
-                        bs, persist: leveledUp, logTag: "PARTY_KILL_EXP", out var skillPoints);
-                    memberHonor = _svc.ResolveHonorLevelForExp(bs, memberHonor);
-                    if (hasSkillPoints)
-                    {
-                        var memberGrowthCapsule = _svc.ResolveGrowthCapsuleForExp(bs);
-                        await bs.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0025,
-                            ExpNotificationBuilder.Build(
-                                bs.Player.Level, bs.Player.Exp, skillPoints, memberHonor,
-                                growthCapsuleExp: GrowthCapsuleDataProvider.GetDisplayProgress(
-                                    bs.Player.Level, memberGrowthCapsule))));
-                    }
-                    if (leveledUp)
+                    // 与击杀者本人同一条统一入口: 荣誉拆分/满级纠偏/成长胶囊联动全部一致。
+                    var grant = _svc.CharacterExperience.Grant(
+                        bs.Player,
+                        bs.Account?.AccountId ?? 0,
+                        memberExp,
+                        ExperiencePersistMode.OnLevelUpOnly,
+                        "party-kill");
+                    await _svc.SendExpGrantNotificationAsync(bs, grant, "PARTY_KILL_EXP");
+                    if (grant.LeveledUp)
                         await _svc.SendInDungeonLevelUpFollowups(bs);
                 }
                 catch (System.Exception ex)
@@ -717,12 +651,6 @@ namespace DfoServer.Network.Handlers.Dungeon
             if (value <= 0)
                 return 0;
             return value >= uint.MaxValue ? uint.MaxValue : (uint)value;
-        }
-
-        private static uint AddSaturating(uint current, uint add)
-        {
-            var value = (ulong)current + add;
-            return value > uint.MaxValue ? uint.MaxValue : (uint)value;
         }
 
         internal async Task HandleUseCoin(EnhancedClientSession session, GamePacketHeader header, byte[] body)

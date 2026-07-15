@@ -128,18 +128,7 @@ namespace DfoServer.Network.Handlers.Dungeon
                 return;
             }
 
-            byte target = TutorialTargetLevel;
-            uint targetExp = 0;
-            for (byte lv = 1; lv < target; lv++)
-            {
-                var threshold = (uint)ExpTableProvider.GetLevelThreshold(lv);
-                if (threshold > targetExp) targetExp = threshold;
-            }
-            session.Player.Exp = targetExp;
-            session.Player.Level = target;
-
-            CharacterProgressService.PersistLevelAndExp(session.Player.CharacterId, session.Player.Level, session.Player.Exp);
-            FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] TUTORIAL_LEVEL_UP: {1}->{target} exp={targetExp}");
+            _svc.CharacterExperience.GrantToLevel(session.Player, TutorialTargetLevel, "tutorial");
 
             var hasSkillPoints = _svc.TryGetSkillPointProtocolState(
                 session, persist: true, logTag: "TUTORIAL_LEVEL_UP", out var skillPoints);

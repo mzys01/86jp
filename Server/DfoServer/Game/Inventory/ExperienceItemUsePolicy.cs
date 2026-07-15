@@ -123,21 +123,16 @@ namespace DfoServer.Game.Inventory
                     ExperienceItemUseStatus.NoExperienceGain,
                     "calculated experience is zero");
 
-            var honorExpGain = HonorLevelDataProvider.CalculateHonorExpGain(
-                context.Level,
-                context.Exp,
-                grantedExp);
-            var normalExpGain = grantedExp > honorExpGain
-                ? grantedExp - honorExpGain
-                : 0;
-            var newExp = AddSaturating(context.Exp, normalExpGain);
+            // 拆分/累加/升级判定统一走经验系统的数学核, 此处只做预演不落库。
+            var plan = Progression.CharacterExperienceService.Plan(
+                context.Level, context.Exp, grantedExp);
             return new ExperienceItemUsePlan
             {
                 Status = ExperienceItemUseStatus.Success,
                 GrantedExp = grantedExp,
-                HonorExpGain = honorExpGain,
-                NewExp = newExp,
-                NewLevel = ExpTableProvider.ApplyLevelUps(context.Level, newExp),
+                HonorExpGain = plan.HonorExpGain,
+                NewExp = plan.NewExp,
+                NewLevel = plan.NewLevel,
             };
         }
 
@@ -149,8 +144,5 @@ namespace DfoServer.Game.Inventory
                 Status = status,
                 Detail = detail,
             };
-
-        private static uint AddSaturating(uint left, uint right)
-            => left > uint.MaxValue - right ? uint.MaxValue : left + right;
     }
 }

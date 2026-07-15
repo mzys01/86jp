@@ -151,7 +151,7 @@ namespace DfoServer.Network.Handlers
 
             var ack = BuildSelectSuccessAck();
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, header.type, ack));
-            await Dungeon.DungeonSharedServices.SendUserInfoSubtype0BroadcastAsync(
+            await UserInfoBroadcastService.SendSubtype0Async(
                 session,
                 _characterRepository,
                 _subtype0Repository,
@@ -194,7 +194,7 @@ namespace DfoServer.Network.Handlers
                 return;
             }
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, header.type, BuildSelectSuccessAck()));
-            await Dungeon.DungeonSharedServices.SendUserInfoSubtype0BroadcastAsync(
+            await UserInfoBroadcastService.SendSubtype0Async(
                 session,
                 _characterRepository,
                 _subtype0Repository,

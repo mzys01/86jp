@@ -88,19 +88,16 @@ namespace DfoServer.Network.Handlers
             EnhancedClientSession session,
             HonorLevelSummary honor)
         {
-            var characterId = session.Player.CharacterId;
-            var record = _characterRepository.GetById(characterId);
-            if (record == null)
-                throw new InvalidOperationException($"character {characterId} is unavailable");
-
-            record.Subtype0Tail = _subtype0Repository.Load(characterId)
-                ?? new UserInfoMinimumTailSnapshot();
-            HonorLevelDataProvider.ApplyToSubtype0Tail(record.Subtype0Tail, honor);
-            session.Player.Subtype0Tail = record.Subtype0Tail;
-            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
-                0x00,
-                0x0002,
-                UserInfoSubtype0Builder.BuildNotificationBody(record)));
+            var sent = await UserInfoBroadcastService.SendSubtype0Async(
+                session,
+                _characterRepository,
+                _subtype0Repository,
+                _honorLevel,
+                "EXPERIENCE_ITEM subtype0",
+                honor);
+            if (!sent)
+                throw new InvalidOperationException(
+                    $"subtype0 broadcast failed for character {session.Player.CharacterId}");
         }
 
         private async Task SendSubtype1Async(
@@ -118,22 +115,11 @@ namespace DfoServer.Network.Handlers
             }
 
             var accountCharacters = _characterRepository.ListByAccount(result.AccountId);
-            AdventureGroupUserInfoSynchronizer.ApplyToUserInfoAddition(
-                addition,
-                accountCharacters);
-            HonorLevelDataProvider.ApplyToUserInfoAddition(addition, honor);
-
-            var writer = new GamePacketWriter();
-            writer.WriteByte(1);
-            writer.WriteUInt16(1);
-            writer.WriteUInt16((ushort)record.CharacterId);
-            writer.WriteBytes(UserInfoSubtype1Builder.BuildFromSnapshot(
-                addition,
-                result.SyncedSkills));
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
                 0x00,
                 0x0002,
-                writer.ToArray()));
+                UserInfoBroadcastService.BuildSubtype1Body(
+                    record, addition, accountCharacters, honor, result.SyncedSkills)));
         }
 
         private static Task SendExperienceAsync(

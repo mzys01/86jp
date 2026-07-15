@@ -2,6 +2,7 @@ using DfoServer.Game.Accounts;
 using DfoServer.Game.CharacterData;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory;
+using DfoServer.Game.Progression;
 using DfoServer.Game.Quests;
 using DfoServer.Game.SelectCharacter;
 using DfoServer.Game.Skills;
@@ -37,6 +38,7 @@ namespace DfoServer.Network.Handlers.Dungeon
         internal HonorLevelSyncService HonorLevel { get; }
         internal AccountExperienceProgressService AccountExperience { get; }
         internal GrowthCapsuleSyncService GrowthCapsuleSync { get; }
+        internal CharacterExperienceService CharacterExperience { get; }
 
         // 组队副本联机用: 检测队伍 + 定位队员会话(可空; 未接线时副本 fan-out 优雅跳过=单人不回归)。
         internal Game.Party.PartyManager PartyManager { get; }
@@ -68,6 +70,7 @@ namespace DfoServer.Network.Handlers.Dungeon
             HonorLevel = new HonorLevelSyncService(CharacterRepository);
             AccountExperience = new AccountExperienceProgressService(CharacterRepository);
             GrowthCapsuleSync = new GrowthCapsuleSyncService(CharacterRepository);
+            CharacterExperience = new CharacterExperienceService(AccountExperience);
             CardRewards = new Game.Dungeon.CardRewardService(this, assetService);
             Drops = new Game.Dungeon.DropService(assetService);
             EntryCost = new Game.Dungeon.DungeonEntryCostService(assetService);
@@ -164,6 +167,31 @@ namespace DfoServer.Network.Handlers.Dungeon
             return false;
         }
 
+        // 经验入口共用: Grant 之后的 0x0025 通知块(荣誉/胶囊快照解析 + SP 状态 + 组包发送)。
+        // 升级后的后续包(任务列表/subtype1)时序因入口而异, 由调用方另行发送。
+        internal async Task SendExpGrantNotificationAsync(
+            EnhancedClientSession session,
+            ExperienceGrantResult grant,
+            string logTag,
+            uint growthContractBonusExp = 0)
+        {
+            if (grant == null
+                || (grant.NormalExpGain == 0 && grant.HonorExpGain == 0 && !grant.LeveledUp))
+                return;
+
+            var honor = ResolveHonorLevelForExp(session, grant.Honor);
+            var capsule = ResolveGrowthCapsuleForExp(session, grant.GrowthCapsule);
+            if (!TryGetSkillPointProtocolState(session, persist: grant.LeveledUp, logTag, out var skillPoints))
+                return;
+
+            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0025,
+                ExpNotificationBuilder.Build(
+                    session.Player.Level, session.Player.Exp, skillPoints, honor,
+                    growthContractBonusExp: growthContractBonusExp,
+                    growthCapsuleExp: GrowthCapsuleDataProvider.GetDisplayProgress(
+                        session.Player.Level, capsule))));
+        }
+
         // 副本内升级的后续通知: 刷新可接任务列表 + 补属性(subtype1)。
         // 绝不发角色状态包(subtype0) -- 它会打乱客户端的副本内角色状态,
         // 实测导致清房后无法进下一个门。
@@ -210,15 +238,11 @@ namespace DfoServer.Network.Handlers.Dungeon
                 {
                     var accountId = session.Account?.AccountId ?? record.AccountId;
                     var accountCharacters = CharacterRepository.ListByAccount(accountId);
-                    AdventureGroupUserInfoSynchronizer.ApplyToUserInfoAddition(addition, accountCharacters);
-                    HonorLevel.ApplyToUserInfoAddition(addition, accountId, accountCharacters);
+                    var honor = HonorLevel.LoadSummary(accountId, accountCharacters);
                     var skillSnap = LoadSyncedSkillState(cid, session.Player.Level).Skills;
-                    var w = new GamePacketWriter();
-                    w.WriteByte(1);
-                    w.WriteUInt16(1);
-                    w.WriteUInt16((ushort)record.CharacterId);
-                    w.WriteBytes(UserInfoSubtype1Builder.BuildFromSnapshot(addition, skillSnap));
-                    await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0002, w.ToArray()));
+                    await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0002,
+                        UserInfoBroadcastService.BuildSubtype1Body(
+                            record, addition, accountCharacters, honor, skillSnap)));
                 }
             }
             catch (Exception ex)
@@ -229,59 +253,12 @@ namespace DfoServer.Network.Handlers.Dungeon
 
         internal async Task SendUserInfoSubtype0Broadcast(EnhancedClientSession session)
         {
-            await SendUserInfoSubtype0BroadcastAsync(
+            await UserInfoBroadcastService.SendSubtype0Async(
                 session,
                 CharacterRepository,
                 Subtype0FieldsRepository,
                 HonorLevel,
                 "SendUserInfoSubtype0Broadcast");
-        }
-
-        internal static async Task<bool> SendUserInfoSubtype0BroadcastAsync(
-            EnhancedClientSession session,
-            ICharacterRepository characterRepository,
-            SqliteSubtype0FieldsRepository subtype0Repository,
-            HonorLevelSyncService honorLevel,
-            string logTag,
-            HonorLevelSummary honorSummary = null)
-        {
-            try
-            {
-                if (session?.Player == null
-                    || characterRepository == null
-                    || subtype0Repository == null
-                    || honorLevel == null)
-                    return false;
-
-                int cid = session.Player.CharacterId;
-                var record = characterRepository.GetById(cid);
-                if (record == null)
-                    return false;
-
-                record.Subtype0Tail = subtype0Repository.Load(cid) ?? new UserInfoMinimumTailSnapshot();
-                var accountId = session.Account?.AccountId ?? record.AccountId;
-                var accountCharacters = honorSummary == null
-                    ? characterRepository.ListByAccount(accountId)
-                    : null;
-                honorLevel.ApplyToSubtype0Tail(
-                    record.Subtype0Tail,
-                    accountId,
-                    accountCharacters,
-                    honorSummary);
-
-                // subtype0既是客户端通知，也是服务端会话缓存；复用此广播的生命周期路径
-                // 必须让两端观察到同一份DB快照。
-                session.Player.Subtype0Tail = record.Subtype0Tail;
-
-                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
-                    0x00, 0x0002, UserInfoSubtype0Builder.BuildNotificationBody(record)));
-                return true;
-            }
-            catch (Exception ex)
-            {
-                FileLogger.Log($"[GameProtocol] {logTag} ERROR: {ex.Message}");
-                return false;
-            }
         }
 
     }

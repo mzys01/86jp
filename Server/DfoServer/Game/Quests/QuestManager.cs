@@ -25,6 +25,7 @@ namespace DfoServer.Game.Quests
         private readonly SqliteCharacterRepository _characterRepository;
         private readonly SqliteCharacterProgressRepository _progressRepository;
         private readonly HonorLevelSyncService _honorLevel;
+        private readonly SqliteSubtype0FieldsRepository _subtype0Repository;
         private readonly GrowthCapsuleProgressRepository _growthCapsuleRepository;
 
         public QuestManager(ISessionPacketSender sender, string connStr, IAssetService assetService)
@@ -40,6 +41,8 @@ namespace DfoServer.Game.Quests
                 _characterRepository,
                 _databasePath,
                 ServerPaths.SchemaFilePath);
+            _subtype0Repository = new SqliteSubtype0FieldsRepository(
+                _databasePath, ServerPaths.SchemaFilePath);
             _growthCapsuleRepository = new GrowthCapsuleProgressRepository(
                 _databasePath, ServerPaths.SchemaFilePath);
         }
@@ -159,7 +162,7 @@ namespace DfoServer.Game.Quests
             // 实测导致清房后无法进下一个门; 副本内沿用旧时序(经验包之后只补属性)。
             if (leveledUp && !inDungeon)
             {
-                await SendUserInfoSubtype0Broadcast(cid, "LevelUp", honorLevel);
+                await SendUserInfoSubtype0Broadcast("LevelUp", honorLevel);
                 await SendUserInfoBroadcast(cid, honorLevel);
             }
 
@@ -350,12 +353,7 @@ namespace DfoServer.Game.Quests
         {
             try
             {
-                CharacterRecord record;
-                using (var conn = new Microsoft.Data.Sqlite.SqliteConnection(_connStr))
-                {
-                    conn.Open();
-                    record = SqliteCharacterRepository.LoadById(conn, characterId);
-                }
+                var record = _characterRepository.GetById(characterId);
                 var addition = SqliteSubtype1Repository.FromConnectionString(_connStr).Load(characterId);
 
                 if (record != null && addition != null)
@@ -363,18 +361,11 @@ namespace DfoServer.Game.Quests
                     var accountCharacters = _characterRepository.ListByAccount(record.AccountId);
                     honorLevel = honorLevel
                         ?? _honorLevel.LoadSummary(record.AccountId, accountCharacters);
-                    AdventureGroupUserInfoSynchronizer.ApplyToUserInfoAddition(
-                        addition,
-                        accountCharacters);
-                    HonorLevelDataProvider.ApplyToUserInfoAddition(addition, honorLevel);
                     var synced = SkillStateService.LoadAndSync(
                         _progressRepository, characterId, record.Job, record.Level, record.BonusSp, record.BonusTp, persist: false);
-                    var w = new Network.GamePacketWriter();
-                    w.WriteByte(1);
-                    w.WriteUInt16(1);
-                    w.WriteUInt16((ushort)record.CharacterId);
-                    w.WriteBytes(UserInfoSubtype1Builder.BuildFromSnapshot(addition, synced.Skills));
-                    await _sender.SendNotiAsync(0x0002, w.ToArray());
+                    await _sender.SendNotiAsync(0x0002,
+                        Network.Handlers.UserInfoBroadcastService.BuildSubtype1Body(
+                            record, addition, accountCharacters, honorLevel, synced.Skills));
                 }
             }
             catch (Exception ex)
@@ -383,40 +374,22 @@ namespace DfoServer.Game.Quests
             }
         }
 
+        // 广播对象固定是当前会话角色(_sender.Player), 不接受外部 cid。
         private async Task SendUserInfoSubtype0Broadcast(
-            int characterId,
             string reason,
             HonorLevelSummary honorLevel = null)
         {
-            try
-            {
-                byte[] body;
-                using (var conn = new Microsoft.Data.Sqlite.SqliteConnection(_connStr))
-                {
-                    conn.Open();
-                    var record = SqliteCharacterRepository.LoadById(conn, characterId);
-                    if (record == null) return;
-                    record.Subtype0Tail = SqliteSubtype0FieldsRepository.Load(conn, characterId)
-                        ?? new UserInfoMinimumTailSnapshot();
-                    if (honorLevel != null)
-                    {
-                        HonorLevelDataProvider.ApplyToSubtype0Tail(record.Subtype0Tail, honorLevel);
-                    }
-                    else
-                    {
-                        _honorLevel.ApplyToSubtype0Tail(
-                            record.Subtype0Tail, record.AccountId, null);
-                    }
-                    body = UserInfoSubtype0Builder.BuildNotificationBody(record);
-                }
-
-                await _sender.SendNotiAsync(0x0002, body);
-                FileLogger.Log($"[QuestManager] {reason} NOTI 2 subtype0 sent: cid={characterId}");
-            }
-            catch (Exception ex)
-            {
-                FileLogger.Log($"[QuestManager] SendUserInfoSubtype0Broadcast ERROR: {ex.Message}");
-            }
+            var sent = await Network.Handlers.UserInfoBroadcastService.SendSubtype0Async(
+                _sender.Player,
+                _sender.AccountId,
+                body => _sender.SendNotiAsync(0x0002, body),
+                _characterRepository,
+                _subtype0Repository,
+                _honorLevel,
+                "QuestManager subtype0",
+                honorLevel);
+            if (sent)
+                FileLogger.Log($"[QuestManager] {reason} NOTI 2 subtype0 sent: cid={_sender.CharacterId}");
         }
 
         private async Task SendJobChangeNotification(

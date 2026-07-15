@@ -1,13 +1,16 @@
 using DfoServer.Game.CharacterData;
+using DfoServer.Game.Characters;
 using DfoServer.Infrastructure;
 using Microsoft.Data.Sqlite;
 using System;
 
-namespace DfoServer.Game.Characters
+namespace DfoServer.Game.Progression
 {
-    public static class CharacterProgressService
+    // 经验系统内部原语: characters 表 level/exp 的唯一业务写入点(连带战斗属性重算)。
+    // 业务代码一律走 CharacterExperienceService, 不要直接调这里。
+    internal static class CharacterProgressService
     {
-        public static bool PersistLevelAndExp(int characterId, byte level, uint exp)
+        internal static bool PersistLevelAndExp(int characterId, byte level, uint exp)
         {
             return PersistLevelAndExp(
                 characterId,
@@ -17,7 +20,7 @@ namespace DfoServer.Game.Characters
                 ServerPaths.SchemaFilePath);
         }
 
-        public static bool PersistLevelAndExp(
+        internal static bool PersistLevelAndExp(
             int characterId,
             byte level,
             uint exp,
@@ -28,7 +31,7 @@ namespace DfoServer.Game.Characters
             return PersistLevelAndExp(connectionString, characterId, level, exp);
         }
 
-        public static bool PersistLevelAndExp(
+        internal static bool PersistLevelAndExp(
             string connectionString,
             int characterId,
             byte level,
@@ -61,8 +64,8 @@ namespace DfoServer.Game.Characters
         }
 
         // (conn, tx) 变体: 并入调用方的事务, 由调用方提交/回滚。
-        // 任务完成结算走这里, 使"任务奖励 + 经验/等级/战斗属性"整体原子。
-        public static bool PersistLevelAndExp(
+        // GrantInTransaction 走这里, 使"业务变更 + 经验/等级/战斗属性"整体原子。
+        internal static bool PersistLevelAndExp(
             SqliteConnection conn,
             SqliteTransaction tx,
             int characterId,

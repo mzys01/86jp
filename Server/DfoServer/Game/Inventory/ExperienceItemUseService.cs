@@ -145,12 +145,17 @@ namespace DfoServer.Game.Inventory
                                 "inventory deduction failed");
                         }
 
-                        if (!CharacterProgressService.PersistLevelAndExp(
-                                connection,
-                                transaction,
-                                characterId,
-                                usePlan.NewLevel,
-                                usePlan.NewExp))
+                        // 经验/等级/荣誉/胶囊统一走经验系统事务内入口, 随本事务提交或回滚。
+                        // 输入与 Evaluate 预演相同, 结果按构造一致。
+                        var grant = Progression.CharacterExperienceService.GrantInTransaction(
+                            connection,
+                            transaction,
+                            characterId,
+                            accountId,
+                            character.Level,
+                            character.Exp,
+                            usePlan.GrantedExp);
+                        if (!grant.Persisted)
                         {
                             return Reject(
                                 ExperienceItemUseStatus.PersistenceFailed,
@@ -164,10 +169,10 @@ namespace DfoServer.Game.Inventory
                             transaction,
                             characterId,
                             character.Job,
-                            usePlan.NewLevel,
+                            grant.NewLevel,
                             character.BonusSp,
                             character.BonusTp,
-                            persist: usePlan.NewLevel > character.Level);
+                            persist: grant.LeveledUp);
                         if (syncedSkills.Points == null)
                         {
                             return Reject(
@@ -176,28 +181,13 @@ namespace DfoServer.Game.Inventory
                                 "skill-point synchronization failed");
                         }
 
-                        AccountExperienceProgressTotals accountProgress;
-                        if (usePlan.HonorExpGain > 0)
+                        var totalGrowthCapsuleExp = grant.TotalGrowthCapsuleExp;
+                        if (grant.HonorExpGain == 0 && grant.NewLevel >= ExpTableProvider.MaxLevel)
                         {
-                            accountProgress = AccountExperienceProgressService.AddInTransaction(
+                            totalGrowthCapsuleExp = GrowthCapsuleProgressRepository.LoadTotalExp(
                                 connection,
                                 transaction,
-                                accountId,
-                                usePlan.HonorExpGain);
-                        }
-                        else if (usePlan.NewLevel >= ExpTableProvider.MaxLevel)
-                        {
-                            accountProgress = new AccountExperienceProgressTotals(
-                                0,
-                                GrowthCapsuleProgressRepository.LoadTotalExp(
-                                    connection,
-                                    transaction,
-                                    accountId),
-                                0);
-                        }
-                        else
-                        {
-                            accountProgress = default;
+                                accountId);
                         }
 
                         var result = new ExperienceItemUseResult
@@ -207,13 +197,13 @@ namespace DfoServer.Game.Inventory
                             ItemTemplateId = item.ItemTemplateId,
                             ConsumedItem = consumedItem,
                             PreviousLevel = character.Level,
-                            NewLevel = usePlan.NewLevel,
+                            NewLevel = grant.NewLevel,
                             PreviousExp = character.Exp,
-                            NewExp = usePlan.NewExp,
+                            NewExp = grant.NewExp,
                             GrantedExp = usePlan.GrantedExp,
-                            HonorExpGain = usePlan.HonorExpGain,
-                            TotalHonorExp = accountProgress.TotalHonorExp,
-                            TotalGrowthCapsuleExp = accountProgress.TotalGrowthCapsuleExp,
+                            HonorExpGain = grant.HonorExpGain,
+                            TotalHonorExp = grant.TotalHonorExp,
+                            TotalGrowthCapsuleExp = totalGrowthCapsuleExp,
                             SyncedSkills = syncedSkills.Skills,
                             SkillPoints = SkillStateService.GetProtocolState(
                                 syncedSkills.Skills,
