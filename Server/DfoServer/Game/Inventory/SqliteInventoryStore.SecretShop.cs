@@ -106,7 +106,7 @@ namespace DfoServer.Game.Inventory
                 RemainingStackCount = remainingStackCount,
                 InstanceValue = itemValue,
                 Durability = record?.Durability ?? 0,
-                ExtData0 = ItemExtraView.Parse(record?.ExtraJson).Raw84.Attr,
+                ExtData0 = record != null ? InventoryItemView.ForCommon(record).Attr : (byte)0,
                 UpdatedGold = walletAfter.Gold,
                 UpdatedSp = walletAfter.Sp,
                 UpdatedCoin = walletAfter.Cera,

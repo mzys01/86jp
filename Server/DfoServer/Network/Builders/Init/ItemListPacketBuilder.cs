@@ -142,13 +142,20 @@ namespace DfoServer.Network.Builders
 
             writer.WriteInt16(item.SlotIndex);
             writer.WriteInt32(item.AvatarItemId);
-            writer.WriteBytes(item.Reserved0);
-            writer.WriteByte(item.OptionValue);
-            writer.WriteBytes(item.Reserved1);
-            writer.WriteInt32(item.UnknownFixed30);
-            writer.WriteBytes(item.Reserved2);
-            writer.WriteUInt16(item.UnknownFixed4);
-            writer.WriteBytes(item.TailData);
+            writer.WriteInt32(item.RemainingSeconds);
+            writer.WriteByte(item.Attr);
+            writer.WriteUInt16(item.AbilityNo);
+            writer.WriteByte(item.SealFlag);
+            WriteFixedBytes(writer, item.PrefixData0E, 8);
+            writer.WriteInt32(item.Marker16);
+            WriteFixedBytes(writer, item.MiddleData1A, 17);
+            writer.WriteInt32(item.ExpireTime);
+            WriteFixedBytes(writer, item.TailData2F, 37);
+            writer.WriteInt32(item.AvatarSocketLen);
+            WriteFixedBytes(writer, item.AvatarSocketData, 30);
+            writer.WriteInt32(item.ColorDataLen);
+            writer.WriteUInt16(item.Color1);
+            writer.WriteUInt16(item.Color2);
         }
 
         private static byte[] BuildPetContainerBody(List<PetInventoryItem> items)
@@ -171,7 +178,14 @@ namespace DfoServer.Network.Builders
             writer.WriteInt16(item.SlotIndex);
             writer.WriteInt32(item.CreatureItemId);
             writer.WriteInt32(item.CreatureSerialOrHandle);
-            writer.WriteBytes(item.TailData0A);
+            writer.WriteByte(item.Attr);
+            writer.WriteUInt16(item.Durability);
+            writer.WriteByte(item.SealFlag);
+            WriteFixedBytes(writer, item.PrefixData0E, 8);
+            writer.WriteInt32(item.Marker16);
+            WriteFixedBytes(writer, item.MiddleData1A, 17);
+            writer.WriteInt32(item.ExpireTime);
+            WriteFixedBytes(writer, item.TailData2F, 37);
         }
 
         private static byte[] BuildAccountCargoBody(AccountCargoStateSnapshot state, List<CommonInventoryItem> items)

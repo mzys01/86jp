@@ -55,20 +55,12 @@ namespace DfoServer.Game.Inventory
                     return false;
                 }
 
-                var targetExtra = ItemExtraView.Parse(target.ExtraJson);
-                var targetExtraBuilder = ItemExtraViewBuilder.FromView(targetExtra);
-                var tailData2F = NormalizeBytes(targetExtra.Equipment.TailData2F, 37);
-                var jewelSocket = NormalizeBytes(targetExtra.Equipment.JewelSocket, 30);
-                NormalizeEquipmentSocketLayout(jewelSocket, tailData2F);
-                RepairJewelSocketTypes(jewelSocket, targetItemTemplateId);
-                var currentOpenCount = CountOpenJewelSockets(jewelSocket);
+                var targetView = InventoryItemView.ForCommon(target);
+                var currentOpenCount = GetEquipmentOpenCount(targetView.Entry84, targetItemTemplateId);
                 if (currentOpenCount > 0)
                 {
-                    EnsureVisibleSocketCount(tailData2F, currentOpenCount);
-                    targetExtraBuilder.Equipment.TailData2F = tailData2F;
-                    targetExtraBuilder.Equipment.JewelSocket = jewelSocket;
-                    var updatedExtra = targetExtraBuilder.Build();
-                    _db.UpdateItemExtraJson(connection, transaction, target.ItemUid, updatedExtra.Serialize());
+                    EnsureEquipmentSocketOpenFields(targetView.Entry84, targetItemTemplateId, currentOpenCount);
+                    _db.UpdateItemExtraJson(connection, transaction, target.ItemUid, target.ExtraJson);
                     _auditLogger.WriteAuditLog(connection, transaction, characterId, "repair_equipment_socket", target, target.ListType, target.SlotIndex, 0);
                     transaction.Commit();
 
@@ -83,11 +75,8 @@ namespace DfoServer.Game.Inventory
                 if (material == null || material.StackCount <= 0)
                     return false;
 
-                SetEquipmentSocketOpenFields(target.ItemTemplateId, tailData2F, out jewelSocket);
-                targetExtraBuilder.Equipment.TailData2F = tailData2F;
-                targetExtraBuilder.Equipment.JewelSocket = jewelSocket;
-                var openedExtra = targetExtraBuilder.Build();
-                _db.UpdateItemExtraJson(connection, transaction, target.ItemUid, openedExtra.Serialize());
+                EnsureEquipmentSocketOpenFields(targetView.Entry84, targetItemTemplateId, GetEquipmentSocketOpenCount(targetItemTemplateId));
+                _db.UpdateItemExtraJson(connection, transaction, target.ItemUid, target.ExtraJson);
 
                 var remaining = Math.Max(0, material.StackCount - 1);
                 if (remaining > 0)
@@ -140,38 +129,24 @@ namespace DfoServer.Game.Inventory
                     return false;
                 }
 
-                var targetExtra = ItemExtraView.Parse(target.ExtraJson);
-                var targetExtraBuilder = ItemExtraViewBuilder.FromView(targetExtra);
-                var tailData2F = NormalizeBytes(targetExtra.Equipment.TailData2F, 37);
-                var jewelSocket = NormalizeBytes(targetExtra.Equipment.JewelSocket, 30);
-                NormalizeEquipmentSocketLayout(jewelSocket, tailData2F);
-                RepairJewelSocketTypes(jewelSocket, targetItemTemplateId);
-
-                var openCount = CountOpenJewelSockets(jewelSocket);
-                if (openCount <= 0 && tailData2F[0] > 0)
-                {
-                    var rebuiltCount = Math.Min(GetEquipmentSocketOpenCount(targetItemTemplateId), (int)tailData2F[0]);
-                    jewelSocket = BuildJewelSocketData(targetItemTemplateId);
-                    EnsureVisibleSocketCount(tailData2F, rebuiltCount);
-                    openCount = CountOpenJewelSockets(jewelSocket);
-                    FileLogger.Log($"  [EmblemAttach] repaired missing jewelSocket targetSlot={targetSlotIndex} item=0x{targetItemTemplateId:X8} count={openCount}");
-                }
+                var targetView = InventoryItemView.ForCommon(target);
+                var openCount = targetView.Entry84.EmblemSocketCount;
 
                 if (openCount <= 0)
                 {
-                    FileLogger.Log($"  [EmblemAttach] REJECT: no open sockets targetSlot={targetSlotIndex} item=0x{targetItemTemplateId:X8} tailCount={tailData2F[0]} jewel={BitConverter.ToString(jewelSocket)}");
+                    FileLogger.Log($"  [EmblemAttach] REJECT: no open sockets targetSlot={targetSlotIndex} item=0x{targetItemTemplateId:X8} openCount={targetView.Entry84.EmblemSocketCount}");
                     return false;
                 }
 
-                EnsureVisibleSocketCount(tailData2F, openCount);
+                EnsureEquipmentSocketPlaceholders(targetView.Entry84, openCount);
 
+                var socketType = ResolveJewelSocketType(targetItemTemplateId);
                 var consumed = new List<InventoryMutationResult>();
                 foreach (var request in emblems)
                 {
-                    if (!TryResolveEquipmentSocketRequest(targetItemTemplateId, openCount, request.SocketIndex, out var logicalSocketIndex, out var physicalSocketIndex))
+                    if (!TryResolveEquipmentSocketRequest(targetItemTemplateId, openCount, request.SocketIndex, out var logicalSocketIndex))
                         return false;
 
-                    var socketType = GetJewelSocketType(jewelSocket, physicalSocketIndex);
                     var emblemType = ItemMetadataResolver.ResolveEmblemSocketType(request.EmblemItemTemplateId);
                     if (!CanAttachEmblemToJewelSocket(socketType, emblemType))
                     {
@@ -183,8 +158,7 @@ namespace DfoServer.Game.Inventory
                     if (emblem == null || emblem.ItemTemplateId != request.EmblemItemTemplateId || emblem.StackCount <= 0)
                         return false;
 
-                    WriteEmblemToTail(tailData2F, logicalSocketIndex, request.EmblemItemTemplateId);
-                    WriteEmblemToJewelSocket(jewelSocket, physicalSocketIndex, request.EmblemItemTemplateId);
+                    WriteEquipmentEmblem(targetView.Entry84, logicalSocketIndex, request.EmblemItemTemplateId);
 
                     var remaining = Math.Max(0, emblem.StackCount - 1);
                     if (remaining > 0)
@@ -209,10 +183,7 @@ namespace DfoServer.Game.Inventory
                     });
                 }
 
-                targetExtraBuilder.Equipment.TailData2F = tailData2F;
-                targetExtraBuilder.Equipment.JewelSocket = jewelSocket;
-                var updatedExtra = targetExtraBuilder.Build();
-                _db.UpdateItemExtraJson(connection, transaction, target.ItemUid, updatedExtra.Serialize());
+                _db.UpdateItemExtraJson(connection, transaction, target.ItemUid, target.ExtraJson);
                 _auditLogger.WriteAuditLog(connection, transaction, characterId, "set_equipment_emblems", target, target.ListType, target.SlotIndex, emblems.Count);
                 transaction.Commit();
 
@@ -251,7 +222,7 @@ namespace DfoServer.Game.Inventory
             var consumed = new List<InventoryMutationResult>();
             foreach (var request in emblems)
             {
-                if (!TryResolveEquipmentSocketRequest(targetItemTemplateId, openCount, request.SocketIndex, out var logicalSocketIndex, out _))
+                if (!TryResolveEquipmentSocketRequest(targetItemTemplateId, openCount, request.SocketIndex, out var logicalSocketIndex))
                     return false;
 
                 var emblemType = ItemMetadataResolver.ResolveEmblemSocketType(request.EmblemItemTemplateId);
@@ -322,9 +293,8 @@ namespace DfoServer.Game.Inventory
                     return false;
                 }
 
-                var targetExtra = ItemExtraView.Parse(target.ExtraJson);
-                var targetExtraBuilder = ItemExtraViewBuilder.FromAvatarView(targetExtra);
-                var reserved2 = NormalizeBytes(targetExtra.Avatar.Reserved2, 30);
+                var targetView = InventoryItemView.ForAvatar(target);
+                var reserved2 = targetView.AvatarDetail.SocketData;
                 var expectedSocketTypes = ItemMetadataResolver.ResolveAvatarSocketTypes(targetItemTemplateId);
                 var currentOpenCount = CountOpenAvatarSockets(reserved2);
                 if (currentOpenCount > 0)
@@ -335,9 +305,8 @@ namespace DfoServer.Game.Inventory
                         FileLogger.Log($"  [AvatarSocket] repaired socket layout item=0x{targetItemTemplateId:X8} count={Math.Min(5, expectedSocketTypes != null ? expectedSocketTypes.Count : 0)}");
                     }
 
-                    targetExtraBuilder.Avatar.Reserved2 = reserved2;
-                    var updatedExtra = targetExtraBuilder.Build();
-                    _db.UpdateItemExtraJson(connection, transaction, target.ItemUid, updatedExtra.Serialize());
+                    targetView.AvatarDetail.SocketData = reserved2;
+                    _db.UpdateItemExtraJson(connection, transaction, target.ItemUid, target.ExtraJson);
                     _auditLogger.WriteAuditLog(connection, transaction, characterId, "repair_avatar_socket", target, target.ListType, target.SlotIndex, 0);
                     transaction.Commit();
 
@@ -358,9 +327,8 @@ namespace DfoServer.Game.Inventory
                     return false;
                 }
 
-                targetExtraBuilder.Avatar.Reserved2 = reserved2;
-                var openedExtra = targetExtraBuilder.Build();
-                _db.UpdateItemExtraJson(connection, transaction, target.ItemUid, openedExtra.Serialize());
+                targetView.AvatarDetail.SocketData = reserved2;
+                _db.UpdateItemExtraJson(connection, transaction, target.ItemUid, target.ExtraJson);
 
                 var remaining = Math.Max(0, material.StackCount - 1);
                 if (remaining > 0)
@@ -413,9 +381,8 @@ namespace DfoServer.Game.Inventory
                     return false;
                 }
 
-                var targetExtra = ItemExtraView.Parse(target.ExtraJson);
-                var targetExtraBuilder = ItemExtraViewBuilder.FromAvatarView(targetExtra);
-                var reserved2 = NormalizeBytes(targetExtra.Avatar.Reserved2, 30);
+                var targetView = InventoryItemView.ForAvatar(target);
+                var reserved2 = targetView.AvatarDetail.SocketData;
                 var openCount = CountOpenAvatarSockets(reserved2);
                 if (openCount <= 0)
                     return false;
@@ -463,9 +430,8 @@ namespace DfoServer.Game.Inventory
                     });
                 }
 
-                targetExtraBuilder.Avatar.Reserved2 = reserved2;
-                var updatedExtra = targetExtraBuilder.Build();
-                _db.UpdateItemExtraJson(connection, transaction, target.ItemUid, updatedExtra.Serialize());
+                targetView.AvatarDetail.SocketData = reserved2;
+                _db.UpdateItemExtraJson(connection, transaction, target.ItemUid, target.ExtraJson);
                 _auditLogger.WriteAuditLog(connection, transaction, characterId, "set_avatar_emblems", target, target.ListType, target.SlotIndex, emblems.Count);
                 transaction.Commit();
 
@@ -571,10 +537,50 @@ namespace DfoServer.Game.Inventory
             return true;
         }
 
-        private static void SetEquipmentSocketOpenFields(int itemTemplateId, byte[] tailData2F, out byte[] jewelSocket)
+        private static int GetEquipmentOpenCount(InventoryItemEntry84View entry, int itemTemplateId)
         {
-            jewelSocket = BuildJewelSocketData(itemTemplateId);
-            EnsureVisibleSocketCount(tailData2F, GetEquipmentSocketOpenCount(itemTemplateId));
+            if (entry == null)
+                return 0;
+
+            return Math.Min(entry.EmblemSocketCount, GetEquipmentSocketOpenCount(itemTemplateId));
+        }
+
+        private static void EnsureEquipmentSocketOpenFields(InventoryItemEntry84View entry, int itemTemplateId, int openCount)
+        {
+            if (entry == null)
+                return;
+
+            var visibleCount = Math.Min(Math.Max(openCount, 0), GetEquipmentSocketOpenCount(itemTemplateId));
+            if (entry.EmblemSocketCount != visibleCount)
+                entry.EmblemSocketCount = (byte)visibleCount;
+
+            if (visibleCount > 0 && entry.EmblemId1 == 0)
+                entry.EmblemId1 = -1;
+            if (visibleCount > 1 && entry.EmblemId2 == 0)
+                entry.EmblemId2 = -1;
+        }
+
+        private static void EnsureEquipmentSocketPlaceholders(InventoryItemEntry84View entry, int openCount)
+        {
+            if (entry == null)
+                return;
+
+            var visibleCount = Math.Min(Math.Max(openCount, 0), 2);
+            if (visibleCount > 0 && entry.EmblemId1 == 0)
+                entry.EmblemId1 = -1;
+            if (visibleCount > 1 && entry.EmblemId2 == 0)
+                entry.EmblemId2 = -1;
+        }
+
+        private static void WriteEquipmentEmblem(InventoryItemEntry84View entry, byte socketIndex, int emblemItemTemplateId)
+        {
+            if (entry == null)
+                return;
+
+            if (socketIndex == 0)
+                entry.EmblemId1 = emblemItemTemplateId;
+            else if (socketIndex == 1)
+                entry.EmblemId2 = emblemItemTemplateId;
         }
 
         private static bool TrySetAvatarSocketOpenFields(IReadOnlyList<byte> socketTypes, out byte[] reserved2)
@@ -598,54 +604,20 @@ namespace DfoServer.Game.Inventory
             for (var i = 0; i < count; i++)
             {
                 var offset = i * 6;
-                data[offset] = 0;
-                data[offset + 1] = socketTypes[i];
-                data[offset + 2] = socketTypes[i] == 0xEF ? (byte)0xFF : (byte)0;
+                data[offset] = socketTypes[i];
+                data[offset + 1] = socketTypes[i] == 0xEF ? (byte)0xFF : (byte)0;
             }
             return data;
         }
 
         internal static byte[] AvatarReservedToEquippedJewel(byte[] reserved2)
         {
-            var data = NormalizeBytes(reserved2, 30);
-            var equipped = new byte[30];
-            for (var i = 0; i < 5; i++)
-            {
-                var offset = i * 6;
-                equipped[offset] = data[offset + 1];
-                equipped[offset + 1] = data[offset + 2];
-                Buffer.BlockCopy(data, offset + 3, equipped, offset + 2, 3);
-            }
-            return equipped;
+            return AvatarSocketDataCodec.Normalize(reserved2);
         }
 
         internal static byte[] EquippedJewelToAvatarReserved(byte[] jewelSocket)
         {
-            var data = NormalizeBytes(jewelSocket, 30);
-            var reserved = new byte[30];
-            for (var i = 0; i < 5; i++)
-            {
-                var offset = i * 6;
-                reserved[offset] = 0;
-                reserved[offset + 1] = data[offset];
-                reserved[offset + 2] = data[offset + 1];
-                Buffer.BlockCopy(data, offset + 2, reserved, offset + 3, 3);
-            }
-            return reserved;
-        }
-
-        private static byte[] BuildJewelSocketData(int itemTemplateId)
-        {
-            var data = new byte[30];
-            var socketType = ResolveJewelSocketType(itemTemplateId);
-            var socketCount = GetEquipmentSocketOpenCount(itemTemplateId);
-            for (var i = 0; i < socketCount; i++)
-            {
-                var offset = GetEquipmentSocketPhysicalIndex(itemTemplateId, (byte)i) * 6;
-                data[offset] = socketType;
-                data[offset + 1] = 0;
-            }
-            return data;
+            return AvatarSocketDataCodec.Normalize(jewelSocket);
         }
 
         private static int GetEquipmentSocketOpenCount(int itemTemplateId)
@@ -660,17 +632,12 @@ namespace DfoServer.Game.Inventory
                 || string.Equals(equipmentType, "[magic stone]", StringComparison.OrdinalIgnoreCase);
         }
 
-        private static byte GetEquipmentSocketPhysicalIndex(int itemTemplateId, byte logicalSocketIndex)
-        {
-            return IsSingleMiddleEquipmentSocket(itemTemplateId) ? (byte)1 : logicalSocketIndex;
-        }
-
-        private static bool TryResolveEquipmentSocketRequest(int itemTemplateId, int openCount, byte requestSocketIndex, out byte logicalSocketIndex, out byte physicalSocketIndex)
+        private static bool TryResolveEquipmentSocketRequest(int itemTemplateId, int openCount, byte requestSocketIndex, out byte logicalSocketIndex)
         {
             logicalSocketIndex = 0;
-            physicalSocketIndex = 0;
 
-            if (requestSocketIndex >= 5 || openCount <= 0)
+            var visibleOpenCount = Math.Min(openCount, 2);
+            if (requestSocketIndex >= 5 || visibleOpenCount <= 0)
                 return false;
 
             if (IsSingleMiddleEquipmentSocket(itemTemplateId))
@@ -678,15 +645,13 @@ namespace DfoServer.Game.Inventory
                 if (requestSocketIndex > 1)
                     return false;
 
-                physicalSocketIndex = 1;
                 return true;
             }
 
-            if (requestSocketIndex >= openCount)
+            if (requestSocketIndex >= visibleOpenCount)
                 return false;
 
             logicalSocketIndex = requestSocketIndex;
-            physicalSocketIndex = requestSocketIndex;
             return true;
         }
 
@@ -716,25 +681,9 @@ namespace DfoServer.Game.Inventory
             }
         }
 
-        private static int CountOpenJewelSockets(byte[] jewelSocket)
-        {
-            var data = jewelSocket;
-            if (data == null || data.Length < 8)
-                return 0;
-
-            var count = 0;
-            for (var i = 0; i < 2; i++)
-            {
-                var offset = i * 6;
-                if (offset < data.Length && data[offset] != 0)
-                    count++;
-            }
-            return count;
-        }
-
         private static int CountOpenAvatarSockets(byte[] reserved2)
         {
-            var data = reserved2;
+            var data = AvatarSocketDataCodec.Normalize(reserved2);
             if (data == null || data.Length < 6)
                 return 0;
 
@@ -746,15 +695,6 @@ namespace DfoServer.Game.Inventory
                     count++;
             }
             return count;
-        }
-
-        private static byte GetJewelSocketType(byte[] jewelSocket, byte socketIndex)
-        {
-            var data = NormalizeBytes(jewelSocket, 30);
-            var offset = socketIndex * 6;
-            if (data == null || offset >= data.Length)
-                return 0;
-            return data[offset];
         }
 
         private static bool CanAttachEmblemToJewelSocket(byte socketType, byte emblemType)
@@ -776,9 +716,8 @@ namespace DfoServer.Game.Inventory
             return data != null
                 && offset >= 0
                 && offset + 5 < data.Length
-                && data[offset] == 0
-                && data[offset + 1] != 0
-                && (data[offset + 1] != 0xEF || data[offset + 2] == 0xFF);
+                && data[offset] != 0
+                && (data[offset] != 0xEF || data[offset + 1] == 0xFF);
         }
 
         private static bool IsEquippedAvatarSocketOpen(byte[] data, int offset)
@@ -820,15 +759,15 @@ namespace DfoServer.Game.Inventory
             if (socketTypes == null || socketTypes.Count == 0)
                 return false;
 
-            data = NormalizeBytes(data, 30);
+            data = AvatarSocketDataCodec.Normalize(data);
             var expectedCount = Math.Min(5, socketTypes.Count);
             for (var i = 0; i < expectedCount; i++)
             {
                 var offset = i * 6;
-                if (data[offset] != 0 || data[offset + 1] != socketTypes[i])
+                if (data[offset] != socketTypes[i])
                     return false;
 
-                if (socketTypes[i] == 0xEF && data[offset + 2] != 0xFF)
+                if (socketTypes[i] == 0xEF && data[offset + 1] != 0xFF)
                     return false;
             }
 
@@ -840,17 +779,6 @@ namespace DfoServer.Game.Inventory
             }
 
             return true;
-        }
-
-        private static void WriteEmblemToTail(byte[] tailData2F, byte socketIndex, int emblemItemTemplateId)
-        {
-            if (tailData2F == null || tailData2F.Length < 37)
-                return;
-
-            tailData2F[0] = Math.Max(tailData2F[0], (byte)(socketIndex + 1));
-            var offset = 1 + socketIndex * 4;
-            if (offset + 4 <= tailData2F.Length)
-                BitConverter.GetBytes(emblemItemTemplateId).CopyTo(tailData2F, offset);
         }
 
         private static void WriteEmblemToEquippedFields(ref byte[] emblemData, byte socketIndex, int emblemItemTemplateId)
@@ -874,11 +802,8 @@ namespace DfoServer.Game.Inventory
                 return;
 
             var offset = socketIndex * 6 + 2;
-            if (offset + 3 <= jewelSocket.Length)
-            {
-                var bytes = BitConverter.GetBytes(emblemItemTemplateId);
-                Buffer.BlockCopy(bytes, 0, jewelSocket, offset, 3);
-            }
+            if (offset + 4 <= jewelSocket.Length)
+                BitConverter.GetBytes(emblemItemTemplateId).CopyTo(jewelSocket, offset);
         }
 
         private static MakeEquipListCodec.Entry LoadEquippedEntry(SqliteConnection connection, SqliteTransaction transaction, int characterId, short slotIndex)
@@ -928,149 +853,14 @@ WHERE character_id = @cid AND slot = @slot AND item_id = @itemId;";
 
         }
 
-        private static void EnsureVisibleSocketCount(byte[] tailData2F, int openCount)
-        {
-            if (tailData2F == null || openCount <= 0)
-                return;
-
-            tailData2F[0] = (byte)Math.Max(tailData2F[0], Math.Min(openCount, 2));
-            for (var i = 0; i < openCount && i < 2; i++)
-            {
-                var offset = 1 + i * 4;
-                if (offset + 4 <= tailData2F.Length && BitConverter.ToInt32(tailData2F, offset) == 0)
-                    BitConverter.GetBytes(-1).CopyTo(tailData2F, offset);
-            }
-        }
-
-        private static void NormalizeEquipmentSocketLayout(byte[] jewelSocket, byte[] tailData2F)
-        {
-            if (jewelSocket == null)
-                return;
-
-            var changed = false;
-            for (var i = 0; i < 2; i++)
-            {
-                var offset = i * 6;
-                if (jewelSocket[offset] == 0 && IsKnownJewelSocketType(jewelSocket[offset + 1]))
-                {
-                    jewelSocket[offset] = jewelSocket[offset + 1];
-                    jewelSocket[offset + 1] = 0;
-                    changed = true;
-                }
-                else if (jewelSocket[offset] == 0x02 && IsKnownJewelSocketType(jewelSocket[offset + 1]))
-                {
-                    jewelSocket[offset] = jewelSocket[offset + 1];
-                    jewelSocket[offset + 1] = 0;
-                    changed = true;
-                }
-            }
-
-            if (changed)
-                EnsureVisibleSocketCount(tailData2F, CountOpenJewelSockets(jewelSocket));
-        }
-
-        private static bool RepairJewelSocketTypes(byte[] jewelSocket, int itemTemplateId)
-        {
-            if (jewelSocket == null)
-                return false;
-
-            var expectedType = ResolveJewelSocketType(itemTemplateId);
-            if (IsSingleMiddleEquipmentSocket(itemTemplateId))
-                return RepairSingleMiddleJewelSocket(jewelSocket, expectedType);
-
-            var changed = false;
-            for (var i = 0; i < 2; i++)
-            {
-                var offset = i * 6;
-                if (offset >= jewelSocket.Length || jewelSocket[offset] == 0)
-                    continue;
-
-                if (jewelSocket[offset] != expectedType)
-                {
-                    jewelSocket[offset] = expectedType;
-                    jewelSocket[offset + 1] = 0;
-                    changed = true;
-                }
-            }
-
-            return changed;
-        }
-
-        private static bool RepairSingleMiddleJewelSocket(byte[] jewelSocket, byte expectedType)
-        {
-            var sourceOffset = jewelSocket.Length > 6 && jewelSocket[6] != 0
-                ? 6
-                : FindFirstOpenJewelSocketOffset(jewelSocket, 3);
-
-            if (sourceOffset == 6 && jewelSocket[sourceOffset] == expectedType && !HasOpenEquipmentSocketOutsideMiddle(jewelSocket))
-                return false;
-
-            if (sourceOffset < 0)
-                return false;
-
-            var emblemBytes = new byte[4];
-            if (sourceOffset + 6 <= jewelSocket.Length)
-                Buffer.BlockCopy(jewelSocket, sourceOffset + 2, emblemBytes, 0, emblemBytes.Length);
-
-            Array.Clear(jewelSocket, 0, jewelSocket.Length);
-            jewelSocket[6] = expectedType;
-            jewelSocket[7] = 0;
-            Buffer.BlockCopy(emblemBytes, 0, jewelSocket, 8, emblemBytes.Length);
-            return true;
-        }
-
-        private static int FindFirstOpenJewelSocketOffset(byte[] jewelSocket, int maxSlots)
-        {
-            if (jewelSocket == null)
-                return -1;
-
-            for (var i = 0; i < maxSlots; i++)
-            {
-                var offset = i * 6;
-                if (offset < jewelSocket.Length && jewelSocket[offset] != 0)
-                    return offset;
-            }
-
-            return -1;
-        }
-
-        private static bool HasOpenEquipmentSocketOutsideMiddle(byte[] jewelSocket)
-        {
-            return jewelSocket != null
-                && ((jewelSocket.Length > 0 && jewelSocket[0] != 0)
-                    || (jewelSocket.Length > 12 && jewelSocket[12] != 0));
-        }
-
-        private static bool IsKnownJewelSocketType(byte socketType)
-        {
-            return socketType == 0x01
-                || socketType == 0x02
-                || socketType == 0x04
-                || socketType == 0x08
-                || socketType == 0x10;
-        }
-
-        private static void WriteEmblemToJewelSocket(byte[] jewelSocket, byte socketIndex, int emblemItemTemplateId)
-        {
-            if (jewelSocket == null || jewelSocket.Length < 30)
-                return;
-
-            var offset = socketIndex * 6 + 2;
-            if (offset + 4 <= jewelSocket.Length)
-                BitConverter.GetBytes(emblemItemTemplateId).CopyTo(jewelSocket, offset);
-        }
-
         private static void WriteEmblemToAvatarSocket(byte[] reserved2, byte socketIndex, int emblemItemTemplateId)
         {
             if (reserved2 == null || reserved2.Length < 30)
                 return;
 
-            var offset = socketIndex * 6 + 3;
-            if (offset + 3 <= reserved2.Length)
-            {
-                var bytes = BitConverter.GetBytes(emblemItemTemplateId);
-                Buffer.BlockCopy(bytes, 0, reserved2, offset, 3);
-            }
+            var offset = socketIndex * 6 + 2;
+            if (offset + 4 <= reserved2.Length)
+                BitConverter.GetBytes(emblemItemTemplateId).CopyTo(reserved2, offset);
         }
 
         private static byte[] NormalizeBytes(byte[] source, int expectedLength)

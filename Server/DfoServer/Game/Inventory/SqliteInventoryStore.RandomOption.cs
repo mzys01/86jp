@@ -62,9 +62,8 @@ namespace DfoServer.Game.Inventory
 
             var updatedGold = CurrencyService.LoadWallet(connection, transaction, characterId).Gold;
 
-            var targetExtra = ItemExtraView.Parse(target.ExtraJson);
-            var updatedExtra = BuildMagicSealExtraView(targetExtra, entries);
-            target.ExtraJson = updatedExtra.Serialize();
+            var targetView = InventoryItemView.ForCommon(target);
+            targetView.Entry84.SetRandomOptions(entries);
             _db.UpdateItemExtraJson(connection, transaction, target.ItemUid, target.ExtraJson);
             _auditLogger.WriteAuditLog(connection, transaction, characterId, "unseal_random_option", target, target.ListType, target.SlotIndex, entries.Count);
             transaction.Commit();
@@ -123,9 +122,8 @@ namespace DfoServer.Game.Inventory
         {
             result = null;
             var metadata = ItemMetadataResolver.Resolve(target.ItemTemplateId);
-            var targetExtra = ItemExtraView.Parse(target.ExtraJson);
-            var tailData2F = NormalizeMagicSealTail(targetExtra.Equipment.TailData2F);
-            var entries = ReadMagicSealOptions(tailData2F);
+            var targetView = InventoryItemView.ForCommon(target);
+            var entries = new List<RandomOptionEntry>(targetView.Entry84.RandomOptions);
             if (!TryReplaceSingleOption(metadata, requestedOptionIndex, entries, out var replacedIndex))
                 return false;
 
@@ -134,8 +132,7 @@ namespace DfoServer.Game.Inventory
                 return false;
 
             var updatedGold = CurrencyService.LoadWallet(connection, transaction, characterId).Gold;
-            var updatedExtra = BuildMagicSealExtraView(targetExtra, entries);
-            target.ExtraJson = updatedExtra.Serialize();
+            targetView.Entry84.SetRandomOptions(entries);
             _db.UpdateItemExtraJson(connection, transaction, target.ItemUid, target.ExtraJson);
             _auditLogger.WriteAuditLog(connection, transaction, characterId, "change_random_option", target, target.ListType, target.SlotIndex, replacedIndex);
             transaction.Commit();
@@ -207,13 +204,7 @@ namespace DfoServer.Game.Inventory
 
         internal static List<RandomOptionEntry> ReadMagicSealOptions(byte[] tailData2F)
         {
-            var result = new List<RandomOptionEntry>();
-            if (tailData2F == null || tailData2F.Length < 21)
-                return result;
-            var count = Math.Max(0, Math.Min(3, (int)tailData2F[11]));
-            for (var i = 0; i < count; i++)
-                result.Add(new RandomOptionEntry { Type = tailData2F[12 + i], Value1 = tailData2F[15 + i], Value2 = tailData2F[18 + i] });
-            return result;
+            return new List<RandomOptionEntry>(InventoryItemViewBytes.ParseRandomOptions(tailData2F));
         }
 
         private static List<RandomOptionEntry> ReadMagicSealOptionsFromEquipped(InvenItem item)
@@ -233,15 +224,6 @@ namespace DfoServer.Game.Inventory
             item.SealGenuineUpgrade = 0;
             item.SealCheck = 0xFF;
             item.SealExtra = 0;
-        }
-
-        private static ItemExtraView BuildMagicSealExtraView(ItemExtraView original, IReadOnlyList<RandomOptionEntry> entries)
-        {
-            var builder = ItemExtraViewBuilder.FromView(original);
-            var tailData2F = NormalizeMagicSealTail(original?.Equipment.TailData2F);
-            WriteMagicSealOptions(tailData2F, entries);
-            builder.Equipment.TailData2F = tailData2F;
-            return builder.Build();
         }
 
         private static MakeEquipListCodec.Entry LoadEquippedEntryForRandomOption(SqliteConnection connection, SqliteTransaction transaction, int characterId, short slotIndex)
@@ -284,15 +266,7 @@ namespace DfoServer.Game.Inventory
 
         internal static void WriteMagicSealOptions(byte[] tailData2F, IReadOnlyList<RandomOptionEntry> entries)
         {
-            if (tailData2F == null || tailData2F.Length < 37 || entries == null || entries.Count == 0)
-                return;
-            var count = Math.Min(3, entries.Count);
-            tailData2F[11] = (byte)count;
-            for (var i = 0; i < 3; i++) { tailData2F[12 + i] = 0; tailData2F[15 + i] = 0; tailData2F[18 + i] = 0; }
-            for (var i = 0; i < count; i++) { tailData2F[12 + i] = entries[i].Type; tailData2F[15 + i] = entries[i].Value1; tailData2F[18 + i] = entries[i].Value2; }
-            tailData2F[21] = 0x00;
-            tailData2F[22] = 0xFF;
-            for (var i = 23; i <= 26 && i < tailData2F.Length; i++) tailData2F[i] = 0;
+            InventoryItemViewBytes.WriteRandomOptions(tailData2F, entries);
         }
     }
 }

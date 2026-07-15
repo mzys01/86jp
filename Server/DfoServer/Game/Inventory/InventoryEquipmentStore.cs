@@ -614,7 +614,7 @@ VALUES (@accountId, @selectionKey, @value32, @itemCount, CURRENT_TIMESTAMP);";
             using (var cmd = connection.CreateCommand())
             {
                 cmd.Transaction = transaction;
-                cmd.CommandText = @"SELECT item_template_id, stack_count, durability, extra_json, item_kind, option_value, pet_serial_or_handle
+                cmd.CommandText = @"SELECT item_template_id, stack_count, durability, extra_json, item_kind, option_value, pet_serial_or_handle, marker_16
                                     FROM character_items WHERE character_id=@cid AND list_type=@lt AND slot_index=@si";
                 cmd.Parameters.AddWithValue("@cid", characterId);
                 cmd.Parameters.AddWithValue("@lt", (int)listType);
@@ -623,45 +623,89 @@ VALUES (@accountId, @selectionKey, @value32, @itemCount, CURRENT_TIMESTAMP);";
                 {
                     if (!reader.Read()) return null;
                     var itemTemplateId = reader.GetInt32(0);
+                    var stackCount = reader.GetInt32(1);
                     var extraJson = reader.IsDBNull(3) ? "{}" : reader.GetString(3);
                     var itemKind = reader.IsDBNull(4) ? "" : reader.GetString(4);
-                    var extra = ItemExtraView.Parse(extraJson);
-                    var equipmentExtra = extra.Equipment;
                     var durabilityFromDb = (ushort)reader.GetInt32(2);
                     var isAvatar = string.Equals(itemKind, "avatar", StringComparison.Ordinal);
                     var isPet = listType == InventoryListType.Pet && string.Equals(itemKind, "pet", StringComparison.Ordinal);
                     var petSerialOrHandle = reader.GetInt32(6);
                     var optionValue = Convert.ToByte(reader.GetInt32(5), CultureInfo.InvariantCulture);
+                    var record = new SqliteInventoryStore.ItemRecord
+                    {
+                        ListType = listType,
+                        SlotIndex = slotIndex,
+                        ItemTemplateId = itemTemplateId,
+                        ItemKind = itemKind,
+                        StackCount = stackCount,
+                        Durability = durabilityFromDb,
+                        OptionValue = optionValue,
+                        PetSerialOrHandle = petSerialOrHandle,
+                        Marker16 = reader.GetInt32(7),
+                        ExtraJson = extraJson,
+                    };
+                    var view = isAvatar
+                        ? InventoryItemView.ForAvatar(record)
+                        : isPet
+                            ? InventoryItemView.ForPet(record)
+                            : InventoryItemView.ForCommon(record);
+                    var entry = view.Entry84;
                     var f = new MakeEquipListCodec.DisplayFields
                     {
-                        InstanceValue = unchecked((uint)(isPet ? petSerialOrHandle : reader.GetInt32(1))),
+                        InstanceValue = unchecked((uint)entry.Value),
                         Durability = listType == InventoryListType.Avatar ? optionValue : durabilityFromDb,
-                        Reinforce = equipmentExtra.ExtData0,
-                        Enchant = unchecked((uint)equipmentExtra.EnchantCardId),
-                        EnchantUpgradeCount = equipmentExtra.EnchantUpgradeCount,
-                        AmplifyType = equipmentExtra.AmplifyType,
-                        AmplifyValue = equipmentExtra.AmplifyValue,
+                        Reinforce = entry.Attr,
+                        Enchant = unchecked((uint)entry.EnchantCardId),
+                        EnchantUpgradeCount = entry.EnchantUpgradeCount,
+                        AmplifyType = entry.AmplifyType,
+                        AmplifyValue = entry.AmplifyValue,
                     };
                     if (isPet && petSerialOrHandle != 0 && CreatureExtraResolver.HasCreatureExtra(itemTemplateId))
                         f.CreatureExtra = unchecked((uint)petSerialOrHandle);
-                    f.Emblem = equipmentExtra.EmblemData;
-                    f.Rune = equipmentExtra.Rune;
-                    f.MagicSealCount = equipmentExtra.SealCount;
+                    f.Emblem = entry.EmblemData;
+                    f.Rune = entry.Rune;
+                    var randomOptions = entry.RandomOptions;
+                    f.MagicSealCount = (byte)Math.Min(3, randomOptions.Count);
                     if (f.MagicSealCount > 0)
                     {
-                        f.MagicSealTypes = equipmentExtra.SealTypes;
-                        f.MagicSealVal1s = equipmentExtra.SealVal1s;
-                        f.MagicSealVal2s = equipmentExtra.SealVal2s;
-                        f.MagicSealTail = equipmentExtra.SealTail;
+                        f.MagicSealTypes = BuildRandomOptionTypes(randomOptions);
+                        f.MagicSealVal1s = BuildRandomOptionValue1s(randomOptions);
+                        f.MagicSealVal2s = BuildRandomOptionValue2s(randomOptions);
                     }
-                    f.Forging = equipmentExtra.Forging;
+                    f.Forging = entry.Forging;
                     if (isAvatar)
-                        f.JewelSocket = SqliteInventoryStore.AvatarReservedToEquippedJewel(extra.Avatar.Reserved2);
+                        f.JewelSocket = SqliteInventoryStore.AvatarReservedToEquippedJewel(view.AvatarDetail.SocketData);
                     else
-                        f.JewelSocket = equipmentExtra.JewelSocket;
+                        f.JewelSocket = entry.JewelSocket;
                     return f;
                 }
             }
+        }
+
+        private static byte[] BuildRandomOptionTypes(IReadOnlyList<RandomOptionEntry> entries)
+        {
+            return BuildRandomOptionBytes(entries, option => option.Type);
+        }
+
+        private static byte[] BuildRandomOptionValue1s(IReadOnlyList<RandomOptionEntry> entries)
+        {
+            return BuildRandomOptionBytes(entries, option => option.Value1);
+        }
+
+        private static byte[] BuildRandomOptionValue2s(IReadOnlyList<RandomOptionEntry> entries)
+        {
+            return BuildRandomOptionBytes(entries, option => option.Value2);
+        }
+
+        private static byte[] BuildRandomOptionBytes(IReadOnlyList<RandomOptionEntry> entries, Func<RandomOptionEntry, byte> selector)
+        {
+            var data = new byte[3];
+            if (entries == null || selector == null)
+                return data;
+
+            for (var index = 0; index < entries.Count && index < data.Length; index++)
+                data[index] = selector(entries[index]);
+            return data;
         }
 
         private void InsertEquipToContainer(SqliteConnection connection, SqliteTransaction transaction, int characterId, InventoryListType listType, short slot, int itemId, byte[] entryRaw, int entryExpireTime, byte equipmentLockId = 0)
@@ -690,39 +734,100 @@ VALUES (@accountId, @selectionKey, @value32, @itemCount, CURRENT_TIMESTAMP);";
                 countOrIv = unchecked((int)f.InstanceValue);
                 if (listType == InventoryListType.Avatar)
                 {
-                    var avatarExtraBuilder = ItemExtraViewBuilder.FromAvatarView(null);
-                    avatarExtraBuilder.Avatar.UnknownFixed4 = SqliteInventoryStore.DefaultAvatarUnknownFixed4;
-                    avatarExtraBuilder.Avatar.Reserved2 = SqliteInventoryStore.EquippedJewelToAvatarReserved(f.JewelSocket);
+                    var avatarExtraJson = BuildAvatarExtraJsonFromEquippedFields(f);
                     _db.InsertCharacterItem(
                         connection, transaction, characterId, listType, slot, itemId, "avatar",
                         stackCount: 0, instanceValue: 0, durability: 0, sealFlag: 0, optionValue: ResolveAvatarOptionValue(f),
                         expireTime: 0, marker16: SqliteInventoryStore.DefaultAvatarUnknownFixed30, petSerialOrHandle: 0,
-                        extraJson: avatarExtraBuilder.Build().Serialize(), equipmentLockId: equipmentLockId);
+                        extraJson: avatarExtraJson, equipmentLockId: equipmentLockId);
                     return;
                 }
 
-                var extraBuilder = new ItemExtraViewBuilder();
-                extraBuilder.Equipment.ExtData0 = f.Reinforce;
-                extraBuilder.Equipment.EnchantCardId = unchecked((int)f.Enchant);
-                extraBuilder.Equipment.EnchantUpgradeCount = f.EnchantUpgradeCount;
-                extraBuilder.Equipment.AmplifyType = f.AmplifyType;
-                extraBuilder.Equipment.AmplifyValue = f.AmplifyValue;
-                extraBuilder.Equipment.EmblemData = f.Emblem;
-                extraBuilder.Equipment.Rune = f.Rune;
-                extraBuilder.Equipment.SealCount = f.MagicSealCount;
-                extraBuilder.Equipment.SealTypes = f.MagicSealTypes;
-                extraBuilder.Equipment.SealVal1s = f.MagicSealVal1s;
-                extraBuilder.Equipment.SealVal2s = f.MagicSealVal2s;
-                extraBuilder.Equipment.SealTail = f.MagicSealTail;
-                extraBuilder.Equipment.Forging = f.Forging;
-                extraBuilder.Equipment.JewelSocket = f.JewelSocket;
-                extraJson = extraBuilder.Build().Serialize();
+                extraJson = BuildEquipmentExtraJsonFromEquippedFields(f);
             }
             byte ov = (byte)(listType == InventoryListType.Avatar ? dur : 0);
             _db.InsertCharacterItem(connection, transaction, characterId, listType, slot, itemId, "equipment",
                 stackCount: countOrIv, instanceValue: 0, durability: dur, sealFlag: 0, optionValue: ov,
                 expireTime: expireTime, marker16: -1, petSerialOrHandle: 0, extraJson: extraJson, equipmentLockId: equipmentLockId);
             FileLogger.Log($"  [InsertEquipToContainer] listType={listType} slot={slot} itemId=0x{itemId:X8} durability={dur} optionValue={ov}");
+        }
+
+        private static string BuildAvatarExtraJsonFromEquippedFields(MakeEquipListCodec.DisplayFields fields)
+        {
+            var record = new SqliteInventoryStore.ItemRecord
+            {
+                OptionValue = ResolveAvatarOptionValue(fields),
+                Marker16 = SqliteInventoryStore.DefaultAvatarUnknownFixed30,
+                ExtraJson = SqliteInventoryStore.CreateDefaultAvatarExtraJson(),
+            };
+            var view = InventoryItemView.ForAvatar(record);
+            view.AvatarDetail.ColorDataLen = SqliteInventoryStore.DefaultAvatarUnknownFixed4;
+            view.AvatarDetail.SocketData = SqliteInventoryStore.EquippedJewelToAvatarReserved(fields.JewelSocket);
+            return record.ExtraJson;
+        }
+
+        private static string BuildEquipmentExtraJsonFromEquippedFields(MakeEquipListCodec.DisplayFields fields)
+        {
+            var record = new SqliteInventoryStore.ItemRecord
+            {
+                ExtraJson = DefaultEquipmentExtraJson,
+            };
+            var view = InventoryItemView.ForCommon(record);
+            view.Attr = fields.Reinforce;
+            view.EnchantCardId = unchecked((int)fields.Enchant);
+            view.EnchantUpgradeCount = fields.EnchantUpgradeCount;
+            view.AmplifyType = fields.AmplifyType;
+            view.AmplifyValue = fields.AmplifyValue;
+            view.Entry84.EmblemData = fields.Emblem;
+            view.Entry84.Rune = fields.Rune;
+            if (fields.MagicSealCount > 0)
+            {
+                view.Entry84.SetRandomOptions(BuildRandomOptions(fields));
+                ApplyRandomOptionTail(view.Entry84, fields.MagicSealTail);
+            }
+            view.Forging = fields.Forging;
+            view.Entry84.JewelSocket = fields.JewelSocket;
+            return record.ExtraJson;
+        }
+
+        private static IReadOnlyList<RandomOptionEntry> BuildRandomOptions(MakeEquipListCodec.DisplayFields fields)
+        {
+            var count = Math.Min(3, (int)fields.MagicSealCount);
+            var entries = new List<RandomOptionEntry>(count);
+            for (var index = 0; index < count; index++)
+            {
+                entries.Add(new RandomOptionEntry
+                {
+                    Type = ReadRandomOptionByte(fields.MagicSealTypes, index),
+                    Value1 = ReadRandomOptionByte(fields.MagicSealVal1s, index),
+                    Value2 = ReadRandomOptionByte(fields.MagicSealVal2s, index),
+                });
+            }
+
+            return entries;
+        }
+
+        private static byte ReadRandomOptionByte(byte[] data, int index)
+        {
+            return data != null && index >= 0 && index < data.Length ? data[index] : (byte)0;
+        }
+
+        private static void ApplyRandomOptionTail(InventoryItemEntry84View entry, byte[] tail)
+        {
+            if (entry == null || tail == null || tail.Length == 0)
+                return;
+
+            entry.RandomOptionState = tail[0];
+            if (tail.Length > 1)
+                entry.RandomOptionChangedIndex = tail[1];
+            if (tail.Length > 2)
+                entry.RandomOptionChangeState = tail[2];
+            if (tail.Length > 3)
+                entry.RandomOptionChangeType = tail[3];
+            if (tail.Length > 4)
+                entry.RandomOptionChangeValue1 = tail[4];
+            if (tail.Length > 5)
+                entry.RandomOptionChangeValue2 = tail[5];
         }
 
         private static byte ResolveAvatarOptionValue(MakeEquipListCodec.DisplayFields fields)

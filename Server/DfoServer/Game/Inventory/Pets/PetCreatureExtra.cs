@@ -174,10 +174,10 @@ WHERE character_id = @cid
             byte enchantUpgradeCount)
         {
             var json = ParseJsonObject(NormalizePetCreatureExtraJson(extraJson));
-            var tail = ItemExtraView.Parse(json.ToJsonString()).Pet.TailData0A;
+            var tail = ReadPetTailData0A(json.ToJsonString());
             BitConverter.GetBytes(enchantCardItemId).CopyTo(tail, PetTailEnchantCardIdIndex);
             tail[PetTailEnchantUpgradeCountIndex] = enchantUpgradeCount;
-            json["tailData0A"] = ItemExtraView.ToHex(tail);
+            WritePetTailData0A(json, tail);
             json[PetEnchantCardItemIdProperty] = enchantCardItemId;
             json[PetEnchantUpgradeCountProperty] = enchantUpgradeCount;
             return json.ToJsonString();
@@ -256,12 +256,12 @@ LIMIT 1;";
         private static string BuildInitializedPetCreatureSealExtraJson(byte remainUseCount)
         {
             var json = ParseJsonObject(CreateDefaultPetExtraJson());
-            var tail = ItemExtraView.Parse(json.ToJsonString()).Pet.TailData0A;
+            var tail = ReadPetTailData0A(json.ToJsonString());
             tail[PetTailTradeRestrictionIndex] = remainUseCount <= 0
                 ? PetTradeRestrictionExhausted
                 : PetTradeRestrictionNone;
             tail[PetTailRemainUseCountIndex] = remainUseCount;
-            json["tailData0A"] = ItemExtraView.ToHex(tail);
+            WritePetTailData0A(json, tail);
             json[PetSealRemainUseCountInitializedProperty] = true;
             json[PetSealRemainUseCountProperty] = remainUseCount;
             return json.ToJsonString();
@@ -270,7 +270,7 @@ LIMIT 1;";
         private static bool TryResolvePetCreatureSealRemainUseCount(string extraJson, out byte remainUseCount)
         {
             remainUseCount = 0;
-            var tail = ItemExtraView.Parse(extraJson).Pet.TailData0A;
+            var tail = ReadPetTailData0A(extraJson);
             if (tail.Length <= PetTailRemainUseCountIndex)
                 return false;
 
@@ -315,7 +315,7 @@ LIMIT 1;";
             if (commonTailData2F == null || commonTailData2F.Length <= CommonTailRemainUseCountIndex)
                 return;
 
-            var tail = ItemExtraView.Parse(petExtraJson).Pet.TailData0A;
+            var tail = ReadPetTailData0A(petExtraJson);
             CopyPetExtraByte(tail, PetTailTradeRestrictionIndex, commonTailData2F, CommonTailTradeRestrictionIndex);
             CopyPetExtraByte(tail, PetTailRemainUseCountIndex, commonTailData2F, CommonTailRemainUseCountIndex);
 
@@ -338,14 +338,30 @@ LIMIT 1;";
             target[targetIndex] = source[sourceIndex];
         }
 
+        private static byte[] ReadPetTailData0A(string extraJson)
+        {
+            return InventoryItemView.ForPet(new ItemRecord
+            {
+                ExtraJson = string.IsNullOrWhiteSpace(extraJson) ? "{}" : extraJson,
+            }).PetTailData0A;
+        }
+
+        private static void WritePetTailData0A(JsonObject json, byte[] tailData0A)
+        {
+            if (json == null)
+                return;
+
+            json["tailData0A"] = InventoryItemViewBytes.ToHex(InventoryItemViewBytes.CopyFixed(tailData0A, 74));
+        }
+
         private static string NormalizePetCreatureExtraJson(string extraJson)
         {
             var json = ParseJsonObject(extraJson);
-            var tail = ItemExtraView.Parse(extraJson).Pet.TailData0A;
+            var tail = ReadPetTailData0A(extraJson);
             if (tail.Length != 74)
                 tail = new byte[74];
 
-            json["tailData0A"] = ItemExtraView.ToHex(tail);
+            WritePetTailData0A(json, tail);
             return json.ToJsonString();
         }
 
@@ -354,7 +370,7 @@ LIMIT 1;";
             if (HasPetCreatureExtraProtocolMarker(extraJson))
                 return true;
 
-            var tail = ItemExtraView.Parse(extraJson).Pet.TailData0A;
+            var tail = ReadPetTailData0A(extraJson);
             for (var index = 0; index < tail.Length; index++)
                 if (tail[index] != 0)
                     return true;
@@ -450,7 +466,7 @@ WHERE character_id = @cid
             enchantCardItemId = 0;
             enchantUpgradeCount = 0;
 
-            var tail = ItemExtraView.Parse(extraJson).Pet.TailData0A;
+            var tail = ReadPetTailData0A(extraJson);
             if (TryReadJsonObject(extraJson, out var json))
             {
                 var hasCard = TryReadJsonInt(json, PetEnchantCardItemIdProperty, out var directCardItemId);

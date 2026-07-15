@@ -174,7 +174,7 @@ namespace DfoServer.Game.Inventory
 
         private static bool IsUnidentifiedAmplifyEquipment(ItemRecord source)
         {
-            var amplifyType = ItemExtraView.Parse(source.ExtraJson).Equipment.AmplifyType;
+            var amplifyType = InventoryItemView.ForCommon(source).AmplifyType;
 
             // 最高位为未鉴定标志，低 7 位保留增幅属性类型。
             return (amplifyType & 0x80) != 0;

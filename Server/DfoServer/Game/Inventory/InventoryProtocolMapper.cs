@@ -3,55 +3,70 @@ namespace DfoServer.Game.Inventory
     // 协议 DTO 的集中映射入口；业务层不应该直接构造或修改这些 DTO。
     internal static class InventoryProtocolMapper
     {
-        internal static CommonInventoryItem ToCommonItem(SqliteInventoryStore.ItemRecord record, ItemExtraView extra)
+        internal static CommonInventoryItem ToCommonItem(SqliteInventoryStore.ItemRecord record)
         {
-            var view = extra ?? ItemExtraView.Parse(record?.ExtraJson);
-            var raw = view.Raw84;
+            var view = InventoryItemView.ForCommon(record);
+            var entry = view.Entry84;
             return new CommonInventoryItem
             {
-                SlotIndex = record.SlotIndex,
-                ItemTemplateId = record.ItemTemplateId,
-                CountOrInstanceValue = record.StackCount,
-                ExtData0 = raw.Attr,
-                Durability = record.Durability,
-                SealFlag = record.SealFlag,
-                PrefixData0E = raw.PrefixData0E,
-                Marker16 = record.Marker16,
-                MiddleData1A = raw.MiddleData1A,
-                ExpireTime = record.ExpireTime,
-                TailData2F = raw.TailData2F,
-                JewelSocket = raw.JewelSocket,
+                SlotIndex = entry.SlotIndex,
+                ItemTemplateId = entry.ItemTemplateId,
+                CountOrInstanceValue = entry.Value,
+                ExtData0 = entry.Attr,
+                Durability = entry.Durability,
+                SealFlag = entry.SealFlag,
+                PrefixData0E = entry.PrefixData0E,
+                Marker16 = entry.Marker16,
+                MiddleData1A = entry.MiddleData1A,
+                ExpireTime = entry.ExpireTime,
+                TailData2F = entry.TailData2F,
+                JewelSocket = entry.JewelSocket,
                 EquipmentLockId = record.EquipmentLockId,
             };
         }
 
-        internal static AvatarInventoryItem ToAvatarItem(SqliteInventoryStore.ItemRecord record, ItemExtraView extra)
+        internal static AvatarInventoryItem ToAvatarItem(SqliteInventoryStore.ItemRecord record)
         {
-            var view = extra ?? ItemExtraView.Parse(record?.ExtraJson);
-            var avatar = view.Avatar;
+            var view = InventoryItemView.ForAvatar(record);
+            var entry = view.Entry84;
+            var detail = view.AvatarDetail;
             return new AvatarInventoryItem
             {
-                SlotIndex = record.SlotIndex,
-                AvatarItemId = record.ItemTemplateId,
-                Reserved0 = avatar.Reserved0,
-                OptionValue = record.OptionValue,
-                Reserved1 = avatar.Reserved1,
-                UnknownFixed30 = record.Marker16,
-                Reserved2 = avatar.Reserved2,
-                UnknownFixed4 = avatar.UnknownFixed4,
-                TailData = avatar.TailData,
+                SlotIndex = entry.SlotIndex,
+                AvatarItemId = entry.ItemTemplateId,
+                RemainingSeconds = entry.Value,
+                Attr = entry.Attr,
+                AbilityNo = entry.AbilityNo,
+                SealFlag = entry.SealFlag,
+                PrefixData0E = entry.PrefixData0E,
+                Marker16 = entry.Marker16,
+                MiddleData1A = entry.MiddleData1A,
+                ExpireTime = entry.ExpireTime,
+                TailData2F = entry.TailData2F,
+                AvatarSocketData = detail.AvatarSocketData,
+                ColorDataLen = detail.ColorDataLen,
+                Color1 = detail.Color1,
+                Color2 = detail.Color2,
             };
         }
 
-        internal static PetInventoryItem ToPetItem(SqliteInventoryStore.ItemRecord record, ItemExtraView extra)
+        internal static PetInventoryItem ToPetItem(SqliteInventoryStore.ItemRecord record)
         {
-            var view = extra ?? ItemExtraView.Parse(record?.ExtraJson);
+            var view = InventoryItemView.ForPet(record);
+            var entry = view.Entry84;
             return new PetInventoryItem
             {
-                SlotIndex = record.SlotIndex,
-                CreatureItemId = record.ItemTemplateId,
-                CreatureSerialOrHandle = record.PetSerialOrHandle,
-                TailData0A = view.Pet.TailData0A,
+                SlotIndex = entry.SlotIndex,
+                CreatureItemId = entry.ItemTemplateId,
+                CreatureSerialOrHandle = entry.Value,
+                Attr = entry.Attr,
+                Durability = entry.Durability,
+                SealFlag = entry.SealFlag,
+                PrefixData0E = entry.PrefixData0E,
+                Marker16 = entry.Marker16,
+                MiddleData1A = entry.MiddleData1A,
+                ExpireTime = entry.ExpireTime,
+                TailData2F = entry.TailData2F,
             };
         }
     }

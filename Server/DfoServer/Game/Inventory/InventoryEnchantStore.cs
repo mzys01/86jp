@@ -54,7 +54,7 @@ namespace DfoServer.Game.Inventory
                 return false;
             }
 
-            var enchantUpgradeCount = ReadEnchantUpgradeCount(bead.ExtraJson);
+            var enchantUpgradeCount = ReadEnchantUpgradeCount(bead);
             if (!ItemMetadataResolver.TryValidateEnchantByBeadTarget(bead.ItemTemplateId, target.ItemTemplateId, enchantUpgradeCount, out var enchantCardItemId, out var rejectReason))
             {
                 var errorCode = rejectReason != null && rejectReason.StartsWith("target", StringComparison.Ordinal)
@@ -65,9 +65,9 @@ namespace DfoServer.Game.Inventory
                 return false;
             }
 
-            var targetExtra = ItemExtraView.Parse(target.ExtraJson);
-            var updatedTargetExtra = BuildEnchantTargetExtraView(targetExtra, enchantCardItemId, enchantUpgradeCount);
-            target.ExtraJson = updatedTargetExtra.Serialize();
+            var targetView = InventoryItemView.ForCommon(target);
+            targetView.EnchantCardId = enchantCardItemId;
+            targetView.EnchantUpgradeCount = enchantUpgradeCount;
             _db.UpdateItemExtraJson(connection, transaction, target.ItemUid, target.ExtraJson);
 
             var remainingBeadCount = bead.StackCount - 1;
@@ -104,7 +104,7 @@ namespace DfoServer.Game.Inventory
                 return false;
             }
 
-            var enchantUpgradeCount = ReadEnchantUpgradeCount(bead.ExtraJson);
+            var enchantUpgradeCount = ReadEnchantUpgradeCount(bead);
             if (!ItemMetadataResolver.TryValidatePetEnchantByBeadTarget(bead.ItemTemplateId, target.ItemTemplateId, enchantUpgradeCount, out var enchantCardItemId, out var rejectReason))
             {
                 var errorCode = rejectReason != null && rejectReason.StartsWith("target", StringComparison.Ordinal)
@@ -141,18 +141,12 @@ namespace DfoServer.Game.Inventory
             return true;
         }
 
-        private static byte ReadEnchantUpgradeCount(string extraJson)
+        private static byte ReadEnchantUpgradeCount(SqliteInventoryStore.ItemRecord bead)
         {
             // 86 附魔卡片升级次数跟随宝珠动态数据保存，写入装备时落到 common entry +0x12。
-            return ItemExtraView.Parse(extraJson).Equipment.EnchantUpgradeCount;
-        }
-
-        private static ItemExtraView BuildEnchantTargetExtraView(ItemExtraView targetExtra, int enchantCardItemId, byte enchantUpgradeCount)
-        {
-            var builder = ItemExtraViewBuilder.FromView(targetExtra);
-            builder.Equipment.EnchantCardId = enchantCardItemId;
-            builder.Equipment.EnchantUpgradeCount = enchantUpgradeCount;
-            return builder.Build();
+            return bead != null
+                ? InventoryItemView.ForCommon(bead).EnchantUpgradeCount
+                : (byte)0;
         }
     }
 }

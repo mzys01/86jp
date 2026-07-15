@@ -298,11 +298,9 @@ namespace DfoServer.Game.Inventory
             if (target.ItemUid <= 0)
                 return false;
 
-            var extra = ItemExtraView.Parse(target.ExtraJson);
-            var builder = ItemExtraViewBuilder.FromView(extra);
-            builder.Equipment.Rune = effectId;
-            var updated = builder.Build();
-            target.ExtraJson = updated.Serialize();
+            var view = InventoryItemView.ForCommon(target.ToItemRecord());
+            view.Entry84.Rune = effectId;
+            target.ExtraJson = view.Record.ExtraJson;
             _db.UpdateItemExtraJson(connection, transaction, target.ItemUid, target.ExtraJson);
             return true;
         }

@@ -150,8 +150,9 @@ namespace DfoServer.SelfTests
                     var offset = 5 + i * AvatarEntryLength;
                     Check($"avatar packet[{i}] slot={i}", BitConverter.ToInt16(avatarBody, offset) == i);
                     Check($"avatar packet[{i}] item={ExpectedAvatarItemIds[i]}", BitConverter.ToInt32(avatarBody, offset + 2) == ExpectedAvatarItemIds[i]);
-                    Check($"avatar packet[{i}] fixed30", BitConverter.ToInt32(avatarBody, offset + 83) == ExpectedAvatarUnknownFixed30);
-                    Check($"avatar packet[{i}] fixed4", BitConverter.ToUInt16(avatarBody, offset + 117) == ExpectedAvatarUnknownFixed4);
+                    Check($"avatar packet[{i}] sortLock", avatarBody[offset + 83] == 0);
+                    Check($"avatar packet[{i}] socketLen", BitConverter.ToInt32(avatarBody, offset + 84) == 30);
+                    Check($"avatar packet[{i}] colorLen", BitConverter.ToInt32(avatarBody, offset + 118) == 4);
                 }
             }
 

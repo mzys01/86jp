@@ -36,16 +36,6 @@ namespace DfoServer.SelfTests
             var middle = TitleBookInventoryItemCodec.EncodeChronicle(chronicle);
             var tail = Sequence(37, 0x40);
 
-            var builder = new ItemExtraViewBuilder();
-            builder.Equipment.ExtData0 = 0x6D;
-            builder.Equipment.EnchantCardId = 0x01020304;
-            builder.Equipment.EnchantUpgradeCount = 7;
-            builder.Equipment.AmplifyType = 2;
-            builder.Equipment.AmplifyValue = 0x3456;
-            builder.Equipment.MiddleData1A = middle;
-            builder.Equipment.TailData2F = tail;
-            builder.Equipment.JewelSocket = Sequence(30, 0xA0);
-
             var record = new SqliteInventoryStore.ItemRecord
             {
                 SlotIndex = 12,
@@ -56,8 +46,17 @@ namespace DfoServer.SelfTests
                 Marker16 = -1,
                 ExpireTime = 0,
                 EquipmentLockId = 9,
-                ExtraJson = builder.Build().Serialize(),
+                ExtraJson = "{}",
             };
+            var seedView = InventoryItemView.ForCommon(record);
+            seedView.Attr = 0x6D;
+            seedView.EnchantCardId = 0x01020304;
+            seedView.EnchantUpgradeCount = 7;
+            seedView.AmplifyType = 2;
+            seedView.AmplifyValue = 0x3456;
+            seedView.Entry84.MiddleData1A = middle;
+            seedView.Entry84.TailData2F = tail;
+            seedView.Entry84.JewelSocket = Sequence(30, 0xA0);
 
             var title = TitleBookInventoryItemCodec.FromItemRecord(0, 3, record);
             Check("record 转称号簿基础字段", title.Category == 0
@@ -90,14 +89,18 @@ namespace DfoServer.SelfTests
                 && decoded.AmplifyValue == title.AmplifyValue
                 && Hex(decoded.TailData) == Hex(title.TailData));
 
-            var restoredExtra = ItemExtraView.Parse(TitleBookInventoryItemCodec.ToExtraJson(decoded));
-            Check("称号簿写回 extra_json prefix/middle/tail", restoredExtra.Raw84.Attr == decoded.Attr
-                && restoredExtra.Equipment.EnchantCardId == decoded.EnchantIndex
-                && restoredExtra.Equipment.EnchantUpgradeCount == decoded.EnchantUpgradeCount
-                && Hex(restoredExtra.Raw84.MiddleData1A) == Hex(middle)
-                && Hex(restoredExtra.Raw84.TailData2F) == Hex(tail));
+            var restoredRecord = new SqliteInventoryStore.ItemRecord
+            {
+                ExtraJson = TitleBookInventoryItemCodec.ToExtraJson(decoded),
+            };
+            var restoredView = InventoryItemView.ForCommon(restoredRecord);
+            Check("称号簿写回 extra_json prefix/middle/tail", restoredView.Entry84.Attr == decoded.Attr
+                && restoredView.EnchantCardId == decoded.EnchantIndex
+                && restoredView.EnchantUpgradeCount == decoded.EnchantUpgradeCount
+                && Hex(restoredView.Entry84.MiddleData1A) == Hex(middle)
+                && Hex(restoredView.Entry84.TailData2F) == Hex(tail));
             Check("称号簿写回 extra_json 保持旧 common jewelSocket 形态", TitleBookInventoryItemCodec.ToExtraJson(decoded).Contains("\"jewelSocket\"", StringComparison.Ordinal)
-                && Hex(restoredExtra.Raw84.JewelSocket) == Hex(new byte[30]));
+                && Hex(restoredView.Entry84.JewelSocket) == Hex(new byte[30]));
 
             Check("称号簿 item_kind 推断保持旧规则", TitleBookInventoryItemCodec.InferItemKind(decoded) == "equipment"
                 && TitleBookInventoryItemCodec.InferItemKind(new TitleBookInventoryItem { ItemId = 1, Marker16 = 0 }) == "stackable"

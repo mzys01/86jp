@@ -51,52 +51,13 @@ namespace DfoServer.Game.Inventory
         internal static AvatarInventoryItem ReadEquipmentAsAvatarItem(SqliteDataReader reader, string extraJson)
         {
             var common = ReadCommonItem(reader, extraJson);
-            var buf = new byte[126];
-            buf[0] = (byte)(common.SlotIndex & 0xFF);
-            buf[1] = (byte)((common.SlotIndex >> 8) & 0xFF);
-            buf[2] = (byte)(common.ItemTemplateId & 0xFF);
-            buf[3] = (byte)((common.ItemTemplateId >> 8) & 0xFF);
-            buf[4] = (byte)((common.ItemTemplateId >> 16) & 0xFF);
-            buf[5] = (byte)((common.ItemTemplateId >> 24) & 0xFF);
-            buf[6] = (byte)(common.CountOrInstanceValue & 0xFF);
-            buf[7] = (byte)((common.CountOrInstanceValue >> 8) & 0xFF);
-            buf[8] = (byte)((common.CountOrInstanceValue >> 16) & 0xFF);
-            buf[9] = (byte)((common.CountOrInstanceValue >> 24) & 0xFF);
-            buf[10] = common.ExtData0;
-            buf[11] = (byte)(common.Durability & 0xFF);
-            buf[12] = (byte)((common.Durability >> 8) & 0xFF);
-            buf[13] = common.SealFlag;
-            Array.Copy(common.PrefixData0E, 0, buf, 14, 8);
-            buf[22] = (byte)(common.Marker16 & 0xFF);
-            buf[23] = (byte)((common.Marker16 >> 8) & 0xFF);
-            buf[24] = (byte)((common.Marker16 >> 16) & 0xFF);
-            buf[25] = (byte)((common.Marker16 >> 24) & 0xFF);
-            Array.Copy(common.MiddleData1A, 0, buf, 26, 17);
-            buf[43] = (byte)(common.ExpireTime & 0xFF);
-            buf[44] = (byte)((common.ExpireTime >> 8) & 0xFF);
-            buf[45] = (byte)((common.ExpireTime >> 16) & 0xFF);
-            buf[46] = (byte)((common.ExpireTime >> 24) & 0xFF);
-            Array.Copy(common.TailData2F, 0, buf, 47, 37);
-
-            byte optionValue = buf[11];
-            Array.Clear(buf, 6, 78);
-            buf[84] = 0x1E;
-            buf[118] = 0x04;
-            var jewel = ReadHexValue(extraJson, "jewelSocket", 30);
-            if (jewel != null && jewel.Length == 30)
-                Array.Copy(jewel, 0, buf, 88, 30);
-
             return new AvatarInventoryItem
             {
-                SlotIndex = BitConverter.ToInt16(buf, 0),
-                AvatarItemId = BitConverter.ToInt32(buf, 2),
-                Reserved0 = CharacterItemListSnapshot.Slice(buf, 6, 5),
-                OptionValue = optionValue,
-                Reserved1 = CharacterItemListSnapshot.Slice(buf, 12, 71),
-                UnknownFixed30 = BitConverter.ToInt32(buf, 83),
-                Reserved2 = CharacterItemListSnapshot.Slice(buf, 87, 30),
-                UnknownFixed4 = BitConverter.ToUInt16(buf, 117),
-                TailData = CharacterItemListSnapshot.Slice(buf, 119, 7),
+                SlotIndex = common.SlotIndex,
+                AvatarItemId = common.ItemTemplateId,
+                AbilityNo = common.Durability,
+                AvatarSocketData = common.JewelSocket,
+                ColorDataLen = 4,
             };
         }
 

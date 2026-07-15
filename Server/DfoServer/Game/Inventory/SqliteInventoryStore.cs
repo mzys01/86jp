@@ -740,14 +740,16 @@ WHERE item_uid = @itemUid;";
 
         internal static string CreateDefaultAvatarExtraJson()
         {
-            var builder = ItemExtraViewBuilder.FromAvatarView(null);
-            builder.Avatar.UnknownFixed4 = DefaultAvatarUnknownFixed4;
-            return builder.Build().Serialize();
+            return "{\"reserved0\":\"" + InventoryItemViewBytes.ToHex(new byte[5]) + "\""
+                + ",\"reserved1\":\"" + InventoryItemViewBytes.ToHex(new byte[71]) + "\""
+                + ",\"reserved2\":\"" + InventoryItemViewBytes.ToHex(new byte[30]) + "\""
+                + ",\"unknownFixed4\":" + DefaultAvatarUnknownFixed4.ToString(CultureInfo.InvariantCulture)
+                + ",\"tailData\":\"" + InventoryItemViewBytes.ToHex(new byte[7]) + "\"}";
         }
 
         internal static string CreateDefaultPetExtraJson()
         {
-            return "{\"tailData0A\":\"" + ItemExtraView.ToHex(new byte[74]) + "\"}";
+            return "{\"tailData0A\":\"" + InventoryItemViewBytes.ToHex(new byte[74]) + "\"}";
         }
 
             internal static bool IsSupportedDeleteOrSellListType(InventoryListType listType)
