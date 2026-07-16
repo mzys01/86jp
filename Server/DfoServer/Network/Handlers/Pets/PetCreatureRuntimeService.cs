@@ -759,6 +759,6 @@ namespace DfoServer.Network.Handlers.Pets
         }
 
         private static bool IsPetRuntimeEquipmentSlot(short slot)
-            => slot >= 24 && slot <= 27;
+            => PetInventoryLayout.IsPetEquipmentSlot(slot);
     }
 }

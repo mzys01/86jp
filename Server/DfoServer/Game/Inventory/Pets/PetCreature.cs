@@ -14,12 +14,12 @@ namespace DfoServer.Game.Inventory
 {
     public sealed partial class SqliteInventoryStore
     {
-        internal const short PetCreatureEquipSlot = 24;
-        private const short PetCreatureEquippedStorageSlot = PetCreatureEquipSlot + 216;
+        internal const short PetCreatureEquipSlot = PetInventoryLayout.CreatureEquipSlot;
+        private const short PetCreatureEquippedStorageSlot = PetInventoryLayout.CreatureEquippedStorageSlot;
         private const int MaxPersistentPetCreatureSerial = 0x000FFFFF;
-        private const short PetArtifactRedEquipSlot = 25;
-        private const short PetArtifactBlueEquipSlot = 26;
-        private const short PetArtifactGreenEquipSlot = 27;
+        private const short PetArtifactRedEquipSlot = PetInventoryLayout.ArtifactRedEquipSlot;
+        private const short PetArtifactBlueEquipSlot = PetInventoryLayout.ArtifactBlueEquipSlot;
+        private const short PetArtifactGreenEquipSlot = PetInventoryLayout.ArtifactGreenEquipSlot;
         private const int MinCreatureExpireUnixTime = 946684800; // 2000-01-01; filters out pet serials stored in CreatureExtra.
         private const byte DefaultCreatureField1 = 133;
         private const byte DefaultCreatureField2 = 47;
@@ -28,10 +28,7 @@ namespace DfoServer.Game.Inventory
 
         internal static bool IsPetServerStorageSlot(int slot)
         {
-            return slot == PetCreatureEquippedStorageSlot
-                || slot == ToPetEquipmentStorageSlot(PetArtifactRedEquipSlot)
-                || slot == ToPetEquipmentStorageSlot(PetArtifactBlueEquipSlot)
-                || slot == ToPetEquipmentStorageSlot(PetArtifactGreenEquipSlot);
+            return PetInventoryLayout.IsServerStorageSlot(slot);
         }
 
         private bool TryHandlePetCreatureEquipMove(
@@ -124,6 +121,8 @@ namespace DfoServer.Game.Inventory
                 result = CreatePetCreatureMoveResult(request, request.MoveCount);
                 result.PetCreatureStateChanged = true;
                 result.PetItemStateChanged = true;
+                if (currentlyEquipped.HasValue)
+                    result.PetItemFullRefresh = true;
                 AddPetCreatureRefreshSlot(result, source.SlotIndex);
                 AddEquipmentRefreshSlot(result, PetCreatureEquipSlot);
                 return true;
@@ -222,7 +221,7 @@ namespace DfoServer.Game.Inventory
                 var equipped = LoadPetCreatureEquippedEntry(connection, transaction, characterId);
                 if (!equipped.HasValue)
                 {
-                    FileLogger.Log("  [PetCreatureMove] UNEQUIP: slot 24 already empty");
+                    FileLogger.Log($"  [PetCreatureMove] UNEQUIP: slot {PetCreatureEquipSlot} already empty");
                     ClearPetEquippedEntry(connection, transaction, characterId, PetCreatureEquipSlot);
                     result = CreatePetCreatureMoveResult(
                         request,
@@ -783,7 +782,7 @@ LIMIT 1;";
 
         private void RepairPetArtifactEntries(SqliteConnection connection, SqliteTransaction transaction, int characterId)
         {
-            foreach (var equipSlot in new[] { PetArtifactRedEquipSlot, PetArtifactBlueEquipSlot, PetArtifactGreenEquipSlot })
+            foreach (var equipSlot in PetInventoryLayout.ArtifactEquipSlots)
             {
                 var storageSlot = ToPetEquipmentStorageSlot(equipSlot);
                 var equipped = LoadPetEquippedEntry(connection, transaction, characterId, equipSlot);
@@ -1198,7 +1197,7 @@ LIMIT 1;";
                 return;
             }
 
-            var equipSlot = storageSlot - 216;
+            var equipSlot = storageSlot - PetInventoryLayout.EquippedStorageSlotOffset;
             var equipped = IsPetArtifactEquipSlot(equipSlot)
                 ? LoadPetEquippedEntry(connection, transaction, characterId, equipSlot)
                 : null;
@@ -1374,10 +1373,10 @@ WHERE character_id = @cid
         }
 
         private static bool IsPetArtifactEquipSlot(int slot)
-            => slot == PetArtifactRedEquipSlot || slot == PetArtifactBlueEquipSlot || slot == PetArtifactGreenEquipSlot;
+            => PetInventoryLayout.IsArtifactEquipSlot(slot);
 
         private static int ToPetEquipmentStorageSlot(int equipSlot)
-            => IsPetArtifactEquipSlot(equipSlot) ? equipSlot + 216 : -1;
+            => PetInventoryLayout.ToEquipmentStorageSlot(equipSlot);
 
         private static bool IsPetArtifactItem(int itemTemplateId)
             => ResolvePetArtifactEquipSlot(itemTemplateId) >= 0;

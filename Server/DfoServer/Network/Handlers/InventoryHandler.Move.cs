@@ -39,7 +39,7 @@ namespace DfoServer.Network.Handlers
             FileLogger.Log($"[{ProtocolName}] MOVE fields: src=({request.SourceListType},slot{request.SourceSlotIndex},IV=0x{srcIV:X8},stk{srcStack}) dst=({request.DestinationListType},slot{request.DestinationSlotIndex},IV=0x{request.DestinationInstanceValue:X8},stk{dstStack})");
 
             var (cid, aid) = ResolveOwner(session);
-            var petRuntimeMove = PetCreatureRuntimeService.BeginInventoryMoveMutation(session, request);
+            var petRuntimeMove = PetInventoryMoveCoordinator.Begin(session, request);
 
             if (!_inventoryStore.TryMoveItem(cid, aid, request, out var result))
             {
@@ -79,32 +79,10 @@ namespace DfoServer.Network.Handlers
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0013, MoveItemSpaceAckBuilder.Build(result)));
             await SendMoveSortLockSignals(session, request, result);
 
-            await PetCreatureRuntimeService.CompleteInventoryMoveMutationAsync(session, result, petRuntimeMove);
-            if (result.PetCreatureStateChanged)
-            {
-                _refresh.ReloadSubtype0Tail(session);
-                await _refresh.SendCreatureItemListRefresh(session);
-                await _refresh.SendNoti2AppearanceUpdate(session);
-                FileLogger.Log($"[{ProtocolName}] pet creature switch: 0x0069 + NOTI2 mode0 sent via upstream subtype0 fields");
-            }
-
-            if (result.PetItemStateChanged
-                || result.PetItemFullRefresh
-                || result.PetCreatureRefreshSlots.Count > 0
-                || result.EquipmentRefreshSlots.Count > 0)
-            {
-                if (result.PetItemFullRefresh)
-                    await _refresh.SendItemListRefresh(session, InventoryListType.Pet);
-                else if (result.PetCreatureRefreshSlots.Count > 0)
-                    await _refresh.SendUpdateItemList(session, InventoryListType.Pet, result.PetCreatureRefreshSlots);
-
-                if (result.EquipmentRefreshSlots.Count > 0)
-                    await _refresh.SendUpdateItemList(session, InventoryListType.Equipment, result.EquipmentRefreshSlots);
-            }
+            await PetInventoryMoveCoordinator.CompleteAsync(session, result, petRuntimeMove, _refresh);
 
             // In dungeon, weapon/title moves rely on the normal move ACK only; NOTI2 appearance rebuilds the pet actor.
-            if (!result.PetCreatureStateChanged
-                && !result.PetItemStateChanged
+            if (!PetInventoryMoveCoordinator.HandlesDefaultAppearanceRefresh(result)
                 && ShouldSendSubtype0AppearanceUpdate(session, result))
             {
                 // 先重载宠物字段再发 subtype0: 宠物ID不变时客户端只做原地更新,

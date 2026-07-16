@@ -7,8 +7,6 @@ namespace DfoServer.Game.Inventory
 {
     internal static class PetCreatureSatietyService
     {
-        private const int PetCreatureEquipSlot = 24;
-
         internal static PetCreatureSatietyUpdate LoadEquippedCreatureSatiety(
             string databasePath,
             string schemaFilePath,
@@ -278,7 +276,7 @@ WHERE character_id = @cid
   AND slot = @slot
 LIMIT 1;";
                 command.Parameters.AddWithValue("@cid", characterId);
-                command.Parameters.AddWithValue("@slot", PetCreatureEquipSlot);
+                command.Parameters.AddWithValue("@slot", (int)PetInventoryLayout.CreatureEquipSlot);
 
                 var raw = command.ExecuteScalar() as byte[];
                 if (raw == null)
@@ -382,8 +380,11 @@ WHERE character_id = @cid
 SELECT item_id
 FROM character_equipped_entries
 WHERE character_id = @cid
-  AND slot IN (25, 26, 27);";
+  AND slot IN (@redArtifactSlot, @blueArtifactSlot, @greenArtifactSlot);";
                 command.Parameters.AddWithValue("@cid", characterId);
+                command.Parameters.AddWithValue("@redArtifactSlot", (int)PetInventoryLayout.ArtifactRedEquipSlot);
+                command.Parameters.AddWithValue("@blueArtifactSlot", (int)PetInventoryLayout.ArtifactBlueEquipSlot);
+                command.Parameters.AddWithValue("@greenArtifactSlot", (int)PetInventoryLayout.ArtifactGreenEquipSlot);
 
                 using (var reader = command.ExecuteReader())
                 {

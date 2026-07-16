@@ -118,9 +118,10 @@ namespace DfoServer.Game.Inventory
 SELECT item_id
 FROM character_equipped_entries
 WHERE character_id = @characterId
-  AND slot = 24
+  AND slot = @slot
 LIMIT 1;";
                 command.Parameters.AddWithValue("@characterId", characterId);
+                command.Parameters.AddWithValue("@slot", (int)PetCreatureEquipSlot);
                 var value = command.ExecuteScalar();
                 return value == null || value == DBNull.Value ? 0 : Convert.ToInt32(value);
             }
