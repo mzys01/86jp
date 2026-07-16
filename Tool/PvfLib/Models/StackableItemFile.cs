@@ -74,6 +74,8 @@ namespace PvfLib
 
         
         public string StackableType { get; set; }
+        public List<string> AvatarEmblemTargetTypes { get; set; } = new List<string>();
+        public byte AvatarEmblemSocketType { get; set; }
         public int SubType { get; set; } = -1;
         public string AttachType { get; set; }
         public string ItemGroupName { get; set; }
@@ -196,6 +198,10 @@ namespace PvfLib
 
                     
                     case "stackable type": stk.StackableType = StripBacktick(data); break;
+                    case "avatar emblem target type":
+                        stk.AvatarEmblemTargetTypes = ParseStringList(node, content);
+                        stk.AvatarEmblemSocketType = ResolveAvatarEmblemSocketType(stk.AvatarEmblemTargetTypes);
+                        break;
                     case "sub type": stk.SubType = ParseInt(data); break;
                     case "attach type": stk.AttachType = StripBacktick(data); break;
                     case "item group name": stk.ItemGroupName = StripBacktick(data); break;
@@ -557,6 +563,46 @@ namespace PvfLib
             }
 
             return result;
+        }
+
+        private static byte ResolveAvatarEmblemSocketType(IEnumerable<string> targetTypes)
+        {
+            byte socketType = 0;
+            if (targetTypes == null)
+                return socketType;
+
+            foreach (var targetType in targetTypes)
+                socketType |= MapAvatarEmblemTargetType(targetType);
+
+            return socketType;
+        }
+
+        private static byte MapAvatarEmblemTargetType(string targetType)
+        {
+            if (string.IsNullOrWhiteSpace(targetType))
+                return 0;
+
+            var match = Regex.Match(targetType, @"\[\s*([ABCDSM])\s+socket\s*\]", RegexOptions.IgnoreCase);
+            if (!match.Success || match.Groups.Count < 2)
+                return 0;
+
+            switch (char.ToUpperInvariant(match.Groups[1].Value[0]))
+            {
+                case 'A':
+                    return 0x01;
+                case 'B':
+                    return 0x02;
+                case 'C':
+                    return 0x04;
+                case 'D':
+                    return 0x08;
+                case 'S':
+                    return 0x10;
+                case 'M':
+                    return 0xEF;
+                default:
+                    return 0;
+            }
         }
 
         private static List<int> ParseIntList(ScriptNode node, string content)

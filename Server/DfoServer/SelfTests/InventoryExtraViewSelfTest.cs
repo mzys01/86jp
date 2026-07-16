@@ -2,6 +2,7 @@ using DfoServer.Game.Inventory;
 using DfoServer.Game.CharacterData;
 using DfoServer.Game.Appearance;
 using DfoServer.Game.Characters;
+using PvfLib;
 using System;
 
 namespace DfoServer.SelfTests
@@ -208,6 +209,14 @@ namespace DfoServer.SelfTests
                 && updatedAvatar.AvatarDetail.GetSocket(0).Type == 0xFFEF
                 && updatedAvatar.AvatarDetail.Color1 == 0x1111
                 && updatedAvatar.AvatarDetail.Color2 == 0x2222);
+            updatedAvatar.AvatarDetail.SetSocketTypes(new byte[] { 0x01, 0x02, 0x04 });
+            var updatedAvatarLayout = InventoryItemView.ForAvatar(avatarRecord);
+            Check("avatar detail socket layout helpers", updatedAvatarLayout.AvatarDetail.SocketCount == 3
+                && updatedAvatarLayout.AvatarDetail.Socket0.SocketType == 0x0001
+                && updatedAvatarLayout.AvatarDetail.Socket1.SocketType == 0x0002
+                && updatedAvatarLayout.AvatarDetail.Socket2.SocketType == 0x0004
+                && updatedAvatarLayout.AvatarDetail.Socket3.SocketType == 0x0000
+                && updatedAvatarLayout.AvatarDetail.Socket0.EmblemItemId == 0);
 
             var avatarEquippedRaw = MakeEquipListCodec.BuildEntryFromDisplayFields(2, 223344, new MakeEquipListCodec.DisplayFields
             {
@@ -399,6 +408,55 @@ namespace DfoServer.SelfTests
                 && updatedEquippedFields.RemainUseCount == 6
                 && updatedEquippedFields.SealFlag == 0
                 && equippedView.EquipmentLockId == 7);
+            var equippedAvatarSockets = new byte[30];
+            BitConverter.GetBytes((ushort)0x0001).CopyTo(equippedAvatarSockets, 0);
+            BitConverter.GetBytes(0x01020304).CopyTo(equippedAvatarSockets, 2);
+            BitConverter.GetBytes((ushort)0x0004).CopyTo(equippedAvatarSockets, 6);
+            var equippedAvatarSocketRaw = MakeEquipListCodec.BuildEntryFromDisplayFields(2, 223344, new MakeEquipListCodec.DisplayFields
+            {
+                JewelSocket = equippedAvatarSockets,
+            });
+            var equippedAvatarSocketView = EquippedItemView.FromRecord(new MakeEquipListCodec.Entry
+            {
+                Slot = 2,
+                ItemId = 223344,
+                Raw = equippedAvatarSocketRaw,
+            });
+            equippedAvatarSocketView.SetAvatarSocketEmblemItemId(1, 0x55667788);
+            var updatedEquippedAvatarSocketFields = MakeEquipListCodec.ParseDisplayFields(equippedAvatarSocketView.Record.Raw);
+            Check("equipped avatar socket view helpers", equippedAvatarSocketView.AvatarSocketCount == 2
+                && equippedAvatarSocketView.GetAvatarSocketType(0) == 0x0001
+                && equippedAvatarSocketView.GetAvatarSocketType(1) == 0x0004
+                && equippedAvatarSocketView.GetAvatarSocketEmblemItemId(1) == 0x55667788
+                && BitConverter.ToInt32(updatedEquippedAvatarSocketFields.JewelSocket, 8) == 0x55667788);
+
+            var colorfulEmblem = StackableItemFile.Parse(@"
+[stackable type]
+    `[avatar emblem]`
+[avatar emblem target type]
+    `[A socket]`
+    `[B socket]`
+    `[C socket]`
+    `[D socket]`
+[/avatar emblem target type]
+");
+            Check("stackable emblem target type multi", colorfulEmblem.AvatarEmblemTargetTypes.Count == 4
+                && colorfulEmblem.AvatarEmblemSocketType == 0x0F);
+
+            var dualEmblem = StackableItemFile.Parse(@"
+[avatar emblem target type]
+    `[A socket]`
+    `[C socket]`
+[/avatar emblem target type]
+");
+            Check("stackable emblem target type dual", dualEmblem.AvatarEmblemSocketType == 0x05);
+
+            var platinumEmblem = StackableItemFile.Parse(@"
+[avatar emblem target type]
+    `[S socket]`
+[/avatar emblem target type]
+");
+            Check("stackable emblem target type platinum", platinumEmblem.AvatarEmblemSocketType == 0x10);
 
             PrintSummary();
             return _fail == 0 ? 0 : 1;

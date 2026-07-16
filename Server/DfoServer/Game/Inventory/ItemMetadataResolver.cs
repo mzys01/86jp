@@ -107,6 +107,8 @@ namespace DfoServer.Game.Inventory
         // PvfArchiveAccessor与equipment.lst都是进程级不可变Lazy，装备类型也按进程缓存。
         private static readonly ConcurrentDictionary<int, Lazy<string>> EquipmentTypeCache
             = new ConcurrentDictionary<int, Lazy<string>>();
+        private static readonly ConcurrentDictionary<int, Lazy<byte>> EmblemSocketTypeCache
+            = new ConcurrentDictionary<int, Lazy<byte>>();
         private static readonly Regex AvatarSocketRegex = new Regex(@"\[\s*([ABCDSM])\s+socket\s*\]", RegexOptions.IgnoreCase | RegexOptions.Compiled);
         private const string AvatarTypeSelectTag = "[avatar type select]";
         private const string AvatarTypeSelectEndTag = "[/avatar type select]";
@@ -237,6 +239,13 @@ namespace DfoServer.Game.Inventory
 
         public static byte ResolveEmblemSocketType(int itemTemplateId)
         {
+            return EmblemSocketTypeCache.GetOrAdd(
+                itemTemplateId,
+                id => new Lazy<byte>(() => ResolveEmblemSocketTypeCore(id))).Value;
+        }
+
+        private static byte ResolveEmblemSocketTypeCore(int itemTemplateId)
+        {
             var stackableEntry = StackableList.Value.GetById(itemTemplateId);
             if (stackableEntry == null)
                 return 0;
@@ -252,40 +261,7 @@ namespace DfoServer.Game.Inventory
                 return 0;
             }
 
-            var stackableType = stackable.StackableType != null
-                ? stackable.StackableType.Replace("`", "").Trim()
-                : string.Empty;
-            if (!stackableType.StartsWith("[avatar emblem]", StringComparison.OrdinalIgnoreCase))
-                return 0;
-
-            var text = string.Join(" ", new[]
-            {
-                stackableEntry.FilePath,
-                stackable.Name,
-                stackable.ItemCategory,
-                stackable.ItemGroupName,
-                stackable.AttachType,
-                stackable.StringData,
-                stackable.IntData,
-                stackable.Equipment,
-                string.Join(" ", stackable.StringDataItems ?? new List<string>()),
-            }).ToLowerInvariant();
-
-            byte socketType = 0;
-            if (text.Contains("red") || text.Contains("[red]"))
-                socketType |= 0x01;
-            if (text.Contains("yellow") || text.Contains("[yellow]"))
-                socketType |= 0x02;
-            if (text.Contains("green") || text.Contains("[green]"))
-                socketType |= 0x04;
-            if (text.Contains("blue") || text.Contains("[blue]"))
-                socketType |= 0x08;
-            if (text.Contains("platinum") || text.Contains("[platinum]"))
-                socketType |= 0x10;
-            if (text.Contains("multi") || text.Contains("all color") || text.Contains("rainbow") || text.Contains("colorful"))
-                socketType |= 0x0F;
-
-            return socketType;
+            return stackable.AvatarEmblemSocketType;
         }
 
         public static IReadOnlyList<byte> ResolveAvatarSocketTypes(int itemTemplateId)
