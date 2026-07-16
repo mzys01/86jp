@@ -7,6 +7,7 @@ using DfoServer.GameWorld;
 using DfoServer.Network.Builders;
 using DfoServer.Network.Parsers;
 using System;
+using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 
@@ -419,6 +420,25 @@ namespace DfoServer.Network.Handlers
             Dungeon.DungeonRunLifecycle.EndRunOnTeardown(session, "return_select_character");
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0007, CommonPacketBodyBuilder.BuildSuccessAck()));
             FileLogger.Log($"[{ProtocolName}] RETURN_SELECT_CHARACTER: sent ACK for session {session.SessionId}");
+            await SendCharacterListAsync(session);
+        }
+
+        public async Task Handle_CHANGE_CHARAC_SLOT(EnhancedClientSession session, GamePacketHeader header, byte[] body)
+        {
+            if (body == null || body.Length < 8)
+            {
+                FileLogger.Log($"[{ProtocolName}] CHANGE_CHARAC_SLOT body too short ({body?.Length ?? 0}B)");
+                return;
+            }
+
+            var slotA = BitConverter.ToUInt32(body, 0);
+            var slotB = BitConverter.ToUInt32(body, 4);
+            var accountId = session.Account?.AccountId ?? 1;
+
+            _characterRepository.SwapSlotIndexes(accountId, (byte)slotA, (byte)slotB);
+            FileLogger.Log($"[{ProtocolName}] CHANGE_CHARAC_SLOT swapped slot {slotA} <-> {slotB} for account_id={accountId}");
+
+            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0127, CommonPacketBodyBuilder.BuildSuccessAck()));
             await SendCharacterListAsync(session);
         }
 
