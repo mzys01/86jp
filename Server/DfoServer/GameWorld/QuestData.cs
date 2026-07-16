@@ -306,10 +306,10 @@ namespace DfoServer.GameWorld
 
                 // check_possible: growType / jobChangeQuest
                 // jcq=1: 一转相关(转职任务+转职贺礼), 不过滤growType, 靠pre_required_quest控制顺序
-                // jcq=2: 二转(觉醒)任务, 需 growType 匹配 [grow type]
+                // jcq=2/3: 觉醒/二次觉醒任务, 需 firstGrow 匹配 [grow type]
                 // jcq=10/20: 跳过 growType 检查
                 int jcq = qst.JobChangeQuestValue;
-                if (jcq == 2)
+                if (jcq == 2 || jcq == 3)
                 {
                     int firstGrow = growType & 0xF;
                     if (qst.GrowType != -1 && qst.GrowType != firstGrow) continue;
@@ -748,6 +748,7 @@ namespace DfoServer.GameWorld
             {
                 case "[item]": return 0;
                 case "[grow type]": return 1;
+                case "[awakening type]": return 2;
                 case "[creature evolution]": return 10;
                 case "[expert job]": return 20;
                 case "[slot expansion]": return ChainTypeSlotExpansion;
