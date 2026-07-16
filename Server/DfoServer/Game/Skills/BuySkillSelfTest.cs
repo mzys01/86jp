@@ -167,7 +167,7 @@ namespace DfoServer.Game.Skills
             Check($"learned skill refund keeps slot={refunded64?.Slot ?? 255} level={refunded64?.Level ?? 0}",
                 refunded64 != null && refunded64.Slot == 3 && refunded64.Level == 1);
 
-            var page1Learned = BuySkillService.Execute(repo, cid, 0, 1, entries, level: testLevel);
+            var page1Learned = BuySkillService.Execute(repo, cid, 0, 0, 1, entries, level: testLevel);
             Check("page1 learn success uses page1 SP", page1Learned != null && page1Learned.Success);
             Check($"page1 learn remaining SP={page1Learned?.RemainSp ?? 0}, expected {page1StartingSp - firstCost}",
                 page1Learned != null && page1Learned.RemainSp == page1StartingSp - firstCost);
@@ -242,7 +242,7 @@ namespace DfoServer.Game.Skills
             List<BuySkillEntry> entries,
             byte level)
         {
-            try { return BuySkillService.Execute(repo, cid, 0, 0, entries, level: level); }
+            try { return BuySkillService.Execute(repo, cid, 0, 0, 0, entries, level: level); }
             catch (Exception ex)
             {
                 Console.WriteLine("  BuySkillService exception: " + ex);

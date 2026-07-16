@@ -9,10 +9,12 @@ namespace DfoServer.Game.Premium
     {
         private static PremiumCatalog _cached;
         private readonly Dictionary<int, PremiumEntry> _byItemCode;
+        private readonly Dictionary<int, PremiumEffects> _effectsByType;
 
-        private PremiumCatalog(Dictionary<int, PremiumEntry> byItemCode)
+        private PremiumCatalog(Dictionary<int, PremiumEntry> byItemCode, Dictionary<int, PremiumEffects> effectsByType)
         {
             _byItemCode = byItemCode;
+            _effectsByType = effectsByType;
         }
 
         public static PremiumCatalog Load()
@@ -32,10 +34,17 @@ namespace DfoServer.Game.Premium
             return true;
         }
 
+        // 该契约类型的效果字段, 没有效果的类型返回 null。
+        public PremiumEffects GetEffects(int premiumType)
+        {
+            return _effectsByType.TryGetValue(premiumType, out var effects) ? effects : null;
+        }
+
         internal static PremiumCatalog Parse(string text)
         {
             var tokens = Tokenize(text ?? string.Empty);
             var map = new Dictionary<int, PremiumEntry>();
+            var effectsByType = new Dictionary<int, PremiumEffects>();
             var premiumType = 0;
             for (var i = 0; i + 1 < tokens.Count; i++)
             {
@@ -45,7 +54,23 @@ namespace DfoServer.Game.Premium
                     continue;
                 }
 
-                if (premiumType <= 0 || tokens[i] != "[item]" || i + 4 >= tokens.Count)
+                if (premiumType <= 0)
+                    continue;
+
+                // 效果标签尾随在每个 [type] 块的末尾、下一个 [type] 之前。
+                if (tokens[i] == "[over skill]" && int.TryParse(tokens[i + 1], NumberStyles.Integer, CultureInfo.InvariantCulture, out var overSkill))
+                {
+                    GetOrAddEffects(effectsByType, premiumType).OverSkillLevel = overSkill;
+                    continue;
+                }
+
+                if (tokens[i] == "[bonus exp]" && int.TryParse(tokens[i + 1], NumberStyles.Integer, CultureInfo.InvariantCulture, out var bonusExp))
+                {
+                    GetOrAddEffects(effectsByType, premiumType).BonusExpPercent = bonusExp;
+                    continue;
+                }
+
+                if (tokens[i] != "[item]" || i + 4 >= tokens.Count)
                     continue;
 
                 if (!int.TryParse(tokens[i + 1], NumberStyles.Integer, CultureInfo.InvariantCulture, out var itemCode)
@@ -56,7 +81,17 @@ namespace DfoServer.Game.Premium
                 map[itemCode] = new PremiumEntry { PremiumType = premiumType, DurationDays = days };
             }
 
-            return new PremiumCatalog(map);
+            return new PremiumCatalog(map, effectsByType);
+        }
+
+        private static PremiumEffects GetOrAddEffects(Dictionary<int, PremiumEffects> effectsByType, int premiumType)
+        {
+            if (!effectsByType.TryGetValue(premiumType, out var effects))
+            {
+                effects = new PremiumEffects();
+                effectsByType[premiumType] = effects;
+            }
+            return effects;
         }
 
         private static List<string> Tokenize(string text)

@@ -37,11 +37,11 @@ namespace DfoServer.Game.Skills
 
     public static class BuySkillService
     {
-        public static BuySkillResult Execute(SqliteCharacterProgressRepository repo, int cid, int job, int skillTree, IList<BuySkillEntry> entries,
+        public static BuySkillResult Execute(SqliteCharacterProgressRepository repo, int cid, int accountId, int job, int skillTree, IList<BuySkillEntry> entries,
             int bonusSp = 0, byte level = 1, int bonusTp = 0, byte growType = 0)
         {
             Characters.CharacterStatComputer.DecodeGrowType(growType, out var firstGrow, out var secondGrow);
-            var plan = BuildExecutionPlan(repo, cid, job, skillTree, entries, bonusSp, level, bonusTp, firstGrow, secondGrow);
+            var plan = BuildExecutionPlan(repo, cid, accountId, job, skillTree, entries, bonusSp, level, bonusTp, firstGrow, secondGrow);
             if (plan.Result.Success)
                 repo.SaveSkillProgress(cid, plan.Snapshot);
             return plan.Result;
@@ -61,7 +61,7 @@ namespace DfoServer.Game.Skills
             byte growType = 0)
         {
             Characters.CharacterStatComputer.DecodeGrowType(growType, out var firstGrow, out var secondGrow);
-            var plan = BuildExecutionPlan(repo, cid, job, skillTree, entries, bonusSp, level, bonusTp, firstGrow, secondGrow);
+            var plan = BuildExecutionPlan(repo, cid, accountId, job, skillTree, entries, bonusSp, level, bonusTp, firstGrow, secondGrow);
             if (!plan.Result.Success)
                 return plan.Result;
 
@@ -111,7 +111,7 @@ namespace DfoServer.Game.Skills
             public bool HasEffectiveRefund;
         }
 
-        private static BuySkillExecutionPlan BuildExecutionPlan(SqliteCharacterProgressRepository repo, int cid, int job, int skillTree, IList<BuySkillEntry> entries,
+        private static BuySkillExecutionPlan BuildExecutionPlan(SqliteCharacterProgressRepository repo, int cid, int accountId, int job, int skillTree, IList<BuySkillEntry> entries,
             int bonusSp, byte level, int bonusTp, int firstGrow, int secondGrow)
         {
             var snapshot = repo.LoadSkills(cid);
@@ -124,6 +124,10 @@ namespace DfoServer.Game.Skills
             var ledger = SkillPointLedger.Compute((byte)job, level, bonusSp, bonusTp, snapshot, pageIdx, firstGrow, secondGrow);
             int remainSp = ledger.RemainingSp;
             int remainTp = ledger.RemainingTp;
+
+            // 等级门槛用 effectiveLevel = 角色等级 + 激活契约的 over skill 值(达人之契约+5)。
+            // 首个需要门槛校验的条目才解析, 且查询走调用方传入 repo 的库(自测用临时库, 不碰生产库)。
+            int effectiveLevel = -1;
 
             var result = new BuySkillResult { Success = true, SkillTree = (byte)skillTree };
             var hasEffectiveRefund = false;
@@ -155,8 +159,10 @@ namespace DfoServer.Game.Skills
                     // 校验2: 等级门槛 reqLevel + (targetLv-1)*interval <= characLevel
                     if (sd.RequiredLevel > 0)
                     {
+                        if (effectiveLevel < 0)
+                            effectiveLevel = level + Premium.PremiumEffectProvider.GetCombinedEffects(repo.ConnectionString, accountId).OverSkillLevel;
                         var reqLevelForTarget = sd.RequiredLevel + (newLevel - 1) * sd.LevelInterval;
-                        if (reqLevelForTarget > level)
+                        if (reqLevelForTarget > effectiveLevel)
                         {
                             result.Success = false;
                             result.ErrorCode = 18;

@@ -229,7 +229,8 @@ namespace DfoServer.Network.Handlers
                     var charRepo = new Game.Characters.SqliteCharacterRepository(
                         Infrastructure.ServerPaths.DatabasePath, Infrastructure.ServerPaths.SchemaFilePath);
                     var rec = charRepo.GetById(cid);
-                    var result = Game.Skills.BuySkillService.ExecuteWithRefundConsumable(_inventoryStore, repo, cid, session.Account?.AccountId ?? 1, job, skillTree, entries,
+                    // Account 缺失时传 0(查不到契约/物品, 拒绝), 不能回退到账号 1 借用其契约效果。
+                    var result = Game.Skills.BuySkillService.ExecuteWithRefundConsumable(_inventoryStore, repo, cid, session.Account?.AccountId ?? 0, job, skillTree, entries,
                         rec?.BonusSp ?? 0, rec?.Level ?? (byte)1, rec?.BonusTp ?? 0, rec?.GrowType ?? 0);
                     var ack = BuySkillAckBuilder.Build(result);
                     await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x001D, ack));

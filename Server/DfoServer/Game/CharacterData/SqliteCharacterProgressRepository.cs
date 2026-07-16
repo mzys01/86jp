@@ -58,6 +58,8 @@ namespace DfoServer.Game.CharacterData
             return new SqliteCharacterProgressRepository(connectionString);
         }
 
+        internal string ConnectionString => _connectionString;
+
         internal CharacterProgressSnapshot LoadProgressSnapshot(
             SqliteConnection connection,
             SqliteTransaction transaction,

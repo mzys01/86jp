@@ -21,8 +21,7 @@ namespace DfoServer.Network.Handlers.Dungeon
         private readonly DungeonSharedServices _svc;
 
         private const int SetPlayResultRankPointOffset = 10;
-        private const int GrowthContractPremiumType = 84; // PVF premiumlist_new.etc: growth contract
-        private const float GrowthContractBonusRate = 0.20f;
+        // 成长之契约经验加成从 PVF premiumlist_new.etc 读取(PremiumEffectProvider)。
         private const float BlackDiamondBonusRate = 0.10f;
         private static readonly int[] BlackDiamondPremiumTypes = { 1, 17 };
 
@@ -190,12 +189,12 @@ namespace DfoServer.Network.Handlers.Dungeon
                 return default;
 
             var connStr = SqliteDatabaseBootstrap.Initialize(ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
-            var accountId = session.Account?.AccountId ?? 1;
+            // Account 缺失时传 0(查不到契约, 无加成), 不能回退到账号 1 借用其契约效果。
+            var accountId = session.Account?.AccountId ?? 0;
             var scoreBonusRate = MonsterRewardTable.GetClearRankExpBonusRate(rankBonusIndex);
             var scoreBonus = ToUInt32Floor(clearBaseExp * scoreBonusRate);
-            var growthContractBonus = PremiumService.HasActivePremium(connStr, accountId, GrowthContractPremiumType)
-                ? ToUInt32Floor(clearBaseExp * GrowthContractBonusRate)
-                : 0;
+            var premiumEffects = Game.Premium.PremiumEffectProvider.GetCombinedEffects(connStr, accountId);
+            var growthContractBonus = premiumEffects.ComputeBonusExp(clearBaseExp);
             var blackDiamondBonus = PremiumService.HasActivePremium(connStr, accountId, BlackDiamondPremiumTypes)
                 ? ToUInt32Floor(clearBaseExp * BlackDiamondBonusRate)
                 : 0;

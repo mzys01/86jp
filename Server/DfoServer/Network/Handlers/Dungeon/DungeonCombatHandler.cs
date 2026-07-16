@@ -19,8 +19,7 @@ namespace DfoServer.Network.Handlers.Dungeon
 {
     internal sealed class DungeonCombatHandler
     {
-        private const int GrowthContractPremiumType = 84; // PVF premiumlist_new.etc: growth contract
-        private const float GrowthContractMonsterBonusRate = 0.20f;
+        // 成长之契约经验加成从 PVF premiumlist_new.etc 读取(PremiumEffectProvider)。
         private static readonly TimeSpan DeathRespawnDelay = TimeSpan.FromSeconds(10);
 
         private readonly DungeonSharedServices _svc;
@@ -641,16 +640,7 @@ namespace DfoServer.Network.Handlers.Dungeon
 
             var accountId = session.Account?.AccountId ?? 0;
             var connStr = SqliteDatabaseBootstrap.Initialize(ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
-            return PremiumService.HasActivePremium(connStr, accountId, GrowthContractPremiumType)
-                ? ToUInt32Floor(baseMonsterExp * GrowthContractMonsterBonusRate)
-                : 0;
-        }
-
-        private static uint ToUInt32Floor(float value)
-        {
-            if (value <= 0)
-                return 0;
-            return value >= uint.MaxValue ? uint.MaxValue : (uint)value;
+            return Game.Premium.PremiumEffectProvider.GetCombinedEffects(connStr, accountId).ComputeBonusExp(baseMonsterExp);
         }
 
         internal async Task HandleUseCoin(EnhancedClientSession session, GamePacketHeader header, byte[] body)
