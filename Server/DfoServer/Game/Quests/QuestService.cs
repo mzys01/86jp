@@ -935,47 +935,47 @@ namespace DfoServer.Game.Quests
 
             // 转职(chainType 1)=清空技能+重加创角技+按新growType送技+SP全额重算;
             // 觉醒(chainType 2)=不清技能、只免费植入觉醒技、不动SP。
-            try
+            byte job = 0;
+            byte charLevel = 1;
+            uint charExp = 0;
+            using (var cmd = conn.CreateCommand())
             {
-                byte job = 0;
-                byte charLevel = 1;
-                using (var cmd = conn.CreateCommand())
+                cmd.Transaction = tx;
+                cmd.CommandText = "SELECT job, level, exp FROM characters WHERE character_id = @cid";
+                cmd.Parameters.AddWithValue("@cid", characterId);
+                using (var rdr = cmd.ExecuteReader())
                 {
-                    cmd.Transaction = tx;
-                    cmd.CommandText = "SELECT job, level FROM characters WHERE character_id = @cid";
-                    cmd.Parameters.AddWithValue("@cid", characterId);
-                    using (var rdr = cmd.ExecuteReader())
-                    {
-                        if (rdr.Read())
-                        {
-                            job = (byte)rdr.GetInt32(0);
-                            charLevel = (byte)System.Math.Max(1, System.Math.Min(255, rdr.GetInt32(1)));
-                        }
-                    }
-                }
+                    if (!rdr.Read())
+                        throw new InvalidOperationException($"character not found: cid={characterId}");
 
-                var progressRepo = CharacterData.SqliteCharacterProgressRepository.FromConnectionString(conn.ConnectionString);
-                if (chainType == 1)
-                {
-                    // 转职: 清空两树 → 重建初始+送技(统一建构器, 设计布局打底)
-                    var rebuilt = Skills.CharacterSkillProfile.BuildSnapshot(job, firstGrow, 0, charLevel);
-                    progressRepo.SaveSkillProgress(conn, tx, characterId, rebuilt);
-                    FileLogger.Log($"[QuestService] GrowTypeChange: rebuilt skills for cid={characterId} job={job} grow={firstGrow}");
-                }
-                else if (chainType == 2)
-                {
-                    // 觉醒: 在现有技能上植入觉醒技
-                    var current = progressRepo.LoadSkills(conn, tx, characterId);
-                    var grants = Skills.CharacterSkillProfile.GetGrowTypeGrants(job, firstGrow, secondGrow);
-                    Skills.CharacterSkillProfile.MergeGrants(current, grants, job, charLevel);
-                    progressRepo.SaveSkillProgress(conn, tx, characterId, current);
-                    FileLogger.Log($"[QuestService] Awakening: planted {grants.Count} awakening skills for cid={characterId}");
+                    job = (byte)rdr.GetInt32(0);
+                    charLevel = (byte)System.Math.Max(1, System.Math.Min(255, rdr.GetInt32(1)));
+                    var expValue = rdr.GetInt64(2);
+                    charExp = (uint)System.Math.Max(0L, System.Math.Min(uint.MaxValue, expValue));
                 }
             }
-            catch (Exception ex)
+
+            var progressRepo = CharacterData.SqliteCharacterProgressRepository.FromConnectionString(conn.ConnectionString);
+            if (chainType == 1)
             {
-                FileLogger.Log($"[QuestService] UpdateGrowType skill sync ERROR: cid={characterId} chain={chainType}: {ex.Message}");
+                // 转职: 清空两树 → 重建初始+送技(统一建构器, 设计布局打底)
+                var rebuilt = Skills.CharacterSkillProfile.BuildSnapshot(job, firstGrow, 0, charLevel);
+                progressRepo.SaveSkillProgress(conn, tx, characterId, rebuilt);
+                FileLogger.Log($"[QuestService] GrowTypeChange: rebuilt skills for cid={characterId} job={job} grow={firstGrow}");
             }
+            else if (chainType == 2)
+            {
+                // 觉醒: 在现有技能上植入觉醒技
+                var current = progressRepo.LoadSkills(conn, tx, characterId);
+                var grants = Skills.CharacterSkillProfile.GetGrowTypeGrants(job, firstGrow, secondGrow);
+                Skills.CharacterSkillProfile.MergeGrants(current, grants, job, charLevel);
+                progressRepo.SaveSkillProgress(conn, tx, characterId, current);
+                FileLogger.Log($"[QuestService] Awakening: planted {grants.Count} awakening skills for cid={characterId}");
+            }
+
+            if (!DfoServer.Game.Progression.CharacterProgressService.PersistLevelAndExp(conn, tx, characterId, charLevel, charExp))
+                throw new InvalidOperationException($"combat stat refresh failed after grow type update: cid={characterId}");
+            FileLogger.Log($"[QuestService] GrowTypeChange: refreshed combat stats for cid={characterId} level={charLevel} grow=0x{newGrowType:X2}");
         }
 
         private static void UpdateExpertJob(SqliteConnection conn, SqliteTransaction tx, int characterId, int expertJobType)
