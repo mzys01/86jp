@@ -1,5 +1,4 @@
 using DfoServer.Game.Currency;
-using DfoServer.Game.DailyReset;
 using DfoServer.Game.SelectCharacter;
 using DfoServer.Game.ExpertJob;
 using DfoServer.Game.ItemUpgrade;
@@ -32,19 +31,7 @@ namespace DfoServer.Game.Inventory
         internal readonly InventoryEquipmentStore _equipStore;
         private readonly IRentalTimeProvider _rentalTimeProvider;
 
-        public SqliteInventoryStore(
-            string databasePath,
-            string schemaFilePath,
-            DailyResetService dailyResetService)
-            : this(databasePath, schemaFilePath, null, dailyResetService)
-        {
-        }
-
-        public SqliteInventoryStore(
-            string databasePath,
-            string schemaFilePath,
-            IRentalTimeProvider rentalTimeProvider = null,
-            DailyResetService dailyResetService = null)
+        public SqliteInventoryStore(string databasePath, string schemaFilePath, IRentalTimeProvider rentalTimeProvider = null)
         {
             if (databasePath == null) throw new ArgumentNullException(nameof(databasePath));
             if (schemaFilePath == null) throw new ArgumentNullException(nameof(schemaFilePath));
@@ -59,10 +46,7 @@ namespace DfoServer.Game.Inventory
             _db = new InventoryDbPrimitives();
             _enchantStore = new InventoryEnchantStore(_db, _auditLogger);
             _itemUpgradeStore = new InventoryItemUpgradeStore(_db, _auditLogger);
-            _packageStore = new InventoryPackageStore(
-                _db,
-                _auditLogger,
-                dailyResetService ?? new DailyResetService(databasePath, schemaFilePath));
+            _packageStore = new InventoryPackageStore(_db, _auditLogger);
             _shopStore = new InventoryShopStore(_db, _auditLogger);
             _equipStore = new InventoryEquipmentStore(_db, _auditLogger);
         }

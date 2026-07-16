@@ -1,5 +1,6 @@
 using DfoServer.Game.Currency;
 using DfoServer.Game.Inventory;
+using DfoServer.Game.Lottery;
 using DfoServer.Network.Builders;
 using System;
 using System.Collections.Generic;
@@ -112,13 +113,7 @@ namespace DfoServer.Network.Handlers
             if (result == null || result.ListType != InventoryListType.Main || itemTemplateId <= 0)
                 return false;
 
-            var stackable = InventoryDbPrimitives.LoadStackableItem(itemTemplateId);
-            if (stackable == null)
-                return false;
-
-            var stackableType = InventoryPackageStore.NormalizeStackableType(stackable.StackableType);
-            return stackableType.Equals("[upgradable legacy]", StringComparison.OrdinalIgnoreCase)
-                || stackableType.Equals("[random upgradable legacy]", StringComparison.OrdinalIgnoreCase);
+            return LotteryPresentationPolicy.IsLotteryItem(itemTemplateId);
         }
 
         private async Task SendPurchasedMainItemRefresh(EnhancedClientSession session, int characterId, int accountId, InventoryMutationResult result)

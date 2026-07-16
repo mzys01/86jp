@@ -1,5 +1,4 @@
 using DfoServer.Game.Currency;
-using DfoServer.Game.DailyReset;
 using DfoServer.Game.Inventory;
 using DfoServer.Game.SelectCharacter;
 using DfoServer.Network;
@@ -13,11 +12,6 @@ namespace DfoServer.Game.Premium
 {
     public static class PremiumService
     {
-        // 魔王契约的袖珍罐双倍奖励功能位；客户端每天最多显示并消费 8 次。
-        public const int LotteryDoubleRewardServiceIndex = 1;
-        public const int LotteryDoubleRewardDailyLimit = 8;
-        public const string LotteryDoubleRewardCounterKey = "lottery_double_reward_used";
-
         private const int PremiumServiceEntryExpireBase = 6;
         private const int PremiumServiceEntryUsedCountBase = 10;
         private const int PremiumServiceEntryStride = 9;
@@ -200,11 +194,9 @@ namespace DfoServer.Game.Premium
         public static byte[] BuildPremiumServiceData(
             string connStr,
             int accountId,
-            int characterId = 0,
-            DailyResetService dailyResetService = null)
+            IReadOnlyDictionary<int, int> usedCountBySlot = null)
         {
             var data = new byte[74];
-            var lotteryDoubleRewardUsedCount = GetLotteryDoubleRewardUsedCount(dailyResetService, characterId);
             using (var conn = new SqliteConnection(connStr))
             {
                 conn.Open();
@@ -224,12 +216,13 @@ namespace DfoServer.Game.Premium
                             var expireOffset = PremiumServiceEntryExpireBase + slot * PremiumServiceEntryStride;
                             Buffer.BlockCopy(BitConverter.GetBytes((int)Math.Min(expire, int.MaxValue)), 0, data, expireOffset, 4);
 
-                            if (slot == LotteryDoubleRewardServiceIndex)
+                            if (usedCountBySlot != null
+                                && usedCountBySlot.TryGetValue(slot, out var usedCount))
                             {
                                 WriteInt32(
                                     data,
                                     PremiumServiceEntryUsedCountBase + slot * PremiumServiceEntryStride,
-                                    lotteryDoubleRewardUsedCount);
+                                    Math.Max(0, usedCount));
                             }
                         }
                     }
@@ -263,51 +256,6 @@ namespace DfoServer.Game.Premium
                 }
             }
         }
-
-        public static int GetLotteryDoubleRewardUsedCount(DailyResetService dailyResetService, int characterId)
-        {
-            if (dailyResetService == null || characterId <= 0)
-                return 0;
-
-            return ClampLotteryDoubleRewardUseCount(
-                dailyResetService.GetCounter(characterId, LotteryDoubleRewardCounterKey));
-        }
-
-        public static int GetLotteryDoubleRewardUsedCount(
-            DailyResetService dailyResetService,
-            SqliteConnection connection,
-            SqliteTransaction transaction,
-            int characterId)
-        {
-            if (dailyResetService == null || connection == null || transaction == null || characterId <= 0)
-                return 0;
-
-            return ClampLotteryDoubleRewardUseCount(
-                dailyResetService.GetCounter(connection, transaction, characterId, LotteryDoubleRewardCounterKey));
-        }
-
-        public static bool TryConsumeLotteryDoubleRewardUse(
-            SqliteConnection connection,
-            SqliteTransaction transaction,
-            DailyResetService dailyResetService,
-            int characterId,
-            int accountId)
-        {
-            if (connection == null || transaction == null || dailyResetService == null || characterId <= 0 || accountId <= 0)
-                return false;
-
-            var premiumType = DevilContractCatalog.SlotToPremiumType(LotteryDoubleRewardServiceIndex);
-            if (!HasActivePremium(connection, transaction, accountId, premiumType))
-                return false;
-
-            return dailyResetService.TryIncrementCounter(
-                connection,
-                transaction,
-                characterId,
-                LotteryDoubleRewardCounterKey,
-                LotteryDoubleRewardDailyLimit);
-        }
-
 
         public static bool HasActivePremium(string connStr, int accountId, params int[] premiumTypes)
         {
@@ -380,26 +328,6 @@ DO UPDATE SET end_time = @expire, updated_at = CURRENT_TIMESTAMP;";
             }
             return newExpire;
         }
-
-        internal static bool HasActivePremium(
-            SqliteConnection connection,
-            SqliteTransaction transaction,
-            int accountId,
-            int premiumType)
-        {
-            using (var cmd = connection.CreateCommand())
-            {
-                cmd.Transaction = transaction;
-                cmd.CommandText = "SELECT 1 FROM account_premiums WHERE account_id=@aid AND premium_type=@type AND end_time>@now LIMIT 1;";
-                cmd.Parameters.AddWithValue("@aid", accountId);
-                cmd.Parameters.AddWithValue("@type", premiumType);
-                cmd.Parameters.AddWithValue("@now", DateTimeOffset.UtcNow.ToUnixTimeSeconds());
-                return cmd.ExecuteScalar() != null;
-            }
-        }
-
-        private static int ClampLotteryDoubleRewardUseCount(long usedCount)
-            => (int)Math.Max(0, Math.Min(LotteryDoubleRewardDailyLimit, usedCount));
 
         private static void WriteInt32(byte[] data, int offset, int value)
         {

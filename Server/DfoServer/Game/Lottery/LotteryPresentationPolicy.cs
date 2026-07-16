@@ -1,0 +1,186 @@
+using DfoServer.Game.Inventory;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace DfoServer.Game.Lottery
+{
+    public static class LotteryPresentationPolicy
+    {
+        public static bool IsLotteryItem(int itemTemplateId)
+        {
+            return itemTemplateId > 0
+                && LotteryItemDefinitionProvider.TryBuild(
+                    itemTemplateId,
+                    InventoryDbPrimitives.LoadStackableItem(itemTemplateId),
+                    out _);
+        }
+
+        public static bool ShouldSendGoldRefresh(LotteryOpenResult result)
+            => result != null && result.ConsumedGold > 0;
+
+        public static CommonInventoryItem ResolveResultItem(
+            CharacterItemListSnapshot snapshot,
+            BoosterRewardResult reward)
+        {
+            if (reward == null || reward.ListType != InventoryListType.Main || reward.ItemTemplateId <= 0)
+                return null;
+
+            var item = FindResultItem(snapshot, reward);
+            if (item != null)
+                return item;
+
+            var metadata = ItemMetadataResolver.Resolve(reward.ItemTemplateId);
+            return new CommonInventoryItem
+            {
+                SlotIndex = reward.SlotIndex,
+                ItemTemplateId = reward.ItemTemplateId,
+                CountOrInstanceValue = reward.StackCount > 0
+                    ? reward.StackCount
+                    : Math.Max(1, reward.GrantedCount),
+                Durability = metadata.Durability,
+                Marker16 = metadata.IsStackable ? 0 : -1,
+                ExpireTime = metadata.IsStackable ? 0 : -1,
+            };
+        }
+
+        public static AvatarInventoryItem ResolveAvatarResultItem(
+            CharacterItemListSnapshot snapshot,
+            BoosterRewardResult reward)
+        {
+            if (reward == null || reward.ListType != InventoryListType.Avatar || reward.ItemTemplateId <= 0)
+                return null;
+
+            return snapshot?.AvatarItems?.FirstOrDefault(item => item != null
+                && item.SlotIndex == reward.SlotIndex
+                && item.AvatarItemId == reward.ItemTemplateId);
+        }
+
+        public static IReadOnlyList<BoosterRewardResult> ResolveDisplayRewards(
+            IReadOnlyList<BoosterRewardResult> rewards)
+        {
+            if (rewards == null)
+                return Array.Empty<BoosterRewardResult>();
+
+            return rewards
+                .Where(reward => reward != null
+                    && reward.ItemTemplateId > 0
+                    && (reward.ListType == InventoryListType.Main
+                        || reward.ListType == InventoryListType.Avatar))
+                .ToList();
+        }
+
+        public static bool ShouldUseDoubleRewardResultFlow(
+            bool useDoubleReward,
+            IReadOnlyList<BoosterRewardResult> displayRewards)
+        {
+            return useDoubleReward
+                && displayRewards != null
+                && displayRewards.Count > 1;
+        }
+
+        public static int ResolveNativeDisplayValue(
+            int resolvedDisplayValue,
+            bool useDoubleRewardResultFlow)
+        {
+            return useDoubleRewardResultFlow
+                ? (resolvedDisplayValue > 0 ? 2 : 0)
+                : resolvedDisplayValue;
+        }
+
+        public static int ResolveDisplayValue(
+            CommonInventoryItem item,
+            BoosterRewardResult reward,
+            IReadOnlyList<BoosterRewardResult> sameOpenRewards = null)
+        {
+            if (item == null)
+                return 0;
+
+            var fallback = Math.Max(1, reward?.GrantedCount ?? 1);
+            if (reward == null || sameOpenRewards == null || sameOpenRewards.Count == 0)
+                return fallback;
+
+            var total = sameOpenRewards
+                .Where(candidate => candidate != null
+                    && candidate.ListType == reward.ListType
+                    && candidate.ItemTemplateId == reward.ItemTemplateId)
+                .Sum(candidate => Math.Max(1, candidate.GrantedCount));
+            return Math.Max(fallback, total);
+        }
+
+        public static IReadOnlyList<BoosterRewardResult> ResolvePostResultMainRefreshRewards(
+            BoosterRewardResult displayReward,
+            IReadOnlyList<BoosterRewardResult> mainRewards,
+            bool useDoubleRewardResultFlow)
+        {
+            if (mainRewards == null || mainRewards.Count == 0)
+                return Array.Empty<BoosterRewardResult>();
+
+            if (displayReward == null || displayReward.ListType != InventoryListType.Main)
+                return mainRewards.ToList();
+
+            return useDoubleRewardResultFlow
+                ? mainRewards.Skip(1).ToList()
+                : ResolveMainRefreshRewards(mainRewards);
+        }
+
+        public static IReadOnlyList<BoosterRewardResult> ResolveMainRefreshRewards(
+            IReadOnlyList<BoosterRewardResult> mainRewards)
+        {
+            if (mainRewards == null || mainRewards.Count <= 1)
+                return Array.Empty<BoosterRewardResult>();
+
+            var duplicateNonStackableKeys = new HashSet<string>(mainRewards
+                .Where(reward => reward != null && reward.ItemTemplateId > 0)
+                .GroupBy(RewardKey)
+                .Where(group => !ItemMetadataResolver.Resolve(group.First().ItemTemplateId).IsStackable
+                    && group.Sum(reward => Math.Max(1, reward.GrantedCount)) > 1)
+                .Select(group => group.Key));
+            if (duplicateNonStackableKeys.Count == 0)
+                return mainRewards.Skip(1).ToList();
+
+            return mainRewards
+                .Where(reward => reward != null && duplicateNonStackableKeys.Contains(RewardKey(reward)))
+                .ToList();
+        }
+
+        public static bool ShouldSuppressNotice(
+            BoosterRewardResult reward,
+            IReadOnlyList<BoosterRewardResult> sameOpenRewards)
+        {
+            if (reward == null || sameOpenRewards == null || reward.ItemTemplateId <= 0)
+                return false;
+            if (ItemMetadataResolver.Resolve(reward.ItemTemplateId).IsStackable)
+                return false;
+
+            return sameOpenRewards
+                .Where(candidate => candidate != null
+                    && candidate.ListType == reward.ListType
+                    && candidate.ItemTemplateId == reward.ItemTemplateId)
+                .Sum(candidate => Math.Max(1, candidate.GrantedCount)) > 1;
+        }
+
+        public static bool IsNoticeEligible(ItemMetadata metadata)
+        {
+            return metadata != null
+                && !metadata.IsStackable
+                && (metadata.Rarity >= 3
+                    || string.Equals(metadata.ItemCategory, "legacy", StringComparison.OrdinalIgnoreCase));
+        }
+
+        public static CommonInventoryItem FindResultItem(
+            CharacterItemListSnapshot snapshot,
+            BoosterRewardResult reward)
+        {
+            if (snapshot == null || reward == null)
+                return null;
+
+            return snapshot.MainItems?.FirstOrDefault(item =>
+                item.SlotIndex == reward.SlotIndex
+                && item.ItemTemplateId == reward.ItemTemplateId);
+        }
+
+        private static string RewardKey(BoosterRewardResult reward)
+            => $"{(byte)reward.ListType}:0x{reward.ItemTemplateId:X8}";
+    }
+}

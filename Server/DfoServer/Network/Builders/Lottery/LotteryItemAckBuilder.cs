@@ -21,7 +21,10 @@ namespace DfoServer.Network.Builders
             return BuildPhaseStart(-1, 0);
         }
 
-        public static byte[] BuildCommonItemResult(short sourceSlotIndex, CommonInventoryItem rewardItem, int displayValue)
+        public static byte[] BuildCommonItemResult(
+            short sourceSlotIndex,
+            CommonInventoryItem rewardItem,
+            int displayValue)
         {
             if (rewardItem == null || rewardItem.ItemTemplateId <= 0)
                 return BuildError();
@@ -38,15 +41,16 @@ namespace DfoServer.Network.Builders
             writer.WriteUInt16(ReadAmplifyValue(rewardItem));
 
             // Native PacketBuf::put_packet(Inven_Item) appends only the
-            // variable tail after this summary: random option data, upgrade
-            // separate and trade restriction. The full 84-byte inventory-list
-            // entry has a different layout and makes the client crash here.
+            // variable tail after this summary. The 84-byte inventory-list
+            // entry uses a different layout and crashes the client here.
             WriteEmptyEquipmentSocketExtension(writer, rewardItem);
             WriteEmptyInvenItemTail(writer);
             return writer.ToArray();
         }
 
-        public static byte[] BuildAvatarItemResult(short sourceSlotIndex, AvatarInventoryItem rewardItem)
+        public static byte[] BuildAvatarItemResult(
+            short sourceSlotIndex,
+            AvatarInventoryItem rewardItem)
         {
             if (rewardItem == null || rewardItem.AvatarItemId <= 0)
                 return BuildError();
@@ -88,16 +92,13 @@ namespace DfoServer.Network.Builders
             writer.WriteByte(0x00); // trade restriction
         }
 
-        private static void WriteEmptyEquipmentSocketExtension(GamePacketWriter writer, CommonInventoryItem item)
+        private static void WriteEmptyEquipmentSocketExtension(
+            GamePacketWriter writer,
+            CommonInventoryItem item)
         {
-            var metadata = ItemMetadataResolver.Resolve(item.ItemTemplateId);
-            if (metadata.IsStackable)
+            if (ItemMetadataResolver.Resolve(item.ItemTemplateId).IsStackable)
                 return;
 
-            // The Taiwan server hook writes this extension immediately before
-            // PacketBuf::put_packet(Inven_Item). Sending an explicit empty
-            // socket block prevents the lottery tooltip from showing template
-            // default emblem slots for newly granted equipment.
             writer.WriteByte(0xEF);
             writer.WriteInt32(25);
             writer.WriteZeroBytes(25);

@@ -18,7 +18,13 @@ namespace DfoServer.Network.Handlers
 
             var connStr = SqliteDatabaseBootstrap.Initialize(ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
             var dailyResetService = new Game.DailyReset.DailyResetService(ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
-            var serviceData = Game.Premium.PremiumService.BuildPremiumServiceData(connStr, aid, cid, dailyResetService);
+            var lotteryUsage = new Game.Lottery.LotteryDoubleRewardPolicy(
+                dailyResetService,
+                connStr).BuildPremiumServiceUsage(cid);
+            var serviceData = Game.Premium.PremiumService.BuildPremiumServiceData(
+                connStr,
+                aid,
+                lotteryUsage);
 
             var writer = new GamePacketWriter();
             writer.WriteByte(1);

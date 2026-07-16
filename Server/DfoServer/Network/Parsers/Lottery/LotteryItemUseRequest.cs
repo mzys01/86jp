@@ -1,6 +1,6 @@
 using System;
 
-namespace DfoServer.Network.Parsers.Inventory
+namespace DfoServer.Network.Parsers.Lottery
 {
     public sealed class LotteryItemUseRequest
     {
@@ -19,7 +19,7 @@ namespace DfoServer.Network.Parsers.Inventory
                 Phase = BitConverter.ToUInt16(body, 0),
                 SlotIndex = BitConverter.ToInt16(body, 2),
             };
-            return request.SlotIndex >= 0;
+            return request.Phase <= 1 && request.SlotIndex >= 0;
         }
     }
 }

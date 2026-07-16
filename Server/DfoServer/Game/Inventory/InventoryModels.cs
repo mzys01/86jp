@@ -314,10 +314,6 @@ namespace DfoServer.Game.Inventory
         public int ExpectedMaterialItemTemplateId { get; set; }
 
         public int RequestedCount { get; set; } = 1;
-
-        public int RewardMultiplier { get; set; } = 1;
-
-        public bool ConsumeLotteryDoubleRewardUse { get; set; }
     }
 
     public sealed class BoosterUseResult
@@ -339,10 +335,6 @@ namespace DfoServer.Game.Inventory
         public short ConsumedMaterialSlotIndex { get; set; }
 
         public int ConsumedMaterialRemainingStackCount { get; set; }
-
-        public int ConsumedGold { get; set; }
-
-        public int UpdatedGold { get; set; }
 
         public List<BoosterRewardResult> Rewards { get; } = new List<BoosterRewardResult>();
 

@@ -1,7 +1,4 @@
 using DfoServer.Game.Accounts;
-using DfoServer.Game.Currency;
-using DfoServer.Game.DailyReset;
-using DfoServer.Game.Premium;
 using DfoServer.Infrastructure;
 using System;
 using System.Collections.Generic;
@@ -18,16 +15,11 @@ namespace DfoServer.Game.Inventory
         private const int MagicHammerBundleMaxItemTemplateId = 10007477;
         private readonly InventoryDbPrimitives _db;
         private readonly InventoryAuditLogger _auditLogger;
-        private readonly DailyResetService _dailyResetService;
 
-        internal InventoryPackageStore(
-            InventoryDbPrimitives db,
-            InventoryAuditLogger auditLogger,
-            DailyResetService dailyResetService)
+        internal InventoryPackageStore(InventoryDbPrimitives db, InventoryAuditLogger auditLogger)
         {
-            _db = db ?? throw new ArgumentNullException(nameof(db));
-            _auditLogger = auditLogger ?? throw new ArgumentNullException(nameof(auditLogger));
-            _dailyResetService = dailyResetService ?? throw new ArgumentNullException(nameof(dailyResetService));
+            _db = db;
+            _auditLogger = auditLogger;
         }
 
         public bool TryOpenAvatarPackage(SqliteConnection connection, SqliteTransaction transaction, int characterId, int accountId, AvatarPackageOpenRequest request, out AvatarPackageOpenResult result)
@@ -413,36 +405,6 @@ namespace DfoServer.Game.Inventory
                 return false;
             }
 
-            var goldCostPerUse = ResolveBoosterOpenGoldCost(stackable);
-            var totalGoldCostLong = (long)goldCostPerUse * requestedCount;
-            if (totalGoldCostLong > int.MaxValue)
-                return false;
-            var totalGoldCost = (int)totalGoldCostLong;
-            var updatedGold = 0;
-            if (totalGoldCost > 0)
-            {
-                var wallet = _db.LoadWallet(connection, transaction, characterId);
-                if (wallet.Gold < totalGoldCost)
-                {
-                    FileLogger.Log($"  [Booster] REJECT: need {totalGoldCost} gold, have {wallet.Gold}, item=0x{source.ItemTemplateId:X8}");
-                    return false;
-                }
-
-                updatedGold = wallet.Gold - totalGoldCost;
-            }
-
-            if (request.ConsumeLotteryDoubleRewardUse
-                && !PremiumService.TryConsumeLotteryDoubleRewardUse(
-                    connection,
-                    transaction,
-                    _dailyResetService,
-                    characterId,
-                    accountId))
-            {
-                FileLogger.Log($"  [Booster] REJECT: lottery double reward unavailable account={accountId}");
-                return false;
-            }
-
             var isSeriaLuckValueSource = source.ItemTemplateId == SeriaLuckItemConstants.ItemTemplateId;
             var seriaLuckValueBefore = isSeriaLuckValueSource
                 ? SqliteAccountRepository.LoadSeriaLuckValue(connection, transaction, accountId)
@@ -470,7 +432,7 @@ namespace DfoServer.Game.Inventory
                 }
 
                 AddRewardEntries(displayRewardEntries, validRewards);
-                AddRewardCopies(rewardsToGrant, validRewards, request.RewardMultiplier);
+                rewardsToGrant.AddRange(validRewards);
                 if (!isSeriaLuckValueSource)
                     continue;
 
@@ -488,8 +450,6 @@ namespace DfoServer.Game.Inventory
                 return false;
             if (material != null && material.ItemUid != source.ItemUid && !TryConsumeStackableCount(connection, transaction, material, totalMaterialCount))
                 return false;
-            if (totalGoldCost > 0 && !CurrencyService.TrySpendGold(connection, transaction, characterId, totalGoldCost))
-                return false;
 
             var useResult = new BoosterUseResult
             {
@@ -502,8 +462,6 @@ namespace DfoServer.Game.Inventory
                 ConsumedMaterialCount = material == null ? 0 : totalMaterialCount,
                 ConsumedMaterialSlotIndex = material?.SlotIndex ?? 0,
                 ConsumedMaterialRemainingStackCount = material == null ? 0 : Math.Max(0, material.StackCount - totalMaterialCount),
-                ConsumedGold = totalGoldCost,
-                UpdatedGold = updatedGold,
                 IsSeriaLuckValueSource = isSeriaLuckValueSource,
                 SeriaLuckValueBefore = seriaLuckValueBefore,
                 SeriaLuckValueAfter = isSeriaLuckValueSource ? seriaLuckValue : 0,
@@ -534,86 +492,6 @@ namespace DfoServer.Game.Inventory
                 _auditLogger.WriteBuyAuditLog(connection, transaction, characterId, reward.ItemTemplateId, reward.SlotIndex, 0, 0);
             result = useResult;
             return true;
-        }
-
-        public bool CanUseBoosterItem(
-            SqliteConnection connection,
-            SqliteTransaction transaction,
-            int characterId,
-            int accountId,
-            BoosterUseRequest request)
-        {
-            request = request ?? new BoosterUseRequest();
-            var source = ResolveBoosterSource(
-                connection,
-                transaction,
-                characterId,
-                request.SlotIndex,
-                request.ExpectedItemTemplateId);
-            if (source == null || source.StackCount < Math.Max(1, request.RequestedCount))
-                return false;
-
-            var stackable = InventoryDbPrimitives.LoadStackableItem(source.ItemTemplateId);
-            if (stackable == null)
-                return false;
-
-            var stackableType = NormalizeStackableType(stackable.StackableType);
-            var selectedItemTemplateIds = request.SelectedItemTemplateIds ?? Array.Empty<int>();
-            if (!HasPackageRewardDefinition(source.ItemTemplateId, stackable, stackableType, selectedItemTemplateIds))
-                return false;
-
-            ResolveNeedMaterial(source.ItemTemplateId, stackable, out var materialItemTemplateId, out var materialCountPerUse);
-            if (request.ExpectedMaterialItemTemplateId > 0
-                && materialItemTemplateId > 0
-                && request.ExpectedMaterialItemTemplateId != materialItemTemplateId)
-            {
-                return false;
-            }
-
-            var requestedCount = Math.Max(1, request.RequestedCount);
-            if (materialItemTemplateId > 0 && materialCountPerUse > 0)
-            {
-                var materialMetadata = ItemMetadataResolver.Resolve(materialItemTemplateId);
-                materialMetadata.GetSlotRange(out var materialSlotStart, out var materialSlotEnd);
-                var material = request.MaterialSlotIndex.HasValue
-                    ? _db.LoadItemRecord(connection, transaction, characterId, InventoryListType.Main, request.MaterialSlotIndex.Value)
-                    : _db.FindItemByTemplateIdInRange(
-                        connection,
-                        transaction,
-                        characterId,
-                        InventoryListType.Main,
-                        materialItemTemplateId,
-                        materialSlotStart,
-                        materialSlotEnd);
-                if (material == null
-                    || material.ItemTemplateId != materialItemTemplateId
-                    || material.SlotIndex < materialSlotStart
-                    || material.SlotIndex > materialSlotEnd
-                    || material.StackCount < (long)materialCountPerUse * requestedCount)
-                {
-                    return false;
-                }
-            }
-
-            var totalGoldCost = (long)ResolveBoosterOpenGoldCost(stackable) * requestedCount;
-            if (totalGoldCost > int.MaxValue)
-                return false;
-            if (totalGoldCost > 0 && _db.LoadWallet(connection, transaction, characterId).Gold < totalGoldCost)
-                return false;
-
-            if (!request.ConsumeLotteryDoubleRewardUse)
-                return true;
-
-            var usedCount = PremiumService.GetLotteryDoubleRewardUsedCount(
-                _dailyResetService,
-                connection,
-                transaction,
-                characterId);
-            if (usedCount >= PremiumService.LotteryDoubleRewardDailyLimit)
-                return false;
-
-            var premiumType = DevilContractCatalog.SlotToPremiumType(PremiumService.LotteryDoubleRewardServiceIndex);
-            return PremiumService.HasActivePremium(connection, transaction, accountId, premiumType);
         }
 
         private SqliteInventoryStore.ItemRecord ResolveBoosterSource(
@@ -1006,63 +884,6 @@ namespace DfoServer.Game.Inventory
             return true;
         }
 
-        private static bool HasPackageRewardDefinition(
-            int sourceItemTemplateId,
-            PvfLib.StackableItemFile stackable,
-            string stackableType,
-            IReadOnlyList<int> selectedItemTemplateIds)
-        {
-            if (stackable == null)
-                return false;
-
-            if (stackableType.Equals("[booster]", StringComparison.OrdinalIgnoreCase)
-                || stackableType.Equals("[cera booster]", StringComparison.OrdinalIgnoreCase)
-                || stackableType.Equals("[booster random]", StringComparison.OrdinalIgnoreCase))
-            {
-                if (IsMagicHammerBundle(sourceItemTemplateId))
-                {
-                    return TryResolveMagicHammerBundleRewards(sourceItemTemplateId, stackable, out var hammerRewards)
-                        && hammerRewards.Count > 0;
-                }
-
-                return HasPositiveReward(stackable.BoosterRewards);
-            }
-
-            if (stackableType.Equals("[cera package]", StringComparison.OrdinalIgnoreCase))
-                return HasPositiveReward(stackable.PackageRewards);
-
-            if (stackableType.Equals("[usable cera package]", StringComparison.OrdinalIgnoreCase))
-            {
-                return TryResolveClientSelectedRewards(stackable, selectedItemTemplateIds, out var selectedRewards)
-                    && selectedRewards.Count > 0;
-            }
-
-            if (stackableType.Equals("[random upgradable legacy]", StringComparison.OrdinalIgnoreCase))
-                return HasPositiveReward(stackable.RandomBoxRewards);
-
-            if (stackableType.Equals("[upgradable legacy]", StringComparison.OrdinalIgnoreCase))
-                return HasPositiveReward(ParseUpgradableLegacyIntDataRewards(stackable.IntData));
-
-            if (stackableType.Equals("[booster selection]", StringComparison.OrdinalIgnoreCase))
-            {
-                if (selectedItemTemplateIds != null && selectedItemTemplateIds.Count > 0
-                    && TryResolveClientSelectedRewards(stackable, selectedItemTemplateIds, out var rewards))
-                {
-                    return rewards.Count > 0;
-                }
-
-                if (stackable.BoosterSelectionNum <= 0)
-                    return HasPositiveReward(stackable.BoosterSelectionRewards);
-
-                return false;
-            }
-
-            return false;
-        }
-
-        private static bool HasPositiveReward(IEnumerable<PvfLib.BoosterRewardEntry> rewards)
-            => rewards != null && rewards.Any(reward => reward != null && reward.ItemId > 0 && reward.Count > 0);
-
         private static void ResolveNeedMaterial(int sourceItemTemplateId, PvfLib.StackableItemFile stackable, out int materialItemTemplateId, out int materialCountPerUse)
         {
             materialItemTemplateId = 0;
@@ -1081,14 +902,6 @@ namespace DfoServer.Game.Inventory
                 }
             }
 
-            // [upgradable legacy] 的 [need material] 描述获取罐子的兑换材料，
-            // 开启阶段由客户端金币规则处理，不能再次扣该兑换材料。
-            if (NormalizeStackableType(stackable?.StackableType)
-                .Equals("[upgradable legacy]", StringComparison.OrdinalIgnoreCase))
-            {
-                return;
-            }
-
             if (string.IsNullOrWhiteSpace(stackable?.NeedMaterial))
                 return;
 
@@ -1098,43 +911,6 @@ namespace DfoServer.Game.Inventory
 
             int.TryParse(parts[0], out materialItemTemplateId);
             int.TryParse(parts[1], out materialCountPerUse);
-        }
-
-        private static int ResolveBoosterOpenGoldCost(PvfLib.StackableItemFile stackable)
-        {
-            if (stackable == null)
-                return 0;
-
-            var stackableType = NormalizeStackableType(stackable.StackableType);
-            if (!stackableType.Equals("[upgradable legacy]", StringComparison.OrdinalIgnoreCase))
-                return 0;
-
-            var name = stackable.Name ?? string.Empty;
-            if (name.IndexOf("古老的英雄袖珍罐", StringComparison.OrdinalIgnoreCase) >= 0
-                || name.IndexOf("无法交易", StringComparison.OrdinalIgnoreCase) >= 0)
-            {
-                return 5000000;
-            }
-
-            if (name.IndexOf("英雄袖珍罐", StringComparison.OrdinalIgnoreCase) >= 0)
-            {
-                return 40000000;
-            }
-
-            return 0;
-        }
-
-        private static void AddRewardCopies(
-            List<PvfLib.BoosterRewardEntry> target,
-            IReadOnlyList<PvfLib.BoosterRewardEntry> rewards,
-            int multiplier)
-        {
-            if (target == null || rewards == null)
-                return;
-
-            var copies = Math.Max(1, multiplier);
-            for (var copyIndex = 0; copyIndex < copies; copyIndex++)
-                AddRewardEntries(target, rewards);
         }
 
         private static List<PvfLib.BoosterRewardEntry> AggregateRewards(IEnumerable<PvfLib.BoosterRewardEntry> rewards)
@@ -1252,12 +1028,6 @@ namespace DfoServer.Game.Inventory
                 return rewards.Count > 0;
             }
 
-            if (stackableType.Equals("[upgradable legacy]", StringComparison.OrdinalIgnoreCase))
-            {
-                rewards = RollBoosterRewards(ParseUpgradableLegacyIntDataRewards(stackable.IntData));
-                return rewards.Count > 0;
-            }
-
             if (stackableType.Equals("[booster selection]", StringComparison.OrdinalIgnoreCase))
             {
                 if (selectedItemTemplateIds != null && selectedItemTemplateIds.Count > 0
@@ -1276,39 +1046,6 @@ namespace DfoServer.Game.Inventory
             }
 
             return false;
-        }
-
-        private static List<PvfLib.BoosterRewardEntry> ParseUpgradableLegacyIntDataRewards(string intData)
-        {
-            var rewards = new List<PvfLib.BoosterRewardEntry>();
-            if (string.IsNullOrWhiteSpace(intData))
-                return rewards;
-
-            var tokens = intData.Split(new[] { ' ', '\t', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
-            for (var i = 0; i + 2 < tokens.Length; i += 3)
-            {
-                if (!int.TryParse(tokens[i], out var itemId)
-                    || !int.TryParse(tokens[i + 1], out var weight)
-                    || !int.TryParse(tokens[i + 2], out var count)
-                    || itemId <= 0
-                    || weight <= 0
-                    || count <= 0)
-                {
-                    continue;
-                }
-
-                rewards.Add(new PvfLib.BoosterRewardEntry
-                {
-                    RewardKind = "int data",
-                    Group = 0,
-                    DrawCount = 1,
-                    ItemId = itemId,
-                    Weight = weight,
-                    Count = count,
-                });
-            }
-
-            return rewards;
         }
 
         private static bool TryResolveMagicHammerBundleRewards(int sourceItemTemplateId, PvfLib.StackableItemFile stackable, out List<PvfLib.BoosterRewardEntry> rewards)
@@ -1445,7 +1182,6 @@ namespace DfoServer.Game.Inventory
                 || stackableType.Equals("[booster random]", StringComparison.OrdinalIgnoreCase)
                 || stackableType.Equals("[cera package]", StringComparison.OrdinalIgnoreCase)
                 || stackableType.Equals("[random upgradable legacy]", StringComparison.OrdinalIgnoreCase)
-                || stackableType.Equals("[upgradable legacy]", StringComparison.OrdinalIgnoreCase)
                 || stackableType.Equals("[usable cera package]", StringComparison.OrdinalIgnoreCase)
                 || stackableType.Equals("[booster selection]", StringComparison.OrdinalIgnoreCase);
         }

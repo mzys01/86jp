@@ -47,16 +47,6 @@ namespace DfoServer.Game.Inventory
             }
         }
 
-        public bool CanUseBoosterItem(int characterId, int accountId, BoosterUseRequest request)
-        {
-            using (var connection = new SqliteConnection(ConnectionString))
-            {
-                connection.Open();
-                using (var transaction = connection.BeginTransaction())
-                    return _packageStore.CanUseBoosterItem(connection, transaction, characterId, accountId, request);
-            }
-        }
-
         public bool TryOpenPackage0207(int characterId, int accountId, short slotIndex, IReadOnlyList<int> selectedItemTemplateIds, out BoosterUseResult result)
         {
             using (var connection = new SqliteConnection(ConnectionString))

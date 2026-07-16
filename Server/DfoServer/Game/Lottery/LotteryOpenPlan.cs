@@ -1,9 +1,6 @@
-using DfoServer.Game.DailyReset;
-using DfoServer.Game.Premium;
-using DfoServer.Infrastructure;
 using System;
 
-namespace DfoServer.Game.Inventory
+namespace DfoServer.Game.Lottery
 {
     public enum LotteryOpenMode
     {
@@ -27,8 +24,6 @@ namespace DfoServer.Game.Inventory
 
         public bool HasActiveDoubleReward { get; }
 
-        public bool ShouldOpenNow => Mode != LotteryOpenMode.DirectRegularPhaseStart;
-
         public bool ShouldSendRegularPhaseStart => Mode == LotteryOpenMode.DirectRegularPhaseStart;
 
         public bool UseDoubleReward => Mode == LotteryOpenMode.DirectDoubleReward;
@@ -36,16 +31,6 @@ namespace DfoServer.Game.Inventory
         public bool RefreshPremiumBeforePhaseStart => Mode == LotteryOpenMode.DirectRegularPhaseStart;
 
         public bool RefreshPremiumAfterOpen => Mode == LotteryOpenMode.DirectDoubleReward;
-
-        public BoosterUseRequest CreateBoosterUseRequest(short slotIndex)
-        {
-            return new BoosterUseRequest
-            {
-                SlotIndex = slotIndex,
-                RewardMultiplier = UseDoubleReward ? 2 : 1,
-                ConsumeLotteryDoubleRewardUse = UseDoubleReward,
-            };
-        }
 
         public static LotteryOpenPlan ConfirmedRegular()
             => new LotteryOpenPlan(LotteryOpenMode.ConfirmedRegular, 0, false);
@@ -59,14 +44,12 @@ namespace DfoServer.Game.Inventory
 
     public sealed class LotteryOpenPlanner
     {
-        private readonly DailyResetService _dailyResetService;
-        private readonly Func<string> _connectionStringFactory;
+        private readonly LotteryDoubleRewardPolicy _doubleRewardPolicy;
 
-        public LotteryOpenPlanner(DailyResetService dailyResetService, Func<string> connectionStringFactory = null)
+        public LotteryOpenPlanner(LotteryDoubleRewardPolicy doubleRewardPolicy)
         {
-            _dailyResetService = dailyResetService ?? throw new ArgumentNullException(nameof(dailyResetService));
-            _connectionStringFactory = connectionStringFactory
-                ?? (() => SqliteDatabaseBootstrap.Initialize(ServerPaths.DatabasePath, ServerPaths.SchemaFilePath));
+            _doubleRewardPolicy = doubleRewardPolicy
+                ?? throw new ArgumentNullException(nameof(doubleRewardPolicy));
         }
 
         public LotteryOpenPlan Resolve(int characterId, int accountId, bool isDirectFastOpen)
@@ -74,23 +57,21 @@ namespace DfoServer.Game.Inventory
             if (!isDirectFastOpen)
                 return LotteryOpenPlan.ConfirmedRegular();
 
-            var usedCount = PremiumService.GetLotteryDoubleRewardUsedCount(_dailyResetService, characterId);
-            var hasActiveDoubleReward = false;
-            if (characterId > 0 && accountId > 0 && usedCount < PremiumService.LotteryDoubleRewardDailyLimit)
-            {
-                var premiumType = DevilContractCatalog.SlotToPremiumType(PremiumService.LotteryDoubleRewardServiceIndex);
-                hasActiveDoubleReward = PremiumService.HasActivePremium(_connectionStringFactory(), accountId, premiumType);
-            }
-
+            var usedCount = _doubleRewardPolicy.GetUsedCount(characterId);
+            var hasActiveDoubleReward = usedCount < LotteryDoubleRewardPolicy.DailyLimit
+                && _doubleRewardPolicy.HasActiveBenefit(accountId);
             return ResolveDirectFastOpen(isDirectFastOpen, hasActiveDoubleReward, usedCount);
         }
 
-        public static LotteryOpenPlan ResolveDirectFastOpen(bool isDirectFastOpen, bool hasActiveDoubleReward, int usedCount)
+        public static LotteryOpenPlan ResolveDirectFastOpen(
+            bool isDirectFastOpen,
+            bool hasActiveDoubleReward,
+            int usedCount)
         {
             if (!isDirectFastOpen)
                 return LotteryOpenPlan.ConfirmedRegular();
 
-            if (hasActiveDoubleReward && usedCount < PremiumService.LotteryDoubleRewardDailyLimit)
+            if (hasActiveDoubleReward && usedCount < LotteryDoubleRewardPolicy.DailyLimit)
                 return LotteryOpenPlan.DirectDoubleReward(usedCount);
 
             return LotteryOpenPlan.DirectRegularPhaseStart(usedCount, hasActiveDoubleReward);

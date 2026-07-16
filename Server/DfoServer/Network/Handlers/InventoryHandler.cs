@@ -1,6 +1,5 @@
 using DfoServer.Game.Appearance;
 using DfoServer.Game.Characters;
-using DfoServer.Game.DailyReset;
 using DfoServer.Game.Inventory;
 using DfoServer.Game.SelectCharacter;
 using DfoServer.Network.Builders;
@@ -20,8 +19,6 @@ namespace DfoServer.Network.Handlers
         private readonly ICharacterRepository _characterRepository;
         private readonly InventoryRefreshSender _refresh;
         private readonly ExperienceItemNotificationService _experienceItemNotifications;
-        private readonly DailyResetService _dailyResetService;
-        private readonly LotteryOpenPlanner _lotteryOpenPlanner;
         private readonly Func<byte[], Task> _broadcastGamePacket;
 
         public string ProtocolName => "GameProtocol";
@@ -33,7 +30,6 @@ namespace DfoServer.Network.Handlers
             ICharacterRepository characterRepository,
             InventoryRefreshSender refreshSender,
             ExperienceItemNotificationService experienceItemNotifications,
-            DailyResetService dailyResetService,
             Func<byte[], Task> broadcastGamePacket = null)
         {
             _inventoryStore = inventoryStore ?? throw new ArgumentNullException(nameof(inventoryStore));
@@ -44,8 +40,6 @@ namespace DfoServer.Network.Handlers
             _refresh = refreshSender ?? throw new ArgumentNullException(nameof(refreshSender));
             _experienceItemNotifications = experienceItemNotifications
                 ?? throw new ArgumentNullException(nameof(experienceItemNotifications));
-            _dailyResetService = dailyResetService ?? throw new ArgumentNullException(nameof(dailyResetService));
-            _lotteryOpenPlanner = new LotteryOpenPlanner(_dailyResetService);
             _broadcastGamePacket = broadcastGamePacket;
         }
 

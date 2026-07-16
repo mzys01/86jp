@@ -461,8 +461,7 @@ namespace DfoServer.SelfTests
                 new ExperienceItemNotificationService(
                     characterRepository,
                     databasePath,
-                    ServerPaths.SchemaFilePath),
-                new DailyResetService(databasePath, ServerPaths.SchemaFilePath));
+                    ServerPaths.SchemaFilePath));
 
             using (var listener = new TcpListener(IPAddress.Loopback, 0))
             using (var client = new TcpClient())

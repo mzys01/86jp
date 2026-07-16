@@ -95,6 +95,7 @@ namespace PvfLib
         public int Price { get; set; } = -1;
         public int Value { get; set; } = -1;
         public int Weight { get; set; } = -1;
+        public int LotteryUseCost { get; set; }
         public int CoolTime { get; set; } = -1;
         public string CooltimeGroup { get; set; }
 
@@ -220,6 +221,7 @@ namespace PvfLib
                     case "price": stk.Price = ParseInt(data); break;
                     case "value": stk.Value = ParseInt(data); break;
                     case "weight": stk.Weight = ParseInt(data); break;
+                    case "lottery use cost": stk.LotteryUseCost = Math.Max(0, ParseInt(data)); break;
                     case "cool time": stk.CoolTime = ParseInt(data); break;
                     case "cooltime group": stk.CooltimeGroup = data; break;
 

@@ -1,0 +1,43 @@
+using DfoServer.Game.Inventory;
+using System.Collections.Generic;
+
+namespace DfoServer.Game.Lottery
+{
+    public sealed class LotteryItemDefinition
+    {
+        public int ItemTemplateId { get; set; }
+
+        public string StackableType { get; set; }
+
+        public int GoldCost { get; set; }
+
+        public IReadOnlyList<PvfLib.BoosterRewardEntry> RewardPool { get; set; }
+    }
+
+    public sealed class LotterySourceContext
+    {
+        public short SlotIndex { get; set; }
+
+        public int ItemTemplateId { get; set; }
+
+        public int StackCount { get; set; }
+
+    }
+
+    public sealed class LotteryOpenResult
+    {
+        public short SourceSlotIndex { get; set; }
+
+        public int SourceItemTemplateId { get; set; }
+
+        public int SourceRemainingStackCount { get; set; }
+
+        public int ConsumedGold { get; set; }
+
+        public int UpdatedGold { get; set; }
+
+        public bool UsedDoubleReward { get; set; }
+
+        public List<BoosterRewardResult> Rewards { get; } = new List<BoosterRewardResult>();
+    }
+}
