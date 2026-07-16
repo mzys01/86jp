@@ -7,8 +7,6 @@ namespace DfoServer.Game.Lottery
 {
     public sealed class LotteryItemDefinitionProvider
     {
-        private const string UpgradableLegacyType = "[upgradable legacy]";
-
         private readonly Func<int, PvfLib.StackableItemFile> _itemLoader;
         private readonly object _cacheLock = new object();
         private readonly Dictionary<int, LotteryItemDefinition> _cache
@@ -16,7 +14,7 @@ namespace DfoServer.Game.Lottery
 
         public LotteryItemDefinitionProvider(Func<int, PvfLib.StackableItemFile> itemLoader = null)
         {
-            _itemLoader = itemLoader ?? InventoryDbPrimitives.LoadStackableItem;
+            _itemLoader = itemLoader ?? StackableItemProvider.Load;
         }
 
         public bool TryGet(int itemTemplateId, out LotteryItemDefinition definition)
@@ -44,8 +42,10 @@ namespace DfoServer.Game.Lottery
             if (itemTemplateId <= 0 || stackable == null)
                 return false;
 
-            var stackableType = NormalizeStackableType(stackable.StackableType);
-            if (!stackableType.Equals(UpgradableLegacyType, StringComparison.OrdinalIgnoreCase))
+            var stackableType = StackableItemProvider.NormalizeType(stackable.StackableType);
+            if (!stackableType.Equals(
+                    StackableItemProvider.UpgradableLegacyType,
+                    StringComparison.OrdinalIgnoreCase))
                 return false;
 
             IReadOnlyList<PvfLib.BoosterRewardEntry> rewardPool = stackable.UpgradableLegacyRewards;
@@ -81,31 +81,6 @@ namespace DfoServer.Game.Lottery
                 Weight = reward.Weight,
                 Count = Math.Max(1, reward.Count),
             };
-        }
-
-        internal static string NormalizeStackableType(string stackableType)
-        {
-            if (string.IsNullOrWhiteSpace(stackableType))
-                return string.Empty;
-
-            var text = stackableType.Trim();
-            var first = text.IndexOf('`');
-            if (first >= 0)
-            {
-                var second = text.IndexOf('`', first + 1);
-                if (second > first)
-                    return text.Substring(first + 1, second - first - 1).Trim();
-            }
-
-            var bracketStart = text.IndexOf('[');
-            if (bracketStart >= 0)
-            {
-                var bracketEnd = text.IndexOf(']', bracketStart + 1);
-                if (bracketEnd > bracketStart)
-                    return text.Substring(bracketStart, bracketEnd - bracketStart + 1).Trim();
-            }
-
-            return text.Replace("`", string.Empty).Trim();
         }
     }
 }

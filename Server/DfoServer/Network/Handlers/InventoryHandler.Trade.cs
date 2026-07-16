@@ -1,6 +1,5 @@
 using DfoServer.Game.Currency;
 using DfoServer.Game.Inventory;
-using DfoServer.Game.Lottery;
 using DfoServer.Network.Builders;
 using System;
 using System.Collections.Generic;
@@ -113,7 +112,7 @@ namespace DfoServer.Network.Handlers
             if (result == null || result.ListType != InventoryListType.Main || itemTemplateId <= 0)
                 return false;
 
-            return LotteryPresentationPolicy.IsLotteryItem(itemTemplateId);
+            return StackableItemProvider.IsLegacyContainer(itemTemplateId);
         }
 
         private async Task SendPurchasedMainItemRefresh(EnhancedClientSession session, int characterId, int accountId, InventoryMutationResult result)

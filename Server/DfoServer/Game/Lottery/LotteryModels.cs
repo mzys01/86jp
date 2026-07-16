@@ -21,7 +21,6 @@ namespace DfoServer.Game.Lottery
         public int ItemTemplateId { get; set; }
 
         public int StackCount { get; set; }
-
     }
 
     public sealed class LotteryOpenResult
@@ -38,6 +37,26 @@ namespace DfoServer.Game.Lottery
 
         public bool UsedDoubleReward { get; set; }
 
-        public List<BoosterRewardResult> Rewards { get; } = new List<BoosterRewardResult>();
+        public List<LotteryRewardGrant> Rewards { get; } = new List<LotteryRewardGrant>();
+    }
+
+    public sealed class LotteryRewardGrant
+    {
+        public InventoryListType ListType { get; set; }
+
+        public short SlotIndex { get; set; }
+
+        public int ItemTemplateId { get; set; }
+
+        public int StackCount { get; set; }
+
+        public int GrantedCount { get; set; }
+    }
+
+    internal sealed class LotteryRewardPlan
+    {
+        internal int ItemTemplateId { get; set; }
+
+        internal int Count { get; set; }
     }
 }

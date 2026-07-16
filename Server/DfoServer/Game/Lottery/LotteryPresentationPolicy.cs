@@ -7,21 +7,12 @@ namespace DfoServer.Game.Lottery
 {
     public static class LotteryPresentationPolicy
     {
-        public static bool IsLotteryItem(int itemTemplateId)
-        {
-            return itemTemplateId > 0
-                && LotteryItemDefinitionProvider.TryBuild(
-                    itemTemplateId,
-                    InventoryDbPrimitives.LoadStackableItem(itemTemplateId),
-                    out _);
-        }
-
         public static bool ShouldSendGoldRefresh(LotteryOpenResult result)
             => result != null && result.ConsumedGold > 0;
 
         public static CommonInventoryItem ResolveResultItem(
             CharacterItemListSnapshot snapshot,
-            BoosterRewardResult reward)
+            LotteryRewardGrant reward)
         {
             if (reward == null || reward.ListType != InventoryListType.Main || reward.ItemTemplateId <= 0)
                 return null;
@@ -46,7 +37,7 @@ namespace DfoServer.Game.Lottery
 
         public static AvatarInventoryItem ResolveAvatarResultItem(
             CharacterItemListSnapshot snapshot,
-            BoosterRewardResult reward)
+            LotteryRewardGrant reward)
         {
             if (reward == null || reward.ListType != InventoryListType.Avatar || reward.ItemTemplateId <= 0)
                 return null;
@@ -56,11 +47,11 @@ namespace DfoServer.Game.Lottery
                 && item.AvatarItemId == reward.ItemTemplateId);
         }
 
-        public static IReadOnlyList<BoosterRewardResult> ResolveDisplayRewards(
-            IReadOnlyList<BoosterRewardResult> rewards)
+        public static IReadOnlyList<LotteryRewardGrant> ResolveDisplayRewards(
+            IReadOnlyList<LotteryRewardGrant> rewards)
         {
             if (rewards == null)
-                return Array.Empty<BoosterRewardResult>();
+                return Array.Empty<LotteryRewardGrant>();
 
             return rewards
                 .Where(reward => reward != null
@@ -72,7 +63,7 @@ namespace DfoServer.Game.Lottery
 
         public static bool ShouldUseDoubleRewardResultFlow(
             bool useDoubleReward,
-            IReadOnlyList<BoosterRewardResult> displayRewards)
+            IReadOnlyList<LotteryRewardGrant> displayRewards)
         {
             return useDoubleReward
                 && displayRewards != null
@@ -90,8 +81,8 @@ namespace DfoServer.Game.Lottery
 
         public static int ResolveDisplayValue(
             CommonInventoryItem item,
-            BoosterRewardResult reward,
-            IReadOnlyList<BoosterRewardResult> sameOpenRewards = null)
+            LotteryRewardGrant reward,
+            IReadOnlyList<LotteryRewardGrant> sameOpenRewards = null)
         {
             if (item == null)
                 return 0;
@@ -108,13 +99,13 @@ namespace DfoServer.Game.Lottery
             return Math.Max(fallback, total);
         }
 
-        public static IReadOnlyList<BoosterRewardResult> ResolvePostResultMainRefreshRewards(
-            BoosterRewardResult displayReward,
-            IReadOnlyList<BoosterRewardResult> mainRewards,
+        public static IReadOnlyList<LotteryRewardGrant> ResolvePostResultMainRefreshRewards(
+            LotteryRewardGrant displayReward,
+            IReadOnlyList<LotteryRewardGrant> mainRewards,
             bool useDoubleRewardResultFlow)
         {
             if (mainRewards == null || mainRewards.Count == 0)
-                return Array.Empty<BoosterRewardResult>();
+                return Array.Empty<LotteryRewardGrant>();
 
             if (displayReward == null || displayReward.ListType != InventoryListType.Main)
                 return mainRewards.ToList();
@@ -124,11 +115,11 @@ namespace DfoServer.Game.Lottery
                 : ResolveMainRefreshRewards(mainRewards);
         }
 
-        public static IReadOnlyList<BoosterRewardResult> ResolveMainRefreshRewards(
-            IReadOnlyList<BoosterRewardResult> mainRewards)
+        public static IReadOnlyList<LotteryRewardGrant> ResolveMainRefreshRewards(
+            IReadOnlyList<LotteryRewardGrant> mainRewards)
         {
             if (mainRewards == null || mainRewards.Count <= 1)
-                return Array.Empty<BoosterRewardResult>();
+                return Array.Empty<LotteryRewardGrant>();
 
             var duplicateNonStackableKeys = new HashSet<string>(mainRewards
                 .Where(reward => reward != null && reward.ItemTemplateId > 0)
@@ -145,8 +136,8 @@ namespace DfoServer.Game.Lottery
         }
 
         public static bool ShouldSuppressNotice(
-            BoosterRewardResult reward,
-            IReadOnlyList<BoosterRewardResult> sameOpenRewards)
+            LotteryRewardGrant reward,
+            IReadOnlyList<LotteryRewardGrant> sameOpenRewards)
         {
             if (reward == null || sameOpenRewards == null || reward.ItemTemplateId <= 0)
                 return false;
@@ -170,7 +161,7 @@ namespace DfoServer.Game.Lottery
 
         public static CommonInventoryItem FindResultItem(
             CharacterItemListSnapshot snapshot,
-            BoosterRewardResult reward)
+            LotteryRewardGrant reward)
         {
             if (snapshot == null || reward == null)
                 return null;
@@ -180,7 +171,7 @@ namespace DfoServer.Game.Lottery
                 && item.ItemTemplateId == reward.ItemTemplateId);
         }
 
-        private static string RewardKey(BoosterRewardResult reward)
+        private static string RewardKey(LotteryRewardGrant reward)
             => $"{(byte)reward.ListType}:0x{reward.ItemTemplateId:X8}";
     }
 }

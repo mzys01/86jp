@@ -105,18 +105,24 @@ namespace DfoServer.Network
             var lotteryDoubleRewardPolicy = new LotteryDoubleRewardPolicy(
                 dailyResetService,
                 inventoryStore.ConnectionString);
-            var lotteryOpenService = new LotteryItemOpenService(
+            var lotteryRepository = new LotteryItemRepository(
                 inventoryStore,
+                _assetService);
+            var lotteryOpenService = new LotteryItemOpenService(
+                lotteryRepository,
                 new LotteryItemDefinitionProvider(),
                 lotteryDoubleRewardPolicy);
-            _lotteryItemHandler = new LotteryItemHandler(
+            var lotteryResponses = new LotteryItemResponseSender(
                 inventoryStore,
+                lotteryDoubleRewardPolicy,
+                _inventoryRefreshSender,
+                inventoryStore.ConnectionString,
+                broadcastGamePacket);
+            _lotteryItemHandler = new LotteryItemHandler(
                 lotteryOpenService,
                 new LotteryOpenPlanner(lotteryDoubleRewardPolicy),
                 new LotteryOpenSessionCoordinator(),
-                lotteryDoubleRewardPolicy,
-                _inventoryRefreshSender,
-                broadcastGamePacket);
+                lotteryResponses);
             _petCreatureHandler = new PetCreatureHandler(inventoryStore, sqliteSelectCharacterDataSource, _inventoryRefreshSender);
             // 组队与城镇/副本共享同一个 PartyManager 实例: 跟随退出/副本 fan-out 都要看到同一份队伍状态。
             _partyManager = new Game.Party.PartyManager();

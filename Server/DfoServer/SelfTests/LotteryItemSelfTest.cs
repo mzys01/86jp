@@ -11,6 +11,8 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace DfoServer.SelfTests
 {
@@ -23,14 +25,13 @@ namespace DfoServer.SelfTests
         private const short UpgradableLegacySlot = 107;
         private const short HeroLotterySlot = 108;
         private const short AncientHeroLotterySlot = 109;
+        private const short ConcurrentLotterySlot = 110;
         private const short RewardSlot = 120;
         private const int SampleLotteryItemId = 10014964;
         private const int SampleRewardItemId = 400360011;
         private const int MagicBoxItemId = 10007368;
         private const int HeroLotteryItemId = 8095;
         private const int AncientHeroLotteryItemId = 8213;
-        private const int HeroLotteryGoldCost = 40000000;
-        private const int AncientHeroLotteryGoldCost = 5000000;
         private const int CannedAvatarItemId = 39075;
         private const int LegacyEquipmentItemId = 100150516;
         private const int EpicEquipmentItemId = 101000004;
@@ -99,14 +100,14 @@ namespace DfoServer.SelfTests
 
             var duplicateEquipmentRewards = new[]
             {
-                new BoosterRewardResult
+                new LotteryRewardGrant
                 {
                     ListType = InventoryListType.Main,
                     SlotIndex = RewardSlot,
                     ItemTemplateId = SampleRewardItemId,
                     GrantedCount = 1,
                 },
-                new BoosterRewardResult
+                new LotteryRewardGrant
                 {
                     ListType = InventoryListType.Main,
                     SlotIndex = RewardSlot + 1,
@@ -130,7 +131,7 @@ namespace DfoServer.SelfTests
                 duplicateEquipmentRewards[0],
                 duplicateEquipmentRewards), ref failures);
 
-            var avatarReward = new BoosterRewardResult
+            var avatarReward = new LotteryRewardGrant
             {
                 ListType = InventoryListType.Avatar,
                 SlotIndex = 3,
@@ -179,11 +180,31 @@ namespace DfoServer.SelfTests
             Check("hero lottery gold cost comes from PVF", definitions.TryGet(
                 HeroLotteryItemId,
                 out var heroDefinition)
-                && heroDefinition.GoldCost == HeroLotteryGoldCost, ref failures);
+                && heroDefinition.GoldCost > 0, ref failures);
             Check("ancient hero lottery gold cost comes from PVF", definitions.TryGet(
                 AncientHeroLotteryItemId,
                 out var ancientDefinition)
-                && ancientDefinition.GoldCost == AncientHeroLotteryGoldCost, ref failures);
+                && ancientDefinition.GoldCost > 0, ref failures);
+            var syntheticItemId = 7654321;
+            var syntheticGoldCost = 1234567;
+            var syntheticLottery = new PvfLib.StackableItemFile
+            {
+                Name = "selftest data driven lottery",
+                StackableType = "`[upgradable legacy]` 1",
+                LotteryUseCost = syntheticGoldCost,
+            };
+            syntheticLottery.UpgradableLegacyRewards.Add(new PvfLib.BoosterRewardEntry
+            {
+                ItemId = SampleRewardItemId,
+                Weight = 10000,
+                Count = 1,
+            });
+            Check("arbitrary lottery cost comes only from PVF", LotteryItemDefinitionProvider.TryBuild(
+                syntheticItemId,
+                syntheticLottery,
+                out var syntheticDefinition)
+                && syntheticDefinition.ItemTemplateId == syntheticItemId
+                && syntheticDefinition.GoldCost == syntheticGoldCost, ref failures);
             Check("ordinary stackable is not a lottery", !definitions.TryGet(2600014, out _), ref failures);
 
             Check("direct fast open uses double below cap", LotteryOpenPlanner.ResolveDirectFastOpen(
@@ -228,12 +249,29 @@ namespace DfoServer.SelfTests
 
             var dailyReset = new DailyResetService(databasePath, ServerPaths.SchemaFilePath);
             var inventoryStore = new SqliteInventoryStore(databasePath, ServerPaths.SchemaFilePath);
+            var assetService = new SqliteAssetService(
+                databasePath,
+                ServerPaths.SchemaFilePath,
+                inventoryStore);
             var doublePolicy = new LotteryDoubleRewardPolicy(dailyReset, connectionString);
+            var definitions = new LotteryItemDefinitionProvider();
             var service = new LotteryItemOpenService(
-                inventoryStore,
-                new LotteryItemDefinitionProvider(),
+                new LotteryItemRepository(inventoryStore, assetService),
+                definitions,
                 doublePolicy);
             var planner = new LotteryOpenPlanner(doublePolicy);
+            var hasHeroDefinition = definitions.TryGet(
+                HeroLotteryItemId,
+                out var heroDefinition);
+            var hasAncientDefinition = definitions.TryGet(
+                AncientHeroLotteryItemId,
+                out var ancientDefinition);
+            Check("service reads hero pot cost from PVF", hasHeroDefinition
+                && heroDefinition.GoldCost > 0, ref failures);
+            Check("service reads ancient hero pot cost from PVF", hasAncientDefinition
+                && ancientDefinition.GoldCost > 0, ref failures);
+            var heroGoldCost = heroDefinition?.GoldCost ?? 0;
+            var ancientGoldCost = ancientDefinition?.GoldCost ?? 0;
 
             Check("generic booster path rejects lottery type", !inventoryStore.TryUseBoosterItem(
                 CharacterId,
@@ -251,6 +289,7 @@ namespace DfoServer.SelfTests
 
             Check("normal lottery precheck", service.CanOpen(
                 CharacterId,
+                AccountId,
                 LotterySlot,
                 out var source)
                 && source.ItemTemplateId == SampleLotteryItemId, ref failures);
@@ -265,6 +304,31 @@ namespace DfoServer.SelfTests
                 && normalResult.Rewards.Count > 0
                 && !normalResult.UsedDoubleReward, ref failures);
 
+            var startConcurrentOpen = new ManualResetEventSlim(false);
+            var concurrentResults = new bool[2];
+            var concurrentTasks = Enumerable.Range(0, concurrentResults.Length)
+                .Select(index => Task.Run(() =>
+                {
+                    startConcurrentOpen.Wait();
+                    concurrentResults[index] = service.TryOpen(
+                        CharacterId,
+                        AccountId,
+                        ConcurrentLotterySlot,
+                        false,
+                        out _);
+                }))
+                .ToArray();
+            startConcurrentOpen.Set();
+            Task.WaitAll(concurrentTasks);
+            startConcurrentOpen.Dispose();
+            Check("concurrent open consumes a single source exactly once",
+                concurrentResults.Count(value => value) == 1
+                && LoadStackCount(
+                    connectionString,
+                    ConcurrentLotterySlot,
+                    SampleLotteryItemId) == -1,
+                ref failures);
+
             Check("upgradable legacy opens through dedicated service", service.TryOpen(
                 CharacterId,
                 AccountId,
@@ -275,11 +339,13 @@ namespace DfoServer.SelfTests
 
             Check("hero pot rejects insufficient gold", !service.CanOpen(
                 CharacterId,
+                AccountId,
                 HeroLotterySlot,
                 out _), ref failures);
-            SetGold(connectionString, HeroLotteryGoldCost);
+            SetGold(connectionString, heroGoldCost);
             Check("hero pot accepts exact PVF gold cost", service.CanOpen(
                 CharacterId,
+                AccountId,
                 HeroLotterySlot,
                 out _), ref failures);
             Check("hero pot deducts gold without exchange material", service.TryOpen(
@@ -288,17 +354,17 @@ namespace DfoServer.SelfTests
                 HeroLotterySlot,
                 false,
                 out var heroResult)
-                && heroResult.ConsumedGold == HeroLotteryGoldCost
+                && heroResult.ConsumedGold == heroGoldCost
                 && heroResult.UpdatedGold == 0, ref failures);
 
-            SetGold(connectionString, AncientHeroLotteryGoldCost);
+            SetGold(connectionString, ancientGoldCost);
             Check("ancient hero pot deducts PVF gold cost", service.TryOpen(
                 CharacterId,
                 AccountId,
                 AncientHeroLotterySlot,
                 false,
                 out var ancientResult)
-                && ancientResult.ConsumedGold == AncientHeroLotteryGoldCost
+                && ancientResult.ConsumedGold == ancientGoldCost
                 && ancientResult.UpdatedGold == 0, ref failures);
 
             var firstDoublePlan = planner.Resolve(CharacterId, AccountId, true);
@@ -366,12 +432,19 @@ namespace DfoServer.SelfTests
                 10 + LotteryDoubleRewardPolicy.PremiumServiceSlot * 9)
                 == LotteryDoubleRewardPolicy.DailyLimit, ref failures);
 
-            Check("NPC purchase workaround is scoped to lottery", InventoryHandler.ShouldHideNpcBuyItemSummary(
+            Check("NPC purchase refresh includes regular lottery", InventoryHandler.ShouldHideNpcBuyItemSummary(
                 HeroLotteryItemId,
                 new InventoryMutationResult
                 {
                     ListType = InventoryListType.Main,
                     ItemTemplateId = HeroLotteryItemId,
+                }), ref failures);
+            Check("NPC purchase refresh keeps random legacy container compatibility", InventoryHandler.ShouldHideNpcBuyItemSummary(
+                MagicBoxItemId,
+                new InventoryMutationResult
+                {
+                    ListType = InventoryListType.Main,
+                    ItemTemplateId = MagicBoxItemId,
                 }), ref failures);
             Check("NPC purchase workaround excludes ordinary stackable", !InventoryHandler.ShouldHideNpcBuyItemSummary(
                 2600014,
@@ -423,6 +496,8 @@ VALUES
     ('character', @characterId, @characterId, 0, @heroSlot, @heroItemId, 'stackable',
      1, 1, 0, 0, 0, 0, 0, 0, '{}'),
     ('character', @characterId, @characterId, 0, @ancientSlot, @ancientItemId, 'stackable',
+     1, 1, 0, 0, 0, 0, 0, 0, '{}'),
+    ('character', @characterId, @characterId, 0, @concurrentSlot, @lotteryItemId, 'stackable',
      1, 1, 0, 0, 0, 0, 0, 0, '{}');";
                     command.Parameters.AddWithValue("@accountId", AccountId);
                     command.Parameters.AddWithValue("@characterId", CharacterId);
@@ -438,6 +513,7 @@ VALUES
                     command.Parameters.AddWithValue("@legacySlot", UpgradableLegacySlot);
                     command.Parameters.AddWithValue("@heroSlot", HeroLotterySlot);
                     command.Parameters.AddWithValue("@ancientSlot", AncientHeroLotterySlot);
+                    command.Parameters.AddWithValue("@concurrentSlot", ConcurrentLotterySlot);
                     command.Parameters.AddWithValue("@lotteryItemId", SampleLotteryItemId);
                     command.Parameters.AddWithValue("@legacyItemId", SampleLotteryItemId);
                     command.Parameters.AddWithValue("@heroItemId", HeroLotteryItemId);

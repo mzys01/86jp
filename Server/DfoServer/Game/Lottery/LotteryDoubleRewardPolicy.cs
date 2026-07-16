@@ -1,4 +1,5 @@
 using DfoServer.Game.DailyReset;
+using DfoServer.Game.Inventory;
 using DfoServer.Game.Premium;
 using Microsoft.Data.Sqlite;
 using System;
@@ -59,28 +60,29 @@ namespace DfoServer.Game.Lottery
                 CounterKey));
         }
 
-        internal bool TryConsume(
-            SqliteConnection connection,
-            SqliteTransaction transaction,
-            int characterId,
-            int accountId)
+        internal bool TryConsume(DbScope scope)
         {
-            if (connection == null
-                || transaction == null
-                || characterId <= 0
-                || accountId <= 0)
+            if (scope == null
+                || scope.CharacterId <= 0
+                || scope.AccountId <= 0)
             {
                 return false;
             }
 
             var premiumType = DevilContractCatalog.SlotToPremiumType(PremiumServiceSlot);
-            if (!HasActiveBenefit(connection, transaction, accountId, premiumType))
+            if (!HasActiveBenefit(
+                    scope.Connection,
+                    scope.Transaction,
+                    scope.AccountId,
+                    premiumType))
+            {
                 return false;
+            }
 
             return _dailyResetService.TryIncrementCounter(
-                connection,
-                transaction,
-                characterId,
+                scope.Connection,
+                scope.Transaction,
+                scope.CharacterId,
                 CounterKey,
                 DailyLimit);
         }

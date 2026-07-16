@@ -662,6 +662,17 @@ namespace DfoServer.Game.Inventory
             return CreatureExtraResolver.IsPetInventoryEquipment(itemTemplateId);
         }
 
+        internal static bool IsAvatarItem(ItemMetadata metadata)
+        {
+            var path = metadata?.PvfFilePath;
+            if (string.IsNullOrWhiteSpace(path))
+                return false;
+
+            var normalizedPath = "/" + path.Replace('\\', '/').Trim('/');
+            return normalizedPath.IndexOf("/avatar/", StringComparison.OrdinalIgnoreCase) >= 0
+                || normalizedPath.IndexOf("/at_avatar/", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
         public static bool IsPetConsumableItem(ItemMetadata metadata)
         {
             if (metadata == null || !metadata.IsStackable || string.IsNullOrWhiteSpace(metadata.StackableType))

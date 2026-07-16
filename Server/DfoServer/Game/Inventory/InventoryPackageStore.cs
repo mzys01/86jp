@@ -1151,29 +1151,7 @@ namespace DfoServer.Game.Inventory
         }
 
         internal static string NormalizeStackableType(string stackableType)
-        {
-            if (string.IsNullOrWhiteSpace(stackableType))
-                return string.Empty;
-
-            var text = stackableType.Trim();
-            var first = text.IndexOf('`');
-            if (first >= 0)
-            {
-                var second = text.IndexOf('`', first + 1);
-                if (second > first)
-                    return text.Substring(first + 1, second - first - 1).Trim();
-            }
-
-            var bracketStart = text.IndexOf('[');
-            if (bracketStart >= 0)
-            {
-                var bracketEnd = text.IndexOf(']', bracketStart + 1);
-                if (bracketEnd > bracketStart)
-                    return text.Substring(bracketStart, bracketEnd - bracketStart + 1).Trim();
-            }
-
-            return text.Replace("`", "").Trim();
-        }
+            => StackableItemProvider.NormalizeType(stackableType);
 
         internal static bool IsSupportedPackageType(string stackableType)
         {
@@ -1181,20 +1159,12 @@ namespace DfoServer.Game.Inventory
                 || stackableType.Equals("[cera booster]", StringComparison.OrdinalIgnoreCase)
                 || stackableType.Equals("[booster random]", StringComparison.OrdinalIgnoreCase)
                 || stackableType.Equals("[cera package]", StringComparison.OrdinalIgnoreCase)
-                || stackableType.Equals("[random upgradable legacy]", StringComparison.OrdinalIgnoreCase)
+                || stackableType.Equals(
+                    StackableItemProvider.RandomUpgradableLegacyType,
+                    StringComparison.OrdinalIgnoreCase)
                 || stackableType.Equals("[usable cera package]", StringComparison.OrdinalIgnoreCase)
                 || stackableType.Equals("[booster selection]", StringComparison.OrdinalIgnoreCase);
         }
 
-        internal static bool IsAvatarReward(ItemMetadata metadata)
-        {
-            var path = metadata?.PvfFilePath;
-            if (string.IsNullOrWhiteSpace(path))
-                return false;
-
-            var normalizedPath = "/" + path.Replace('\\', '/').Trim('/');
-            return normalizedPath.IndexOf("/avatar/", StringComparison.OrdinalIgnoreCase) >= 0
-                || normalizedPath.IndexOf("/at_avatar/", StringComparison.OrdinalIgnoreCase) >= 0;
-        }
     }
 }
