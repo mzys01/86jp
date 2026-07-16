@@ -13,5 +13,6 @@ namespace DfoServer.Game.Characters
         void SoftDelete(int characterId);
         CharacterRecord GetByName(string name);
         int CountByAccount(int accountId);
+        void SwapSlotIndexes(int accountId, byte slotA, byte slotB);
     }
 }
