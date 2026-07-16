@@ -165,7 +165,7 @@ namespace DfoServer.Game.Inventory
                     }
 
                     var remainUseCountAfter = hadRemainUseCount
-                        ? ClampByte(remainUseCountBefore - 1)
+                        ? PetCreatureExtraView.ClampByte(remainUseCountBefore - 1)
                         : DefaultPetSealCapsuleRemainUseCount;
                     var initializedCreatureExtra = BuildInitializedPetCreatureSealExtraJson(remainUseCountAfter);
                     var sealedItemId = ResolveSealedPetCreatureProductItemId(sealedCreatureItemId);
@@ -596,7 +596,7 @@ WHERE item_uid = @itemUid;";
             if (source == null || string.IsNullOrWhiteSpace(source.ExtraJson))
                 return false;
 
-            if (!TryReadJsonObject(source.ExtraJson, out var json))
+            if (!PetCreatureExtraView.TryReadJsonObject(source.ExtraJson, out var json))
                 return false;
 
             var creatureItemTemplateId = ReadJsonInt(json, "sealedCreatureItemId");
@@ -615,8 +615,8 @@ WHERE item_uid = @itemUid;";
 
         private static byte ResolveSealedPayloadRemainUseCount(JsonObject json)
         {
-            if (TryReadJsonInt(json, "sealedCreatureRemainUseCount", out var direct))
-                return ClampByte(direct);
+            if (PetCreatureExtraView.TryReadJsonInt(json, "sealedCreatureRemainUseCount", out var direct))
+                return PetCreatureExtraView.ClampByte(direct);
 
             var creatureExtraJson = ReadJsonString(json, "sealedCreatureExtraJson");
             return TryResolvePetCreatureSealRemainUseCount(creatureExtraJson, out var remainUseCount)
@@ -713,7 +713,7 @@ WHERE item_uid = @itemUid;";
 
         private static int ReadJsonInt(JsonObject json, string propertyName)
         {
-            return TryReadJsonInt(json, propertyName, out var value) ? value : 0;
+            return PetCreatureExtraView.TryReadJsonInt(json, propertyName, out var value) ? value : 0;
         }
 
         private static string ReadJsonString(JsonObject json, string propertyName)

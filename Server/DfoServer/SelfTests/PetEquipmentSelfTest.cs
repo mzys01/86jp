@@ -12,11 +12,21 @@ namespace DfoServer.SelfTests
         private const int AccountId = 163002;
         private const int CharacterId = 163002;
         private const short PetInventorySourceSlot = 48;
+        private const short PetInventorySwitchSlot = 49;
         private const short EquippedPetSlot = 24;
         private const int MiniBloodPetItemId = 0x17E69F80;
         private const int PetSerial = 37;
+        private const int SwitchPetSerial = 38;
+        private const int ExplicitCreatureExtra = 1234;
         private const int PetEnchantCardItemId = 920024;
         private const byte PetEnchantUpgradeCount = 3;
+        private const int PetPermanentBindTailIndex = 0x4B - 0x0A;
+        private const int PetTradeRestrictionTailIndex = 0x4C - 0x0A;
+        private const int PetRemainUseCountTailIndex = 0x52 - 0x0A;
+        private const int PetRemainUseCountCompatTailIndex = PetRemainUseCountTailIndex - 1;
+        private const int PetWirePermanentBindOffset = 0x4B;
+        private const int PetWireTradeRestrictionOffset = 0x4C;
+        private const byte ExplicitPetPermanentBindValue = 7;
 
         public static int Run()
         {
@@ -97,8 +107,24 @@ namespace DfoServer.SelfTests
                 EquippedPetSlot,
                 MiniBloodPetItemId,
                 new MakeEquipListCodec.DisplayFields { InstanceValue = PetSerial });
-            Check("pet body equipment raw carries creature extra from serial",
-                raw.Length >= 28 && BitConverter.ToInt32(raw, 24) == PetSerial,
+            Check("pet body equipment raw keeps serial separate from creature extra",
+                raw.Length >= 28
+                && BitConverter.ToInt32(raw, 5) == PetSerial
+                && BitConverter.ToInt32(raw, 24) == 0,
+                ref failures);
+
+            var rawWithExtra = MakeEquipListCodec.BuildEntryFromDisplayFields(
+                EquippedPetSlot,
+                MiniBloodPetItemId,
+                new MakeEquipListCodec.DisplayFields
+                {
+                    InstanceValue = PetSerial,
+                    CreatureExtra = ExplicitCreatureExtra,
+                });
+            var fieldsWithExtra = MakeEquipListCodec.ParseDisplayFields(rawWithExtra);
+            Check("pet body equipment raw preserves explicit creature extra",
+                fieldsWithExtra.InstanceValue == PetSerial
+                && fieldsWithExtra.CreatureExtra == ExplicitCreatureExtra,
                 ref failures);
 
             var tempDir = Path.Combine(Path.GetTempPath(), "DfoServerSelfTests");
@@ -174,11 +200,118 @@ namespace DfoServer.SelfTests
                     ref failures);
             }
 
+            var petSealExtraView = PetCreatureExtraView.Parse(petEnchantExtraJson);
+            petSealExtraView.InitializeSealRemainUseCount(0);
+            var petSealExtraJson = petSealExtraView.ToJsonString();
+            var petSealTail = InventoryItemView.ForPet(new SqliteInventoryStore.ItemRecord
+            {
+                ExtraJson = petSealExtraJson,
+            }).PetTailData0A;
+            Check("sealed pet extra writes character bind and pet seal restriction",
+                petSealTail.Length > PetTradeRestrictionTailIndex
+                && petSealTail[PetPermanentBindTailIndex] == 1
+                && petSealTail[PetTradeRestrictionTailIndex] == 1,
+                ref failures);
+            Check("sealed pet extra writes remain use count without synthesizing 0x51",
+                petSealTail.Length > PetRemainUseCountTailIndex
+                && petSealTail[PetRemainUseCountCompatTailIndex] == 0
+                && petSealTail[PetRemainUseCountTailIndex] == 0,
+                ref failures);
+
+            var explicitTradeTail = petEnchantTail;
+            explicitTradeTail[PetPermanentBindTailIndex] = ExplicitPetPermanentBindValue;
+            var explicitTradeExtraView = PetCreatureExtraView.Parse("{\"tailData0A\":\"" + ToHex(explicitTradeTail) + "\"}");
+            explicitTradeExtraView.InitializeSealRemainUseCount(0);
+            var explicitTradeTailAfterNormalize = InventoryItemView.ForPet(new SqliteInventoryStore.ItemRecord
+            {
+                ExtraJson = explicitTradeExtraView.ToJsonString(),
+            }).PetTailData0A;
+            Check("sealed pet extra preserves explicit character bind value",
+                explicitTradeTailAfterNormalize.Length > PetTradeRestrictionTailIndex
+                && explicitTradeTailAfterNormalize[PetPermanentBindTailIndex] == ExplicitPetPermanentBindValue
+                && explicitTradeTailAfterNormalize[PetTradeRestrictionTailIndex] == 1,
+                ref failures);
+            SaveCreatureExtraJson(dbPath, petSealExtraJson);
+
+            Check("sealed pet body can move from equipped slot 24 back to pet inventory",
+                store.TryMoveItem(CharacterId, AccountId, new InventoryMoveRequest
+                {
+                    SourceListType = InventoryListType.Equipment,
+                    SourceSlotIndex = EquippedPetSlot,
+                    SourceInstanceValue = 0,
+                    MoveCount = 1,
+                    DestinationListType = InventoryListType.Pet,
+                    DestinationSlotIndex = PetInventorySourceSlot,
+                    DestinationInstanceValue = 0,
+                }, out var unequipResult)
+                && unequipResult != null
+                && unequipResult.Mutated
+                && unequipResult.PetItemFullRefresh
+                && !unequipResult.AckError,
+                ref failures);
+
+            var returnedPet = store.LoadPetItemForRefresh(CharacterId, PetInventorySourceSlot);
+            Check("unequipped sealed pet slot refresh keeps character bind",
+                HasPetBindAndSealRestriction(returnedPet),
+                ref failures);
+
+            var snapshotAfterUnequip = store.LoadCharacterItemListSnapshot(CharacterId, AccountId);
+            var fullRefreshPet = FindPetItem(snapshotAfterUnequip, PetInventorySourceSlot);
+            Check("unequipped sealed pet full refresh keeps character bind",
+                HasPetBindAndSealRestriction(fullRefreshPet),
+                ref failures);
+
+            var petFullRefreshBody = ItemListPacketBuilder.BuildBody(snapshotAfterUnequip, InventoryListType.Pet);
+            Check("unequipped sealed pet ITEM_LIST 84B keeps character bind",
+                PetListBodyHasPetBindAndSealRestriction(petFullRefreshBody, PetInventorySourceSlot),
+                ref failures);
+
+            Check("sealed pet body can move from pet inventory into equipped slot again",
+                store.TryMoveItem(CharacterId, AccountId, new InventoryMoveRequest
+                {
+                    SourceListType = InventoryListType.Pet,
+                    SourceSlotIndex = PetInventorySourceSlot,
+                    SourceInstanceValue = MiniBloodPetItemId,
+                    MoveCount = 1,
+                    DestinationListType = InventoryListType.Equipment,
+                    DestinationSlotIndex = EquippedPetSlot,
+                    DestinationInstanceValue = 0,
+                }, out var reEquipResult)
+                && reEquipResult != null
+                && reEquipResult.Mutated
+                && !reEquipResult.AckError,
+                ref failures);
+            SeedPetInventoryPet(dbPath, PetInventorySwitchSlot, MiniBloodPetItemId, SwitchPetSerial);
+            Check("switching equipped sealed pet back to pet inventory requests full pet refresh",
+                store.TryMoveItem(CharacterId, AccountId, new InventoryMoveRequest
+                {
+                    SourceListType = InventoryListType.Pet,
+                    SourceSlotIndex = PetInventorySwitchSlot,
+                    SourceInstanceValue = MiniBloodPetItemId,
+                    MoveCount = 1,
+                    DestinationListType = InventoryListType.Equipment,
+                    DestinationSlotIndex = EquippedPetSlot,
+                    DestinationInstanceValue = 0,
+                }, out var switchResult)
+                && switchResult != null
+                && switchResult.Mutated
+                && switchResult.PetItemFullRefresh
+                && !switchResult.AckError,
+                ref failures);
+
+            var switchedOutPet = store.LoadPetItemForRefresh(CharacterId, PetInventorySwitchSlot);
+            Check("switched-out sealed pet slot refresh keeps character bind",
+                HasPetBindAndSealRestriction(switchedOutPet),
+                ref failures);
+
             Console.WriteLine(failures == 0 ? "PASS" : $"FAIL: {failures}");
             return failures == 0 ? 0 : 1;
         }
 
         private static void SeedPetInventoryPet(string databasePath)
+            => SeedPetInventoryPet(databasePath, PetInventorySourceSlot, MiniBloodPetItemId, PetSerial);
+
+        private static void SeedPetInventoryPet(string databasePath, short slotIndex, int petItemId, int petSerial)
         {
             using (var connection = new SqliteConnection(SqliteDatabaseBootstrap.BuildConnectionString(databasePath)))
             {
@@ -205,9 +338,9 @@ VALUES (
     @petSerial, '{}');";
                     command.Parameters.AddWithValue("@accountId", AccountId);
                     command.Parameters.AddWithValue("@characterId", CharacterId);
-                    command.Parameters.AddWithValue("@slotIndex", PetInventorySourceSlot);
-                    command.Parameters.AddWithValue("@petItemId", MiniBloodPetItemId);
-                    command.Parameters.AddWithValue("@petSerial", PetSerial);
+                    command.Parameters.AddWithValue("@slotIndex", slotIndex);
+                    command.Parameters.AddWithValue("@petItemId", petItemId);
+                    command.Parameters.AddWithValue("@petSerial", petSerial);
                     command.ExecuteNonQuery();
                 }
             }
@@ -231,6 +364,55 @@ WHERE character_id = @characterId
                     command.ExecuteNonQuery();
                 }
             }
+        }
+
+        private static PetInventoryItem FindPetItem(CharacterItemListSnapshot snapshot, short slotIndex)
+        {
+            if (snapshot == null)
+                return null;
+
+            foreach (var item in snapshot.PetItems)
+            {
+                if (item.SlotIndex == slotIndex)
+                    return item;
+            }
+
+            return null;
+        }
+
+        private static bool HasPetBindAndSealRestriction(PetInventoryItem item)
+        {
+            if (item == null)
+                return false;
+
+            var tail = item.TailData0A;
+            return tail.Length > PetTradeRestrictionTailIndex
+                && tail[PetPermanentBindTailIndex] == 1
+                && tail[PetTradeRestrictionTailIndex] == 1;
+        }
+
+        private static bool PetListBodyHasPetBindAndSealRestriction(byte[] body, short slotIndex)
+        {
+            if (body == null || body.Length < 3)
+                return false;
+
+            var count = BitConverter.ToUInt16(body, 1);
+            var offset = 3;
+            for (var index = 0; index < count; index++)
+            {
+                if (body.Length < offset + 84)
+                    return false;
+
+                if (BitConverter.ToInt16(body, offset) == slotIndex)
+                {
+                    return body[offset + PetWirePermanentBindOffset] == 1
+                        && body[offset + PetWireTradeRestrictionOffset] == 1;
+                }
+
+                offset += 84;
+            }
+
+            return false;
         }
 
         private static (bool Exists, int ItemId, byte[] Raw) LoadEquippedEntry(SqliteConnection connection)
@@ -276,6 +458,11 @@ WHERE character_id = @characterId
                     return false;
             }
             return true;
+        }
+
+        private static string ToHex(byte[] data)
+        {
+            return BitConverter.ToString(data ?? Array.Empty<byte>()).Replace("-", string.Empty);
         }
 
         private static void Check(string name, bool ok, ref int failures)

@@ -3,36 +3,11 @@ using Microsoft.Data.Sqlite;
 using System;
 using System.Collections.Generic;
 using System.Globalization;
-using System.Text.Json.Nodes;
 
 namespace DfoServer.Game.Inventory
 {
     public sealed partial class SqliteInventoryStore
     {
-        private const int CommonPrefixData0EBaseOffset = 0x0E;
-        private const int PetTailData0ABaseOffset = 0x0A;
-        private const int PetEnchantCardIdOffset = 0x0E;
-        private const int PetEnchantUpgradeCountOffset = 0x12;
-        private const int PetTradeRestrictionOffset = 0x4C;
-        private const int PetSealRemainUseCountOffset = 0x52;
-        private const int CommonTailData2FBaseOffset = 0x2F;
-        private const int CommonPrefixEnchantCardIdIndex = PetEnchantCardIdOffset - CommonPrefixData0EBaseOffset;
-        private const int CommonPrefixEnchantUpgradeCountIndex = PetEnchantUpgradeCountOffset - CommonPrefixData0EBaseOffset;
-        private const int CommonTailTradeRestrictionIndex = PetTradeRestrictionOffset - CommonTailData2FBaseOffset;
-        private const int CommonTailRemainUseCountIndex = PetSealRemainUseCountOffset - CommonTailData2FBaseOffset;
-        private const int CommonTailTradeRestrictionCompatIndex = CommonTailTradeRestrictionIndex - 1;
-        private const int CommonTailRemainUseCountCompatIndex = CommonTailRemainUseCountIndex - 1;
-        private const int PetTailEnchantCardIdIndex = PetEnchantCardIdOffset - PetTailData0ABaseOffset;
-        private const int PetTailEnchantUpgradeCountIndex = PetEnchantUpgradeCountOffset - PetTailData0ABaseOffset;
-        private const int PetTailTradeRestrictionIndex = PetTradeRestrictionOffset - PetTailData0ABaseOffset;
-        private const int PetTailRemainUseCountIndex = PetSealRemainUseCountOffset - PetTailData0ABaseOffset;
-        private const byte PetTradeRestrictionNone = 0;
-        private const byte PetTradeRestrictionExhausted = 1;
-        private const string PetSealRemainUseCountInitializedProperty = "petSealRemainUseCountInitialized";
-        private const string PetSealRemainUseCountProperty = "petSealRemainUseCount";
-        private const string PetEnchantCardItemIdProperty = "petEnchantCardItemId";
-        private const string PetEnchantUpgradeCountProperty = "petEnchantUpgradeCount";
-
         private static Dictionary<int, string> LoadPetCreatureExtraJsonMap(
             SqliteConnection connection,
             SqliteTransaction transaction,
@@ -173,14 +148,9 @@ WHERE character_id = @cid
             int enchantCardItemId,
             byte enchantUpgradeCount)
         {
-            var json = ParseJsonObject(NormalizePetCreatureExtraJson(extraJson));
-            var tail = ReadPetTailData0A(json.ToJsonString());
-            BitConverter.GetBytes(enchantCardItemId).CopyTo(tail, PetTailEnchantCardIdIndex);
-            tail[PetTailEnchantUpgradeCountIndex] = enchantUpgradeCount;
-            WritePetTailData0A(json, tail);
-            json[PetEnchantCardItemIdProperty] = enchantCardItemId;
-            json[PetEnchantUpgradeCountProperty] = enchantUpgradeCount;
-            return json.ToJsonString();
+            var view = PetCreatureExtraView.Parse(extraJson);
+            view.SetEnchant(enchantCardItemId, enchantUpgradeCount);
+            return view.ToJsonString();
         }
 
         internal static void PersistPetCreatureExtraJson(
@@ -255,135 +225,34 @@ LIMIT 1;";
 
         private static string BuildInitializedPetCreatureSealExtraJson(byte remainUseCount)
         {
-            var json = ParseJsonObject(CreateDefaultPetExtraJson());
-            var tail = ReadPetTailData0A(json.ToJsonString());
-            tail[PetTailTradeRestrictionIndex] = remainUseCount <= 0
-                ? PetTradeRestrictionExhausted
-                : PetTradeRestrictionNone;
-            tail[PetTailRemainUseCountIndex] = remainUseCount;
-            WritePetTailData0A(json, tail);
-            json[PetSealRemainUseCountInitializedProperty] = true;
-            json[PetSealRemainUseCountProperty] = remainUseCount;
-            return json.ToJsonString();
+            var view = PetCreatureExtraView.Parse(CreateDefaultPetExtraJson());
+            view.InitializeSealRemainUseCount(remainUseCount);
+            return view.ToJsonString();
         }
 
         private static bool TryResolvePetCreatureSealRemainUseCount(string extraJson, out byte remainUseCount)
         {
-            remainUseCount = 0;
-            var tail = ReadPetTailData0A(extraJson);
-            if (tail.Length <= PetTailRemainUseCountIndex)
-                return false;
-
-            if (TryReadJsonObject(extraJson, out var json))
-            {
-                if (TryReadJsonInt(json, PetSealRemainUseCountProperty, out var direct))
-                {
-                    remainUseCount = ClampByte(direct);
-                    return true;
-                }
-
-                if (HasPetSealRemainUseCountInitialized(json))
-                {
-                    remainUseCount = tail[PetTailRemainUseCountIndex];
-                    return true;
-                }
-            }
-
-            if (tail[PetTailRemainUseCountIndex] > 0)
-            {
-                remainUseCount = tail[PetTailRemainUseCountIndex];
-                return true;
-            }
-
-            return false;
+            return PetCreatureExtraView.Parse(extraJson).TryGetSealRemainUseCount(out remainUseCount);
         }
 
         private static void ApplyPetCreatureExtraToCommonPrefix(byte[] commonPrefixData0E, string petExtraJson)
         {
-            if (commonPrefixData0E == null || commonPrefixData0E.Length <= CommonPrefixEnchantUpgradeCountIndex)
-                return;
-
-            if (!TryResolvePetCreatureEnchant(petExtraJson, out var enchantCardItemId, out var enchantUpgradeCount))
-                return;
-
-            BitConverter.GetBytes(unchecked((int)enchantCardItemId)).CopyTo(commonPrefixData0E, CommonPrefixEnchantCardIdIndex);
-            commonPrefixData0E[CommonPrefixEnchantUpgradeCountIndex] = enchantUpgradeCount;
+            PetCreatureExtraView.Parse(petExtraJson).ApplyEnchantToCommonPrefix(commonPrefixData0E);
         }
 
         private static void ApplyPetCreatureExtraToCommonTail(byte[] commonTailData2F, string petExtraJson)
         {
-            if (commonTailData2F == null || commonTailData2F.Length <= CommonTailRemainUseCountIndex)
-                return;
-
-            var tail = ReadPetTailData0A(petExtraJson);
-            CopyPetExtraByte(tail, PetTailTradeRestrictionIndex, commonTailData2F, CommonTailTradeRestrictionIndex);
-            CopyPetExtraByte(tail, PetTailRemainUseCountIndex, commonTailData2F, CommonTailRemainUseCountIndex);
-
-            // Some client detail refresh paths read the pet body as an 84B common item
-            // and use the adjacent tail indexes for these two pet-only fields.
-            CopyPetExtraByte(tail, PetTailTradeRestrictionIndex, commonTailData2F, CommonTailTradeRestrictionCompatIndex);
-            CopyPetExtraByte(tail, PetTailRemainUseCountIndex, commonTailData2F, CommonTailRemainUseCountCompatIndex);
-        }
-
-        private static void CopyPetExtraByte(byte[] source, int sourceIndex, byte[] target, int targetIndex)
-        {
-            if (source == null
-                || target == null
-                || sourceIndex < 0
-                || targetIndex < 0
-                || source.Length <= sourceIndex
-                || target.Length <= targetIndex)
-                return;
-
-            target[targetIndex] = source[sourceIndex];
-        }
-
-        private static byte[] ReadPetTailData0A(string extraJson)
-        {
-            return InventoryItemView.ForPet(new ItemRecord
-            {
-                ExtraJson = string.IsNullOrWhiteSpace(extraJson) ? "{}" : extraJson,
-            }).PetTailData0A;
-        }
-
-        private static void WritePetTailData0A(JsonObject json, byte[] tailData0A)
-        {
-            if (json == null)
-                return;
-
-            json["tailData0A"] = InventoryItemViewBytes.ToHex(InventoryItemViewBytes.CopyFixed(tailData0A, 74));
+            PetCreatureExtraView.Parse(petExtraJson).ApplySealFieldsToCommonTail(commonTailData2F);
         }
 
         private static string NormalizePetCreatureExtraJson(string extraJson)
         {
-            var json = ParseJsonObject(extraJson);
-            var tail = ReadPetTailData0A(extraJson);
-            if (tail.Length != 74)
-                tail = new byte[74];
-
-            WritePetTailData0A(json, tail);
-            return json.ToJsonString();
+            return PetCreatureExtraView.Parse(extraJson).ToJsonString();
         }
 
         private static bool HasPetCreatureProtocolTail(string extraJson)
         {
-            if (HasPetCreatureExtraProtocolMarker(extraJson))
-                return true;
-
-            var tail = ReadPetTailData0A(extraJson);
-            for (var index = 0; index < tail.Length; index++)
-                if (tail[index] != 0)
-                    return true;
-
-            return false;
-        }
-
-        private static bool HasPetCreatureExtraProtocolMarker(string extraJson)
-        {
-            return TryReadJsonObject(extraJson, out var json)
-                && (json.ContainsKey(PetSealRemainUseCountInitializedProperty)
-                    || json.ContainsKey(PetSealRemainUseCountProperty)
-                    || json.ContainsKey(PetEnchantCardItemIdProperty));
+            return PetCreatureExtraView.Parse(extraJson).HasProtocolTail();
         }
 
         private static void SyncEquippedPetCreatureExtraRaw(
@@ -463,50 +332,7 @@ WHERE character_id = @cid
             out uint enchantCardItemId,
             out byte enchantUpgradeCount)
         {
-            enchantCardItemId = 0;
-            enchantUpgradeCount = 0;
-
-            var tail = ReadPetTailData0A(extraJson);
-            if (TryReadJsonObject(extraJson, out var json))
-            {
-                var hasCard = TryReadJsonInt(json, PetEnchantCardItemIdProperty, out var directCardItemId);
-                var hasUpgrade = TryReadJsonInt(json, PetEnchantUpgradeCountProperty, out var directUpgradeCount);
-                if (hasCard || hasUpgrade)
-                {
-                    if (hasCard)
-                        enchantCardItemId = unchecked((uint)directCardItemId);
-                    if (hasUpgrade)
-                        enchantUpgradeCount = ClampByte(directUpgradeCount);
-
-                    if ((!hasCard || !hasUpgrade)
-                        && TryReadPetCreatureEnchantFromTail(tail, out var tailCardItemId, out var tailUpgradeCount))
-                    {
-                        if (!hasCard)
-                            enchantCardItemId = tailCardItemId;
-                        if (!hasUpgrade)
-                            enchantUpgradeCount = tailUpgradeCount;
-                    }
-
-                    return true;
-                }
-            }
-
-            return TryReadPetCreatureEnchantFromTail(tail, out enchantCardItemId, out enchantUpgradeCount);
-        }
-
-        private static bool TryReadPetCreatureEnchantFromTail(
-            byte[] tail,
-            out uint enchantCardItemId,
-            out byte enchantUpgradeCount)
-        {
-            enchantCardItemId = 0;
-            enchantUpgradeCount = 0;
-            if (tail == null || tail.Length < PetTailEnchantCardIdIndex + 4 || tail.Length <= PetTailEnchantUpgradeCountIndex)
-                return false;
-
-            enchantCardItemId = BitConverter.ToUInt32(tail, PetTailEnchantCardIdIndex);
-            enchantUpgradeCount = tail[PetTailEnchantUpgradeCountIndex];
-            return enchantCardItemId != 0 || enchantUpgradeCount != 0;
+            return PetCreatureExtraView.Parse(extraJson).TryGetEnchant(out enchantCardItemId, out enchantUpgradeCount);
         }
 
         private static int ResolvePetCreatureSerialFromEquippedRaw(byte[] raw)
@@ -528,85 +354,5 @@ WHERE character_id = @cid
             return raw.Length >= 9 ? BitConverter.ToInt32(raw, 5) : 0;
         }
 
-        private static JsonObject ParseJsonObject(string jsonText)
-        {
-            if (!string.IsNullOrWhiteSpace(jsonText))
-            {
-                try
-                {
-                    if (JsonNode.Parse(jsonText) is JsonObject json)
-                        return json;
-                }
-                catch
-                {
-                }
-            }
-
-            return new JsonObject();
-        }
-
-        private static bool TryReadJsonObject(string jsonText, out JsonObject json)
-        {
-            json = null;
-            if (string.IsNullOrWhiteSpace(jsonText))
-                return false;
-
-            try
-            {
-                json = JsonNode.Parse(jsonText) as JsonObject;
-                return json != null;
-            }
-            catch
-            {
-                return false;
-            }
-        }
-
-        private static bool TryReadJsonInt(JsonObject json, string propertyName, out int value)
-        {
-            value = 0;
-            if (json == null || !json.TryGetPropertyValue(propertyName, out var node) || node == null)
-                return false;
-
-            try
-            {
-                value = node.GetValue<int>();
-                return true;
-            }
-            catch
-            {
-                return int.TryParse(node.ToString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out value);
-            }
-        }
-
-        private static bool HasPetSealRemainUseCountInitialized(JsonObject json)
-        {
-            if (json == null)
-                return false;
-
-            if (json.ContainsKey(PetSealRemainUseCountProperty))
-                return true;
-
-            if (!json.TryGetPropertyValue(PetSealRemainUseCountInitializedProperty, out var node) || node == null)
-                return false;
-
-            try
-            {
-                return node.GetValue<bool>();
-            }
-            catch
-            {
-                var text = node.ToString();
-                return string.Equals(text, "true", StringComparison.OrdinalIgnoreCase)
-                    || string.Equals(text, "1", StringComparison.Ordinal);
-            }
-        }
-
-        private static byte ClampByte(int value)
-        {
-            if (value <= 0)
-                return 0;
-            return value >= byte.MaxValue ? byte.MaxValue : (byte)value;
-        }
     }
 }
