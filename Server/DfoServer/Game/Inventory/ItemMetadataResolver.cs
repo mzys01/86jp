@@ -38,6 +38,8 @@ namespace DfoServer.Game.Inventory
 
         public string EquipmentType { get; set; }
 
+        public string ItemCategory { get; set; }
+
         public string AttachType { get; set; }
 
         public IReadOnlyList<string> ImpossibleContents { get; set; } = Array.Empty<string>();
@@ -144,6 +146,7 @@ namespace DfoServer.Game.Inventory
                     MinimumLevel = equipment.MinimumLevel,
                     Rarity = equipment.Rarity,
                     EquipmentType = NormalizeEquipmentType(equipment.EquipmentType),
+                    ItemCategory = equipment.ItemCategory,
                     AttachType = equipment.AttachType,
                     ImpossibleContents = equipment.ImpossibleContentItems,
                 };
@@ -190,6 +193,7 @@ namespace DfoServer.Game.Inventory
                     Grade = stackable.Grade,
                     MinimumLevel = stackable.MinimumLevel,
                     Rarity = stackable.Rarity,
+                    ItemCategory = stackable.ItemCategory,
                     ImpossibleContents = stackable.ImpossibleContentItems,
                 };
             }
@@ -656,6 +660,17 @@ namespace DfoServer.Game.Inventory
         public static bool IsPetInventoryEquipment(int itemTemplateId)
         {
             return CreatureExtraResolver.IsPetInventoryEquipment(itemTemplateId);
+        }
+
+        internal static bool IsAvatarItem(ItemMetadata metadata)
+        {
+            var path = metadata?.PvfFilePath;
+            if (string.IsNullOrWhiteSpace(path))
+                return false;
+
+            var normalizedPath = "/" + path.Replace('\\', '/').Trim('/');
+            return normalizedPath.IndexOf("/avatar/", StringComparison.OrdinalIgnoreCase) >= 0
+                || normalizedPath.IndexOf("/at_avatar/", StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
         public static bool IsPetConsumableItem(ItemMetadata metadata)

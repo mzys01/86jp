@@ -10,13 +10,17 @@ namespace DfoServer.Game.Inventory
         public int CharacterId { get; }
         public int AccountId { get; }
 
-        internal DbScope(string connectionString, int characterId, int accountId)
+        internal DbScope(
+            string connectionString,
+            int characterId,
+            int accountId,
+            bool deferred = true)
         {
             CharacterId = characterId;
             AccountId = accountId;
             Connection = new SqliteConnection(connectionString);
             Connection.Open();
-            Transaction = Connection.BeginTransaction();
+            Transaction = Connection.BeginTransaction(deferred);
         }
 
         public void Commit() => Transaction.Commit();

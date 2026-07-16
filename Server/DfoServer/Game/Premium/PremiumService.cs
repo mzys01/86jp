@@ -12,6 +12,10 @@ namespace DfoServer.Game.Premium
 {
     public static class PremiumService
     {
+        private const int PremiumServiceEntryExpireBase = 6;
+        private const int PremiumServiceEntryUsedCountBase = 10;
+        private const int PremiumServiceEntryStride = 9;
+
         public static bool IsContractItem(int itemTemplateId)
         {
             return PremiumCatalog.Load().TryGetValue(itemTemplateId, out var pt, out var dd)
@@ -187,7 +191,10 @@ namespace DfoServer.Game.Premium
             return (true, result);
         }
 
-        public static byte[] BuildPremiumServiceData(string connStr, int accountId)
+        public static byte[] BuildPremiumServiceData(
+            string connStr,
+            int accountId,
+            IReadOnlyDictionary<int, int> usedCountBySlot = null)
         {
             var data = new byte[74];
             using (var conn = new SqliteConnection(connStr))
@@ -206,8 +213,17 @@ namespace DfoServer.Game.Premium
                             var slot = DevilContractCatalog.PremiumTypeToSlot(reader.GetInt32(0));
                             if (slot < 0 || slot >= 8) continue;
                             var expire = reader.GetInt64(1);
-                            var off = 6 + slot * 9;
-                            Buffer.BlockCopy(BitConverter.GetBytes((int)Math.Min(expire, int.MaxValue)), 0, data, off, 4);
+                            var expireOffset = PremiumServiceEntryExpireBase + slot * PremiumServiceEntryStride;
+                            Buffer.BlockCopy(BitConverter.GetBytes((int)Math.Min(expire, int.MaxValue)), 0, data, expireOffset, 4);
+
+                            if (usedCountBySlot != null
+                                && usedCountBySlot.TryGetValue(slot, out var usedCount))
+                            {
+                                WriteInt32(
+                                    data,
+                                    PremiumServiceEntryUsedCountBase + slot * PremiumServiceEntryStride,
+                                    Math.Max(0, usedCount));
+                            }
                         }
                     }
                 }
@@ -240,7 +256,6 @@ namespace DfoServer.Game.Premium
                 }
             }
         }
-
 
         public static bool HasActivePremium(string connStr, int accountId, params int[] premiumTypes)
         {
@@ -312,6 +327,14 @@ DO UPDATE SET end_time = @expire, updated_at = CURRENT_TIMESTAMP;";
                 cmd.ExecuteNonQuery();
             }
             return newExpire;
+        }
+
+        private static void WriteInt32(byte[] data, int offset, int value)
+        {
+            if (data == null || offset < 0 || offset + 4 > data.Length)
+                return;
+
+            Buffer.BlockCopy(BitConverter.GetBytes(value), 0, data, offset, 4);
         }
     }
 }

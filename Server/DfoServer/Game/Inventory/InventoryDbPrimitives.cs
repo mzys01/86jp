@@ -855,7 +855,7 @@ WHERE character_id = @characterId AND list_type = @listType;";
             }
 
             var effectiveCount = Math.Max(1, stackCount);
-            var isAvatarReward = InventoryPackageStore.IsAvatarReward(metadata);
+            var isAvatarReward = ItemMetadataResolver.IsAvatarItem(metadata);
             var isPetConsumable = ItemMetadataResolver.IsPetConsumableItem(metadata);
 
             int slotStart;

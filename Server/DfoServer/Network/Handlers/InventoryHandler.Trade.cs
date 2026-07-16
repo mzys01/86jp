@@ -3,6 +3,7 @@ using DfoServer.Game.Inventory;
 using DfoServer.Network.Builders;
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading.Tasks;
 
 namespace DfoServer.Network.Handlers
@@ -83,7 +84,11 @@ namespace DfoServer.Network.Handlers
             var costItems = result.CostItemTemplateId > 0
                 ? new System.Collections.Generic.List<CostItemUpdate> { new CostItemUpdate { ItemTemplateId = result.CostItemTemplateId, NewStackCount = result.CostItemNewStackCount } }
                 : null;
-            var ackBody = BuyItemAckBuilder.Build(result, costItems);
+            var hidePurchasedItemSummary = ShouldHideNpcBuyItemSummary(itemTemplateId, result);
+            if (hidePurchasedItemSummary)
+                await SendPurchasedMainItemRefresh(session, cid, aid, result);
+
+            var ackBody = BuyItemAckBuilder.Build(result, costItems, includePurchasedItemSummary: !hidePurchasedItemSummary);
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0015, ackBody));
 
 
@@ -100,6 +105,32 @@ namespace DfoServer.Network.Handlers
                 await _refresh.SendUpdateItemList(session, InventoryListType.Pet, result.SlotIndex);
                 FileLogger.Log($"[{ProtocolName}] BUY_ITEM: pet ITEM_LIST update sent slot={result.SlotIndex}");
             }
+        }
+
+        internal static bool ShouldHideNpcBuyItemSummary(int itemTemplateId, InventoryMutationResult result)
+        {
+            if (result == null || result.ListType != InventoryListType.Main || itemTemplateId <= 0)
+                return false;
+
+            return StackableItemProvider.IsLegacyContainer(itemTemplateId);
+        }
+
+        private async Task SendPurchasedMainItemRefresh(EnhancedClientSession session, int characterId, int accountId, InventoryMutationResult result)
+        {
+            var snapshot = _inventoryStore.LoadCharacterItemListSnapshot(characterId, accountId);
+            var item = snapshot?.MainItems?.FirstOrDefault(x =>
+                x.SlotIndex == result.SlotIndex && x.ItemTemplateId == result.ItemTemplateId);
+            if (item == null)
+            {
+                FileLogger.Log($"[{ProtocolName}] BUY_ITEM: skipped package refresh slot={result.SlotIndex} item=0x{result.ItemTemplateId:X8}");
+                return;
+            }
+
+            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
+                0x00,
+                0x000E,
+                ItemListUpdateBuilder.BuildCommonUpdates(new[] { item })));
+            FileLogger.Log($"[{ProtocolName}] BUY_ITEM: package ITEM_LIST refresh sent before ACK slot={item.SlotIndex} item=0x{item.ItemTemplateId:X8} count={item.CountOrInstanceValue}");
         }
 
         public async Task Handle_ENUM_CMDPACKET_SELL_ITEM(EnhancedClientSession session, GamePacketHeader header, byte[] body)

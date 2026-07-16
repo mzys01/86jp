@@ -2,6 +2,7 @@ using DfoServer.Game.Accounts;
 using DfoServer.Game.Appearance;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory;
+using DfoServer.Game.Lottery;
 using DfoServer.Game.SelectCharacter;
 using DfoServer.Game.Session;
 using DfoServer.Infrastructure;
@@ -20,6 +21,7 @@ namespace DfoServer.Network
         private readonly LoginHandler _loginHandler;
         private readonly CharacterSelectHandler _characterSelectHandler;
         private readonly InventoryHandler _inventoryHandler;
+        private readonly LotteryItemHandler _lotteryItemHandler;
         private readonly TownHandler _townHandler;
         private readonly DungeonHandler _dungeonHandler;
         private readonly SecretShopHandler _secretShopHandler;
@@ -56,9 +58,13 @@ namespace DfoServer.Network
             var accountRepository = new SqliteAccountRepository(databasePath, schemaFilePath);
             // 租赁全链路共用同一时间源，保持绝对 Unix 到期时间模型。
             var rentalTimeProvider = SystemRentalTimeProvider.Instance;
+            var dailyResetService = new Game.DailyReset.DailyResetService(databasePath, schemaFilePath);
 
             // 全程序共享一个 SqliteInventoryStore(无状态, 只持连接串): 旧版门面与 AssetService 各自 new 一个
-            var inventoryStore = new Game.Inventory.SqliteInventoryStore(databasePath, schemaFilePath, rentalTimeProvider);
+            var inventoryStore = new Game.Inventory.SqliteInventoryStore(
+                databasePath,
+                schemaFilePath,
+                rentalTimeProvider);
             var experienceItemCooldowns = new ExperienceItemCooldownTracker();
             var experienceItemUseService = new ExperienceItemUseService(
                 inventoryStore,
@@ -72,7 +78,8 @@ namespace DfoServer.Network
                 characterRepository,
                 _assetService,
                 inventoryStore,
-                rentalTimeProvider);
+                rentalTimeProvider,
+                dailyResetService);
 
             var userInfoBlobRepository = new Game.CharacterData.SqliteUserInfoBlobRepository(databasePath, schemaFilePath);
             var getUserInfoTemplate = userInfoBlobRepository.LoadGetUserInfoTemplate();
@@ -95,11 +102,31 @@ namespace DfoServer.Network
                 _inventoryRefreshSender,
                 experienceItemNotifications,
                 broadcastGamePacket);
+            var lotteryDoubleRewardPolicy = new LotteryDoubleRewardPolicy(
+                dailyResetService,
+                inventoryStore.ConnectionString);
+            var lotteryRepository = new LotteryItemRepository(
+                inventoryStore,
+                _assetService);
+            var lotteryOpenService = new LotteryItemOpenService(
+                lotteryRepository,
+                new LotteryItemDefinitionProvider(),
+                lotteryDoubleRewardPolicy);
+            var lotteryResponses = new LotteryItemResponseSender(
+                inventoryStore,
+                lotteryDoubleRewardPolicy,
+                _inventoryRefreshSender,
+                inventoryStore.ConnectionString,
+                broadcastGamePacket);
+            _lotteryItemHandler = new LotteryItemHandler(
+                lotteryOpenService,
+                new LotteryOpenPlanner(lotteryDoubleRewardPolicy),
+                new LotteryOpenSessionCoordinator(),
+                lotteryResponses);
             _petCreatureHandler = new PetCreatureHandler(inventoryStore, sqliteSelectCharacterDataSource, _inventoryRefreshSender);
             // 组队与城镇/副本共享同一个 PartyManager 实例: 跟随退出/副本 fan-out 都要看到同一份队伍状态。
             _partyManager = new Game.Party.PartyManager();
             _townHandler = new TownHandler(characterRepository, inventoryStore, sqliteSelectCharacterDataSource, _partyManager, sessionDirectory);
-            var dailyResetService = new Game.DailyReset.DailyResetService(databasePath, schemaFilePath);
             var reviveCoinService = new Game.ReviveCoin.ReviveCoinService(inventoryStore, _assetService, dailyResetService);
             _dungeonHandler = new DungeonHandler(
                 _assetService,
@@ -167,6 +194,7 @@ namespace DfoServer.Network
             if (charId > 0) await _sessionDirectory.UnregisterAsync(charId);
             Handlers.Dungeon.DungeonRunLifecycle.EndRunOnTeardown(session, "disconnect");
             _townHandler.PersistPosition(session, forceImmediate: true, source: "disconnect");
+            _lotteryItemHandler.ClearSession(session.SessionId);
             PetCreatureRuntimeService.UnregisterSession(session);
         }
 
@@ -273,12 +301,13 @@ namespace DfoServer.Network
             d[0x0019] = _inventoryHandler.Handle_ENUM_CMDPACKET_COMPOUND_ITEM;     //25 compound item / recipe
             d[0x001A] = _inventoryHandler.Handle_ENUM_CMDPACKET_DISJOINT_ITEM;     //26 系统分解
             d[0x00CA] = _inventoryHandler.Handle_DISJOINT_AVATAR;                  //202 时装分解
-            d[0x001B] = _inventoryHandler.Handle_USE_LOTTERY_ITEM;                  //27
+            d[0x001B] = _lotteryItemHandler.HandleUseLotteryItem;                 //27
             d[(ushort)CmdPacketType.INCREASE_STATUS] = _inventoryHandler.Handle_ENUM_CMDPACKET_INCREASE_STATUS;
             d[0x002C] = _inventoryHandler.Handle_ENUM_CMDPACKET_USE_STACKABLE;
             d[0x00CC] = _inventoryHandler.Handle_ENUM_CMDPACKET_PURIFY_ITEM;
             d[0x00CD] = _inventoryHandler.Handle_ENUM_CMDPACKET_INVEST_ITEM_AMPLIFY_OPTION;
             d[0x00D0] = _inventoryHandler.Handle_OPEN_MAGIC_BOX_SINGLE;
+            d[0x00D9] = _lotteryItemHandler.HandleOverflowInfo;
             d[0x0050] = _inventoryHandler.Handle_ENUM_CMDPACKET_UPGRADE_ITEM;      //80
             d[0x00A0] = _inventoryHandler.Handle_OPEN_SELECTABLE_PACKAGE;
             d[0x0110] = _inventoryHandler.Handle_ENUM_CMDPACKET_ENCHANT_BY_BEAD;   //272

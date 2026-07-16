@@ -5,6 +5,7 @@ using DfoServer.Game.Currency;
 using DfoServer.Game.ExpertJob;
 using DfoServer.Game.Inventory;
 using DfoServer.Game.ItemUpgrade;
+using DfoServer.Game.Lottery;
 using DfoServer.Game.Settings;
 using DfoServer.Game.TitleBook;
 using System;
@@ -25,6 +26,7 @@ namespace DfoServer.Game.SelectCharacter
         private readonly AccountSettingsRepository _accountSettingsRepository;
         private readonly CharacterTitleBookRepository _titleBookRepository;
         private readonly DailyReset.DailyResetService _dailyResetService;
+        private readonly LotteryDoubleRewardPolicy _lotteryDoubleRewardPolicy;
         private readonly TitleBookMutationService _titleBookMutationService;
         private readonly HonorLevelSyncService _honorLevel;
         private readonly string _connectionString;
@@ -38,13 +40,21 @@ namespace DfoServer.Game.SelectCharacter
             ICharacterRepository characterRepository,
             IAssetService assetService = null,
             IInventoryStore inventoryStore = null,
-            IRentalTimeProvider rentalTimeProvider = null)
+            IRentalTimeProvider rentalTimeProvider = null,
+            DailyReset.DailyResetService dailyResetService = null)
         {
             _databasePath = databasePath;
             _schemaFilePath = schemaFilePath;
             _connectionString = Infrastructure.SqliteDatabaseBootstrap.Initialize(databasePath, schemaFilePath);
             _rentalTimeProvider = rentalTimeProvider ?? SystemRentalTimeProvider.Instance;
-            _inventoryStore = inventoryStore ?? new SqliteInventoryStore(databasePath, schemaFilePath, _rentalTimeProvider);
+            _dailyResetService = dailyResetService ?? new DailyReset.DailyResetService(databasePath, schemaFilePath);
+            _lotteryDoubleRewardPolicy = new LotteryDoubleRewardPolicy(
+                _dailyResetService,
+                _connectionString);
+            _inventoryStore = inventoryStore ?? new SqliteInventoryStore(
+                databasePath,
+                schemaFilePath,
+                _rentalTimeProvider);
             _assetService = assetService;
             _initDataRepository = new SqliteCharacterProgressRepository(databasePath, schemaFilePath);
             _darkKnightComboSkillRepository = new SqliteDarkKnightComboSkillRepository(databasePath, schemaFilePath);
@@ -53,7 +63,6 @@ namespace DfoServer.Game.SelectCharacter
             _characterRepository = characterRepository;
             _accountSettingsRepository = new AccountSettingsRepository(databasePath, schemaFilePath);
             _titleBookRepository = new CharacterTitleBookRepository(_connectionString);
-            _dailyResetService = new DailyReset.DailyResetService(databasePath, schemaFilePath);
             _titleBookMutationService = new TitleBookMutationService(_connectionString);
             _honorLevel = new HonorLevelSyncService(_characterRepository);
         }
@@ -214,7 +223,9 @@ namespace DfoServer.Game.SelectCharacter
 
             initSnapshot.PremiumServiceType = 1;
             initSnapshot.PremiumServiceData = Premium.PremiumService.BuildPremiumServiceData(
-                _connectionString, accountId);
+                _connectionString,
+                accountId,
+                _lotteryDoubleRewardPolicy.BuildPremiumServiceUsage(characterId));
             LoadAccountPremiums(accountId, initSnapshot);
 
             

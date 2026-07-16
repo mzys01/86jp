@@ -1028,12 +1028,6 @@ namespace DfoServer.Game.Inventory
                 return rewards.Count > 0;
             }
 
-            if (stackableType.Equals("[upgradable legacy]", StringComparison.OrdinalIgnoreCase))
-            {
-                rewards = RollBoosterRewards(ParseUpgradableLegacyIntDataRewards(stackable.IntData));
-                return rewards.Count > 0;
-            }
-
             if (stackableType.Equals("[booster selection]", StringComparison.OrdinalIgnoreCase))
             {
                 if (selectedItemTemplateIds != null && selectedItemTemplateIds.Count > 0
@@ -1052,39 +1046,6 @@ namespace DfoServer.Game.Inventory
             }
 
             return false;
-        }
-
-        private static List<PvfLib.BoosterRewardEntry> ParseUpgradableLegacyIntDataRewards(string intData)
-        {
-            var rewards = new List<PvfLib.BoosterRewardEntry>();
-            if (string.IsNullOrWhiteSpace(intData))
-                return rewards;
-
-            var tokens = intData.Split(new[] { ' ', '\t', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
-            for (var i = 0; i + 2 < tokens.Length; i += 3)
-            {
-                if (!int.TryParse(tokens[i], out var itemId)
-                    || !int.TryParse(tokens[i + 1], out var weight)
-                    || !int.TryParse(tokens[i + 2], out var count)
-                    || itemId <= 0
-                    || weight <= 0
-                    || count <= 0)
-                {
-                    continue;
-                }
-
-                rewards.Add(new PvfLib.BoosterRewardEntry
-                {
-                    RewardKind = "int data",
-                    Group = 0,
-                    DrawCount = 1,
-                    ItemId = itemId,
-                    Weight = weight,
-                    Count = count,
-                });
-            }
-
-            return rewards;
         }
 
         private static bool TryResolveMagicHammerBundleRewards(int sourceItemTemplateId, PvfLib.StackableItemFile stackable, out List<PvfLib.BoosterRewardEntry> rewards)
@@ -1190,29 +1151,7 @@ namespace DfoServer.Game.Inventory
         }
 
         internal static string NormalizeStackableType(string stackableType)
-        {
-            if (string.IsNullOrWhiteSpace(stackableType))
-                return string.Empty;
-
-            var text = stackableType.Trim();
-            var first = text.IndexOf('`');
-            if (first >= 0)
-            {
-                var second = text.IndexOf('`', first + 1);
-                if (second > first)
-                    return text.Substring(first + 1, second - first - 1).Trim();
-            }
-
-            var bracketStart = text.IndexOf('[');
-            if (bracketStart >= 0)
-            {
-                var bracketEnd = text.IndexOf(']', bracketStart + 1);
-                if (bracketEnd > bracketStart)
-                    return text.Substring(bracketStart, bracketEnd - bracketStart + 1).Trim();
-            }
-
-            return text.Replace("`", "").Trim();
-        }
+            => StackableItemProvider.NormalizeType(stackableType);
 
         internal static bool IsSupportedPackageType(string stackableType)
         {
@@ -1220,21 +1159,12 @@ namespace DfoServer.Game.Inventory
                 || stackableType.Equals("[cera booster]", StringComparison.OrdinalIgnoreCase)
                 || stackableType.Equals("[booster random]", StringComparison.OrdinalIgnoreCase)
                 || stackableType.Equals("[cera package]", StringComparison.OrdinalIgnoreCase)
-                || stackableType.Equals("[random upgradable legacy]", StringComparison.OrdinalIgnoreCase)
-                || stackableType.Equals("[upgradable legacy]", StringComparison.OrdinalIgnoreCase)
+                || stackableType.Equals(
+                    StackableItemProvider.RandomUpgradableLegacyType,
+                    StringComparison.OrdinalIgnoreCase)
                 || stackableType.Equals("[usable cera package]", StringComparison.OrdinalIgnoreCase)
                 || stackableType.Equals("[booster selection]", StringComparison.OrdinalIgnoreCase);
         }
 
-        internal static bool IsAvatarReward(ItemMetadata metadata)
-        {
-            var path = metadata?.PvfFilePath;
-            if (string.IsNullOrWhiteSpace(path))
-                return false;
-
-            var normalizedPath = "/" + path.Replace('\\', '/').Trim('/');
-            return normalizedPath.IndexOf("/avatar/", StringComparison.OrdinalIgnoreCase) >= 0
-                || normalizedPath.IndexOf("/at_avatar/", StringComparison.OrdinalIgnoreCase) >= 0;
-        }
     }
 }

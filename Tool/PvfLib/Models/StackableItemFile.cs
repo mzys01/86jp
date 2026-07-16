@@ -95,6 +95,7 @@ namespace PvfLib
         public int Price { get; set; } = -1;
         public int Value { get; set; } = -1;
         public int Weight { get; set; } = -1;
+        public int LotteryUseCost { get; set; }
         public int CoolTime { get; set; } = -1;
         public string CooltimeGroup { get; set; }
 
@@ -160,6 +161,7 @@ namespace PvfLib
         public string PackageData { get; set; }
         public List<BoosterRewardEntry> PackageRewards { get; set; } = new List<BoosterRewardEntry>();
         public List<BoosterRewardEntry> RandomBoxRewards { get; set; } = new List<BoosterRewardEntry>();
+        public List<BoosterRewardEntry> UpgradableLegacyRewards { get; set; } = new List<BoosterRewardEntry>();
         public List<RandomBoxRemovalItemEntry> RandomBoxRemovalItems { get; set; } = new List<RandomBoxRemovalItemEntry>();
         public string OutputItem { get; set; }
         public string InputItem { get; set; }
@@ -219,6 +221,7 @@ namespace PvfLib
                     case "price": stk.Price = ParseInt(data); break;
                     case "value": stk.Value = ParseInt(data); break;
                     case "weight": stk.Weight = ParseInt(data); break;
+                    case "lottery use cost": stk.LotteryUseCost = Math.Max(0, ParseInt(data)); break;
                     case "cool time": stk.CoolTime = ParseInt(data); break;
                     case "cooltime group": stk.CooltimeGroup = data; break;
 
@@ -284,6 +287,7 @@ namespace PvfLib
             stk.BoosterRewards = ParseBoosterInfo(root.GetChild("booster info"), content);
             stk.BoosterSelectionRewards = ParseBoosterSelection(root.GetChildren("booster select category"), content);
             stk.PackageRewards = ParsePackageRewards(stk.PackageData);
+            stk.UpgradableLegacyRewards = ParseUpgradableLegacyRewards(stk.IntData);
             var randomBox = root.GetChild("RANDOMBOX");
             stk.RandomBoxRewards = ParseRandomBoxRewards(randomBox, content);
             stk.RandomBoxRemovalItems = ParseRandomBoxRemovalItems(randomBox != null ? randomBox.GetChild("sealing removal item") : null, content);
@@ -366,6 +370,29 @@ namespace PvfLib
                     Group = 0,
                     ItemId = ints[i],
                     Count = Math.Max(1, ints[i + 1]),
+                });
+            }
+
+            return rewards;
+        }
+
+        private static List<BoosterRewardEntry> ParseUpgradableLegacyRewards(string intData)
+        {
+            var rewards = new List<BoosterRewardEntry>();
+            var ints = ParseInts(intData);
+            // [upgradable legacy] pots store rewards as itemId/weight/count triples in [int data].
+            for (var i = 0; i + 2 < ints.Count; i += 3)
+            {
+                if (ints[i] <= 0)
+                    continue;
+
+                rewards.Add(new BoosterRewardEntry
+                {
+                    RewardKind = "upgradable legacy",
+                    Group = 0,
+                    ItemId = ints[i],
+                    Weight = Math.Max(0, ints[i + 1]),
+                    Count = Math.Max(1, ints[i + 2]),
                 });
             }
 
