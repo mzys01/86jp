@@ -46,6 +46,12 @@ namespace PvfLib
         public List<EnchantRandomUpgradeEntry> EnchantEntries { get; set; } = new List<EnchantRandomUpgradeEntry>();
     }
 
+    public sealed class AmplificationRandomValueEntry
+    {
+        public int UpgradeLevel { get; set; }
+        public int Weight { get; set; }
+    }
+
     public sealed class StackableStatusIncreaseEntry
     {
         public string EffectType { get; set; }
@@ -126,6 +132,7 @@ namespace PvfLib
         public EquipmentUpgradeTicketInfo EquipmentReinforcementTicket { get; set; }
         public EquipmentUpgradeTicketInfo EquipmentAmplifyReinforcementTicket { get; set; }
         public EnchantRandomUpgradeInfo EnchantRandomUpgrade { get; set; }
+        public List<AmplificationRandomValueEntry> AmplificationRandomValues { get; set; } = new List<AmplificationRandomValueEntry>();
         public List<int> CheckUsableItemLevels { get; set; } = new List<int>();
         public int CheckUsableItemLevelMin => CheckUsableItemLevels.Count > 0 ? CheckUsableItemLevels[0] : -1;
         public int CheckUsableItemLevelMax => CheckUsableItemLevels.Count > 1 ? CheckUsableItemLevels[1] : -1;
@@ -240,6 +247,7 @@ namespace PvfLib
                     case "equipment reinforcement ticket": stk.EquipmentReinforcementTicket = ParseUpgradeTicket(node, content); break;
                     case "equipment amplify reinforcement ticket": stk.EquipmentAmplifyReinforcementTicket = ParseUpgradeTicket(node, content); break;
                     case "enchant random": stk.EnchantRandomUpgrade = ParseEnchantRandomUpgrade(node, content); break;
+                    case "amplification random value": stk.AmplificationRandomValues = ParseAmplificationRandomValues(node, content); break;
                     case "check usable itemlevel": stk.CheckUsableItemLevels = ParseIntList(node, content); break;
                     case "booster info": stk.BoosterInfo = data; break;
                     case "booster category num": stk.BoosterCategoryNum = ParseInt(data); break;
@@ -746,6 +754,25 @@ namespace PvfLib
                 {
                     TargetLevel = values[i],
                     SuccessWeight = values[i + 1],
+                });
+            }
+
+            return result;
+        }
+
+        private static List<AmplificationRandomValueEntry> ParseAmplificationRandomValues(ScriptNode node, string content)
+        {
+            var result = new List<AmplificationRandomValueEntry>();
+            var values = ParseIntList(node, content);
+            for (var i = 0; i + 1 < values.Count; i += 2)
+            {
+                if (values[i] < 0 || values[i + 1] <= 0)
+                    continue;
+
+                result.Add(new AmplificationRandomValueEntry
+                {
+                    UpgradeLevel = values[i],
+                    Weight = values[i + 1],
                 });
             }
 

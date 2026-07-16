@@ -391,6 +391,100 @@ namespace DfoServer.Game.Inventory
         public bool MaterialConsumed { get; set; }
     }
 
+    public enum PurifyItemAction
+    {
+        Unknown = 0,
+        Purify = 1,
+        Clear = 2,
+    }
+
+    public sealed class PurifyItemRequest
+    {
+        public short TargetSlotIndex { get; set; }
+
+        public int TargetItemTemplateId { get; set; }
+
+        public short MaterialSlotIndex { get; set; }
+
+        public int MaterialItemTemplateId { get; set; }
+    }
+
+    public sealed class PurifyItemResult
+    {
+        public const byte ErrorInvalidRequest = 0x01;
+        public const byte ErrorInvalidTarget = 0x02;
+        public const byte ErrorInvalidMaterial = 0x03;
+        public const byte ErrorUnsupported = 0x04;
+        public const byte ErrorLocked = 0x05;
+
+        public PurifyItemRequest Request { get; set; }
+
+        public byte ErrorCode { get; set; }
+
+        public PurifyItemAction Action { get; set; }
+
+        public short TargetSlotIndex { get; set; }
+
+        public short MaterialSlotIndex { get; set; }
+
+        public int MaterialRemainingCount { get; set; }
+
+        public byte AmplifyType { get; set; }
+
+        public ushort AmplifyValue { get; set; }
+    }
+
+    public enum InvestItemAmplifyOptionAction
+    {
+        Invest = 0,
+        Twist = 1,
+        PureGold = 2,
+    }
+
+    public sealed class InvestItemAmplifyOptionRequest
+    {
+        public InvestItemAmplifyOptionAction Action { get; set; }
+
+        public short TargetSlotIndex { get; set; }
+
+        public int TargetItemTemplateId { get; set; }
+
+        public short MaterialSlotIndex { get; set; }
+
+        public int MaterialItemTemplateId { get; set; }
+
+        public byte SelectedOption { get; set; }
+    }
+
+    public sealed class InvestItemAmplifyOptionResult
+    {
+        public const byte ErrorInvalidRequest = 17;
+        public const byte ErrorInvalidTarget = 17;
+        public const byte ErrorInvalidMaterial = 17;
+        public const byte ErrorUnsupported = 8;
+        public const byte ErrorLocked = 17;
+        public const byte ErrorSameOption = 23;
+        public const byte ErrorAlreadyHasAmplifyOption = 20;
+        public const byte ErrorNoAmplifyOption = 21;
+        public const byte ErrorAlreadyUpgraded = 18;
+
+        public InvestItemAmplifyOptionRequest Request { get; set; }
+
+        public byte ErrorCode { get; set; }
+
+        public short TargetSlotIndex { get; set; }
+
+        public short MaterialSlotIndex { get; set; }
+
+        public int MaterialRemainingCount { get; set; }
+
+        public byte AmplifyType { get; set; }
+
+        public ushort AmplifyValue { get; set; }
+
+        public byte AmplifyLevel { get; set; }
+    }
+
     public sealed class AvatarEmblemMutationResult
     {
         public InventoryListType TargetListType { get; set; } = InventoryListType.Avatar;

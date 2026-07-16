@@ -1,14 +1,15 @@
 using DfoServer.Game.Inventory;
+using PvfLib;
 
 namespace DfoServer.Game.ItemUpgrade
 {
     public enum AmplifyAttributeType
     {
         None = 0,
-        Strength = 1,
-        Intelligence = 2,
-        Vitality = 3,
-        Spirit = 4,
+        Vitality = 1,
+        Spirit = 2,
+        Strength = 3,
+        Intelligence = 4,
     }
 
     public sealed class ItemAmplifierState
@@ -27,7 +28,7 @@ namespace DfoServer.Game.ItemUpgrade
             if (attributeType == AmplifyAttributeType.None)
                 return 0;
 
-            return (ushort)ItemUpgradeTableProvider.CalculateInitialAmplifyValue(rarity, 0);
+            return (ushort)ItemUpgradeTableProvider.CalculateInitialAmplifyValue(rarity, ToOptionType(attributeType));
         }
 
         public static int GetUpgradeAttributeBonus(int currentUpgradeLevel)
@@ -60,9 +61,26 @@ namespace DfoServer.Game.ItemUpgrade
 
         private static AmplifyAttributeType ToAttributeType(byte raw)
         {
-            return raw >= (byte)AmplifyAttributeType.Strength && raw <= (byte)AmplifyAttributeType.Spirit
+            return raw >= (byte)AmplifyAttributeType.Vitality && raw <= (byte)AmplifyAttributeType.Intelligence
                 ? (AmplifyAttributeType)raw
                 : AmplifyAttributeType.None;
+        }
+
+        private static AmplifyOptionType ToOptionType(AmplifyAttributeType attributeType)
+        {
+            switch (attributeType)
+            {
+                case AmplifyAttributeType.Vitality:
+                    return AmplifyOptionType.PhysicalDefense;
+                case AmplifyAttributeType.Spirit:
+                    return AmplifyOptionType.MagicalDefense;
+                case AmplifyAttributeType.Strength:
+                    return AmplifyOptionType.PhysicalAttack;
+                case AmplifyAttributeType.Intelligence:
+                    return AmplifyOptionType.MagicalAttack;
+                default:
+                    return AmplifyOptionType.None;
+            }
         }
     }
 }

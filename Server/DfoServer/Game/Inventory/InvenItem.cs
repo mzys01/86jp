@@ -30,7 +30,7 @@ namespace DfoServer.Game.Inventory
         public uint ClearAvatar;          
         public uint EnchantIndex;         
         public byte EnchantUpgradeCount;
-        public byte AmplifyType;           // 低4位=增幅方向, bit7=异界气息污染(0x80); 污染与增幅互斥
+        public byte AmplifyType;           // 低4位=增幅方向(PVF顺序:1体力2精神3力量4智力), bit7=异界气息污染(0x80); 污染与增幅互斥
         public ushort AmplifyValue;       
 
         
