@@ -1,4 +1,4 @@
-﻿using DfoServer.Infrastructure;
+using DfoServer.Infrastructure;
 using System;
 using System.Collections.Generic;
 using System.Data;
@@ -54,7 +54,7 @@ namespace DfoServer.Game.Characters
             using (var conn = Open())
             using (var cmd = conn.CreateCommand())
             {
-                cmd.CommandText = SelectColumns + " WHERE account_id = @aid AND delete_flag = 0 ORDER BY character_id;";
+                cmd.CommandText = SelectColumns + " WHERE account_id = @aid AND delete_flag = 0 ORDER BY slot_index, character_id;";
                 cmd.Parameters.AddWithValue("@aid", accountId);
                 using (var reader = cmd.ExecuteReader())
                 {
@@ -73,13 +73,22 @@ namespace DfoServer.Game.Characters
             using (var conn = Open())
             using (var cmd = conn.CreateCommand())
             {
+                // 自动分配 slot_index：取该 account 下未删除角色中最大 slot_index + 1
+                using (var maxCmd = conn.CreateCommand())
+                {
+                    maxCmd.CommandText = "SELECT COALESCE(MAX(slot_index), -1) FROM characters WHERE account_id = @accid AND delete_flag = 0;";
+                    maxCmd.Parameters.AddWithValue("@accid", record.AccountId);
+                    var maxSlot = Convert.ToInt32(maxCmd.ExecuteScalar());
+                    record.SlotIndex = (byte)(maxSlot + 1);
+                }
+
                 cmd.CommandText = @"
 INSERT INTO characters
     (character_id, account_id, name, job, grow_type, level,
-     town_id, area_id, pos_x, pos_y, direction, area_state, appearance_blob, delete_flag)
+     town_id, area_id, pos_x, pos_y, direction, area_state, appearance_blob, delete_flag, slot_index)
 VALUES
     (@cid, @aid, @name, @job, @grow, @lvl,
-     @town, @area, @px, @py, @dir, @astate, @blob, 0);
+     @town, @area, @px, @py, @dir, @astate, @blob, 0, @slot);
 SELECT character_id FROM characters WHERE rowid = last_insert_rowid();";
 
                 if (record.CharacterId > 0)
@@ -99,6 +108,7 @@ SELECT character_id FROM characters WHERE rowid = last_insert_rowid();";
                 cmd.Parameters.AddWithValue("@dir", record.Direction);
                 cmd.Parameters.AddWithValue("@astate", record.AreaState);
                 cmd.Parameters.AddWithValue("@blob", (object)CharacterAppearanceCodec.Encode(record.Appearance) ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("@slot", (int)record.SlotIndex);
 
                 return Convert.ToInt32(cmd.ExecuteScalar(), CultureInfo.InvariantCulture);
             }
@@ -217,11 +227,54 @@ SELECT character_id FROM characters WHERE rowid = last_insert_rowid();";
             }
         }
 
+        public void SwapSlotIndexes(int accountId, byte slotA, byte slotB)
+        {
+            if (slotA == slotB) return;
+            using (var conn = Open())
+            using (var tx = conn.BeginTransaction())
+            {
+                try
+                {
+                    // Step 1: move slotA to temp -1
+                    using (var cmd = conn.CreateCommand())
+                    {
+                        cmd.CommandText = "UPDATE characters SET slot_index = -1 WHERE account_id = @aid AND delete_flag = 0 AND slot_index = @slot;";
+                        cmd.Parameters.AddWithValue("@aid", accountId);
+                        cmd.Parameters.AddWithValue("@slot", (int)slotA);
+                        cmd.ExecuteNonQuery();
+                    }
+                    // Step 2: move slotB to slotA
+                    using (var cmd = conn.CreateCommand())
+                    {
+                        cmd.CommandText = "UPDATE characters SET slot_index = @slotA WHERE account_id = @aid AND delete_flag = 0 AND slot_index = @slotB;";
+                        cmd.Parameters.AddWithValue("@aid", accountId);
+                        cmd.Parameters.AddWithValue("@slotA", (int)slotA);
+                        cmd.Parameters.AddWithValue("@slotB", (int)slotB);
+                        cmd.ExecuteNonQuery();
+                    }
+                    // Step 3: move temp to slotB
+                    using (var cmd = conn.CreateCommand())
+                    {
+                        cmd.CommandText = "UPDATE characters SET slot_index = @slotB WHERE account_id = @aid AND delete_flag = 0 AND slot_index = -1;";
+                        cmd.Parameters.AddWithValue("@aid", accountId);
+                        cmd.Parameters.AddWithValue("@slotB", (int)slotB);
+                        cmd.ExecuteNonQuery();
+                    }
+                    tx.Commit();
+                }
+                catch
+                {
+                    tx.Rollback();
+                    throw;
+                }
+            }
+        }
+
         private const string SelectColumns = @"
 SELECT character_id, account_id, CAST(name AS BLOB), job, grow_type, level,
        town_id, area_id, pos_x, pos_y, direction, area_state, appearance_blob,
        delete_flag, created_at, updated_at, exp, ex_equip_slot_stat,
-       pvp_grade, pvp_rating_grade, user_state, bonus_sp, bonus_tp
+       pvp_grade, pvp_rating_grade, user_state, bonus_sp, bonus_tp, slot_index
 FROM characters";
 
         private static CharacterRecord Map(IDataRecord r)
@@ -252,6 +305,7 @@ FROM characters";
                 UserState = r.FieldCount > 20 && !r.IsDBNull(20) ? (byte)r.GetInt32(20) : (byte)0,
                 BonusSp = r.FieldCount > 21 && !r.IsDBNull(21) ? r.GetInt32(21) : 0,
                 BonusTp = r.FieldCount > 22 && !r.IsDBNull(22) ? r.GetInt32(22) : 0,
+                SlotIndex = r.FieldCount > 23 && !r.IsDBNull(23) ? (byte)r.GetInt32(23) : (byte)0,
             };
         }
 

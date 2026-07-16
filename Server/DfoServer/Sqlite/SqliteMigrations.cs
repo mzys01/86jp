@@ -501,6 +501,33 @@ ALTER TABLE account_settings_new RENAME TO account_settings;");
             // 全部角色下次选角时由统一建构器按 (job, growType, 觉醒, 等级) 重建技能面板,
             // 学习进度清零、SP/TP 随派生回满, 杜绝任何旧口径残留。
             (23, "技能点数派生化, 退役镜像表, 技能面板清零重建", MigrateSkillPointDerivation),
+
+            // 24: characters 角色槽位互换支持——新增 slot_index 列并用 character_id 顺序填充初始值
+            (24, "characters slot_index 列", conn =>
+            {
+                SqliteSchemaMigrator.EnsureColumns(conn, "characters", new[]
+                {
+                    ("slot_index", "INTEGER NOT NULL DEFAULT 0"),
+                });
+                // 对已有数据按 account_id 分组、character_id 升序分配 slot_index(0,1,2...)
+                // 仅更新未删除角色，避免给已删除行写入重叠值
+                using (var cmd = conn.CreateCommand())
+                {
+                    cmd.CommandText = @"
+UPDATE characters SET slot_index = (
+    SELECT cnt FROM (
+        SELECT c1.character_id,
+               (SELECT COUNT(*) FROM characters c2
+                WHERE c2.account_id = c1.account_id
+                  AND c2.delete_flag = 0
+                  AND c2.character_id <= c1.character_id) - 1 AS cnt
+        FROM characters c1
+        WHERE c1.character_id = characters.character_id
+    )
+) WHERE delete_flag = 0;";
+                    cmd.ExecuteNonQuery();
+                }
+            }),
         };
 
         private static void MigrateSkillPointDerivation(SqliteConnection connection)

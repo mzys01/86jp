@@ -36,7 +36,7 @@ namespace DfoServer.Network.Builders
                 if (ch == null)
                     continue;
 
-                writer.WriteUInt16((ushort)i);
+                writer.WriteUInt16((ushort)ch.SlotIndex);
                 writer.WriteDstr(ch.Name);
                 writer.WriteByte(0x00);
                 writer.WriteByte(0x00);
