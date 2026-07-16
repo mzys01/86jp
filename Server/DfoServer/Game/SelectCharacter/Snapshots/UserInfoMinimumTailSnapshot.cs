@@ -55,7 +55,7 @@ namespace DfoServer.Game.SelectCharacter
         public byte ChannelType { get; set; }                
         public ushort ChannelId { get; set; } = 2;           
         public ushort MoodValue { get; set; }
-        public byte SkillTreeIndex { get; set; }             
+        public byte SkillTreeIndex { get; set; } = Skills.SkillTreeExpansionState.LockedWireValue;
         public byte IsReturnUser { get; set; }               
         public byte LinkSlotEnabled { get; set; }            
         public byte LinkTypeA { get; set; }                  

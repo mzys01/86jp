@@ -528,7 +528,92 @@ UPDATE characters SET slot_index = (
                     cmd.ExecuteNonQuery();
                 }
             }),
+
+            // 存量角色的 0/1 原样保留（视为已购买）；仅改变今后省略该列时的默认状态。
+            (25, "skill_tree_index 未购买状态与默认值", MigrateSkillTreeIndexDefault),
         };
+
+        private static void MigrateSkillTreeIndexDefault(SqliteConnection connection)
+        {
+            bool foreignKeysEnabled;
+            using (var command = new SqliteCommand("PRAGMA foreign_keys;", connection))
+                foreignKeysEnabled = Convert.ToInt32(command.ExecuteScalar()) != 0;
+            if (foreignKeysEnabled)
+                ExecuteBatch(connection, "PRAGMA foreign_keys=OFF;");
+
+            try
+            {
+                using (var transaction = connection.BeginTransaction())
+                {
+                    ExecuteBatch(connection, transaction, @"
+ALTER TABLE character_subtype1_fields RENAME TO character_subtype1_fields_v24;
+CREATE TABLE character_subtype1_fields (
+    character_id INTEGER PRIMARY KEY,
+    stat_hp_max INTEGER NOT NULL DEFAULT 0,
+    stat_mp_max INTEGER NOT NULL DEFAULT 0,
+    stat_physical_attack INTEGER NOT NULL DEFAULT 0,
+    stat_physical_defense INTEGER NOT NULL DEFAULT 0,
+    stat_magical_attack INTEGER NOT NULL DEFAULT 0,
+    stat_magical_defense INTEGER NOT NULL DEFAULT 0,
+    stat_fire_resistance INTEGER NOT NULL DEFAULT 0,
+    stat_water_resistance INTEGER NOT NULL DEFAULT 0,
+    stat_dark_resistance INTEGER NOT NULL DEFAULT 0,
+    stat_light_resistance INTEGER NOT NULL DEFAULT 0,
+    stat_inventory_limit INTEGER NOT NULL DEFAULT 0,
+    stat_hp_regen_speed INTEGER NOT NULL DEFAULT 0,
+    stat_mp_regen_speed INTEGER NOT NULL DEFAULT 0,
+    stat_move_speed INTEGER NOT NULL DEFAULT 0,
+    stat_attack_speed INTEGER NOT NULL DEFAULT 0,
+    stat_cast_speed INTEGER NOT NULL DEFAULT 0,
+    stat_hit_recovery INTEGER NOT NULL DEFAULT 0,
+    stat_jump_power INTEGER NOT NULL DEFAULT 0,
+    stat_weight INTEGER NOT NULL DEFAULT 0,
+    stat_level INTEGER NOT NULL DEFAULT 0,
+    name_tag_item_id INTEGER NOT NULL DEFAULT 0,
+    name_tag_expire_time INTEGER NOT NULL DEFAULT 0,
+    skill_tree_index INTEGER NOT NULL DEFAULT -1,
+    equipped_creature_level INTEGER NOT NULL DEFAULT 0,
+    equip_list_trailing INTEGER NOT NULL DEFAULT 0,
+    manage_level INTEGER NOT NULL DEFAULT 0,
+    flag_byte INTEGER NOT NULL DEFAULT 0,
+    guild_power_war INTEGER NOT NULL DEFAULT 0,
+    server_timestamp INTEGER NOT NULL DEFAULT 0,
+    quest_shop_count INTEGER NOT NULL DEFAULT 0,
+    progress1 INTEGER NOT NULL DEFAULT 0,
+    progress2 INTEGER NOT NULL DEFAULT 0,
+    FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
+);
+INSERT INTO character_subtype1_fields (
+    character_id, stat_hp_max, stat_mp_max, stat_physical_attack, stat_physical_defense,
+    stat_magical_attack, stat_magical_defense, stat_fire_resistance, stat_water_resistance,
+    stat_dark_resistance, stat_light_resistance, stat_inventory_limit,
+    stat_hp_regen_speed, stat_mp_regen_speed, stat_move_speed, stat_attack_speed,
+    stat_cast_speed, stat_hit_recovery, stat_jump_power, stat_weight, stat_level,
+    name_tag_item_id, name_tag_expire_time, skill_tree_index, equipped_creature_level,
+    equip_list_trailing, manage_level, flag_byte, guild_power_war, server_timestamp,
+    quest_shop_count, progress1, progress2
+)
+SELECT
+    character_id, stat_hp_max, stat_mp_max, stat_physical_attack, stat_physical_defense,
+    stat_magical_attack, stat_magical_defense, stat_fire_resistance, stat_water_resistance,
+    stat_dark_resistance, stat_light_resistance, stat_inventory_limit,
+    stat_hp_regen_speed, stat_mp_regen_speed, stat_move_speed, stat_attack_speed,
+    stat_cast_speed, stat_hit_recovery, stat_jump_power, stat_weight, stat_level,
+    name_tag_item_id, name_tag_expire_time,
+    CASE WHEN skill_tree_index IN (0, 1) THEN skill_tree_index ELSE -1 END,
+    equipped_creature_level, equip_list_trailing, manage_level, flag_byte, guild_power_war,
+    server_timestamp, quest_shop_count, progress1, progress2
+FROM character_subtype1_fields_v24;
+DROP TABLE character_subtype1_fields_v24;");
+                    transaction.Commit();
+                }
+            }
+            finally
+            {
+                if (foreignKeysEnabled)
+                    ExecuteBatch(connection, "PRAGMA foreign_keys=ON;");
+            }
+        }
 
         private static void MigrateSkillPointDerivation(SqliteConnection connection)
         {
@@ -635,6 +720,19 @@ CREATE TABLE character_skills (
         {
             using (var cmd = connection.CreateCommand())
             {
+                cmd.CommandText = sql;
+                cmd.ExecuteNonQuery();
+            }
+        }
+
+        private static void ExecuteBatch(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            string sql)
+        {
+            using (var cmd = connection.CreateCommand())
+            {
+                cmd.Transaction = transaction;
                 cmd.CommandText = sql;
                 cmd.ExecuteNonQuery();
             }

@@ -165,7 +165,7 @@ namespace DfoServer.Network.Handlers
         public async Task Handle_CHANGE_ANOTHER_SKILL_TREE(EnhancedClientSession session, GamePacketHeader header, byte[] body)
         {
             var currentSkillTreeIndex = ResolveClientCurrentSkillTreeIndex(session, body);
-            var skillTreeIndex = ToggleSkillTreeIndex(currentSkillTreeIndex);
+            var skillTreeIndex = currentSkillTreeIndex;
             int cid = session.Player != null ? session.Player.CharacterId : 0;
 
             if (cid > 0)
@@ -174,6 +174,22 @@ namespace DfoServer.Network.Handlers
                 {
                     var repo = new Game.CharacterData.SqliteSubtype1Repository(
                         Infrastructure.ServerPaths.DatabasePath, Infrastructure.ServerPaths.SchemaFilePath);
+                    currentSkillTreeIndex = repo.LoadSkillTreeIndex(cid)
+                        ?? Game.Skills.SkillTreeExpansionState.LockedWireValue;
+                    if (!Game.Skills.SkillTreeExpansionState.IsUnlocked(currentSkillTreeIndex))
+                    {
+                        var lockedTail = session.Player.Subtype0Tail ?? new UserInfoMinimumTailSnapshot();
+                        lockedTail.SkillTreeIndex = Game.Skills.SkillTreeExpansionState.LockedWireValue;
+                        session.Player.Subtype0Tail = lockedTail;
+                        FileLogger.Log($"[SkillHandler] CHANGE_ANOTHER_SKILL_TREE rejected: expansion locked char={cid}");
+                        await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
+                            0x01,
+                            header.type,
+                            BuildChangeAnotherSkillTreeAck(lockedTail.SkillTreeIndex, body)));
+                        return;
+                    }
+
+                    skillTreeIndex = ToggleSkillTreeIndex(currentSkillTreeIndex);
                     var rows = repo.UpdateSkillTreeIndex(cid, skillTreeIndex);
 
                     var tail = session.Player.Subtype0Tail ?? new UserInfoMinimumTailSnapshot();
@@ -224,6 +240,28 @@ namespace DfoServer.Network.Handlers
             {
                 try
                 {
+                    var subtypeRepository = new Game.CharacterData.SqliteSubtype1Repository(
+                        Infrastructure.ServerPaths.DatabasePath, Infrastructure.ServerPaths.SchemaFilePath);
+                    var storedSkillTree = subtypeRepository.LoadSkillTreeIndex(cid)
+                        ?? Game.Skills.SkillTreeExpansionState.LockedWireValue;
+                    if (!Game.Skills.SkillTreeExpansionState.IsUnlocked(storedSkillTree)
+                        && requestSkillTree == 1)
+                    {
+                        FileLogger.Log($"[SkillHandler] BUY_SKILL rejected: expansion locked char={cid} requestedTree={requestSkillTree}");
+                        var rejected = new Game.Skills.BuySkillResult
+                        {
+                            Success = false,
+                            SkillTree = requestSkillTree,
+                            ErrorCode = 3,
+                        };
+                        await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
+                            0x01, 0x001D, BuySkillAckBuilder.Build(rejected)));
+                        return;
+                    }
+
+                    if (!Game.Skills.SkillTreeExpansionState.IsUnlocked(storedSkillTree))
+                        skillTree = 0;
+
                     var repo = new Game.CharacterData.SqliteCharacterProgressRepository(
                         Infrastructure.ServerPaths.DatabasePath, Infrastructure.ServerPaths.SchemaFilePath);
                     var charRepo = new Game.Characters.SqliteCharacterRepository(
