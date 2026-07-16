@@ -562,7 +562,7 @@ ON CONFLICT(character_id) DO UPDATE SET manage_level=excluded.manage_level;";
                 ) VALUES(
                     @cid, @hp, @mp, @pa, @pd, @ma, @md, @fr, @wr, @dr, @lr, @il,
                     @hr, @mr, @ms, @as2, @cs, @hrc, @jp, @wt, 100,
-                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+                    0, 0, -1, 0, 0, 0, 0, 0, 0, 0, 0, 0
                 )", conn))
                 {
                     cmd.Parameters.AddWithValue("@cid", characterId);

@@ -504,7 +504,11 @@ namespace DfoServer.Game.Inventory
 
             var itemTemplateId = product.ItemTemplateId;
             var metadata = ItemMetadataResolver.Resolve(itemTemplateId);
-            if (metadata.ItemKind == "special")
+            // PVF 将 821 定义为普通 [etc] 堆叠物；商城购买时按准确物品 ID
+            // 作为立即生效的角色扩展处理，不发放到背包。
+            var isSkillTreeExpansion = itemTemplateId
+                == Game.Skills.SkillTreeExpansionState.ExpansionItemTemplateId;
+            if (metadata.ItemKind == "special" && !isSkillTreeExpansion)
             {
                 FileLogger.Log($"  [CeraShopBuy] REJECT: product=0x{productId:X8} maps to unsupported item=0x{itemTemplateId:X8} section={product.Section}");
                 return false;
@@ -615,6 +619,48 @@ namespace DfoServer.Game.Inventory
                 return false;
             }
             var goldSpent = totalGoldCost > 0;
+
+            if (isSkillTreeExpansion)
+            {
+                if (buyCount != 1 || paymentMode != 0)
+                {
+                    FileLogger.Log($"  [CeraShopBuy] REJECT: skill-tree expansion requires one direct purchase product=0x{productId:X8}");
+                    return false;
+                }
+
+                if (!Game.Skills.SkillTreeExpansionService.TryUnlock(
+                    connection, transaction, characterId))
+                {
+                    FileLogger.Log($"  [CeraShopBuy] REJECT: skill-tree expansion already owned or initialization failed cid={characterId}");
+                    return false;
+                }
+
+                if (!TryApplyCeraShopPayment(connection, transaction, characterId, plan))
+                    return false;
+                DeductCouponIfNeeded(connection, transaction, couponItemUid, couponNewStackCount);
+                _auditLogger.WriteBuyAuditLog(
+                    connection, transaction, characterId, itemTemplateId, -1,
+                    totalGoldCost, totalCeraCost);
+
+                result = new InventoryMutationResult
+                {
+                    ListType = InventoryListType.Main,
+                    SlotIndex = -1,
+                    ItemTemplateId = itemTemplateId,
+                    RemainingStackCount = 0,
+                    UpdatedGold = plan.NewGold,
+                    UpdatedSp = wallet.Sp,
+                    UpdatedCoin = plan.NewCera,
+                    UpdatedTokenCera = plan.NewTokenCera,
+                    UpdatedHappyTokenCera = plan.NewHappyTokenCera,
+                    GoldSpent = goldSpent,
+                    RequestedCount = 1,
+                    AppliedCount = 1,
+                    ConsumedOnPurchase = true,
+                };
+                FileLogger.Log($"  [CeraShopBuy] skill-tree expansion unlocked cid={characterId} item=0x{itemTemplateId:X8} cera={totalCeraCost}");
+                return true;
+            }
 
             if (TryResolvePersonalCargoUpgradeToolTarget(itemTemplateId, out var personalCargoTargetListParam16))
             {

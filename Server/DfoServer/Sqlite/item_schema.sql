@@ -524,7 +524,7 @@ CREATE TABLE IF NOT EXISTS character_subtype1_fields (
     stat_level INTEGER NOT NULL DEFAULT 0,
     name_tag_item_id INTEGER NOT NULL DEFAULT 0,     -- 名称装饰卡 itemId (sub_F546B0 i64 low32 → slot 28; 旧误名 skill_tree_check)
     name_tag_expire_time INTEGER NOT NULL DEFAULT 0, -- 名称装饰卡到期时间 (i64 high32)
-    skill_tree_index INTEGER NOT NULL DEFAULT 0,
+    skill_tree_index INTEGER NOT NULL DEFAULT -1, -- -1=第二技能页未购买，0/1=已购买且为当前页
     equipped_creature_level INTEGER NOT NULL DEFAULT 0,
     equip_list_trailing INTEGER NOT NULL DEFAULT 0,
     manage_level INTEGER NOT NULL DEFAULT 0,

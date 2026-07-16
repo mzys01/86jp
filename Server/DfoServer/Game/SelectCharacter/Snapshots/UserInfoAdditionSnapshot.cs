@@ -44,7 +44,7 @@ namespace DfoServer.Game.SelectCharacter
         public uint NameTagExpireTime { get; set; }
 
         
-        public byte SkillTreeIndex { get; set; }
+        public byte SkillTreeIndex { get; set; } = Skills.SkillTreeExpansionState.LockedWireValue;
 
         
         public byte EquippedCreatureLevel { get; set; }

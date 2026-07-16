@@ -182,7 +182,7 @@ ORDER BY slot", conn))
 
         public int UpdateSkillTreeIndex(int characterId, byte skillTreeIndex)
         {
-            skillTreeIndex = NormalizeSkillTreeIndex(skillTreeIndex);
+            var databaseValue = Game.Skills.SkillTreeExpansionState.ToDatabase(skillTreeIndex);
             using (var conn = Open())
             using (var cmd = new SqliteCommand(@"
 INSERT INTO character_subtype1_fields(character_id, skill_tree_index)
@@ -190,7 +190,27 @@ VALUES(@cid, @idx)
 ON CONFLICT(character_id) DO UPDATE SET skill_tree_index=@idx;", conn))
             {
                 cmd.Parameters.AddWithValue("@cid", characterId);
-                cmd.Parameters.AddWithValue("@idx", (int)skillTreeIndex);
+                cmd.Parameters.AddWithValue("@idx", databaseValue);
+                return cmd.ExecuteNonQuery();
+            }
+        }
+
+        internal int UpdateSkillTreeIndex(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            int characterId,
+            byte skillTreeIndex)
+        {
+            if (connection == null) throw new ArgumentNullException(nameof(connection));
+            if (transaction == null) throw new ArgumentNullException(nameof(transaction));
+
+            using (var cmd = new SqliteCommand(@"
+INSERT INTO character_subtype1_fields(character_id, skill_tree_index)
+VALUES(@cid, @idx)
+ON CONFLICT(character_id) DO UPDATE SET skill_tree_index=@idx;", connection, transaction))
+            {
+                cmd.Parameters.AddWithValue("@cid", characterId);
+                cmd.Parameters.AddWithValue("@idx", Game.Skills.SkillTreeExpansionState.ToDatabase(skillTreeIndex));
                 return cmd.ExecuteNonQuery();
             }
         }
@@ -206,6 +226,27 @@ ON CONFLICT(character_id) DO UPDATE SET skill_tree_index=@idx;", conn))
                 if (value == null || value == DBNull.Value)
                     return null;
 
+                return NormalizeSkillTreeIndex(Convert.ToInt32(value));
+            }
+        }
+
+        internal byte? LoadSkillTreeIndex(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            int characterId)
+        {
+            if (connection == null) throw new ArgumentNullException(nameof(connection));
+            if (transaction == null) throw new ArgumentNullException(nameof(transaction));
+
+            using (var cmd = new SqliteCommand(
+                "SELECT skill_tree_index FROM character_subtype1_fields WHERE character_id=@cid",
+                connection,
+                transaction))
+            {
+                cmd.Parameters.AddWithValue("@cid", characterId);
+                var value = cmd.ExecuteScalar();
+                if (value == null || value == DBNull.Value)
+                    return null;
                 return NormalizeSkillTreeIndex(Convert.ToInt32(value));
             }
         }
@@ -358,7 +399,7 @@ JOIN characters c ON c.character_id = s.character_id;", conn))
 
         private static byte NormalizeSkillTreeIndex(int skillTreeIndex)
         {
-            return skillTreeIndex <= 0 ? (byte)0 : (byte)1;
+            return Game.Skills.SkillTreeExpansionState.FromDatabase(skillTreeIndex);
         }
 
         internal static byte[] ClearEquippedSortLockForClient(byte[] raw)

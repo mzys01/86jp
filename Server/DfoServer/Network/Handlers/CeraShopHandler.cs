@@ -49,6 +49,7 @@ namespace DfoServer.Network.Handlers
             var results = new System.Collections.Generic.List<InventoryMutationResult>();
             var successItems = new System.Collections.Generic.List<System.Tuple<int, InventoryMutationResult>>();
             var contractItems = new List<(int itemTemplateId, int count)>();
+            var skillTreeExpansionUnlocked = false;
             for (int idx = 0; idx < request.CommodityNos.Count; idx++)
             {
                 var commodityNo = request.CommodityNos[idx];
@@ -67,6 +68,9 @@ namespace DfoServer.Network.Handlers
                     FileLogger.Log($"[{ProtocolName}] CERA_SHOP_BUY: OK commodityNo={commodityNo} slot={result.SlotIndex} item=0x{result.ItemTemplateId:X8} count={result.AppliedCount} coin={result.UpdatedCoin} extra={result.ExtraResults.Count}");
                     results.Add(result);
                     successItems.Add(System.Tuple.Create(commodityNo, result));
+                    if (result.ConsumedOnPurchase
+                        && result.ItemTemplateId == Game.Skills.SkillTreeExpansionState.ExpansionItemTemplateId)
+                        skillTreeExpansionUnlocked = true;
                     if (Game.Premium.PremiumService.IsContractItem(result.ItemTemplateId))
                         contractItems.Add((result.ItemTemplateId, 1));
                 }
@@ -193,6 +197,21 @@ namespace DfoServer.Network.Handlers
 
             if (contractItems.Count > 0)
                 await Game.Premium.PremiumService.ActivateAndNotify(session, contractItems, _sqliteSelectCharacterDataSource);
+
+            if (skillTreeExpansionUnlocked)
+            {
+                var refreshed = _sqliteSelectCharacterDataSource.Load(cid, aid);
+                var record = refreshed?.CharacterRecord;
+                if (record != null)
+                {
+                    session.Player.Subtype0Tail = record.Subtype0Tail;
+                    await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
+                        0x00,
+                        0x0002,
+                        UserInfoSubtype0Builder.BuildNotificationBody(record)));
+                    FileLogger.Log($"[{ProtocolName}] CERA_SHOP_BUY: skill-tree expansion USERINFO subtype0 refresh sent cid={cid}");
+                }
+            }
 
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0035,
                 CeraUpdateBuilder.Build(last.UpdatedCoin, last.UpdatedTokenCera, last.UpdatedHappyTokenCera)));
