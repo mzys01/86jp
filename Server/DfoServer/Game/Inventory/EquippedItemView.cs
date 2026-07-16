@@ -192,6 +192,41 @@ namespace DfoServer.Game.Inventory
             set => EquipmentLockId = value;
         }
 
+        public byte[] AvatarSocketData
+        {
+            get => InventoryItemViewBytes.CopyFixed(_fields.JewelSocket, AvatarSocketDataCodec.Length);
+            set
+            {
+                _fields.JewelSocket = InventoryItemViewBytes.CopyFixed(value, AvatarSocketDataCodec.Length);
+                RebuildRaw();
+                RebuildEntry84();
+            }
+        }
+
+        public int AvatarSocketCount => CountOpenAvatarSockets();
+
+        public int OpenAvatarSocketCount => AvatarSocketCount;
+
+        public ushort GetAvatarSocketType(int index)
+        {
+            EnsureAvatarSocketIndex(index);
+            return InventoryItemViewBytes.ReadUInt16(AvatarSocketData, index * 6);
+        }
+
+        public int GetAvatarSocketEmblemItemId(int index)
+        {
+            EnsureAvatarSocketIndex(index);
+            return InventoryItemViewBytes.ReadInt32(AvatarSocketData, index * 6 + 2);
+        }
+
+        public void SetAvatarSocketEmblemItemId(int index, int value)
+        {
+            EnsureAvatarSocketIndex(index);
+            var data = AvatarSocketData;
+            InventoryItemViewBytes.WriteInt32(data, index * 6 + 2, value);
+            AvatarSocketData = data;
+        }
+
         public static EquippedItemView FromRecord(MakeEquipListCodec.Entry record)
         {
             return new EquippedItemView(record);
@@ -256,6 +291,25 @@ namespace DfoServer.Game.Inventory
         private void RebuildRaw()
         {
             Record.Raw = MakeEquipListCodec.BuildEntryFromDisplayFields(Record.Slot, Record.ItemId, _fields);
+        }
+
+        private int CountOpenAvatarSockets()
+        {
+            var count = 0;
+            var data = AvatarSocketData;
+            for (var index = 0; index < 5; index++)
+            {
+                if (InventoryItemViewBytes.ReadUInt16(data, index * 6) != 0)
+                    count++;
+            }
+
+            return count;
+        }
+
+        private static void EnsureAvatarSocketIndex(int index)
+        {
+            if (index < 0 || index >= 5)
+                throw new ArgumentOutOfRangeException(nameof(index));
         }
 
         private void ApplySealFlag(byte sealFlag)
