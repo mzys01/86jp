@@ -39,7 +39,6 @@ namespace DfoServer.Network.Handlers
                 0x00CD,
                 InvestItemAmplifyOptionAckBuilder.BuildSuccess(result)));
 
-            await _refresh.SendUpdateItemList(session, InventoryListType.Main, new[] { result.TargetSlotIndex, result.MaterialSlotIndex });
             await _refresh.SendSortItemLockRefresh(session, InventoryListType.Main);
             FileLogger.Log($"[{ProtocolName}] INVEST_ITEM_AMPLIFY_OPTION: OK action={request.Action} targetSlot={result.TargetSlotIndex} materialSlot={result.MaterialSlotIndex} selected={request.SelectedOption} amplifyType=0x{result.AmplifyType:X2} amplifyValue={result.AmplifyValue} amplifyLevel={result.AmplifyLevel}");
         }

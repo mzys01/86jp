@@ -427,6 +427,8 @@ namespace DfoServer.Game.Inventory
 
         public short MaterialSlotIndex { get; set; }
 
+        public int MaterialRemainingCount { get; set; }
+
         public byte AmplifyType { get; set; }
 
         public ushort AmplifyValue { get; set; }
@@ -456,12 +458,15 @@ namespace DfoServer.Game.Inventory
 
     public sealed class InvestItemAmplifyOptionResult
     {
-        public const byte ErrorInvalidRequest = 0x01;
-        public const byte ErrorInvalidTarget = 0x02;
-        public const byte ErrorInvalidMaterial = 0x03;
-        public const byte ErrorUnsupported = 0x04;
-        public const byte ErrorLocked = 0x05;
-        public const byte ErrorSameOption = 0x06;
+        public const byte ErrorInvalidRequest = 17;
+        public const byte ErrorInvalidTarget = 17;
+        public const byte ErrorInvalidMaterial = 17;
+        public const byte ErrorUnsupported = 8;
+        public const byte ErrorLocked = 17;
+        public const byte ErrorSameOption = 23;
+        public const byte ErrorAlreadyHasAmplifyOption = 20;
+        public const byte ErrorNoAmplifyOption = 21;
+        public const byte ErrorAlreadyUpgraded = 18;
 
         public InvestItemAmplifyOptionRequest Request { get; set; }
 

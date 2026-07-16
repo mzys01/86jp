@@ -1,4 +1,5 @@
 using DfoServer.Game.Inventory;
+using PvfLib;
 
 namespace DfoServer.Game.ItemUpgrade
 {
@@ -27,7 +28,7 @@ namespace DfoServer.Game.ItemUpgrade
             if (attributeType == AmplifyAttributeType.None)
                 return 0;
 
-            return (ushort)ItemUpgradeTableProvider.CalculateInitialAmplifyValue(rarity, 0);
+            return (ushort)ItemUpgradeTableProvider.CalculateInitialAmplifyValue(rarity, ToOptionType(attributeType));
         }
 
         public static int GetUpgradeAttributeBonus(int currentUpgradeLevel)
@@ -63,6 +64,23 @@ namespace DfoServer.Game.ItemUpgrade
             return raw >= (byte)AmplifyAttributeType.Vitality && raw <= (byte)AmplifyAttributeType.Intelligence
                 ? (AmplifyAttributeType)raw
                 : AmplifyAttributeType.None;
+        }
+
+        private static AmplifyOptionType ToOptionType(AmplifyAttributeType attributeType)
+        {
+            switch (attributeType)
+            {
+                case AmplifyAttributeType.Vitality:
+                    return AmplifyOptionType.PhysicalDefense;
+                case AmplifyAttributeType.Spirit:
+                    return AmplifyOptionType.MagicalDefense;
+                case AmplifyAttributeType.Strength:
+                    return AmplifyOptionType.PhysicalAttack;
+                case AmplifyAttributeType.Intelligence:
+                    return AmplifyOptionType.MagicalAttack;
+                default:
+                    return AmplifyOptionType.None;
+            }
         }
     }
 }

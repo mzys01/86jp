@@ -22,6 +22,7 @@ namespace DfoServer.Network.Builders
 
         public static byte[] BuildError(byte errorCode)
         {
+            // 86 客户端 0x00CD 失败分支读取 status 后紧跟的错误码。
             return new[] { (byte)0x00, errorCode };
         }
     }

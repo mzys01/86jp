@@ -1,4 +1,5 @@
 using DfoServer.Game.ItemUpgrade;
+using DfoServer.Infrastructure;
 using Microsoft.Data.Sqlite;
 using System;
 
@@ -37,15 +38,14 @@ namespace DfoServer.Game.Inventory
                     var material = _db.LoadItemRecord(connection, transaction, characterId, InventoryListType.Main, request.MaterialSlotIndex);
                     if (material == null
                         || material.ItemTemplateId != request.MaterialItemTemplateId
-                        || material.StackCount <= 0
-                        || !string.Equals(material.ItemKind, "stackable", StringComparison.Ordinal))
+                        || material.StackCount <= 0)
                     {
                         result = CreatePurifyErrorResult(request, PurifyItemResult.ErrorInvalidMaterial);
                         return false;
                     }
 
-                    var action = ResolvePurifyAction(material.ItemTemplateId);
-                    if (action == PurifyItemAction.Unknown)
+                    if (!TryResolvePurifyAction(material.ItemTemplateId, out var action, out var materialCount)
+                        || material.StackCount < materialCount)
                     {
                         result = CreatePurifyErrorResult(request, PurifyItemResult.ErrorInvalidMaterial);
                         return false;
@@ -58,8 +58,8 @@ namespace DfoServer.Game.Inventory
                         return false;
                     }
 
-                    var extra = ItemExtraView.Parse(target.ExtraJson);
-                    var currentAmplifyType = extra.Equipment.AmplifyType;
+                    var targetView = InventoryItemView.ForCommon(target);
+                    var currentAmplifyType = targetView.AmplifyType;
                     var isUnidentified = (currentAmplifyType & UnidentifiedAmplifyFlag) != 0;
                     if (!isUnidentified)
                     {
@@ -67,24 +67,21 @@ namespace DfoServer.Game.Inventory
                         return false;
                     }
 
-                    var builder = ItemExtraViewBuilder.FromView(extra);
                     if (action == PurifyItemAction.Purify)
                     {
                         var attributeType = RollAmplifyAttributeType();
-                        builder.Equipment.AmplifyType = (byte)attributeType;
-                        builder.Equipment.AmplifyValue = ItemAmplifier.CalculateInitialAttributeValue(metadata.Rarity, attributeType);
+                        targetView.AmplifyType = (byte)attributeType;
+                        targetView.AmplifyValue = ItemAmplifier.CalculateInitialAttributeValue(metadata.Rarity, attributeType);
                     }
                     else
                     {
-                        builder.Equipment.AmplifyType = 0;
-                        builder.Equipment.AmplifyValue = 0;
+                        targetView.AmplifyType = 0;
+                        targetView.AmplifyValue = 0;
                     }
 
-                    var updatedExtra = builder.Build();
-                    target.ExtraJson = updatedExtra.Serialize();
                     _db.UpdateItemExtraJson(connection, transaction, target.ItemUid, target.ExtraJson);
-                    var materialRemaining = ConsumeAmplifyMaterial(connection, transaction, characterId, material);
-                    _auditLogger.WriteDeleteAuditLog(connection, transaction, characterId, material, 1);
+                    var materialRemaining = ConsumeAmplifyMaterial(connection, transaction, characterId, material, materialCount);
+                    _auditLogger.WriteDeleteAuditLog(connection, transaction, characterId, material, materialCount);
                     _auditLogger.WriteAuditLog(connection, transaction, characterId,
                         action == PurifyItemAction.Purify ? "purify_outworld_vigor" : "clear_outworld_vigor",
                         target, target.ListType, target.SlotIndex, 0);
@@ -97,23 +94,33 @@ namespace DfoServer.Game.Inventory
                         Action = action,
                         TargetSlotIndex = target.SlotIndex,
                         MaterialSlotIndex = material.SlotIndex,
-                        AmplifyType = builder.Equipment.AmplifyType,
-                        AmplifyValue = builder.Equipment.AmplifyValue,
+                        MaterialRemainingCount = materialRemaining,
+                        AmplifyType = targetView.AmplifyType,
+                        AmplifyValue = targetView.AmplifyValue,
                     };
                     return true;
                 }
             }
         }
 
-        private static PurifyItemAction ResolvePurifyAction(int itemTemplateId)
+        private static bool TryResolvePurifyAction(int itemTemplateId, out PurifyItemAction action, out int materialCount)
         {
-            if (ItemUpgradeTableProvider.IsPurifyMaterial(itemTemplateId))
-                return PurifyItemAction.Purify;
+            action = PurifyItemAction.Unknown;
+            materialCount = 0;
 
-            if (ItemUpgradeTableProvider.IsOutworldVigorClearMaterial(itemTemplateId))
-                return PurifyItemAction.Clear;
+            if (ItemUpgradeTableProvider.TryGetPurifyMaterialCount(itemTemplateId, out materialCount))
+            {
+                action = PurifyItemAction.Purify;
+                return true;
+            }
 
-            return PurifyItemAction.Unknown;
+            if (ItemUpgradeTableProvider.TryGetOutworldVigorClearMaterialCount(itemTemplateId, out materialCount))
+            {
+                action = PurifyItemAction.Clear;
+                return true;
+            }
+
+            return false;
         }
 
         private static bool CanUseOutworldVigorItem(ItemRecord target, ItemMetadata metadata)
@@ -125,7 +132,8 @@ namespace DfoServer.Game.Inventory
                 || !string.Equals(metadata.ItemKind, "equipment", StringComparison.Ordinal))
                 return false;
 
-            return metadata.MinimumLevel >= 55 && metadata.Rarity >= 2;
+            return metadata.MinimumLevel >= ItemUpgradeTableProvider.GetAmplifyEquipLevelConst()
+                && metadata.Rarity >= 2;
         }
 
         private static AmplifyAttributeType RollAmplifyAttributeType()
@@ -137,12 +145,12 @@ namespace DfoServer.Game.Inventory
                 AmplifyAttributeType.Strength,
                 AmplifyAttributeType.Intelligence,
             };
-            return types[Random.Shared.Next(types.Length)];
+            return types[ServerRandom.Next(types.Length)];
         }
 
-        private int ConsumeAmplifyMaterial(SqliteConnection connection, SqliteTransaction transaction, int characterId, ItemRecord material)
+        private int ConsumeAmplifyMaterial(SqliteConnection connection, SqliteTransaction transaction, int characterId, ItemRecord material, int consumeCount)
         {
-            var remainingCount = material.StackCount - 1;
+            var remainingCount = material.StackCount - Math.Max(1, consumeCount);
             if (remainingCount > 0)
             {
                 _db.UpdateStackCount(connection, transaction, material.ItemUid, remainingCount);
@@ -150,6 +158,7 @@ namespace DfoServer.Game.Inventory
             }
 
             _db.DeleteItem(connection, transaction, material.ItemUid);
+            DeleteSortItemLock(characterId, connection, transaction, material.ListType, material.SlotIndex);
             return 0;
         }
 

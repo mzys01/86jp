@@ -1,4 +1,5 @@
 using DfoServer.Game.ItemUpgrade;
+using DfoServer.Infrastructure;
 using Microsoft.Data.Sqlite;
 using System;
 
@@ -35,14 +36,14 @@ namespace DfoServer.Game.Inventory
                     var material = _db.LoadItemRecord(connection, transaction, characterId, InventoryListType.Main, request.MaterialSlotIndex);
                     if (material == null
                         || material.ItemTemplateId != request.MaterialItemTemplateId
-                        || material.StackCount <= 0
-                        || !string.Equals(material.ItemKind, "stackable", StringComparison.Ordinal))
+                        || material.StackCount <= 0)
                     {
                         result = CreateInvestAmplifyErrorResult(request, InvestItemAmplifyOptionResult.ErrorInvalidMaterial);
                         return false;
                     }
 
-                    if (!IsValidInvestMaterial(request, material.ItemTemplateId))
+                    if (!TryResolveInvestMaterial(request, material.ItemTemplateId, out var configuredOptionType, out var materialCount)
+                        || material.StackCount < materialCount)
                     {
                         result = CreateInvestAmplifyErrorResult(request, InvestItemAmplifyOptionResult.ErrorInvalidMaterial);
                         return false;
@@ -55,20 +56,20 @@ namespace DfoServer.Game.Inventory
                         return false;
                     }
 
-                    var selectedType = ResolveInvestAmplifyAttributeType(request, material.ItemTemplateId);
+                    var selectedType = ResolveInvestAmplifyAttributeType(request, configuredOptionType);
                     if (selectedType == AmplifyAttributeType.None)
                     {
                         result = CreateInvestAmplifyErrorResult(request, InvestItemAmplifyOptionResult.ErrorInvalidRequest);
                         return false;
                     }
 
-                    var extra = ItemExtraView.Parse(target.ExtraJson);
-                    var currentAmplifyType = extra.Equipment.AmplifyType;
+                    var targetView = InventoryItemView.ForCommon(target);
+                    var currentAmplifyType = targetView.AmplifyType;
                     var isUnidentified = (currentAmplifyType & UnidentifiedAmplifyFlag) != 0;
                     var currentIdentifiedType = (byte)(currentAmplifyType & 0x7F);
-                    if (!CanApplyInvestAction(request.Action, isUnidentified, currentIdentifiedType, extra.Equipment.Upgrade))
+                    if (!CanApplyInvestAction(request.Action, isUnidentified, currentIdentifiedType, targetView.Upgrade, out var actionErrorCode))
                     {
-                        result = CreateInvestAmplifyErrorResult(request, InvestItemAmplifyOptionResult.ErrorInvalidTarget);
+                        result = CreateInvestAmplifyErrorResult(request, actionErrorCode);
                         return false;
                     }
 
@@ -78,18 +79,15 @@ namespace DfoServer.Game.Inventory
                         return false;
                     }
 
-                    var builder = ItemExtraViewBuilder.FromView(extra);
-                    builder.Equipment.AmplifyType = (byte)selectedType;
-                    builder.Equipment.AmplifyValue = ItemAmplifier.CalculateInitialAttributeValue(metadata.Rarity, selectedType);
+                    targetView.AmplifyType = (byte)selectedType;
+                    targetView.AmplifyValue = ItemAmplifier.CalculateInitialAttributeValue(metadata.Rarity, selectedType);
                     if (request.Action == InvestItemAmplifyOptionAction.PureGold)
-                        builder.Equipment.Upgrade = RollPureGoldAmplifyLevel();
+                        targetView.Upgrade = RollPureGoldAmplifyLevel(material.ItemTemplateId);
 
-                    var updatedExtra = builder.Build();
-                    target.ExtraJson = updatedExtra.Serialize();
                     _db.UpdateItemExtraJson(connection, transaction, target.ItemUid, target.ExtraJson);
-                    var materialRemaining = ConsumeAmplifyMaterial(connection, transaction, characterId, material);
-                    _auditLogger.WriteDeleteAuditLog(connection, transaction, characterId, material, 1);
-                    _auditLogger.WriteAuditLog(connection, transaction, characterId, "invest_item_amplify_option", target, InventoryListType.Main, target.SlotIndex, builder.Equipment.Upgrade);
+                    var materialRemaining = ConsumeAmplifyMaterial(connection, transaction, characterId, material, materialCount);
+                    _auditLogger.WriteDeleteAuditLog(connection, transaction, characterId, material, materialCount);
+                    _auditLogger.WriteAuditLog(connection, transaction, characterId, "invest_item_amplify_option", target, InventoryListType.Main, target.SlotIndex, targetView.Upgrade);
                     transaction.Commit();
 
                     result = new InvestItemAmplifyOptionResult
@@ -99,51 +97,97 @@ namespace DfoServer.Game.Inventory
                         TargetSlotIndex = target.SlotIndex,
                         MaterialSlotIndex = material.SlotIndex,
                         MaterialRemainingCount = materialRemaining,
-                        AmplifyType = builder.Equipment.AmplifyType,
-                        AmplifyValue = builder.Equipment.AmplifyValue,
-                        AmplifyLevel = builder.Equipment.Upgrade,
+                        AmplifyType = targetView.AmplifyType,
+                        AmplifyValue = targetView.AmplifyValue,
+                        AmplifyLevel = targetView.Upgrade,
                     };
                     return true;
                 }
             }
         }
 
-        private static bool IsValidInvestMaterial(InvestItemAmplifyOptionRequest request, int materialItemTemplateId)
+        private static bool TryResolveInvestMaterial(
+            InvestItemAmplifyOptionRequest request,
+            int materialItemTemplateId,
+            out PvfLib.AmplifyOptionType optionType,
+            out int materialCount)
         {
-            return (request.Action == InvestItemAmplifyOptionAction.Invest
-                    && ItemUpgradeTableProvider.IsInvestAmplifyOptionMaterial(materialItemTemplateId))
-                || (request.Action == InvestItemAmplifyOptionAction.Twist
-                    && ItemUpgradeTableProvider.IsReinvestAmplifyOptionMaterial(materialItemTemplateId))
-                || (request.Action == InvestItemAmplifyOptionAction.PureGold
-                    && ItemUpgradeTableProvider.IsRandomInvestUpgradeOptionMaterial(materialItemTemplateId));
+            optionType = PvfLib.AmplifyOptionType.None;
+            materialCount = 0;
+            if (request == null)
+                return false;
+
+            if (request.Action == InvestItemAmplifyOptionAction.Invest)
+                return ItemUpgradeTableProvider.TryGetInvestAmplifyOption(materialItemTemplateId, out optionType, out materialCount);
+
+            if (request.Action == InvestItemAmplifyOptionAction.Twist)
+                return ItemUpgradeTableProvider.TryGetReinvestAmplifyOption(materialItemTemplateId, out optionType, out materialCount);
+
+            if (request.Action == InvestItemAmplifyOptionAction.PureGold)
+                return ItemUpgradeTableProvider.TryGetRandomInvestUpgradeOption(materialItemTemplateId, out optionType, out materialCount);
+
+            return false;
         }
 
         private static bool CanApplyInvestAction(
             InvestItemAmplifyOptionAction action,
             bool isUnidentified,
             byte currentIdentifiedType,
-            byte currentUpgradeLevel)
+            byte currentUpgradeLevel,
+            out byte errorCode)
         {
+            errorCode = InvestItemAmplifyOptionResult.ErrorInvalidTarget;
+
             if (action == InvestItemAmplifyOptionAction.Invest)
-                return !isUnidentified && currentIdentifiedType == 0;
+            {
+                if (isUnidentified || currentIdentifiedType != 0)
+                {
+                    errorCode = InvestItemAmplifyOptionResult.ErrorAlreadyHasAmplifyOption;
+                    return false;
+                }
+
+                if (currentUpgradeLevel != 0)
+                {
+                    errorCode = InvestItemAmplifyOptionResult.ErrorAlreadyUpgraded;
+                    return false;
+                }
+
+                return true;
+            }
 
             if (action == InvestItemAmplifyOptionAction.Twist)
-                return !isUnidentified && currentIdentifiedType != 0 && currentUpgradeLevel == 0;
+            {
+                if (isUnidentified || currentIdentifiedType == 0)
+                {
+                    errorCode = InvestItemAmplifyOptionResult.ErrorNoAmplifyOption;
+                    return false;
+                }
+
+                if (currentUpgradeLevel != 0)
+                {
+                    errorCode = InvestItemAmplifyOptionResult.ErrorAlreadyUpgraded;
+                    return false;
+                }
+
+                return true;
+            }
 
             if (action == InvestItemAmplifyOptionAction.PureGold)
-                return !isUnidentified;
+            {
+                if (isUnidentified)
+                {
+                    errorCode = InvestItemAmplifyOptionResult.ErrorNoAmplifyOption;
+                    return false;
+                }
+
+                return true;
+            }
 
             return false;
         }
 
-        private static AmplifyAttributeType ResolveInvestAmplifyAttributeType(InvestItemAmplifyOptionRequest request, int materialItemTemplateId)
+        private static AmplifyAttributeType ResolveInvestAmplifyAttributeType(InvestItemAmplifyOptionRequest request, PvfLib.AmplifyOptionType optionType)
         {
-            if (request.Action != InvestItemAmplifyOptionAction.Invest)
-                return MapInvestOptionToAmplifyType(request.SelectedOption);
-
-            if (!ItemUpgradeTableProvider.TryGetInvestAmplifyOptionType(materialItemTemplateId, out var optionType))
-                return AmplifyAttributeType.None;
-
             if (optionType == PvfLib.AmplifyOptionType.All)
                 return MapInvestOptionToAmplifyType(request.SelectedOption);
 
@@ -184,9 +228,40 @@ namespace DfoServer.Game.Inventory
             }
         }
 
-        private static byte RollPureGoldAmplifyLevel()
+        private static byte RollPureGoldAmplifyLevel(int materialItemTemplateId)
         {
-            var roll = Random.Shared.Next(100);
+            if (ItemMetadataResolver.TryLoadStackableFile(materialItemTemplateId, out var stackable)
+                && stackable.AmplificationRandomValues != null
+                && stackable.AmplificationRandomValues.Count > 0)
+            {
+                var totalWeight = 0;
+                foreach (var entry in stackable.AmplificationRandomValues)
+                {
+                    if (entry != null && entry.Weight > 0)
+                        totalWeight += entry.Weight;
+                }
+
+                if (totalWeight > 0)
+                {
+                    var roll = ServerRandom.Next(totalWeight);
+                    foreach (var entry in stackable.AmplificationRandomValues)
+                    {
+                        if (entry == null || entry.Weight <= 0)
+                            continue;
+
+                        roll -= entry.Weight;
+                        if (roll < 0)
+                            return (byte)Math.Max(0, Math.Min(byte.MaxValue, entry.UpgradeLevel));
+                    }
+                }
+            }
+
+            return RollDefaultPureGoldAmplifyLevel();
+        }
+
+        private static byte RollDefaultPureGoldAmplifyLevel()
+        {
+            var roll = ServerRandom.Next(100);
             if (roll < 50)
                 return 3;
             if (roll < 80)
