@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Text;
 
 namespace DfoServer.Game.Characters
@@ -26,6 +26,7 @@ namespace DfoServer.Game.Characters
         public byte ExEquipSlotStat { get; set; }
         public int BonusSp { get; set; }
         public int BonusTp { get; set; }
+        public byte SlotIndex { get; set; }
         public bool Deleted { get; set; }
         public DateTime CreatedAt { get; set; }
         public DateTime UpdatedAt { get; set; }
