@@ -822,6 +822,27 @@ WHERE character_id = @characterId AND list_type = @listType;";
 
         internal bool TryAddBoosterRewardItems(SqliteConnection connection, SqliteTransaction transaction, int characterId, int accountId, int itemTemplateId, int stackCount, out List<BoosterRewardResult> results)
         {
+            return TryAddBoosterRewardItems(
+                connection,
+                transaction,
+                characterId,
+                accountId,
+                itemTemplateId,
+                stackCount,
+                0,
+                out results);
+        }
+
+        internal bool TryAddBoosterRewardItems(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            int characterId,
+            int accountId,
+            int itemTemplateId,
+            int stackCount,
+            int usablePeriodDays,
+            out List<BoosterRewardResult> results)
+        {
             results = new List<BoosterRewardResult>();
 
             if (SpecialRewardRouter.TryRoute(connection, transaction, characterId, accountId, itemTemplateId, stackCount, out var specialOutcome))
@@ -861,7 +882,7 @@ WHERE character_id = @characterId AND list_type = @listType;";
             int slotStart;
             int slotEnd;
             var insertListType = InventoryListType.Main;
-            var expireTime = ResolveBoosterRewardExpireTime(itemTemplateId, metadata);
+            var expireTime = ResolveBoosterRewardExpireTime(itemTemplateId, metadata, usablePeriodDays);
             var insertKind = metadata.IsStackable && expireTime > 0 ? "special" : metadata.ItemKind;
             var marker16 = metadata.IsStackable ? 0 : -1;
             var petSerial = 0;
@@ -875,7 +896,8 @@ WHERE character_id = @characterId AND list_type = @listType;";
                 insertKind = "avatar";
                 slotStart = 0;
                 slotEnd = 500;
-                expireTime = 0;
+                if (usablePeriodDays <= 0)
+                    expireTime = 0;
                 marker16 = SqliteInventoryStore.DefaultAvatarUnknownFixed30;
             }
             else if (isCreature)
@@ -1130,10 +1152,13 @@ WHERE character_id = @characterId AND list_type = @listType;";
             return remaining;
         }
 
-        private static int ResolveBoosterRewardExpireTime(int itemTemplateId, ItemMetadata metadata)
+        private static int ResolveBoosterRewardExpireTime(int itemTemplateId, ItemMetadata metadata, int usablePeriodDays)
         {
             if (metadata == null)
                 return 0;
+
+            if (usablePeriodDays > 0)
+                return AddDaysFromNow(usablePeriodDays);
 
             if (metadata.IsStackable)
             {

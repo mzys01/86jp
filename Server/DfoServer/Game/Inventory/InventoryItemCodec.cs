@@ -45,6 +45,7 @@ namespace DfoServer.Game.Inventory
                 Reserved1 = ReadHexValue(extraJson, "reserved1", 71),
                 Reserved2 = ReadHexValue(extraJson, "reserved2", 30),
                 TailData = ReadHexValue(extraJson, "tailData", 7),
+                ExpireTime = reader.GetInt32(9),
             };
         }
 
@@ -56,6 +57,7 @@ namespace DfoServer.Game.Inventory
                 SlotIndex = common.SlotIndex,
                 AvatarItemId = common.ItemTemplateId,
                 AbilityNo = common.Durability,
+                ExpireTime = common.ExpireTime,
                 AvatarSocketData = common.JewelSocket,
                 ColorDataLen = 4,
             };

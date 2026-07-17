@@ -53,6 +53,9 @@ namespace DfoServer.SelfTests
         private const short PackageQuickConsumableSlot = 4;
         private const short PackageBagConsumableSlot = 90;
         private const short StackableRewardPackageSlot = 72;
+        private const short ShimmeringLightGiftBoxSlot = 73;
+        private const short UsableCeraPackageSlot = 74;
+        private const short MaterialGiftBoxSlot = 75;
         private const int PackageQuickConsumableInitialCount = 7;
         private const int PackageBagConsumableInitialCount = 20;
         private const short RewardStackQuickSlot = 3;
@@ -63,6 +66,11 @@ namespace DfoServer.SelfTests
         private const int SampleSelectedTitleRewardId = 400330051;
         private const int SampleCrossJobAuraRewardId = 112590011;
         private const int InvalidRewardItemTemplateId = 1;
+        private const int ShimmeringLightGiftBoxItemTemplateId = 10007318;
+        private const int ShimmeringLightWeaponAvatarItemTemplateId = 112600021;
+        private const int UsableCeraPackageItemTemplateId = 1007145;
+        private const int UsableCeraPackageRewardItemTemplateId = 63115;
+        private const int MaterialGiftBoxItemTemplateId = 2680445;
 
         private static readonly byte[] CapturedOpenRequestBody =
         {
@@ -181,6 +189,8 @@ namespace DfoServer.SelfTests
             _pass = 0;
             _fail = 0;
             Console.WriteLine("=== SELECTABLE_PACKAGE selftest ===");
+            CheckShimmeringLightGiftBoxPvf();
+            CheckGiftBoxPvfVariants();
 
             Check("parse captured 0x00A0 request", SelectablePackageOpenRequest.TryParse(CapturedOpenRequestBody, out var request));
             if (request == null)
@@ -231,6 +241,20 @@ namespace DfoServer.SelfTests
 
             var store = new SqliteInventoryStore(tempDb, ServerPaths.SchemaFilePath);
             SeedCharacterAndPackages(tempDb);
+
+            Check("0x0207 usable cera package without selections grants all package data",
+                store.TryOpenPackage0207(
+                    CharacterId,
+                    AccountId,
+                    UsableCeraPackageSlot,
+                    Array.Empty<int>(),
+                    out var usableCeraResult));
+            Check("0x0207 usable cera package grants declared pet capsule reward",
+                usableCeraResult?.Rewards.Exists(x =>
+                    x.ItemTemplateId == UsableCeraPackageRewardItemTemplateId && x.GrantedCount == 1) == true);
+            Check("0x0207 usable cera package consumes source",
+                store.LoadCharacterItemListSnapshot(CharacterId, AccountId).MainItems.TrueForAll(x =>
+                    x.SlotIndex != UsableCeraPackageSlot || x.ItemTemplateId != UsableCeraPackageItemTemplateId));
 
             var seriaLuckTimedRewardId = FindTimedSeriaLuckRewardId(out var timedRewardUsablePeriod);
             Check("Seria luck PVF contains a usable-period reward", seriaLuckTimedRewardId > 0 && timedRewardUsablePeriod > 0);
@@ -520,6 +544,31 @@ namespace DfoServer.SelfTests
                 Check("special booster reward exists", snapshot.MainItems.Find(x => x.ItemTemplateId == SampleSpecialKindBoosterRewardId) != null);
             }
 
+            BoosterUseResult shimmeringLightResult = null;
+            Check("打开闪烁之光礼盒成功", store.TryUseBoosterItem(CharacterId, AccountId, new BoosterUseRequest
+            {
+                SlotIndex = ShimmeringLightGiftBoxSlot,
+                ExpectedItemTemplateId = ShimmeringLightGiftBoxItemTemplateId,
+                SelectedItemTemplateIds = Array.Empty<int>(),
+            }, out shimmeringLightResult));
+            if (shimmeringLightResult != null)
+            {
+                Check("闪烁之光礼盒只发放一条奖励", shimmeringLightResult.Rewards.Count == 1);
+                Check("闪烁之光礼盒发放武器装扮",
+                    shimmeringLightResult.Rewards.Count == 1 &&
+                    shimmeringLightResult.Rewards[0].ItemTemplateId == ShimmeringLightWeaponAvatarItemTemplateId &&
+                    shimmeringLightResult.Rewards[0].ListType == InventoryListType.Avatar &&
+                    shimmeringLightResult.Rewards[0].GrantedCount == 1);
+                Check("闪烁之光礼盒不再发放复活币",
+                    !shimmeringLightResult.Rewards.Exists(x => x.ItemTemplateId == InvalidRewardItemTemplateId));
+
+                var snapshot = store.LoadCharacterItemListSnapshot(CharacterId, AccountId);
+                Check("闪烁之光武器装扮已进入装扮栏",
+                    snapshot.AvatarItems.Exists(x => x.AvatarItemId == ShimmeringLightWeaponAvatarItemTemplateId));
+                Check("闪烁之光礼盒已被消耗",
+                    snapshot.MainItems.Find(x => x.SlotIndex == ShimmeringLightGiftBoxSlot) == null);
+            }
+
             Check("parse captured 0x03F3 magic-box request", MagicBoxOpenRequest.TryParse(CapturedMagicBoxOpenRequestBody, out var magicBoxRequest));
             if (magicBoxRequest != null)
             {
@@ -794,6 +843,7 @@ namespace DfoServer.SelfTests
                             MaterialSlotIndex = requestMaterialSlot,
                             ExpectedMaterialItemTemplateId = magicBoxRequest.MaterialItemTemplateId,
                         }, out _));
+
                     Check("magic-box request rejects wrong-tab hammer without material slot",
                         !store.TryUseBoosterItem(CharacterId, AccountId, new BoosterUseRequest
                         {
@@ -818,6 +868,19 @@ namespace DfoServer.SelfTests
                 Check("cera-shop purchase result has chicken-box extra reward", ceraShopBundleResult.ExtraResults.Exists(x => x.ItemTemplateId == MagicBoxItemTemplateId));
                 Check("cera-shop purchase ACK keeps mall extra item count zero", ceraAckBody.Length == 24 && BitConverter.ToUInt16(ceraAckBody, 22) == 0);
             }
+
+            InsertStackableItem(tempDb, MaterialGiftBoxItemTemplateId, MaterialGiftBoxSlot, 1);
+            Check("material gift box rejects open without required material",
+                !store.TryUseBoosterItem(CharacterId, AccountId, new BoosterUseRequest
+                {
+                    SlotIndex = MaterialGiftBoxSlot,
+                    SelectedItemTemplateIds = Array.Empty<int>(),
+                    ExpectedItemTemplateId = MaterialGiftBoxItemTemplateId,
+                }, out var materialGiftBoxFailure));
+            Check("material gift box returns material-not-enough error",
+                materialGiftBoxFailure?.ErrorCode == BoosterUseResult.ErrorMaterialNotEnough);
+            Check("material gift box remains after material-not-enough error",
+                store.LoadCharacterItemListSnapshot(CharacterId, AccountId).MainItems.Find(x => x.SlotIndex == MaterialGiftBoxSlot)?.ItemTemplateId == MaterialGiftBoxItemTemplateId);
 
             using (var connection = new SqliteConnection(SqliteDatabaseBootstrap.BuildConnectionString(tempDb)))
             {
@@ -848,16 +911,75 @@ namespace DfoServer.SelfTests
                 Check($"invalid open keeps package stack={remaining}", remaining == 2);
             }
 
-            var errorAckBody = SelectablePackageAckBuilder.BuildError();
-            Check($"0x00A0 error ACK padded length={errorAckBody.Length}", errorAckBody.Length == 22);
-            Check("0x00A0 error ACK safe category sentinel", errorAckBody.Length >= 10 && BitConverter.ToInt32(errorAckBody, 2) == -1 && BitConverter.ToInt32(errorAckBody, 6) == -1);
-            Check("0x00A0 parsed selectable fallback keeps padded error ACK",
-                BytesEqual(InventoryHandler.BuildOpenSelectablePackageFallbackErrorBody(true), errorAckBody));
-            Check("0x00A0 booster-style fallback uses compact command error",
-                BytesEqual(InventoryHandler.BuildOpenSelectablePackageFallbackErrorBody(false), new byte[] { 0x00, 0x04 }));
+            var errorAckBody = CommonPacketBodyBuilder.BuildCmdError(BoosterUseResult.ErrorInvalidRequest);
+            Check("0x00A0 error ACK uses common invalid-item error",
+                errorAckBody.Length == 2 && errorAckBody[0] == 0 && errorAckBody[1] == BoosterUseResult.ErrorInvalidRequest);
+            Check("0x00A0 fallback uses common invalid-item error",
+                BytesEqual(InventoryHandler.BuildOpenSelectablePackageFallbackErrorBody(), errorAckBody));
 
             PrintSummary();
             return _fail == 0 ? 0 : 1;
+        }
+
+        private static void CheckShimmeringLightGiftBoxPvf()
+        {
+            var stackable = InventoryDbPrimitives.LoadStackableItem(ShimmeringLightGiftBoxItemTemplateId);
+            Check("闪烁之光礼盒 PVF 可解析", stackable != null);
+            if (stackable == null)
+                return;
+
+            Check("闪烁之光礼盒只解析出一条装扮奖励", stackable.BoosterRewards.Count == 1);
+            var reward = stackable.BoosterRewards.Count == 1 ? stackable.BoosterRewards[0] : null;
+            Check($"闪烁之光礼盒奖励物品={ShimmeringLightWeaponAvatarItemTemplateId}", reward?.ItemId == ShimmeringLightWeaponAvatarItemTemplateId);
+            Check("闪烁之光礼盒奖励数量=1", reward?.Count == 1);
+            Check("闪烁之光礼盒奖励权重=100000", reward?.Weight == 100000);
+        }
+
+        private static void CheckGiftBoxPvfVariants()
+        {
+            var broadcast = InventoryDbPrimitives.LoadStackableItem(2680445);
+            Check("broadcast 礼盒解析三条奖励", broadcast?.BoosterRewards.Count == 3);
+            Check("broadcast 礼盒跳过控制列",
+                broadcast?.BoosterRewards.Select(x => x.ItemId).SequenceEqual(new[] { 7273, 7274, 7275 }) == true);
+
+            var character = InventoryDbPrimitives.LoadStackableItem(2680814);
+            Check("charactor 礼盒解析七职业奖励", character?.BoosterRewards.Count == 7);
+            Check("charactor 礼盒保留职业标签",
+                character?.BoosterRewards.Any(x => x.CharacterJobLabel == "swordman" && x.ItemId == 40356) == true &&
+                character.BoosterRewards.Any(x => x.CharacterJobLabel == "thief" && x.ItemId == 1750029));
+
+            var decimalWeights = InventoryDbPrimitives.LoadStackableItem(10003593);
+            Check("charactor 礼盒小数权重保持相对精度",
+                decimalWeights?.BoosterRewards.Any(x =>
+                    x.CharacterJobLabel == "gunner" && x.ItemId == 104030039 && x.Weight == 2525) == true &&
+                decimalWeights.BoosterRewards.Any(x =>
+                    x.CharacterJobLabel == "gunner" && x.ItemId == 104020034 && x.Weight == 45));
+
+            var defaultSelection = InventoryDbPrimitives.LoadStackableItem(10092771);
+            Check("default select 只解析声明的默认项",
+                defaultSelection?.BoosterSelectionRewards.Count(x => x.RewardKind == "default select") == 1 &&
+                defaultSelection.BoosterSelectionRewards.Any(x =>
+                    x.RewardKind == "default select" && x.ItemId == 100312071 && x.Count == 1));
+
+            var avatarSelection = InventoryDbPrimitives.LoadStackableItem(10012700);
+            Check("选择礼包 avatar 四元组解析完整", avatarSelection?.BoosterSelectionRewards.Count == 30);
+            Check("选择礼包 avatar 不把控制列当物品",
+                avatarSelection?.BoosterSelectionRewards.All(x => x.ItemId > 100000000 && x.Count == 1) == true);
+
+            var packageWithPeriod = InventoryDbPrimitives.LoadStackableItem(2681636);
+            Check("带有效期商城礼包解析七条奖励", packageWithPeriod?.PackageRewards.Count == 7);
+            Check("商城礼包保留奖励级有效期",
+                packageWithPeriod?.PackageRewards.All(x => x.Count == 1 && x.UsablePeriodDays == 3) == true);
+
+            var repeatedPackageNode = InventoryDbPrimitives.LoadStackableItem(2683258);
+            Check("空的重复 package data 不覆盖有效奖励",
+                repeatedPackageNode?.PackageRewards.Count == 3 &&
+                repeatedPackageNode.PackageRewards.Any(x => x.ItemId == 8 && x.Count == 100));
+
+            var randomBox = InventoryDbPrimitives.LoadStackableItem(2681920);
+            Check("RANDOMBOX 四元组解析完整",
+                randomBox?.RandomBoxRewards.Count == 22 &&
+                randomBox.RandomBoxRewards.All(x => x.ItemId > 0 && x.Weight > 0 && x.Count > 0));
         }
 
         private static void RunRewardStackingRegressionTests()
@@ -867,6 +989,34 @@ namespace DfoServer.SelfTests
 
             var store = new SqliteInventoryStore(databasePath, ServerPaths.SchemaFilePath);
             SeedRewardStackingCharacter(databasePath);
+
+            var timedPackageReward = InventoryDbPrimitives.LoadStackableItem(2681636)?.PackageRewards.FirstOrDefault();
+            Check("带有效期商城礼包提供真实装扮奖励",
+                timedPackageReward != null &&
+                timedPackageReward.UsablePeriodDays == 3 &&
+                ItemMetadataResolver.IsAvatarItem(ItemMetadataResolver.Resolve(timedPackageReward.ItemId)));
+            if (timedPackageReward != null && timedPackageReward.UsablePeriodDays == 3)
+            {
+                var expectedMinExpire = DateTimeOffset.Now.AddDays(3).AddMinutes(-1).ToUnixTimeSeconds();
+                Check("奖励级有效期写入库存",
+                    TryAddTimedBoosterRewardItems(
+                        databasePath,
+                        timedPackageReward.ItemId,
+                        timedPackageReward.Count,
+                        timedPackageReward.UsablePeriodDays,
+                        out var timedResults));
+                var timedAvatar = store.LoadCharacterItemListSnapshot(CharacterId, AccountId).AvatarItems.Find(x =>
+                    x.AvatarItemId == timedPackageReward.ItemId);
+                var storedExpireTime = LoadItemExpireTime(databasePath, InventoryListType.Avatar, timedPackageReward.ItemId);
+                var expectedMaxExpire = DateTimeOffset.Now.AddDays(3).AddMinutes(1).ToUnixTimeSeconds();
+                Check("商城礼包装扮按奖励级有效期到期",
+                    timedAvatar != null &&
+                    timedResults?.FirstOrDefault()?.ListType == InventoryListType.Avatar &&
+                    storedExpireTime == timedAvatar.ExpireTime &&
+                    timedAvatar.ExpireTime >= expectedMinExpire &&
+                    timedAvatar.ExpireTime <= expectedMaxExpire);
+                DeleteItemsByTemplateId(databasePath, timedPackageReward.ItemId, InventoryListType.Avatar);
+            }
 
             var teleportMetadata = ItemMetadataResolver.Resolve(InstantTeleportPotionItemTemplateId);
             Check("instant teleport potion is stackable", teleportMetadata.IsStackable);
@@ -1209,6 +1359,10 @@ VALUES
                       1, 1, 0, 0, 0, @expireTime, 0, 0, '{}'),
                     ('character', @characterId, @characterId, 0, @magicHammerBundleSlot, @magicHammerBundleTemplateId, 'stackable',
                      1, 1, 0, 0, 0, 0, 0, 0, '{}'),
+                    ('character', @characterId, @characterId, 0, @shimmeringLightGiftBoxSlot, @shimmeringLightGiftBoxTemplateId, 'stackable',
+                     1, 1, 0, 0, 0, @expireTime, 0, 0, '{}'),
+                    ('character', @characterId, @characterId, 0, @usableCeraPackageSlot, @usableCeraPackageTemplateId, 'stackable',
+                     1, 1, 0, 0, 0, 0, 0, 0, '{}'),
                     ('character', @characterId, @characterId, 0, @wrongMagicHammerSlot, @magicHammerTemplateId, 'stackable',
                      1, 1, 0, 0, 0, 0, 0, 0, '{}');";
                     command.Parameters.AddWithValue("@accountId", AccountId);
@@ -1219,12 +1373,16 @@ VALUES
                     command.Parameters.AddWithValue("@crossJobAuraPackageSlot", CrossJobAuraPackageSlot);
                     command.Parameters.AddWithValue("@specialBoosterPackageSlot", SpecialBoosterPackageSlot);
                     command.Parameters.AddWithValue("@magicHammerBundleSlot", MagicHammerBundleSlot);
+                    command.Parameters.AddWithValue("@shimmeringLightGiftBoxSlot", ShimmeringLightGiftBoxSlot);
+                    command.Parameters.AddWithValue("@usableCeraPackageSlot", UsableCeraPackageSlot);
                     command.Parameters.AddWithValue("@wrongMagicHammerSlot", WrongMagicHammerSlot);
                     command.Parameters.AddWithValue("@templateId", SampleTitleSelectablePackageId);
                     command.Parameters.AddWithValue("@avatarTemplateId", SampleAvatarSelectablePackageId);
                     command.Parameters.AddWithValue("@auraTemplateId", SampleAuraSelectablePackageId);
                     command.Parameters.AddWithValue("@specialBoosterTemplateId", SampleSpecialKindBoosterPackageId);
                     command.Parameters.AddWithValue("@magicHammerBundleTemplateId", SampleMagicHammerBundleId);
+                    command.Parameters.AddWithValue("@shimmeringLightGiftBoxTemplateId", ShimmeringLightGiftBoxItemTemplateId);
+                    command.Parameters.AddWithValue("@usableCeraPackageTemplateId", UsableCeraPackageItemTemplateId);
                     command.Parameters.AddWithValue("@magicHammerTemplateId", MagicHammerItemTemplateId);
                     command.Parameters.AddWithValue("@expireTime", ToUnixLocal("2027-08-13 06:00:00"));
                     command.ExecuteNonQuery();
@@ -1274,6 +1432,35 @@ VALUES (@characterId, 0, 24);";
                         AccountId,
                         itemTemplateId,
                         stackCount,
+                        out results);
+                    if (success)
+                        transaction.Commit();
+                    return success;
+                }
+            }
+        }
+
+        private static bool TryAddTimedBoosterRewardItems(
+            string databasePath,
+            int itemTemplateId,
+            int stackCount,
+            int usablePeriodDays,
+            out List<BoosterRewardResult> results)
+        {
+            using (var connection = new SqliteConnection(SqliteDatabaseBootstrap.BuildConnectionString(databasePath)))
+            {
+                connection.Open();
+                using (var transaction = connection.BeginTransaction())
+                {
+                    var db = new InventoryDbPrimitives();
+                    var success = db.TryAddBoosterRewardItems(
+                        connection,
+                        transaction,
+                        CharacterId,
+                        AccountId,
+                        itemTemplateId,
+                        stackCount,
+                        usablePeriodDays,
                         out results);
                     if (success)
                         transaction.Commit();
@@ -1736,6 +1923,32 @@ WHERE character_id=@characterId AND list_type=@listType AND slot_index=@slotInde
                     command.Parameters.AddWithValue("@characterId", CharacterId);
                     command.Parameters.AddWithValue("@listType", (int)listType);
                     command.Parameters.AddWithValue("@slotIndex", slotIndex);
+                    var value = command.ExecuteScalar();
+                    return value == null || value == DBNull.Value
+                        ? -1
+                        : Convert.ToInt32(value, CultureInfo.InvariantCulture);
+                }
+            }
+        }
+
+        private static int LoadItemExpireTime(
+            string databasePath,
+            InventoryListType listType,
+            int itemTemplateId)
+        {
+            using (var connection = new SqliteConnection(SqliteDatabaseBootstrap.BuildConnectionString(databasePath)))
+            {
+                connection.Open();
+                using (var command = connection.CreateCommand())
+                {
+                    command.CommandText = @"
+SELECT expire_time
+FROM character_items
+WHERE character_id=@characterId AND list_type=@listType AND item_template_id=@itemTemplateId
+LIMIT 1;";
+                    command.Parameters.AddWithValue("@characterId", CharacterId);
+                    command.Parameters.AddWithValue("@listType", (int)listType);
+                    command.Parameters.AddWithValue("@itemTemplateId", itemTemplateId);
                     var value = command.ExecuteScalar();
                     return value == null || value == DBNull.Value
                         ? -1

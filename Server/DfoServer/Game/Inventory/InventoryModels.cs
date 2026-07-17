@@ -318,6 +318,14 @@ namespace DfoServer.Game.Inventory
 
     public sealed class BoosterUseResult
     {
+        public const byte ErrorInvalidRequest = 0x13;
+
+        public const byte ErrorInventoryFull = 0x04;
+
+        public const byte ErrorMaterialNotEnough = 0x11;
+
+        public byte ErrorCode { get; set; } = ErrorInvalidRequest;
+
         public short SourceSlotIndex { get; set; }
 
         public int SourceItemTemplateId { get; set; }
