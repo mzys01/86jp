@@ -93,6 +93,8 @@ namespace PvfLib
         #region 经济属性
 
         public int Price { get; set; } = -1;
+        // [add price] is a signed purchase-price adjustment.
+        public int AddPrice { get; set; }
         public int Value { get; set; } = -1;
         public int Weight { get; set; } = -1;
         public int LotteryUseCost { get; set; }
@@ -219,6 +221,7 @@ namespace PvfLib
 
                     
                     case "price": stk.Price = ParseInt(data); break;
+                    case "add price": stk.AddPrice = ParseInt(data); break;
                     case "value": stk.Value = ParseInt(data); break;
                     case "weight": stk.Weight = ParseInt(data); break;
                     case "lottery use cost": stk.LotteryUseCost = Math.Max(0, ParseInt(data)); break;
