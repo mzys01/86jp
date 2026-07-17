@@ -76,7 +76,9 @@ namespace DfoServer.SelfTests
             // --- 完成: 触发器归零 -> 成功 ACK (经验/金币/消耗/奖励段) ---
             var finishOk = QuestAckBuilder.BuildFinish(questService.HandleFinishQuest(CharacterId, BuildFinishBody(LetterQuestId)));
             CheckBytes("finish success ack bytes",
-                "01-FA-07-00-AB-B4-00-00-00-00-00-00-00-00-00", finishOk, ref failures);
+                "01-FA-07-00-AB-B4-00-00-A8-0C-00-00-00-00-01-00-00-00-00-00-00-A8-0C-00-00-00-00-00-00-00-00-00-00",
+                finishOk,
+                ref failures);
 
             // --- 完成: 任务已完成且不在身上, 再次请求被拒绝(不能重复领奖励) ---
             var finishAgain = QuestAckBuilder.BuildFinish(questService.HandleFinishQuest(CharacterId, BuildFinishBody(LetterQuestId)));

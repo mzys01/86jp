@@ -685,13 +685,13 @@ namespace DfoServer.GameWorld
                 uint gold = 0;
                 if (chainType == 0)
                 {
-                    var fixedRewards = ParseItemPairs(qst.RewardIntData, playerJob, playerGrowType);
+                    var fixedRewards = ParseItemPairs(
+                        qst.RewardIntData, playerJob, playerGrowType, preserveGoldMarker: true);
                     foreach (var fr in fixedRewards)
                     {
                         if (fr.ItemId == 0)
                         {
-                            if (fr.Count > 0 || qst.GoldMultiple > 0)
-                                gold = param.ComputeGoldReward(playerLevel, questMinLevel, qst.GoldMultiple, ignoreLevel);
+                            gold = param.ComputeGoldReward(playerLevel, questMinLevel, qst.GoldMultiple, ignoreLevel);
                         }
                         else
                         {
@@ -757,7 +757,11 @@ namespace DfoServer.GameWorld
             }
         }
 
-        private static List<QuestRewardItem> ParseItemPairs(string data, int playerJob = -1, int playerGrowType = -1)
+        private static List<QuestRewardItem> ParseItemPairs(
+            string data,
+            int playerJob = -1,
+            int playerGrowType = -1,
+            bool preserveGoldMarker = false)
         {
             var result = new List<QuestRewardItem>();
             if (string.IsNullOrWhiteSpace(data)) return result;
@@ -789,7 +793,7 @@ namespace DfoServer.GameWorld
                 {
                     int count = 0;
                     if (i < tokens.Length) { int.TryParse(tokens[i], out count); i++; }
-                    if (itemId > 0)
+                    if (itemId > 0 || (preserveGoldMarker && itemId == 0))
                         result.Add(new QuestRewardItem { ItemId = itemId, Count = count });
                 }
             }
@@ -994,8 +998,8 @@ namespace DfoServer.GameWorld
 
         public uint ComputeGold(int questMinLevel)
         {
-            if (questMinLevel >= 1 && questMinLevel <= _goldTable.Length)
-                return (uint)_goldTable[questMinLevel - 1];
+            if (questMinLevel >= 0 && questMinLevel < _goldTable.Length)
+                return (uint)_goldTable[questMinLevel];
             return 0;
         }
 
@@ -1004,8 +1008,8 @@ namespace DfoServer.GameWorld
             if (goldMultiple <= 0) goldMultiple = 100;
             int levelDiff = playerLevel - questMinLevel;
             int penalty = ignoreLevel ? 100 : ComputeLevelPenalty(levelDiff);
-            int lookupLevel = ignoreLevel ? playerLevel : questMinLevel;
-            int baseGold = (lookupLevel >= 1 && lookupLevel <= _goldTable.Length) ? _goldTable[lookupLevel - 1] : 0;
+            int lookupIndex = ignoreLevel ? playerLevel - 1 : questMinLevel;
+            int baseGold = (lookupIndex >= 0 && lookupIndex < _goldTable.Length) ? _goldTable[lookupIndex] : 0;
             return (uint)(goldMultiple * ((long)penalty * baseGold / 100) / 100);
         }
 
