@@ -173,6 +173,19 @@ namespace PvfLib
                     case "fixed level skill":
                         skl.IsFixedLevelSkill = true;
                         skl.FixedLevelBase = ParseInt(data);
+                        foreach (var child in node.Children)
+                        {
+                            var childData = child.DataItems.Count > 0 ? child.GetFirstDataContent(content).Trim() : "";
+                            switch (child.Tag.ToLowerInvariant())
+                            {
+                                case "interval level":
+                                    skl.FixedLevelInterval = Math.Max(1, ParseInt(childData));
+                                    break;
+                                case "add level per interval":
+                                    skl.FixedLevelAddPerInterval = Math.Max(1, ParseInt(childData));
+                                    break;
+                            }
+                        }
                         break;
                     case "interval level": skl.FixedLevelInterval = Math.Max(1, ParseInt(data)); break;
                     case "add level per interval": skl.FixedLevelAddPerInterval = Math.Max(1, ParseInt(data)); break;
