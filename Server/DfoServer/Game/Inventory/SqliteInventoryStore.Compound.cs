@@ -111,7 +111,7 @@ namespace DfoServer.Game.Inventory
                         0,
                         DefaultAvatarUnknownFixed30,
                         0,
-                        CreateDefaultAvatarExtraJson());
+                        CreateDefaultAvatarExtraJson(newItemId));
                     newSlotsOut.Add(newSlot);
                 }
 
@@ -226,7 +226,7 @@ namespace DfoServer.Game.Inventory
                     0,
                     DefaultAvatarUnknownFixed30,
                     0,
-                    CreateDefaultAvatarExtraJson());
+                    CreateDefaultAvatarExtraJson(newItemId));
 
                     transaction.Commit();
                     newSlot = emptySlot;

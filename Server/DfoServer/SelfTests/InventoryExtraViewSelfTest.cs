@@ -218,6 +218,29 @@ namespace DfoServer.SelfTests
                 && updatedAvatarLayout.AvatarDetail.Socket3.SocketType == 0x0000
                 && updatedAvatarLayout.AvatarDetail.Socket0.EmblemItemId == 0);
 
+            var auraOpenSockets = ItemMetadataResolver.ResolveAvatarOpenSocketTypes(0x060E240F);
+            var auraDefaultSockets = ItemMetadataResolver.ResolveAvatarDefaultSocketTypes(0x060E240F);
+            var auraDefaultRecord = new SqliteInventoryStore.ItemRecord
+            {
+                ExtraJson = SqliteInventoryStore.CreateDefaultAvatarExtraJson(0x060E240F),
+            };
+            var auraDefaultView = InventoryItemView.ForAvatar(auraDefaultRecord);
+            Check("avatar default socket resolver 只读 emblem socket default", auraOpenSockets.Count == 0
+                && auraDefaultSockets.Count == 2
+                && auraDefaultSockets[0] == 0xEF
+                && auraDefaultSockets[1] == 0xEF
+                && auraDefaultView.AvatarDetail.SocketCount == 2
+                && auraDefaultView.AvatarDetail.Socket0.SocketType == 0xFFEF
+                && auraDefaultView.AvatarDetail.Socket1.SocketType == 0xFFEF
+                && auraDefaultRecord.ExtraJson.Contains("\"reserved2\":\"EFFF00000000EFFF00000000", StringComparison.Ordinal));
+
+            var hairOpenSockets = ItemMetadataResolver.ResolveAvatarOpenSocketTypes(0x060DB1B9);
+            var hairDefaultSockets = ItemMetadataResolver.ResolveAvatarDefaultSocketTypes(0x060DB1B9);
+            Check("avatar open socket resolver 只读 avatar type select", hairOpenSockets.Count == 2
+                && hairOpenSockets[0] == 0x01
+                && hairOpenSockets[1] == 0x01
+                && hairDefaultSockets.Count == 0);
+
             var avatarEquippedRaw = MakeEquipListCodec.BuildEntryFromDisplayFields(2, 223344, new MakeEquipListCodec.DisplayFields
             {
                 InstanceValue = 0x01020304,

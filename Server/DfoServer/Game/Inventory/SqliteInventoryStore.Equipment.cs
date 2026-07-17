@@ -295,7 +295,35 @@ namespace DfoServer.Game.Inventory
                 }
 
                 var targetView = InventoryItemView.ForAvatar(target);
-                var expectedSocketTypes = ItemMetadataResolver.ResolveAvatarSocketTypes(targetItemTemplateId);
+                var expectedSocketTypes = ItemMetadataResolver.ResolveAvatarOpenSocketTypes(targetItemTemplateId);
+                if (expectedSocketTypes == null || expectedSocketTypes.Count == 0)
+                {
+                    var defaultSocketTypes = ItemMetadataResolver.ResolveAvatarDefaultSocketTypes(targetItemTemplateId);
+                    if (defaultSocketTypes == null || defaultSocketTypes.Count == 0)
+                    {
+                        FileLogger.Log($"  [AvatarSocket] REJECT: avatar item=0x{targetItemTemplateId:X8} has no socket definition in [avatar type select]");
+                        return false;
+                    }
+
+                    if (AvatarSocketLayoutMatches(targetView.AvatarDetail, defaultSocketTypes))
+                    {
+                        FileLogger.Log($"  [AvatarSocket] REJECT: avatar item=0x{targetItemTemplateId:X8} uses [emblem socket default] and is already open");
+                        return false;
+                    }
+
+                    targetView.AvatarDetail.SetSocketTypes(defaultSocketTypes);
+                    _db.UpdateItemExtraJson(connection, transaction, target.ItemUid, target.ExtraJson);
+                    _auditLogger.WriteAuditLog(connection, transaction, characterId, "repair_default_avatar_socket", target, target.ListType, target.SlotIndex, 0);
+                    transaction.Commit();
+
+                    result = new AvatarSocketMutationResult
+                    {
+                        MaterialConsumed = false,
+                    };
+                    FileLogger.Log($"  [AvatarSocket] repaired default socket layout item=0x{targetItemTemplateId:X8} count={Math.Min(5, defaultSocketTypes.Count)}");
+                    return true;
+                }
+
                 var currentOpenCount = targetView.AvatarDetail.SocketCount;
                 if (currentOpenCount > 0)
                 {

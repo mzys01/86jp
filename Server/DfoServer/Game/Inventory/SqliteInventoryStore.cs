@@ -747,6 +747,21 @@ WHERE item_uid = @itemUid;";
                 + ",\"tailData\":\"" + InventoryItemViewBytes.ToHex(new byte[7]) + "\"}";
         }
 
+        internal static string CreateDefaultAvatarExtraJson(int itemTemplateId)
+        {
+            var extraJson = CreateDefaultAvatarExtraJson();
+            var socketTypes = ItemMetadataResolver.ResolveAvatarDefaultSocketTypes(itemTemplateId);
+            if (socketTypes == null || socketTypes.Count == 0)
+                return extraJson;
+
+            var record = new ItemRecord
+            {
+                ExtraJson = extraJson,
+            };
+            InventoryItemView.ForAvatar(record).AvatarDetail.SetSocketTypes(socketTypes);
+            return record.ExtraJson;
+        }
+
         internal static string CreateDefaultPetExtraJson()
         {
             return "{\"tailData0A\":\"" + InventoryItemViewBytes.ToHex(new byte[74]) + "\"}";
