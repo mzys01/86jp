@@ -1,6 +1,7 @@
 using DfoServer.Game.Accounts;
 using DfoServer.Game.Appearance;
 using DfoServer.Game.Characters;
+using DfoServer.Game.KnightShield;
 using DfoServer.Game.Names;
 using DfoServer.Game.SelectCharacter;
 using DfoServer.GameWorld;
@@ -417,10 +418,36 @@ namespace DfoServer.Network.Handlers
 
         public async Task Handle_ENUM_CMDPACKET_RETURN_SELECT_CHARACTER(EnhancedClientSession session, GamePacketHeader header, byte[] body)
         {
+            var shieldReset = BuildKnightShieldReturnSelectReset(session?.Player);
+            if (shieldReset != null)
+            {
+                // 423 窗口会跨角色保留 catalog。离开角色时先把它的五槽归一为空，
+                // 避免下一守护者的真实物品 ID 被旧 growType catalog 反向清零。
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
+                    0x00,
+                    KnightShieldDeckBodyBuilder.DeckNotificationType,
+                    shieldReset));
+                FileLogger.Log(
+                    $"[{ProtocolName}] RETURN_SELECT_CHARACTER: cleared client knight-shield deck " +
+                    $"for character_id={session.Player.CharacterId}");
+            }
+
             Dungeon.DungeonRunLifecycle.EndRunOnTeardown(session, "return_select_character");
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0007, CommonPacketBodyBuilder.BuildSuccessAck()));
             FileLogger.Log($"[{ProtocolName}] RETURN_SELECT_CHARACTER: sent ACK for session {session.SessionId}");
             await SendCharacterListAsync(session);
+        }
+
+        internal static byte[] BuildKnightShieldReturnSelectReset(Game.Session.PlayerContext player)
+        {
+            if (player == null
+                || player.CharacterId <= 0
+                || !KnightShieldDataProvider.IsEligibleCharacter(player.Job))
+            {
+                return null;
+            }
+
+            return KnightShieldDeckBodyBuilder.BuildDeck(new KnightShieldDeckSnapshot());
         }
 
         public async Task Handle_CHANGE_CHARAC_SLOT(EnhancedClientSession session, GamePacketHeader header, byte[] body)

@@ -531,7 +531,21 @@ UPDATE characters SET slot_index = (
 
             // 存量角色的 0/1 原样保留（视为已购买）；仅改变今后省略该列时的默认状态。
             (25, "skill_tree_index 未购买状态与默认值", MigrateSkillTreeIndexDefault),
+
+            (26, "守护者盾牌5槽", MigrateKnightShieldDeck),
         };
+
+        private static void MigrateKnightShieldDeck(SqliteConnection connection)
+        {
+            ExecuteBatch(connection, @"
+CREATE TABLE IF NOT EXISTS character_knight_shield_deck (
+    character_id INTEGER NOT NULL,
+    slot_index INTEGER NOT NULL CHECK (slot_index >= 0 AND slot_index <= 4),
+    shield_item_id INTEGER NOT NULL CHECK (shield_item_id > 0),
+    PRIMARY KEY (character_id, slot_index),
+    FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
+);");
+        }
 
         private static void MigrateSkillTreeIndexDefault(SqliteConnection connection)
         {
