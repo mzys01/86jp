@@ -224,6 +224,8 @@ namespace DfoServer
             }
 
             server.Stop();
+            // 服务停止后不再产生常规业务日志，此时完成队列并等待后台写入结束，避免退出时丢失尾部日志。
+            FileLogger.Shutdown(TimeSpan.FromSeconds(5));
             Console.WriteLine("Server stopped.");
         }
     }
