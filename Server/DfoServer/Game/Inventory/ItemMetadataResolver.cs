@@ -266,6 +266,11 @@ namespace DfoServer.Game.Inventory
 
         public static IReadOnlyList<byte> ResolveAvatarSocketTypes(int itemTemplateId)
         {
+            return ResolveAvatarOpenSocketTypes(itemTemplateId);
+        }
+
+        public static IReadOnlyList<byte> ResolveAvatarOpenSocketTypes(int itemTemplateId)
+        {
             var result = new List<byte>();
             var equipmentEntry = EquipmentList.Value.GetById(itemTemplateId);
             if (equipmentEntry == null)
@@ -276,13 +281,30 @@ namespace DfoServer.Game.Inventory
                 var text = PvfArchiveAccessor.ReadText(Path.Combine("equipment", equipmentEntry.FilePath));
                 var section = ExtractAvatarTypeSelectSection(text);
                 AddAvatarSocketMatches(result, section, 5);
-
-                if (result.Count == 0)
-                    AddAvatarSocketMatches(result, ExtractEmblemSocketDefaultSection(text), ResolveAvatarEmblemSocketNum(text));
             }
             catch (Exception ex)
             {
-                FileLogger.Log($"  [AvatarSocket] ResolveAvatarSocketTypes(0x{itemTemplateId:X8}) failed: {ex.Message}");
+                FileLogger.Log($"  [AvatarSocket] ResolveAvatarOpenSocketTypes(0x{itemTemplateId:X8}) failed: {ex.Message}");
+            }
+
+            return result;
+        }
+
+        public static IReadOnlyList<byte> ResolveAvatarDefaultSocketTypes(int itemTemplateId)
+        {
+            var result = new List<byte>();
+            var equipmentEntry = EquipmentList.Value.GetById(itemTemplateId);
+            if (equipmentEntry == null)
+                return result;
+
+            try
+            {
+                var text = PvfArchiveAccessor.ReadText(Path.Combine("equipment", equipmentEntry.FilePath));
+                AddAvatarSocketMatches(result, ExtractEmblemSocketDefaultSection(text), ResolveAvatarEmblemSocketNum(text));
+            }
+            catch (Exception ex)
+            {
+                FileLogger.Log($"  [AvatarSocket] ResolveAvatarDefaultSocketTypes(0x{itemTemplateId:X8}) failed: {ex.Message}");
             }
 
             return result;

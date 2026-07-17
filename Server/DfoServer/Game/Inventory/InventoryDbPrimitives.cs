@@ -1025,7 +1025,7 @@ WHERE character_id = @characterId AND list_type = @listType;";
                 var extraJson = "{}";
                 if (insertListType == InventoryListType.Avatar)
                 {
-                    extraJson = SqliteInventoryStore.CreateDefaultAvatarExtraJson();
+                    extraJson = SqliteInventoryStore.CreateDefaultAvatarExtraJson(itemTemplateId);
                 }
 
                 var sealFlag = metadata.IsSealed ? (byte)1 : (byte)0;

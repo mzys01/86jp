@@ -377,7 +377,26 @@ namespace DfoServer.Game.Inventory
             if (source != null && source.Length > 0)
                 Buffer.BlockCopy(source, 0, data, 0, Math.Min(source.Length, Length));
 
-            return LooksLikeLegacyShifted(data) ? ConvertLegacyShiftedToCanonical(data) : data;
+            return NormalizeCanonicalSocketTypes(LooksLikeLegacyShifted(data) ? ConvertLegacyShiftedToCanonical(data) : data);
+        }
+
+        public static ushort NormalizeSocketType(ushort socketType)
+        {
+            return socketType == 0x00EF ? (ushort)0xFFEF : socketType;
+        }
+
+        private static byte[] NormalizeCanonicalSocketTypes(byte[] data)
+        {
+            for (var i = 0; i < 5; i++)
+            {
+                var offset = i * 6;
+                var socketType = BitConverter.ToUInt16(data, offset);
+                var normalized = NormalizeSocketType(socketType);
+                if (normalized != socketType)
+                    BitConverter.GetBytes(normalized).CopyTo(data, offset);
+            }
+
+            return data;
         }
 
         private static bool LooksLikeLegacyShifted(byte[] data)

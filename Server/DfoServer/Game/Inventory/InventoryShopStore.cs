@@ -921,7 +921,7 @@ namespace DfoServer.Game.Inventory
                     avatarExpireTime,
                     SqliteInventoryStore.DefaultAvatarUnknownFixed30,
                     0,
-                    SqliteInventoryStore.CreateDefaultAvatarExtraJson());
+                    SqliteInventoryStore.CreateDefaultAvatarExtraJson(itemTemplateId));
             }
             else if (!ItemIntake.TryInsertNewRow(
                     _db, connection, transaction, characterId, placement,

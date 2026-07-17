@@ -1033,7 +1033,7 @@ namespace DfoServer.Game.Inventory
         {
             EnsureSocketIndex(index);
             var offset = index * 6;
-            InventoryItemViewBytes.WriteUInt16(_avatarSocketData, offset, socketType);
+            InventoryItemViewBytes.WriteUInt16(_avatarSocketData, offset, AvatarSocketDataCodec.NormalizeSocketType(socketType));
             InventoryItemViewBytes.WriteInt32(_avatarSocketData, offset + 2, emblemItemId);
             Notify(InventoryAvatarDetailField.SocketData);
         }
@@ -1045,7 +1045,7 @@ namespace DfoServer.Game.Inventory
             {
                 var count = Math.Min(5, socketTypes.Count);
                 for (var index = 0; index < count; index++)
-                    InventoryItemViewBytes.WriteUInt16(_avatarSocketData, index * 6, socketTypes[index]);
+                    InventoryItemViewBytes.WriteUInt16(_avatarSocketData, index * 6, AvatarSocketDataCodec.NormalizeSocketType(socketTypes[index]));
             }
 
             Notify(InventoryAvatarDetailField.SocketData);
@@ -1060,7 +1060,7 @@ namespace DfoServer.Game.Inventory
         internal void SetSocketType(int index, ushort value)
         {
             EnsureSocketIndex(index);
-            InventoryItemViewBytes.WriteUInt16(_avatarSocketData, index * 6, value);
+            InventoryItemViewBytes.WriteUInt16(_avatarSocketData, index * 6, AvatarSocketDataCodec.NormalizeSocketType(value));
             Notify(InventoryAvatarDetailField.SocketData);
         }
 
