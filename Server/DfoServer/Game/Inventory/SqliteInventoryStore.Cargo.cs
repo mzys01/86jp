@@ -74,9 +74,11 @@ namespace DfoServer.Game.Inventory
 
                     if (!TrySpendCargoGold(conn, tx, accountId, amount))
                         return false;
-                    CurrencyService.GrantGold(conn, tx, characterId, amount);
+                    var granted = CurrencyService.GrantGold(conn, tx, characterId, amount);
+                    if (granted != amount)
+                        return false;
 
-                    newCharGold = wallet.Gold + amount;
+                    newCharGold = wallet.Gold + granted;
                     newCargoGold = cargoGold - amount;
                     tx.Commit();
                     return true;

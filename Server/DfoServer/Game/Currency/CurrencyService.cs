@@ -177,16 +177,7 @@ WHERE list_type = 0 AND slot_index >= 354 AND slot_index <= 359
 
         public static WalletSnapshot LoadWallet(SqliteConnection connection, SqliteTransaction transaction, int characterId)
         {
-            var w = new WalletSnapshot();
-            using (var cmd = connection.CreateCommand())
-            {
-                cmd.Transaction = transaction;
-                cmd.CommandText = "SELECT stack_count FROM character_items WHERE character_id = @cid AND list_type = 0 AND slot_index = 0;";
-                cmd.Parameters.AddWithValue("@cid", characterId);
-                var result = cmd.ExecuteScalar();
-                if (result != null && result != DBNull.Value)
-                    w.Gold = Convert.ToInt32(result);
-            }
+            var w = new WalletSnapshot { Gold = LoadGold(connection, transaction, characterId) };
             using (var cmd = connection.CreateCommand())
             {
                 cmd.Transaction = transaction;
@@ -237,29 +228,42 @@ WHERE c.character_id = @cid;";
         // 货币写入唯一入口。发放=SQL原子增量; 扣费=条件扣减(余额不足返回false, 绝不clamp到0)。
         // 绝对值SET的旧 Update* 已全部删除, 任何路径不得整值覆盖钱包列。
 
-        public static void GrantGold(SqliteConnection connection, SqliteTransaction transaction, int characterId, int amount)
+        public static int GrantGold(SqliteConnection connection, SqliteTransaction transaction, int characterId, int amount)
         {
             if (amount < 0)
                 throw new ArgumentOutOfRangeException(nameof(amount), amount, "GrantGold amount must be >= 0; use TrySpendGold to deduct");
             if (amount == 0)
-                return;
+                return 0;
+
+            var before = LoadGold(connection, transaction, characterId);
+            var limit = CharacterGoldLimitRepository.LoadEffectiveGoldCarryLimit(
+                connection, transaction, characterId);
 
             using (var cmd = connection.CreateCommand())
             {
                 cmd.Transaction = transaction;
                 cmd.CommandText = @"
 UPDATE character_items
-SET stack_count = stack_count + @amt,
-    instance_value = instance_value + @amt
+SET stack_count = CASE
+        WHEN stack_count >= @limit THEN stack_count
+        ELSE MIN(@limit, CAST(stack_count AS INTEGER) + @amt)
+    END,
+    instance_value = CASE
+        WHEN stack_count >= @limit THEN stack_count
+        ELSE MIN(@limit, CAST(stack_count AS INTEGER) + @amt)
+    END
 WHERE character_id = @cid AND list_type = 0 AND slot_index = 0;";
                 cmd.Parameters.AddWithValue("@amt", amount);
+                cmd.Parameters.AddWithValue("@limit", limit);
                 cmd.Parameters.AddWithValue("@cid", characterId);
                 if (cmd.ExecuteNonQuery() > 0)
-                    return;
+                    return Math.Max(0, LoadGold(connection, transaction, characterId) - before);
             }
 
             // 金币行不存在(新角色): 建行, 初值即发放额
-            InsertCurrencySlotRow(connection, transaction, characterId, 0, amount);
+            var granted = Math.Min(amount, limit);
+            InsertCurrencySlotRow(connection, transaction, characterId, 0, granted);
+            return granted;
         }
 
         public static bool TrySpendGold(SqliteConnection connection, SqliteTransaction transaction, int characterId, int amount)
@@ -391,6 +395,24 @@ WHERE account_id = (SELECT account_id FROM characters WHERE character_id = @cid)
             if (value > 999)
                 return 999;
             return (ushort)value;
+        }
+
+        private static int LoadGold(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            int characterId)
+        {
+            using (var command = connection.CreateCommand())
+            {
+                command.Transaction = transaction;
+                command.CommandText = @"
+SELECT stack_count
+FROM character_items
+WHERE character_id=@cid AND list_type=0 AND slot_index=0;";
+                command.Parameters.AddWithValue("@cid", characterId);
+                var raw = command.ExecuteScalar();
+                return raw == null || raw == DBNull.Value ? 0 : Convert.ToInt32(raw);
+            }
         }
 
         // 前置条件: 同事务内已确认该槽位无行(UPDATE命中0行)。

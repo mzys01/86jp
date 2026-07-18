@@ -89,14 +89,19 @@ namespace DfoServer.Game.Dungeon
                 var baseGold = (int)drop.StackCount;
                 var bonusPct = GetEquippedGoldBonus(characterId);
                 var extraGold = baseGold * bonusPct / 100;
-                PersistGold(characterId, accountId, baseGold + extraGold);
+                var grantedGold = PersistGold(characterId, accountId, baseGold + extraGold);
+                if (!grantedGold.HasValue)
+                    return PickupResult.PersistenceFailed;
+
                 run.Drops.Remove(srcSlot);
+                var grantedBaseGold = Math.Min(baseGold, grantedGold.Value);
+                var grantedExtraGold = Math.Min(extraGold, Math.Max(0, grantedGold.Value - grantedBaseGold));
                 return new PickupResult
                 {
                     Success = true,
                     IsGold = true,
-                    GoldAmount = baseGold + extraGold,
-                    ExtraGold = extraGold
+                    GoldAmount = grantedGold.Value,
+                    ExtraGold = grantedExtraGold
                 };
             }
 
@@ -120,20 +125,22 @@ namespace DfoServer.Game.Dungeon
                 run.Drops[drop.SceneSlot] = drop;
         }
 
-        private void PersistGold(int characterId, int accountId, int goldGained)
+        private int? PersistGold(int characterId, int accountId, int goldGained)
         {
-            if (goldGained <= 0) return;
+            if (goldGained <= 0) return 0;
             try
             {
                 using (var scope = _assetService.OpenScope(characterId, accountId))
                 {
-                    _assetService.GrantGold(scope, goldGained);
+                    var granted = _assetService.GrantGold(scope, goldGained);
                     scope.Commit();
+                    return granted;
                 }
             }
             catch (Exception ex)
             {
                 FileLogger.Log($"[DropService] PersistGold ERROR: {ex.Message}");
+                return null;
             }
         }
 
@@ -235,12 +242,14 @@ namespace DfoServer.Game.Dungeon
 
         internal static readonly PickupResult NotFound = new PickupResult { FailReason = PickupFailReason.NotFound };
         internal static readonly PickupResult InventoryFull = new PickupResult { FailReason = PickupFailReason.InventoryFull };
+        internal static readonly PickupResult PersistenceFailed = new PickupResult { FailReason = PickupFailReason.PersistenceFailed };
     }
 
     internal enum PickupFailReason : byte
     {
         None,
         NotFound,
-        InventoryFull
+        InventoryFull,
+        PersistenceFailed
     }
 }

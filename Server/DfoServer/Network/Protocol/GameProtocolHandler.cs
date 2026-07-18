@@ -40,6 +40,7 @@ namespace DfoServer.Network
         private readonly PetCreatureHandler _petCreatureHandler;
         private readonly MercenaryHandler _mercenaryHandler;
         private readonly GrowthCapsuleHandler _growthCapsuleHandler;
+        private readonly GoldLimitHandler _goldLimitHandler;
         private readonly ICharacterRepository _characterRepository;
         private readonly SqliteSelectCharacterDataSource _selectCharacterDataSource;
         private readonly SqliteAssetService _assetService;
@@ -160,6 +161,8 @@ namespace DfoServer.Network
             PetCreatureRuntimeService.EnsureClockRegistered();
             _growthCapsuleHandler = new GrowthCapsuleHandler(
                 _assetService, _inventoryRefreshSender, characterRepository);
+            _goldLimitHandler = new GoldLimitHandler(
+                new Game.Currency.CharacterGoldLimitRepository(databasePath, schemaFilePath));
 
             _cmdDispatch = new Dictionary<ushort, Func<EnhancedClientSession, GamePacketHeader, byte[], Task>>();
             RegisterLoginHandlers(_cmdDispatch);
@@ -504,6 +507,7 @@ namespace DfoServer.Network
             d[0x0372] = _rentalHandler.HandleRentWeapon;
             d[0x0373] = _luckyStarHandler.HandleShopPurchasePacket;
             d[(ushort)CmdPacketType.GET_EXPAND_EXP_GAGE_REWARD] = _growthCapsuleHandler.HandleClaimAsync;
+            d[(ushort)CmdPacketType.UPGRADE_CARRY_GOLD] = _goldLimitHandler.HandleUpgradeAsync;
         }
 
         #endregion

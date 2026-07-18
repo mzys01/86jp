@@ -14,6 +14,9 @@ namespace DfoServer.Game.SelectCharacter
         // 0x00B1: 复活币当日已领取标记(character_daily_reset bit0)
         public byte ShopCoinEventFlag { get; set; }
 
+        // 0x0331: 金币携带/拍卖额同步扩充档位，客户端支持 0-4。
+        public byte GoldLimitUpgradeLevel { get; set; }
+
         public ChampionBreakSystemSnapshot ChampionBreakSystem { get; set; } = new ChampionBreakSystemSnapshot();
 
         

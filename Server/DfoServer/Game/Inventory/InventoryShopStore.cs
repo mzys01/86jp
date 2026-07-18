@@ -456,8 +456,8 @@ namespace DfoServer.Game.Inventory
 
             var wallet = _db.LoadWallet(connection, transaction, characterId);
             var goldDelta = metadata.SellGold * appliedCount;
-            var updatedGold = wallet.Gold + goldDelta;
-            CurrencyService.GrantGold(connection, transaction, characterId, goldDelta);
+            var grantedGold = CurrencyService.GrantGold(connection, transaction, characterId, goldDelta);
+            var updatedGold = wallet.Gold + grantedGold;
             _auditLogger.WriteSellAuditLog(connection, transaction, characterId, item, appliedCount, goldDelta);
 
             result = new InventoryMutationResult
