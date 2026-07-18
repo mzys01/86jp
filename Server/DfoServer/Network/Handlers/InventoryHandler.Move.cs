@@ -4,13 +4,14 @@ using DfoServer.Game.SelectCharacter;
 using DfoServer.Network.Builders;
 using DfoServer.Network.Handlers.Pets;
 using System;
-using System.Text;
 using System.Threading.Tasks;
 
 namespace DfoServer.Network.Handlers
 {
     public sealed partial class InventoryHandler
     {
+        internal const string CharmQuickSlotLimitNoticeMessage = "快捷栏最多只能放置1个符咒。";
+
         public async Task Handle_ENUM_CMDPACKET_MOVE_ITEMSPACE(EnhancedClientSession session, GamePacketHeader header, byte[] body)
         {
             if (body == null || body.Length < 14)
@@ -45,16 +46,13 @@ namespace DfoServer.Network.Handlers
             {
                 if (result?.FailureReason == InventoryMoveFailureReason.CharmCarryLimit)
                 {
-                    // 官服 dstr 6222：已超出物品持有数上限， 无法继续获得。
-                    // 0x04 是“仓库空间不足”，不能用于符咒持有上限。
+                    // 0x04 是“仓库空间不足”，符咒快捷栏上限使用通用移动失败响应。
                     await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0013,
                         MoveItemSpaceAckBuilder.BuildError(0x02, (byte)request.SourceListType, (byte)request.DestinationListType)));
-                    await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0077,
-                        PetCreatureScript.BuildNotiBody(
-                            mode: 3,
-                            senderUniqueId: session.Player?.UserId ?? 0,
-                            serverGroup: 0,
-                            messageBytes: Encoding.UTF8.GetBytes("已超出物品持有数上限， 无法继续获得"))));
+                    await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
+                        0x00,
+                        (ushort)NotiPacketType.SERVER_NOTICE_MESSAGE,
+                        ServerNoticeMessageBuilder.Build(CharmQuickSlotLimitNoticeMessage)));
                     FileLogger.Log($"[{ProtocolName}] MOVE_ITEMSPACE: CHARM_LIMIT src=({request.SourceListType},{request.SourceSlotIndex}) dst=({request.DestinationListType},{request.DestinationSlotIndex})");
                     return;
                 }

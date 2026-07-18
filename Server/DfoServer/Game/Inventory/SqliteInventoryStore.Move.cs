@@ -98,13 +98,16 @@ namespace DfoServer.Game.Inventory
                 {
                     if (destination != null)
                     {
-                        if (dbSrcList == InventoryListType.Main
-                            && !CharmInventoryPolicy.CanEnterMain(
-                                connection,
-                                transaction,
-                                characterId,
-                                destination.ItemTemplateId,
-                                destination.ListType == InventoryListType.Main ? destination.ItemUid : 0))
+                        if (!CharmInventoryPolicy.CanApplyQuickSlotMove(
+                            connection,
+                            transaction,
+                            characterId,
+                            source,
+                            destination,
+                            dbSrcList,
+                            request.SourceSlotIndex,
+                            dbDstList,
+                            request.DestinationSlotIndex))
                         {
                             result = CreateMoveResult(request, 0, mutated: false);
                             result.FailureReason = InventoryMoveFailureReason.CharmCarryLimit;
@@ -131,24 +134,20 @@ namespace DfoServer.Game.Inventory
                 var moveCount = NormalizeMoveCount(source, request.MoveCount);
                 destination = ResolveDestinationStackTarget(characterId, accountId, connection, transaction, source, destination, dbSrcList, dbDstList, moveCount);
 
-                if (dbDstList == InventoryListType.Main)
+                if (!CharmInventoryPolicy.CanApplyQuickSlotMove(
+                    connection,
+                    transaction,
+                    characterId,
+                    source,
+                    destination,
+                    dbSrcList,
+                    request.SourceSlotIndex,
+                    dbDstList,
+                    request.DestinationSlotIndex))
                 {
-                    var excludedSourceUid = source.ListType == InventoryListType.Main ? source.ItemUid : 0;
-                    var excludedDestinationUid = destination != null && destination.ListType == InventoryListType.Main
-                        ? destination.ItemUid
-                        : 0;
-                    if (!CharmInventoryPolicy.CanEnterMain(
-                        connection,
-                        transaction,
-                        characterId,
-                        source.ItemTemplateId,
-                        excludedSourceUid,
-                        excludedDestinationUid))
-                    {
-                        result = CreateMoveResult(request, 0, mutated: false);
-                        result.FailureReason = InventoryMoveFailureReason.CharmCarryLimit;
-                        return false;
-                    }
+                    result = CreateMoveResult(request, 0, mutated: false);
+                    result.FailureReason = InventoryMoveFailureReason.CharmCarryLimit;
+                    return false;
                 }
 
                 if (CanStack(source, destination, moveCount) && moveCount > 0)

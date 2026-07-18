@@ -3,9 +3,12 @@ using DfoServer.Game.ItemUpgrade;
 using DfoServer.Game.CharacterData;
 using DfoServer.Game.SelectCharacter;
 using DfoServer.Infrastructure;
+using DfoServer.Network.Builders;
+using DfoServer.Network.Handlers;
 using Microsoft.Data.Sqlite;
 using System;
 using System.IO;
+using System.Text;
 
 namespace DfoServer.SelfTests
 {
@@ -14,8 +17,17 @@ namespace DfoServer.SelfTests
         private const int AccountId = 966001;
         private const int CharacterId = 966002;
         private const int CharmItemId = 400360000;
-        private const short FirstCharmSlot = 9;
+        private const int ReplacementCharmItemId = 400360001;
+        private const int ThirdCharmItemId = 400360002;
+        private const int ElfCharmGiftBoxItemTemplateId = 10004007;
+        private static readonly int[] ElfCharmRewardItemTemplateIds = { CharmItemId, ReplacementCharmItemId, ThirdCharmItemId };
+        private const short FirstCharmQuickSlot = 3;
+        private const short EmptyQuickSlot = 4;
+        private const short ReplacementCharmBagSlot = 9;
         private const short WarehouseCharmSlot = 9;
+        private const short WarehouseCharmBagDestinationSlot = 12;
+        private const short ElfCharmGiftBoxSlot = 84;
+        private const short SecondElfCharmGiftBoxSlot = 85;
         private const short NormalEquipmentSlot = 11;
         private const short CharmEquipSlot = 29;
         private static int _pass;
@@ -34,24 +46,86 @@ namespace DfoServer.SelfTests
             Check("normal equipment fixture resolved", normalItemId > 0);
             Check("normal equipment is not charm",
                 EquipmentTypeInfo.ParseOrUnknown(ItemMetadataResolver.ResolveEquipmentType(normalItemId)) != EquipmentType.Charm);
+
+            var noticeBody = ServerNoticeMessageBuilder.Build(InventoryHandler.CharmQuickSlotLimitNoticeMessage);
+            Check("charm quick-slot limit notice uses system-message UTF-8 dstr",
+                noticeBody.Length > 5
+                && noticeBody[0] == 0
+                && BitConverter.ToInt32(noticeBody, 1) == noticeBody.Length - 5
+                && Encoding.UTF8.GetString(noticeBody, 5, noticeBody.Length - 5)
+                    == InventoryHandler.CharmQuickSlotLimitNoticeMessage);
+
             var tempDb = Path.Combine(Path.GetTempPath(), "dfo-charm-equipment-slot-selftest.db");
             DeleteTempDatabase(tempDb);
             Seed(tempDb, normalItemId);
             var store = new SqliteInventoryStore(tempDb, ServerPaths.SchemaFilePath);
 
-            Check("main inventory starts with one charm", CountItems(tempDb, InventoryListType.Main, CharmItemId) == 1);
-            Check("personal cargo charm does not count toward main limit", CountItems(tempDb, InventoryListType.PersonalCargo, CharmItemId) == 1);
-            Check("second charm pickup is rejected while main has charm",
-                !store.TryPickupItem(CharacterId, AccountId, CharmItemId, 1, out _));
-            Check("rejected pickup keeps one main charm", CountItems(tempDb, InventoryListType.Main, CharmItemId) == 1);
-            Check("cargo charm cannot enter main while main has charm",
-                !MoveToMain(store, InventoryListType.PersonalCargo, WarehouseCharmSlot, 12, out _));
-            Check("rejected cargo move keeps charm in cargo", LoadItem(tempDb, InventoryListType.PersonalCargo, WarehouseCharmSlot) == CharmItemId);
+            Check("main inventory starts with one quick-slot charm",
+                LoadItem(tempDb, InventoryListType.Main, FirstCharmQuickSlot) == CharmItemId);
+            Check("main backpack starts with another charm",
+                LoadItem(tempDb, InventoryListType.Main, ReplacementCharmBagSlot) == ReplacementCharmItemId);
+            Check("second charm pickup is allowed in backpack",
+                store.TryPickupItem(CharacterId, AccountId, CharmItemId, 1, out var pickedCharmSlot)
+                && pickedCharmSlot > SqliteInventoryStore.QuickSlotEnd);
+            Check("cargo charm can enter backpack while quick slot has charm",
+                MoveToMain(store, InventoryListType.PersonalCargo, WarehouseCharmSlot, WarehouseCharmBagDestinationSlot, out _));
+            Check("moved cargo charm exists in backpack",
+                LoadItem(tempDb, InventoryListType.Main, WarehouseCharmBagDestinationSlot) == ThirdCharmItemId);
+
+            var charmCountsBeforeGiftBoxes = new int[ElfCharmRewardItemTemplateIds.Length];
+            var snapshotBeforeGiftBoxes = store.LoadCharacterItemListSnapshot(CharacterId, AccountId);
+            for (var i = 0; i < ElfCharmRewardItemTemplateIds.Length; i++)
+                charmCountsBeforeGiftBoxes[i] = snapshotBeforeGiftBoxes.MainItems.FindAll(
+                    item => item.ItemTemplateId == ElfCharmRewardItemTemplateIds[i]).Count;
+
+            Check("elf charm gift box grants three different charms", store.TryUseBoosterItem(
+                CharacterId,
+                AccountId,
+                new BoosterUseRequest
+                {
+                    SlotIndex = ElfCharmGiftBoxSlot,
+                    ExpectedItemTemplateId = ElfCharmGiftBoxItemTemplateId,
+                    SelectedItemTemplateIds = Array.Empty<int>(),
+                },
+                out var firstGiftBoxResult)
+                && firstGiftBoxResult?.Rewards.Count == ElfCharmRewardItemTemplateIds.Length);
+            Check("second elf charm gift box can grant duplicate backpack charms", store.TryUseBoosterItem(
+                CharacterId,
+                AccountId,
+                new BoosterUseRequest
+                {
+                    SlotIndex = SecondElfCharmGiftBoxSlot,
+                    ExpectedItemTemplateId = ElfCharmGiftBoxItemTemplateId,
+                    SelectedItemTemplateIds = Array.Empty<int>(),
+                },
+                out var secondGiftBoxResult)
+                && secondGiftBoxResult?.Rewards.Count == ElfCharmRewardItemTemplateIds.Length);
+            var snapshotAfterGiftBoxes = store.LoadCharacterItemListSnapshot(CharacterId, AccountId);
+            for (var i = 0; i < ElfCharmRewardItemTemplateIds.Length; i++)
+            {
+                var rewardItemTemplateId = ElfCharmRewardItemTemplateIds[i];
+                Check($"elf charm gift boxes keep duplicate charm {rewardItemTemplateId} in backpack",
+                    snapshotAfterGiftBoxes.MainItems.FindAll(item => item.ItemTemplateId == rewardItemTemplateId).Count
+                    == charmCountsBeforeGiftBoxes[i] + 2);
+            }
+
+            Check("second charm cannot enter another quick slot",
+                !MoveToMain(store, InventoryListType.Main, ReplacementCharmBagSlot, EmptyQuickSlot, out var quickLimitResult)
+                && quickLimitResult?.FailureReason == InventoryMoveFailureReason.CharmCarryLimit);
+            Check("rejected quick-slot move keeps both charms",
+                LoadItem(tempDb, InventoryListType.Main, FirstCharmQuickSlot) == CharmItemId
+                && LoadItem(tempDb, InventoryListType.Main, ReplacementCharmBagSlot) == ReplacementCharmItemId);
+            Check("backpack charm can replace the quick-slot charm",
+                MoveToMain(store, InventoryListType.Main, ReplacementCharmBagSlot, FirstCharmQuickSlot, out var quickReplaceResult)
+                && quickReplaceResult != null && quickReplaceResult.Mutated);
+            Check("replaced quick-slot charm returns to source backpack slot",
+                LoadItem(tempDb, InventoryListType.Main, FirstCharmQuickSlot) == ReplacementCharmItemId
+                && LoadItem(tempDb, InventoryListType.Main, ReplacementCharmBagSlot) == CharmItemId);
 
             Check("charm equips to slot 29",
-                MoveToEquipment(store, FirstCharmSlot, CharmItemId, CharmEquipSlot, out var firstResult)
+                MoveToEquipment(store, FirstCharmQuickSlot, ReplacementCharmItemId, CharmEquipSlot, out var firstResult)
                 && firstResult != null && firstResult.Mutated);
-            Check("slot 29 contains charm", LoadEquippedItem(tempDb, CharmEquipSlot) == CharmItemId);
+            Check("slot 29 contains charm", LoadEquippedItem(tempDb, CharmEquipSlot) == ReplacementCharmItemId);
             SetEquippedExpireTime(tempDb, CharmEquipSlot, -1);
             Check("legacy -1 permanent equipment remains in subtype1",
                 new SqliteSubtype1Repository(tempDb, ServerPaths.SchemaFilePath)
@@ -62,29 +136,32 @@ namespace DfoServer.SelfTests
                     .Load(CharacterId).EquippedEntries.Exists(entry => entry.Slot == CharmEquipSlot));
             SetEquippedExpireTime(tempDb, CharmEquipSlot, 0);
 
-            Check("bulk charm pickup is rejected even when main is empty",
-                !store.TryPickupItem(CharacterId, AccountId, CharmItemId, 2, out _));
-            Check("rejected bulk pickup keeps main without charm", CountItems(tempDb, InventoryListType.Main, CharmItemId) == 0);
-            Check("equipped and cargo charms do not block main pickup",
-                store.TryPickupItem(CharacterId, AccountId, CharmItemId, 1, out var secondCharmSlot));
-            Check("pickup creates exactly one main charm", CountItems(tempDb, InventoryListType.Main, CharmItemId) == 1);
+            Check("backpack charm can enter empty quick slot after previous charm is equipped",
+                MoveToMain(store, InventoryListType.Main, ReplacementCharmBagSlot, FirstCharmQuickSlot, out _));
+            Check("quick slot contains the moved charm",
+                LoadItem(tempDb, InventoryListType.Main, FirstCharmQuickSlot) == CharmItemId);
+            Check("another backpack charm remains blocked from a second quick slot",
+                !MoveToMain(store, InventoryListType.Main, WarehouseCharmBagDestinationSlot, EmptyQuickSlot, out _));
 
             Check("second charm replaces slot 29",
-                MoveToEquipment(store, secondCharmSlot, CharmItemId, CharmEquipSlot, out var replaceResult)
+                MoveToEquipment(store, FirstCharmQuickSlot, CharmItemId, CharmEquipSlot, out var replaceResult)
                 && replaceResult != null && replaceResult.Mutated);
-            Check("replaced charm returns to source slot", LoadItem(tempDb, InventoryListType.Main, secondCharmSlot) == CharmItemId);
+            Check("replaced charm returns to source slot",
+                LoadItem(tempDb, InventoryListType.Main, FirstCharmQuickSlot) == ReplacementCharmItemId);
             Check("slot 29 still contains replacement charm", LoadEquippedItem(tempDb, CharmEquipSlot) == CharmItemId);
 
             Check("unequip to occupied backpack slot is rejected",
-                !MoveToEquipment(store, secondCharmSlot, 0, CharmEquipSlot, out var occupiedUnequipResult)
+                !MoveToEquipment(store, FirstCharmQuickSlot, 0, CharmEquipSlot, out var occupiedUnequipResult)
                 && occupiedUnequipResult == null);
             Check("rejected unequip keeps equipped charm", LoadEquippedItem(tempDb, CharmEquipSlot) == CharmItemId);
-            Check("rejected unequip keeps backpack charm", LoadItem(tempDb, InventoryListType.Main, secondCharmSlot) == CharmItemId);
+            Check("rejected unequip keeps backpack charm",
+                LoadItem(tempDb, InventoryListType.Main, FirstCharmQuickSlot) == ReplacementCharmItemId);
 
             Check("charm cannot equip to another slot",
-                !MoveToEquipment(store, secondCharmSlot, CharmItemId, 11, out var wrongSlotResult)
+                !MoveToEquipment(store, FirstCharmQuickSlot, ReplacementCharmItemId, 11, out var wrongSlotResult)
                 && wrongSlotResult == null);
-            Check("rejected charm stays in backpack", LoadItem(tempDb, InventoryListType.Main, secondCharmSlot) == CharmItemId);
+            Check("rejected charm stays in quick slot",
+                LoadItem(tempDb, InventoryListType.Main, FirstCharmQuickSlot) == ReplacementCharmItemId);
 
             Check("normal equipment cannot equip to slot 29",
                 !MoveToEquipment(store, NormalEquipmentSlot, normalItemId, CharmEquipSlot, out var normalToCharmResult)
@@ -168,29 +245,35 @@ INSERT OR REPLACE INTO character_items (
     stack_count, instance_value, durability, seal_flag, option_value, expire_time, marker_16,
     pet_serial_or_handle, extra_json)
 VALUES
-    ('character', @characterId, @characterId, 0, @firstCharmSlot, @charmItemId, 'equipment',
+    ('character', @characterId, @characterId, 0, @firstCharmQuickSlot, @charmItemId, 'equipment',
      100001, @charmItemId, 0, 0, 0, 0, -1, 0, '{}'),
-    ('character', @characterId, @characterId, 2, @warehouseCharmSlot, @charmItemId, 'equipment',
-     100002, @charmItemId, 0, 0, 0, 0, -1, 0, '{}'),
+    ('character', @characterId, @characterId, 0, @replacementCharmBagSlot, @replacementCharmItemId, 'equipment',
+     100002, @replacementCharmItemId, 0, 0, 0, 0, -1, 0, '{}'),
+    ('character', @characterId, @characterId, 2, @warehouseCharmSlot, @thirdCharmItemId, 'equipment',
+     100003, @thirdCharmItemId, 0, 0, 0, 0, -1, 0, '{}'),
     ('character', @characterId, @characterId, 0, @normalEquipmentSlot, @normalItemId, 'equipment',
-     100003, @normalItemId, 1, 0, 0, 0, -1, 0, '{}');";
+     100004, @normalItemId, 1, 0, 0, 0, -1, 0, '{}'),
+    ('character', @characterId, @characterId, 0, @elfCharmGiftBoxSlot, @elfCharmGiftBoxItemTemplateId, 'special',
+     1, 1, 0, 0, 0, 0, 0, 0, '{}'),
+    ('character', @characterId, @characterId, 0, @secondElfCharmGiftBoxSlot, @elfCharmGiftBoxItemTemplateId, 'special',
+     1, 1, 0, 0, 0, 0, 0, 0, '{}');";
                     command.Parameters.AddWithValue("@accountId", AccountId);
                     command.Parameters.AddWithValue("@characterId", CharacterId);
-                    command.Parameters.AddWithValue("@firstCharmSlot", FirstCharmSlot);
+                    command.Parameters.AddWithValue("@firstCharmQuickSlot", FirstCharmQuickSlot);
+                    command.Parameters.AddWithValue("@replacementCharmBagSlot", ReplacementCharmBagSlot);
                     command.Parameters.AddWithValue("@warehouseCharmSlot", WarehouseCharmSlot);
                     command.Parameters.AddWithValue("@normalEquipmentSlot", NormalEquipmentSlot);
+                    command.Parameters.AddWithValue("@elfCharmGiftBoxSlot", ElfCharmGiftBoxSlot);
+                    command.Parameters.AddWithValue("@secondElfCharmGiftBoxSlot", SecondElfCharmGiftBoxSlot);
                     command.Parameters.AddWithValue("@charmItemId", CharmItemId);
+                    command.Parameters.AddWithValue("@replacementCharmItemId", ReplacementCharmItemId);
+                    command.Parameters.AddWithValue("@thirdCharmItemId", ThirdCharmItemId);
                     command.Parameters.AddWithValue("@normalItemId", normalItemId);
+                    command.Parameters.AddWithValue("@elfCharmGiftBoxItemTemplateId", ElfCharmGiftBoxItemTemplateId);
                     command.ExecuteNonQuery();
                 }
             }
         }
-
-        private static int CountItems(string databasePath, InventoryListType listType, int itemTemplateId)
-            => ExecuteScalar(databasePath,
-                "SELECT COUNT(1) FROM character_items WHERE character_id=@characterId AND list_type=@listType AND item_template_id=@value;",
-                itemTemplateId,
-                listType);
 
         private static int LoadItem(string databasePath, InventoryListType listType, short slot)
             => ExecuteScalar(databasePath,
