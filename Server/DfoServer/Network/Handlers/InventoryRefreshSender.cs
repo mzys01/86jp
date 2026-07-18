@@ -156,7 +156,8 @@ namespace DfoServer.Network.Handlers
                 var emptySlots = new List<short>();
                 foreach (var slotIndex in slots)
                 {
-                    var item = _inventoryStore.LoadEquipmentCommonItemForRefresh(cid, slotIndex);
+                    var item = InventoryProtocolMapper.NormalizeCommonItem(
+                        _inventoryStore.LoadEquipmentCommonItemForRefresh(cid, slotIndex));
                     if (item != null)
                         updates.Add(item);
                     else

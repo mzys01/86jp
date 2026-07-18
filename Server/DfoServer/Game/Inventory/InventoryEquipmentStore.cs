@@ -816,7 +816,8 @@ VALUES (@accountId, @selectionKey, @value32, @itemCount, CURRENT_TIMESTAMP);";
                     };
                     if (isPet && CreatureExtraResolver.HasCreatureExtra(itemTemplateId))
                         f.Marker16 = unchecked((uint)entry.Marker16);
-                    f.ChronicleOptions = MakeEquipListCodec.BuildChronicleOptions(entry.MiddleData1A);
+                    f.ChronicleOptions = MakeEquipListCodec.BuildChronicleOptions(
+                        ChronicleRefineProtocol.NormalizeMiddleData(itemTemplateId, entry.MiddleData1A));
                     f.Emblem = entry.EmblemData;
                     f.EmblemSocketCount = entry.EmblemSocketCount;
                     f.EmblemId1 = entry.EmblemId1;

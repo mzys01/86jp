@@ -15,6 +15,7 @@ namespace DfoServer
             ("--selftest-cerashop", SelfTests.CeraShopSelfTest.Run),
             ("--selftest-selectable-package", SelfTests.SelectablePackageSelfTest.Run),
             ("--selftest-equipment-effect-rune", SelfTests.EquipmentEffectRuneSelfTest.Run),
+            ("--selftest-chronicle-refine", SelfTests.ChronicleRefineSelfTest.Run),
             ("--selftest-pet-consumable", SelfTests.PetConsumableSelfTest.Run),
             ("--selftest-inventory-extra-view", SelfTests.InventoryExtraViewSelfTest.Run),
             ("--selftest-titlebook-item-codec", SelfTests.TitleBookInventoryItemCodecSelfTest.Run),
@@ -147,6 +148,7 @@ namespace DfoServer
             try
             {
                 GameWorld.PvfArchiveAccessor.ReadText("character/character.lst");
+                Game.Inventory.ChronicleRefineMaterialResolver.Warmup();
                 Game.Mercenary.StrikerSkillDataProvider.Warmup();
                 Game.Mercenary.StrikerDefaultAvatarDataProvider.Warmup();
                 Console.WriteLine("OK");

@@ -12,10 +12,11 @@ namespace DfoServer.Game.Inventory
     {
         internal static CommonInventoryItem ReadCommonItem(SqliteDataReader reader, string extraJson)
         {
+            var itemTemplateId = reader.GetInt32(2);
             return new CommonInventoryItem
             {
                 SlotIndex = Convert.ToInt16(reader.GetInt32(1), CultureInfo.InvariantCulture),
-                ItemTemplateId = reader.GetInt32(2),
+                ItemTemplateId = itemTemplateId,
                 CountOrInstanceValue = reader.GetInt32(4),
                 Durability = Convert.ToUInt16(reader.GetInt32(6), CultureInfo.InvariantCulture),
                 SealFlag = Convert.ToByte(reader.GetInt32(7), CultureInfo.InvariantCulture),
@@ -23,7 +24,9 @@ namespace DfoServer.Game.Inventory
                 Marker16 = reader.GetInt32(10),
                 ExtData0 = Convert.ToByte(ReadIntValue(extraJson, "extData0"), CultureInfo.InvariantCulture),
                 PrefixData0E = ReadHexValue(extraJson, "prefixData0E", 8),
-                MiddleData1A = ReadHexValue(extraJson, "middleData1A", 17),
+                MiddleData1A = ChronicleRefineProtocol.NormalizeMiddleData(
+                    itemTemplateId,
+                    ReadHexValue(extraJson, "middleData1A", 17)),
                 TailData2F = ReadHexValue(extraJson, "tailData2F", 37),
                 JewelSocket = ReadHexValue(extraJson, "jewelSocket", 30),
                 EquipmentLockId = reader.FieldCount > 13
