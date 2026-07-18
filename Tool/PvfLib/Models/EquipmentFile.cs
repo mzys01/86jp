@@ -67,13 +67,16 @@ namespace PvfLib
         public int RepairPrice { get; set; } = -1;
         public int AddRepairPrice { get; set; } = -1;
         public int Value { get; set; } = -1;
-        public int AddPrice { get; set; } = -1;
+        // [add price] is a signed purchase-price adjustment.  Zero means the
+        // tag is absent; -1 is a valid adjustment and must not mean "missing".
+        public int AddPrice { get; set; }
         public int AddValue { get; set; } = -1;
         public int CreationRate { get; set; } = -1;
         public int Durability { get; set; } = -1;
         public int Weight { get; set; } = -1;
         public int CoolTime { get; set; } = -1;
         public int InventoryLimit { get; set; } = -1;
+        public string NeedMaterial { get; set; }
 
         #endregion
 
@@ -170,6 +173,7 @@ namespace PvfLib
                     case "weight": equ.Weight = ParseInt(data); break;
                     case "cool time": equ.CoolTime = ParseInt(data); break;
                     case "inventory limit": equ.InventoryLimit = ParseInt(data); break;
+                    case "need material": equ.NeedMaterial = data; break;
 
                     
                     case "icon": equ.Icon = data; break;

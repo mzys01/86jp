@@ -124,7 +124,12 @@ namespace DfoServer.Game.Inventory
             if (equipmentEntry != null)
             {
                 var equipment = EquipmentFile.Parse(PvfArchiveAccessor.ReadText(Path.Combine("equipment", equipmentEntry.FilePath)));
-                var buyGold = Math.Max(0, equipment.Price >= 0 ? equipment.Price : equipment.Value);
+                ResolveNeedMaterial(equipment.NeedMaterial, out var equipmentNeedMatId, out var equipmentNeedMatCount);
+                // Keep legacy ordinary-NPC pricing intact.  Only entries that
+                // actually exchange [need material] use PVF's price correction.
+                var buyGold = equipmentNeedMatId > 0 && equipmentNeedMatCount > 0
+                    ? ResolveBuyGold(equipment.Price, equipment.AddPrice)
+                    : Math.Max(0, equipment.Price >= 0 ? equipment.Price : equipment.Value);
                 
                 
                 var baseSellPrice = equipment.Value >= 0 ? equipment.Value : buyGold;
@@ -149,6 +154,8 @@ namespace DfoServer.Game.Inventory
                     ItemCategory = equipment.ItemCategory,
                     AttachType = equipment.AttachType,
                     ImpossibleContents = equipment.ImpossibleContentItems,
+                    NeedMaterialId = equipmentNeedMatId,
+                    NeedMaterialCount = equipmentNeedMatCount,
                 };
             }
 
@@ -156,11 +163,6 @@ namespace DfoServer.Game.Inventory
             if (stackableEntry != null)
             {
                 var stackable = StackableItemFile.Parse(PvfArchiveAccessor.ReadText(Path.Combine("stackable", stackableEntry.FilePath)));
-                var buyGold = Math.Max(0, stackable.Price >= 0 ? stackable.Price : stackable.Value);
-                
-                
-                
-                
                 var sellGold = stackable.Value >= 0
                     ? stackable.Value / 5
                     : (stackable.Price > 0 ? stackable.Price / 5 : 0);
@@ -178,7 +180,12 @@ namespace DfoServer.Game.Inventory
 
                 
                 
-                var hasMaterialCost = needMatId > 0 && needMatCount > 0;
+                // Keep legacy ordinary-NPC pricing intact.  Material exchanges
+                // are the only path where [add price] corrects [price] and
+                // [value] must never become a purchase cost.
+                var buyGold = needMatId > 0 && needMatCount > 0
+                    ? ResolveBuyGold(stackable.Price, stackable.AddPrice)
+                    : Math.Max(0, stackable.Price >= 0 ? stackable.Price : stackable.Value);
                 return new ItemMetadata
                 {
                     ItemKind = "stackable",
@@ -211,6 +218,39 @@ namespace DfoServer.Game.Inventory
         public static LstEntry GetStackableEntry(int itemTemplateId)
         {
             return StackableList.Value.GetById(itemTemplateId);
+        }
+
+        // [value] is the NPC sell value only.  NPC purchase cost comes solely
+        // from [price], adjusted by the optional signed [add price] field.
+        // A missing [price] therefore means a zero-gold purchase, even when an
+        // exchange also defines [need material].
+        internal static int ResolveBuyGold(int price, int addPrice)
+        {
+            if (price < 0)
+                return 0;
+
+            var effectivePrice = (long)price + addPrice;
+            return effectivePrice <= 0 ? 0 : effectivePrice > int.MaxValue ? int.MaxValue : (int)effectivePrice;
+        }
+
+        private static void ResolveNeedMaterial(string needMaterial, out int itemId, out int count)
+        {
+            itemId = 0;
+            count = 0;
+            if (string.IsNullOrWhiteSpace(needMaterial))
+                return;
+
+            var parts = needMaterial.Trim().Split(new[] { ' ', '\t', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length < 2)
+                return;
+
+            int.TryParse(parts[0], out itemId);
+            int.TryParse(parts[1], out count);
+            if (itemId <= 0 || count <= 0)
+            {
+                itemId = 0;
+                count = 0;
+            }
         }
 
         public static LstEntry GetEquipmentEntry(int itemTemplateId)
