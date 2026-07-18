@@ -36,6 +36,16 @@ namespace DfoServer.Network.Builders
             return writer.ToArray();
         }
 
+        public static byte[] BuildSingleSilentCompletion()
+        {
+            var writer = new GamePacketWriter();
+            writer.WriteByte(1);
+            // 0x00D0 handler先关闭开箱窗口，再按客户端类型0..5展示结果；保留值仅执行前者。
+            writer.WriteByte(byte.MaxValue);
+            writer.WriteByte(0);
+            return writer.ToArray();
+        }
+
         private static short GetMaterialSlot(BoosterUseResult result)
         {
             if (result == null || result.ConsumedMaterialCount <= 0)

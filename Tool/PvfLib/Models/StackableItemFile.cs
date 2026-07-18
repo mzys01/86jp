@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Text.RegularExpressions;
 
 namespace PvfLib
@@ -7,11 +8,13 @@ namespace PvfLib
     public class BoosterRewardEntry
     {
         public string RewardKind { get; set; }
+        public string CharacterJobLabel { get; set; }
         public int Group { get; set; }
         public int DrawCount { get; set; } = 1;
         public int ItemId { get; set; }
         public int Weight { get; set; } = 10000;
         public int Count { get; set; } = 1;
+        public int UsablePeriodDays { get; set; }
     }
 
     public class RandomBoxRemovalItemEntry
@@ -265,7 +268,10 @@ namespace PvfLib
                         stk.StringDataItems = ParseStringList(node, content);
                         break;
                     case "int data": stk.IntData = data; break;
-                    case "package data": stk.PackageData = data; break;
+                    case "package data":
+                        if (!string.IsNullOrWhiteSpace(data))
+                            stk.PackageData = string.IsNullOrWhiteSpace(stk.PackageData) ? data : stk.PackageData + " " + data;
+                        break;
                     case "output item": stk.OutputItem = data; break;
                     case "input item": stk.InputItem = data; break;
                     case "need skill": stk.NeedSkill = data; break;
@@ -286,7 +292,10 @@ namespace PvfLib
 
             stk.BoosterRewards = ParseBoosterInfo(root.GetChild("booster info"), content);
             stk.BoosterSelectionRewards = ParseBoosterSelection(root.GetChildren("booster select category"), content);
-            stk.PackageRewards = ParsePackageRewards(stk.PackageData);
+            stk.PackageRewards = ParsePackageRewards(
+                root.GetChildren("package data"),
+                root.GetChildren("package data include usable period"),
+                content);
             stk.UpgradableLegacyRewards = ParseUpgradableLegacyRewards(stk.IntData);
             var randomBox = root.GetChild("RANDOMBOX");
             stk.RandomBoxRewards = ParseRandomBoxRewards(randomBox, content);
@@ -355,25 +364,46 @@ namespace PvfLib
             return rewards;
         }
 
-        private static List<BoosterRewardEntry> ParsePackageRewards(string packageData)
+        private static List<BoosterRewardEntry> ParsePackageRewards(
+            List<ScriptNode> packageNodes,
+            List<ScriptNode> packageWithPeriodNodes,
+            string content)
         {
             var rewards = new List<BoosterRewardEntry>();
-            var ints = ParseInts(packageData);
-            for (var i = 0; i + 1 < ints.Count; i += 2)
+            foreach (var node in packageNodes ?? new List<ScriptNode>())
             {
-                if (ints[i] <= 0)
-                    continue;
+                var ints = ParseInts(node.GetContent(content));
+                for (var i = 0; i + 1 < ints.Count; i += 2)
+                    AddPackageReward(rewards, ints[i], ints[i + 1], 0);
+            }
 
-                rewards.Add(new BoosterRewardEntry
-                {
-                    RewardKind = "package",
-                    Group = 0,
-                    ItemId = ints[i],
-                    Count = Math.Max(1, ints[i + 1]),
-                });
+            foreach (var node in packageWithPeriodNodes ?? new List<ScriptNode>())
+            {
+                var ints = ParseInts(node.GetContent(content));
+                for (var i = 0; i + 2 < ints.Count; i += 3)
+                    AddPackageReward(rewards, ints[i], ints[i + 1], ints[i + 2]);
             }
 
             return rewards;
+        }
+
+        private static void AddPackageReward(
+            List<BoosterRewardEntry> rewards,
+            int itemId,
+            int count,
+            int usablePeriodDays)
+        {
+            if (itemId <= 0)
+                return;
+
+            rewards.Add(new BoosterRewardEntry
+            {
+                RewardKind = "package",
+                Group = 0,
+                ItemId = itemId,
+                Count = Math.Max(1, count),
+                UsablePeriodDays = Math.Max(0, usablePeriodDays),
+            });
         }
 
         private static List<BoosterRewardEntry> ParseUpgradableLegacyRewards(string intData)
@@ -485,6 +515,15 @@ namespace PvfLib
             if (node == null)
                 return;
 
+            var characterJobLabel = GetCharacterJobLabel(node, content);
+            if (weighted && string.Equals(rewardKind, "charactor", StringComparison.OrdinalIgnoreCase))
+            {
+                ParseCharacterRewards(node, content, rewardKind, fallbackGroup, characterJobLabel, rewards);
+                foreach (var child in node.Children)
+                    ParseBoosterRewardNode(child, content, child.Tag, fallbackGroup, rewards, weighted);
+                return;
+            }
+
             var ints = new List<int>();
             foreach (var item in node.DataItems)
                 ints.AddRange(ParseInts(item.GetContent(content)));
@@ -498,10 +537,47 @@ namespace PvfLib
                 ParseBoosterRewardNode(child, content, child.Tag, fallbackGroup, rewards, weighted);
         }
 
-        private static void AddWeightedRewards(List<int> ints, string rewardKind, int fallbackGroup, List<BoosterRewardEntry> rewards)
+        private static void AddWeightedRewards(
+            List<int> ints,
+            string rewardKind,
+            int fallbackGroup,
+            List<BoosterRewardEntry> rewards)
         {
             if (ints == null || ints.Count == 0)
                 return;
+
+            if ((string.Equals(rewardKind, "avatar", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(rewardKind, "special avatar", StringComparison.OrdinalIgnoreCase))
+                && ints.Count >= 6
+                && (ints.Count - 1) % 5 == 0)
+            {
+                var avatarDrawCount = Math.Max(1, ints[0]);
+                for (var i = 1; i + 4 < ints.Count; i += 5)
+                {
+                    if (ints[i] <= 0)
+                        continue;
+
+                    rewards.Add(new BoosterRewardEntry
+                    {
+                        RewardKind = rewardKind,
+                        Group = fallbackGroup,
+                        DrawCount = avatarDrawCount,
+                        ItemId = ints[i],
+                        Weight = Math.Max(0, ints[i + 1]),
+                        Count = Math.Max(1, ints[i + 2]),
+                    });
+                }
+
+                return;
+            }
+
+            if (string.Equals(rewardKind, "broadcast", StringComparison.OrdinalIgnoreCase)
+                && ints.Count >= 5
+                && (ints.Count - 1) % 4 == 0)
+            {
+                AddRewardsByStride(ints, 1, 4, Math.Max(1, ints[0]), rewardKind, fallbackGroup, rewards);
+                return;
+            }
 
             var group = fallbackGroup;
             var drawCount = 1;
@@ -538,6 +614,51 @@ namespace PvfLib
             if (ints == null || ints.Count == 0)
                 return;
 
+            if (string.Equals(rewardKind, "avatar", StringComparison.OrdinalIgnoreCase)
+                && ints.Count % 4 == 0)
+            {
+                for (var i = 0; i + 3 < ints.Count; i += 4)
+                {
+                    if (ints[i] <= 0)
+                        continue;
+
+                    rewards.Add(new BoosterRewardEntry
+                    {
+                        RewardKind = rewardKind,
+                        Group = fallbackGroup,
+                        ItemId = ints[i],
+                        Count = Math.Max(1, ints[i + 1]),
+                    });
+                }
+
+                return;
+            }
+
+            if (string.Equals(rewardKind, "default select", StringComparison.OrdinalIgnoreCase))
+            {
+                var itemCount = Math.Min(Math.Max(0, ints[0]), ints.Count - 1);
+                for (var i = 0; i < itemCount; i++)
+                {
+                    var itemId = ints[i + 1];
+                    if (itemId <= 0)
+                        continue;
+
+                    rewards.Add(new BoosterRewardEntry
+                    {
+                        RewardKind = rewardKind,
+                        Group = fallbackGroup,
+                        ItemId = itemId,
+                        Count = 1,
+                    });
+                }
+
+                return;
+            }
+
+            if (string.Equals(rewardKind, "random probability", StringComparison.OrdinalIgnoreCase)
+                || rewardKind.StartsWith("booster equipment ", StringComparison.OrdinalIgnoreCase))
+                return;
+
             var start = (ints.Count % 2) == 1 ? 1 : 0;
             var group = start == 1 ? ints[0] : fallbackGroup;
             for (var i = start; i + 1 < ints.Count; i += 2)
@@ -553,6 +674,99 @@ namespace PvfLib
                     Count = Math.Max(1, ints[i + 1]),
                 });
             }
+        }
+
+        private static void AddRewardsByStride(
+            List<int> ints,
+            int start,
+            int stride,
+            int drawCount,
+            string rewardKind,
+            int group,
+            List<BoosterRewardEntry> rewards)
+        {
+            for (var i = start; i + 2 < ints.Count; i += stride)
+            {
+                if (ints[i] <= 0)
+                    continue;
+
+                rewards.Add(new BoosterRewardEntry
+                {
+                    RewardKind = rewardKind,
+                    Group = group,
+                    DrawCount = drawCount,
+                    ItemId = ints[i],
+                    Weight = Math.Max(0, ints[i + 1]),
+                    Count = Math.Max(1, ints[i + 2]),
+                });
+            }
+        }
+
+        private static void ParseCharacterRewards(
+            ScriptNode node,
+            string content,
+            string rewardKind,
+            int group,
+            string characterJobLabel,
+            List<BoosterRewardEntry> rewards)
+        {
+            var values = new List<decimal>();
+            foreach (var item in node.DataItems)
+            {
+                var matches = Regex.Matches(item.GetContent(content) ?? string.Empty, @"-?\d+(?:\.\d+)?");
+                foreach (Match match in matches)
+                {
+                    if (decimal.TryParse(match.Value, NumberStyles.Number, CultureInfo.InvariantCulture, out var value))
+                        values.Add(value);
+                }
+            }
+
+            if (values.Count < 3 || values.Count % 3 != 0)
+                return;
+
+            var maxWeightScale = 0;
+            for (var i = 4; i + 1 < values.Count; i += 3)
+            {
+                var scale = (decimal.GetBits(values[i])[3] >> 16) & 0x7F;
+                maxWeightScale = Math.Max(maxWeightScale, scale);
+            }
+            var weightScale = 1m;
+            for (var digit = 0; digit < maxWeightScale; digit++)
+                weightScale *= 10m;
+
+            var drawCount = Math.Max(1, decimal.ToInt32(decimal.Truncate(values[0])));
+            for (var i = 3; i + 2 < values.Count; i += 3)
+            {
+                var itemId = decimal.ToInt32(decimal.Truncate(values[i]));
+                if (itemId <= 0)
+                    continue;
+
+                rewards.Add(new BoosterRewardEntry
+                {
+                    RewardKind = rewardKind,
+                    CharacterJobLabel = characterJobLabel,
+                    Group = group,
+                    DrawCount = drawCount,
+                    ItemId = itemId,
+                    Weight = Math.Max(0, decimal.ToInt32(values[i + 1] * weightScale)),
+                    Count = Math.Max(1, decimal.ToInt32(decimal.Truncate(values[i + 2]))),
+                });
+            }
+        }
+
+        private static string GetCharacterJobLabel(ScriptNode node, string content)
+        {
+            if (node == null || !string.Equals(node.Tag, "charactor", StringComparison.OrdinalIgnoreCase))
+                return null;
+
+            foreach (var item in node.DataItems)
+            {
+                var match = Regex.Match(item.GetContent(content) ?? string.Empty, @"`?\[(?<job>[^\]]+)\]`?");
+                if (match.Success)
+                    return match.Groups["job"].Value.Trim();
+            }
+
+            return null;
         }
 
         private static List<int> ParseInts(string text)

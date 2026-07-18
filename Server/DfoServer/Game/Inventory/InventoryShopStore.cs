@@ -788,14 +788,14 @@ namespace DfoServer.Game.Inventory
                 return true;
             }
 
-            if (InventoryPackageStore.TryResolveMallAutoOpenRewards(itemTemplateId, out var autoOpenRewards))
+            if (InventoryPackageStore.TryResolveMallAutoOpenRewards(connection, transaction, characterId, itemTemplateId, out var autoOpenRewards))
             {
                 var openedResults = new List<InventoryMutationResult>();
                 for (var openIndex = 0; openIndex < effectiveCount; openIndex++)
                 {
                     foreach (var reward in autoOpenRewards)
                     {
-                        if (!_db.TryAddBoosterRewardItems(connection, transaction, characterId, accountId, reward.ItemId, reward.Count, out var rewardResults))
+                        if (!_db.TryAddBoosterRewardItems(connection, transaction, characterId, accountId, reward.ItemId, reward.Count, reward.UsablePeriodDays, out var rewardResults))
                         {
                             FileLogger.Log($"  [CeraShopBuy] auto-open failed source=0x{itemTemplateId:X8} reward=0x{reward.ItemId:X8} count={reward.Count}");
                             return false;

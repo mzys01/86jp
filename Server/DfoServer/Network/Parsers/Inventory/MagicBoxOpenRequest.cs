@@ -6,6 +6,7 @@ namespace DfoServer.Network.Parsers.Inventory
     public sealed class MagicBoxOpenRequest
     {
         private const byte ClientMainInventoryListType = 0x04;
+        private const byte ClientUpgradableLegacyListType = 0x05;
 
         public short SlotIndex { get; set; }
 
@@ -91,7 +92,9 @@ namespace DfoServer.Network.Parsers.Inventory
 
         private static bool TryMapListType(byte rawListType, out InventoryListType listType)
         {
-            if (rawListType == (byte)InventoryListType.Main || rawListType == ClientMainInventoryListType)
+            if (rawListType == (byte)InventoryListType.Main
+                || rawListType == ClientMainInventoryListType
+                || rawListType == ClientUpgradableLegacyListType)
             {
                 listType = InventoryListType.Main;
                 return true;

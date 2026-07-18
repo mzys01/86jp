@@ -337,7 +337,7 @@ namespace DfoServer.Game.Inventory
 
         public bool TryUseBoosterItem(SqliteConnection connection, SqliteTransaction transaction, int characterId, int accountId, BoosterUseRequest request, out BoosterUseResult result)
         {
-            result = null;
+            result = new BoosterUseResult();
             request = request ?? new BoosterUseRequest();
             var selectedItemTemplateIds = request.SelectedItemTemplateIds ?? Array.Empty<int>();
 
@@ -367,6 +367,11 @@ namespace DfoServer.Game.Inventory
             if (request.ExpectedMaterialItemTemplateId > 0 && materialItemTemplateId > 0 && materialItemTemplateId != request.ExpectedMaterialItemTemplateId)
                 return false;
 
+            var totalMaterialCountLong = (long)materialCountPerUse * requestedCount;
+            if (totalMaterialCountLong > int.MaxValue)
+                return false;
+            var totalMaterialCount = (int)totalMaterialCountLong;
+
             SqliteInventoryStore.ItemRecord material = null;
             if (materialItemTemplateId > 0 && materialCountPerUse > 0)
             {
@@ -391,21 +396,20 @@ namespace DfoServer.Game.Inventory
                     || material.SlotIndex > materialSlotEnd)
                 {
                     FileLogger.Log($"  [Booster] REJECT: need material=0x{materialItemTemplateId:X8} at slot={(request.MaterialSlotIndex.HasValue ? request.MaterialSlotIndex.Value.ToString() : "auto")} range={materialSlotStart}-{materialSlotEnd}, found=0x{material?.ItemTemplateId ?? 0:X8}@{material?.SlotIndex ?? 0}");
+                    SetMaterialNotEnoughResult(result, materialItemTemplateId, totalMaterialCount, 0);
                     return false;
                 }
             }
 
-            var totalMaterialCountLong = (long)materialCountPerUse * requestedCount;
-            if (totalMaterialCountLong > int.MaxValue)
-                return false;
-            var totalMaterialCount = (int)totalMaterialCountLong;
             if (material != null && material.StackCount < totalMaterialCount)
             {
                 FileLogger.Log($"  [Booster] REJECT: need {totalMaterialCount}x material=0x{materialItemTemplateId:X8}, have={material.StackCount}");
+                SetMaterialNotEnoughResult(result, materialItemTemplateId, totalMaterialCount, material.StackCount);
                 return false;
             }
 
             var isSeriaLuckValueSource = source.ItemTemplateId == SeriaLuckItemConstants.ItemTemplateId;
+            var characterJobLabel = LoadCharacterJobLabel(connection, transaction, characterId);
             var seriaLuckValueBefore = isSeriaLuckValueSource
                 ? SqliteAccountRepository.LoadSeriaLuckValue(connection, transaction, accountId)
                 : 0;
@@ -415,7 +419,7 @@ namespace DfoServer.Game.Inventory
             var rewardsToGrant = new List<PvfLib.BoosterRewardEntry>();
             for (var useIndex = 0; useIndex < requestedCount; useIndex++)
             {
-                if (!TryResolvePackageRewards(source.ItemTemplateId, stackable, stackableType, selectedItemTemplateIds, out var rewards))
+                if (!TryResolvePackageRewards(source.ItemTemplateId, stackable, stackableType, selectedItemTemplateIds, characterJobLabel, out var rewards))
                 {
                     var selectedText = selectedItemTemplateIds.Count == 0
                         ? "none"
@@ -453,6 +457,7 @@ namespace DfoServer.Game.Inventory
 
             var useResult = new BoosterUseResult
             {
+                ErrorCode = 0,
                 SourceSlotIndex = source.SlotIndex,
                 SourceItemTemplateId = source.ItemTemplateId,
                 SourceRemainingStackCount = Math.Max(0, source.StackCount - requestedCount),
@@ -473,8 +478,11 @@ namespace DfoServer.Game.Inventory
 
             foreach (var reward in AggregateRewards(rewardsToGrant))
             {
-                if (!_db.TryAddBoosterRewardItems(connection, transaction, characterId, accountId, reward.ItemId, reward.Count, out var rewardResults))
+                if (!_db.TryAddBoosterRewardItems(connection, transaction, characterId, accountId, reward.ItemId, reward.Count, reward.UsablePeriodDays, out var rewardResults))
+                {
+                    result.ErrorCode = BoosterUseResult.ErrorInventoryFull;
                     return false;
+                }
 
                 useResult.Rewards.AddRange(rewardResults);
                 foreach (var r in rewardResults)
@@ -492,6 +500,30 @@ namespace DfoServer.Game.Inventory
                 _auditLogger.WriteBuyAuditLog(connection, transaction, characterId, reward.ItemTemplateId, reward.SlotIndex, 0, 0);
             result = useResult;
             return true;
+        }
+
+        private static string ResolveBoosterItemName(int itemTemplateId)
+        {
+            if (itemTemplateId <= 0)
+                return null;
+
+            var stackable = InventoryDbPrimitives.LoadStackableItem(itemTemplateId);
+            return string.IsNullOrWhiteSpace(stackable?.Name)
+                ? null
+                : stackable.Name.Trim('`', ' ', '\t', '\r', '\n');
+        }
+
+        private static void SetMaterialNotEnoughResult(
+            BoosterUseResult result,
+            int materialItemTemplateId,
+            int requiredCount,
+            int availableCount)
+        {
+            result.ErrorCode = BoosterUseResult.ErrorMaterialNotEnough;
+            result.RequiredMaterialItemTemplateId = materialItemTemplateId;
+            result.RequiredMaterialName = ResolveBoosterItemName(materialItemTemplateId);
+            result.RequiredMaterialCount = requiredCount;
+            result.AvailableMaterialCount = Math.Max(0, availableCount);
         }
 
         private SqliteInventoryStore.ItemRecord ResolveBoosterSource(
@@ -524,9 +556,6 @@ namespace DfoServer.Game.Inventory
         public bool TryOpenPackage0207(SqliteConnection connection, SqliteTransaction transaction, int characterId, int accountId, short slotIndex, IReadOnlyList<int> selectedItemTemplateIds, out BoosterUseResult result)
         {
             result = null;
-            if (selectedItemTemplateIds == null || selectedItemTemplateIds.Count == 0)
-                return false;
-
             var source = _db.LoadItemRecord(connection, transaction, characterId, InventoryListType.Main, slotIndex);
             if (source == null)
                 return false;
@@ -540,11 +569,23 @@ namespace DfoServer.Game.Inventory
                 && !stackableType.Equals("[booster selection]", StringComparison.OrdinalIgnoreCase))
                 return false;
 
-            if (!TryResolveClientSelectedRewards(stackable, selectedItemTemplateIds, out var rewards))
+            List<PvfLib.BoosterRewardEntry> rewards;
+            if ((selectedItemTemplateIds == null || selectedItemTemplateIds.Count == 0)
+                && stackableType.Equals("[usable cera package]", StringComparison.OrdinalIgnoreCase))
             {
-                FileLogger.Log($"  [OpenPkg0207] PVF validation failed source=0x{source.ItemTemplateId:X8} selected={string.Join(",", selectedItemTemplateIds.Select(id => $"0x{id:X8}"))}");
+                rewards = stackable.PackageRewards.ToList();
+            }
+            else if (!TryResolveClientSelectedRewards(stackable, selectedItemTemplateIds, out rewards))
+            {
+                var selectedText = selectedItemTemplateIds == null
+                    ? "null"
+                    : string.Join(",", selectedItemTemplateIds.Select(id => $"0x{id:X8}"));
+                FileLogger.Log($"  [OpenPkg0207] PVF validation failed source=0x{source.ItemTemplateId:X8} selected={selectedText}");
                 return false;
             }
+
+            if (rewards.Count == 0)
+                return false;
 
             if (!_db.ConsumeOneStackable(connection, transaction, source))
                 return false;
@@ -559,7 +600,7 @@ namespace DfoServer.Game.Inventory
 
             foreach (var reward in rewards)
             {
-                if (!_db.TryAddBoosterRewardItems(connection, transaction, characterId, accountId, reward.ItemId, reward.Count, out var rewardResults))
+                if (!_db.TryAddBoosterRewardItems(connection, transaction, characterId, accountId, reward.ItemId, reward.Count, reward.UsablePeriodDays, out var rewardResults))
                     return false;
 
                 useResult.Rewards.AddRange(rewardResults);
@@ -920,12 +961,13 @@ namespace DfoServer.Game.Inventory
 
             return rewards
                 .Where(reward => reward != null && reward.ItemId > 0 && reward.Count > 0)
-                .GroupBy(reward => reward.ItemId)
+                .GroupBy(reward => new { reward.ItemId, reward.UsablePeriodDays })
                 .Select(group => new PvfLib.BoosterRewardEntry
                 {
-                    ItemId = group.Key,
+                    ItemId = group.Key.ItemId,
                     Count = group.Sum(reward => Math.Max(1, reward.Count)),
                     Weight = 10000,
+                    UsablePeriodDays = group.Key.UsablePeriodDays,
                 })
                 .ToList();
         }
@@ -944,6 +986,8 @@ namespace DfoServer.Game.Inventory
                     Weight = reward.Weight,
                     Group = reward.Group,
                     DrawCount = reward.DrawCount,
+                    CharacterJobLabel = reward.CharacterJobLabel,
+                    UsablePeriodDays = reward.UsablePeriodDays,
                 })
                 .ToList();
         }
@@ -994,10 +1038,18 @@ namespace DfoServer.Game.Inventory
                 Weight = reward.Weight,
                 Group = reward.Group,
                 DrawCount = reward.DrawCount,
+                CharacterJobLabel = reward.CharacterJobLabel,
+                UsablePeriodDays = reward.UsablePeriodDays,
             };
         }
 
-        private static bool TryResolvePackageRewards(int sourceItemTemplateId, PvfLib.StackableItemFile stackable, string stackableType, IReadOnlyList<int> selectedItemTemplateIds, out List<PvfLib.BoosterRewardEntry> rewards)
+        private static bool TryResolvePackageRewards(
+            int sourceItemTemplateId,
+            PvfLib.StackableItemFile stackable,
+            string stackableType,
+            IReadOnlyList<int> selectedItemTemplateIds,
+            string characterJobLabel,
+            out List<PvfLib.BoosterRewardEntry> rewards)
         {
             rewards = new List<PvfLib.BoosterRewardEntry>();
             if (stackableType.Equals("[booster]", StringComparison.OrdinalIgnoreCase)
@@ -1009,7 +1061,7 @@ namespace DfoServer.Game.Inventory
                 if (TryResolveMagicHammerBundleRewards(sourceItemTemplateId, stackable, out rewards))
                     return true;
 
-                rewards = RollBoosterRewards(stackable.BoosterRewards);
+                rewards = RollBoosterRewards(stackable.BoosterRewards, characterJobLabel);
                 return rewards.Count > 0;
             }
 
@@ -1024,7 +1076,7 @@ namespace DfoServer.Game.Inventory
 
             if (stackableType.Equals("[random upgradable legacy]", StringComparison.OrdinalIgnoreCase))
             {
-                rewards = RollBoosterRewards(stackable.RandomBoxRewards);
+                rewards = RollBoosterRewards(stackable.RandomBoxRewards, characterJobLabel);
                 return rewards.Count > 0;
             }
 
@@ -1105,10 +1157,15 @@ namespace DfoServer.Game.Inventory
             return rewards.Count > 0;
         }
 
-        private static List<PvfLib.BoosterRewardEntry> RollBoosterRewards(IEnumerable<PvfLib.BoosterRewardEntry> rewards)
+        private static List<PvfLib.BoosterRewardEntry> RollBoosterRewards(
+            IEnumerable<PvfLib.BoosterRewardEntry> rewards,
+            string characterJobLabel)
         {
             var selected = new List<PvfLib.BoosterRewardEntry>();
-            foreach (var group in rewards.GroupBy(r => r.Group))
+            var eligibleRewards = rewards.Where(reward =>
+                string.IsNullOrWhiteSpace(reward.CharacterJobLabel)
+                || string.Equals(reward.CharacterJobLabel, characterJobLabel, StringComparison.OrdinalIgnoreCase));
+            foreach (var group in eligibleRewards.GroupBy(r => r.Group))
             {
                 var totalWeight = group.Sum(r => Math.Max(0, r.Weight));
                 if (totalWeight <= 0)
@@ -1134,7 +1191,12 @@ namespace DfoServer.Game.Inventory
             return selected;
         }
 
-        internal static bool TryResolveMallAutoOpenRewards(int itemTemplateId, out List<PvfLib.BoosterRewardEntry> rewards)
+        internal static bool TryResolveMallAutoOpenRewards(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            int characterId,
+            int itemTemplateId,
+            out List<PvfLib.BoosterRewardEntry> rewards)
         {
             rewards = null;
             var stackable = InventoryDbPrimitives.LoadStackableItem(itemTemplateId);
@@ -1147,7 +1209,30 @@ namespace DfoServer.Game.Inventory
                 && !(stackableType.Equals("[booster]", StringComparison.OrdinalIgnoreCase) && IsMagicHammerBundle(itemTemplateId)))
                 return false;
 
-            return TryResolvePackageRewards(itemTemplateId, stackable, stackableType, null, out rewards) && rewards.Count > 0;
+            var characterJobLabel = LoadCharacterJobLabel(connection, transaction, characterId);
+            return TryResolvePackageRewards(itemTemplateId, stackable, stackableType, null, characterJobLabel, out rewards) && rewards.Count > 0;
+        }
+
+        private static string LoadCharacterJobLabel(SqliteConnection connection, SqliteTransaction transaction, int characterId)
+        {
+            using (var command = connection.CreateCommand())
+            {
+                command.Transaction = transaction;
+                command.CommandText = "SELECT job FROM characters WHERE character_id = @characterId LIMIT 1;";
+                command.Parameters.AddWithValue("@characterId", characterId);
+                var value = command.ExecuteScalar();
+                if (value == null || value == DBNull.Value)
+                    return null;
+
+                var job = Convert.ToInt32(value);
+                string[] labels =
+                {
+                    "swordman", "fighter", "gunner", "mage", "priest",
+                    "at gunner", "thief", "at fighter", "at mage",
+                    "demonic swordman", "creator mage", "at swordman", "knight",
+                };
+                return job >= 0 && job < labels.Length ? labels[job] : null;
+            }
         }
 
         internal static string NormalizeStackableType(string stackableType)
