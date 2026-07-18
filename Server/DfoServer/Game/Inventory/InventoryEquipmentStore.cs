@@ -125,6 +125,10 @@ namespace DfoServer.Game.Inventory
             uint now)
         {
             var removed = 0;
+            // 角色租赁记录是租赁身份的权威来源。升级、转职或 PVF 目录变化后，
+            // 旧模板可能已不在当前租赁目录中，但仍必须按原到期时间清除。
+            var persistedRentalTemplateIds = LoadPersistedRentalTemplateIds(
+                connection, transaction, characterId);
 
             var expiredBagItems = new List<(long itemUid, int slotIndex, int itemTemplateId, int expireTime)>();
             using (var command = connection.CreateCommand())
@@ -150,7 +154,7 @@ ORDER BY slot_index;";
                     while (reader.Read())
                     {
                         var itemTemplateId = reader.GetInt32(2);
-                        if (!RentalWeaponInventoryMapper.IsValidInventoryTemplate(itemTemplateId))
+                        if (!IsRentalTemplateForCleanup(itemTemplateId, persistedRentalTemplateIds))
                             continue;
 
                         expiredBagItems.Add((
@@ -187,7 +191,7 @@ ORDER BY slot;";
                     while (reader.Read())
                     {
                         var itemId = reader.GetInt32(1);
-                        if (!RentalWeaponInventoryMapper.IsValidInventoryTemplate(itemId)
+                        if (!IsRentalTemplateForCleanup(itemId, persistedRentalTemplateIds)
                             && !ItemMetadataResolver.IsNameTagItem(itemId))
                             continue;
 
@@ -213,6 +217,40 @@ ORDER BY slot;";
                 ClearNameTagSubtype1Fields(connection, transaction, characterId);
 
             return removed;
+        }
+
+        private static bool IsRentalTemplateForCleanup(
+            int itemTemplateId,
+            HashSet<int> persistedRentalTemplateIds)
+        {
+            // 先短路持久化身份，避免清理依赖角色当前等级/职业对应的租赁目录。
+            return persistedRentalTemplateIds.Contains(itemTemplateId)
+                || RentalWeaponInventoryMapper.IsValidInventoryTemplate(itemTemplateId);
+        }
+
+        private static HashSet<int> LoadPersistedRentalTemplateIds(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            int characterId)
+        {
+            var templateIds = new HashSet<int>();
+            using (var command = connection.CreateCommand())
+            {
+                command.Transaction = transaction;
+                command.CommandText = @"
+SELECT DISTINCT inventory_template_id
+FROM character_rental_items
+WHERE character_id = @characterId
+  AND inventory_template_id > 0;";
+                command.Parameters.AddWithValue("@characterId", characterId);
+                using (var reader = command.ExecuteReader())
+                {
+                    while (reader.Read())
+                        templateIds.Add(reader.GetInt32(0));
+                }
+            }
+
+            return templateIds;
         }
 
         private static void ClearNameTagSubtype1Fields(SqliteConnection connection, SqliteTransaction transaction, int characterId)
