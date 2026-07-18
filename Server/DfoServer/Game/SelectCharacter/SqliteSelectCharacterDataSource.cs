@@ -5,6 +5,7 @@ using DfoServer.Game.Currency;
 using DfoServer.Game.ExpertJob;
 using DfoServer.Game.Inventory;
 using DfoServer.Game.ItemUpgrade;
+using DfoServer.Game.KnightShield;
 using DfoServer.Game.Lottery;
 using DfoServer.Game.Settings;
 using DfoServer.Game.TitleBook;
@@ -20,6 +21,7 @@ namespace DfoServer.Game.SelectCharacter
         private readonly IAssetService _assetService;
         private readonly SqliteCharacterProgressRepository _initDataRepository;
         private readonly SqliteDarkKnightComboSkillRepository _darkKnightComboSkillRepository;
+        private readonly KnightShieldDeckRepository _knightShieldDeckRepository;
         private readonly SqliteUserInfoBlobRepository _userInfoBlobRepository;
         private readonly ICharacterStateRepository _initFlagsRepository;
         private readonly ICharacterRepository _characterRepository;
@@ -58,6 +60,7 @@ namespace DfoServer.Game.SelectCharacter
             _assetService = assetService;
             _initDataRepository = new SqliteCharacterProgressRepository(databasePath, schemaFilePath);
             _darkKnightComboSkillRepository = new SqliteDarkKnightComboSkillRepository(databasePath, schemaFilePath);
+            _knightShieldDeckRepository = KnightShieldDeckRepository.FromConnectionString(_connectionString);
             _userInfoBlobRepository = new SqliteUserInfoBlobRepository(databasePath, schemaFilePath);
             _initFlagsRepository = new SqliteCharacterStateRepository(databasePath, schemaFilePath);
             _characterRepository = characterRepository;
@@ -232,6 +235,9 @@ namespace DfoServer.Game.SelectCharacter
             
             
             CharacterRecord characterRecord = _characterRepository?.GetById(characterId);
+            var knightShieldDeck = KnightShieldDataProvider.IsEligibleCharacter(characterRecord)
+                ? _knightShieldDeckRepository.Load(characterId)
+                : null;
             if (characterRecord != null)
             {
                 // 选角初始化 USERINFO 同样必须使用当前穿戴栏重建外观，避免 characters.appearance_blob在新建角色或换装后滞留为空/旧值，导致城镇模型和选人/副本显示不一致。
@@ -249,7 +255,7 @@ namespace DfoServer.Game.SelectCharacter
                 _databasePath, _schemaFilePath);
             if (subtype1Repo.HasData(characterId))
             {
-                initSnapshot.UserInfoAddition = subtype1Repo.Load(characterId);
+                initSnapshot.UserInfoAddition = subtype1Repo.Load(characterId, knightShieldDeck);
                 if (initSnapshot.UserInfoAddition != null)
                 {
                     AdventureGroupUserInfoSynchronizer.ApplyToUserInfoAddition(
@@ -281,6 +287,7 @@ namespace DfoServer.Game.SelectCharacter
             {
                 ItemListSnapshot = itemList,
                 InitializationSnapshot = initSnapshot,
+                KnightShieldDeck = knightShieldDeck,
                 CharacterRecord = characterRecord,
             };
         }

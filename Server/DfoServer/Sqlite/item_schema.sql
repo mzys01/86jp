@@ -180,6 +180,15 @@ CREATE TABLE IF NOT EXISTS character_dark_knight_combo_skill_pages (
     PRIMARY KEY (character_id, page_index),
     FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
 );
+-- 守护者盾牌 deck: slot 0=当前主盾, slot 1..4=备用盾。
+-- 空槽不落行，repository 加载时固定补齐为 5 个零值槽。
+CREATE TABLE IF NOT EXISTS character_knight_shield_deck (
+    character_id INTEGER NOT NULL,
+    slot_index INTEGER NOT NULL CHECK (slot_index >= 0 AND slot_index <= 4),
+    shield_item_id INTEGER NOT NULL CHECK (shield_item_id > 0),
+    PRIMARY KEY (character_id, slot_index),
+    FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
+);
 
 CREATE TABLE IF NOT EXISTS character_mercenary_support (
     owner_character_id INTEGER NOT NULL,

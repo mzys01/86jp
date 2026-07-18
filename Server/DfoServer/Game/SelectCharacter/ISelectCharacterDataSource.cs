@@ -1,5 +1,6 @@
 using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory;
+using DfoServer.Game.KnightShield;
 using System.Collections.Generic;
 
 namespace DfoServer.Game.SelectCharacter
@@ -24,7 +25,7 @@ namespace DfoServer.Game.SelectCharacter
 
         public SelectCharacterInitializationSnapshot InitializationSnapshot { get; set; } = new SelectCharacterInitializationSnapshot();
 
-
+        public KnightShieldDeckSnapshot KnightShieldDeck { get; set; }
 
         public CharacterRecord CharacterRecord { get; set; }
     }

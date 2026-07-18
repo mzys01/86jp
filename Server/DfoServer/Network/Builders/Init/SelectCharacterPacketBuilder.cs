@@ -1,5 +1,6 @@
 using DfoServer.Game.CharacterData;
 using DfoServer.Game.Inventory;
+using DfoServer.Game.KnightShield;
 using DfoServer.Game.SelectCharacter;
 using DfoServer.Infrastructure;
 using System;
@@ -33,6 +34,22 @@ namespace DfoServer.Network.Builders
 
             foreach (var template in templates)
             {
+                if (template.Kind == SelectCharacterPacketTemplateKind.Raw
+                    && template.Command == 0x00
+                    && template.Type == KnightShieldDeckBodyBuilder.DeckNotificationType)
+                {
+                    if (KnightShieldDataProvider.IsEligibleCharacter(snapshot.CharacterRecord)
+                        && snapshot.KnightShieldDeck != null)
+                    {
+                        var body = KnightShieldDeckBodyBuilder.BuildDeck(snapshot.KnightShieldDeck);
+                        FileLogger.Log(
+                            $"[SelectCharacterPacketBuilder] OK cmd=0 type=0x{template.Type:X4} "
+                            + $"deck=[{string.Join(",", snapshot.KnightShieldDeck.ShieldItemIds)}]");
+                        yield return GamePacketEnvelopeBuilder.Build(0x00, template.Type, body);
+                    }
+                    continue;
+                }
+
                 if (template.Kind == SelectCharacterPacketTemplateKind.Raw
                     && template.Command == 0x00
                     && template.Type == 0x019F)

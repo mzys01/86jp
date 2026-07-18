@@ -32,6 +32,7 @@ namespace DfoServer
             ("--selftest-crystal-contract", SelfTests.CrystalContractSelfTest.Run),
             ("--selftest-slot-expansion-quest", SelfTests.SlotExpansionQuestSelfTest.Run),
             ("--selftest-character-slot-policy", SelfTests.CharacterSlotPolicySelfTest.Run),
+            ("--selftest-knight-shield-deck", SelfTests.KnightShieldDeckRepositorySelfTest.Run),
             ("--selftest-clear-map-quest", SelfTests.ClearMapQuestSelfTest.Run),
             ("--selftest-death-tower-entry", SelfTests.DeathTowerEntrySelfTest.Run),
             ("--selftest-death-tower-map-loader", SelfTests.DeathTowerMapLoaderSelfTest.Run),

@@ -2,6 +2,7 @@ using DfoServer.Game.Accounts;
 using DfoServer.Game.Appearance;
 using DfoServer.Game.Characters;
 using DfoServer.Game.Inventory;
+using DfoServer.Game.KnightShield;
 using DfoServer.Game.Lottery;
 using DfoServer.Game.SelectCharacter;
 using DfoServer.Game.Session;
@@ -22,6 +23,7 @@ namespace DfoServer.Network
         private readonly CharacterSelectHandler _characterSelectHandler;
         private readonly InventoryHandler _inventoryHandler;
         private readonly LotteryItemHandler _lotteryItemHandler;
+        private readonly KnightShieldHandler _knightShieldHandler;
         private readonly TownHandler _townHandler;
         private readonly DungeonHandler _dungeonHandler;
         private readonly SecretShopHandler _secretShopHandler;
@@ -90,6 +92,11 @@ namespace DfoServer.Network
             _loginHandler = new LoginHandler(accountRepository, characterRepository);
             _characterSelectHandler = new CharacterSelectHandler(sqliteSelectCharacterDataSource, characterRepository, getUserInfoTemplate, sessionDirectory);
             _inventoryRefreshSender = new InventoryRefreshSender(inventoryStore, sqliteSelectCharacterDataSource, characterRepository);
+            var knightShieldRepository = new KnightShieldDeckRepository(databasePath, schemaFilePath);
+            var knightShieldService = new KnightShieldService(knightShieldRepository);
+            _knightShieldHandler = new KnightShieldHandler(
+                knightShieldService,
+                characterRepository);
             var experienceItemNotifications = new ExperienceItemNotificationService(
                 characterRepository,
                 databasePath,
@@ -293,7 +300,12 @@ namespace DfoServer.Network
         private void RegisterInventoryHandlers(Dictionary<ushort, Func<EnhancedClientSession, GamePacketHeader, byte[], Task>> d)
         {
             d[0x0012] = _inventoryHandler.Handle_ENUM_CMDPACKET_DELETE_ITEM;       //18
-            d[0x0013] = _inventoryHandler.Handle_ENUM_CMDPACKET_MOVE_ITEMSPACE;    //19
+            d[0x0013] = async (s, h, b) =>
+            {
+                if (await _knightShieldHandler.TryHandleMoveItemSpace(s, h, b))
+                    return;
+                await _inventoryHandler.Handle_ENUM_CMDPACKET_MOVE_ITEMSPACE(s, h, b);
+            };                                                                    //19
             d[0x0014] = _inventoryHandler.Handle_ENUM_CMDPACKET_SORT_ITEM;         //20
             d[0x0015] = _inventoryHandler.Handle_ENUM_CMDPACKET_BUY_ITEM;          //21
             d[0x0016] = _inventoryHandler.Handle_ENUM_CMDPACKET_SELL_ITEM;         //22
@@ -328,6 +340,7 @@ namespace DfoServer.Network
             d[0x0133] = _inventoryHandler.Handle_DEPOSIT_MONEY;                    //307 金库存金币
             d[0x0134] = _inventoryHandler.Handle_WITHDRAW_MONEY;                   //308 金库取金币
             d[0x0198] = _inventoryHandler.Handle_UPGRADE_CARGO;                    //408 扩容个人仓库
+            d[KnightShieldDeckBodyBuilder.ChangeDeckCommandType] = _knightShieldHandler.HandleChangeDeckInfo;
         }
 
         private void RegisterPetHandlers(Dictionary<ushort, Func<EnhancedClientSession, GamePacketHeader, byte[], Task>> d)

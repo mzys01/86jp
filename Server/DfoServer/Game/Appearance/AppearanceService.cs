@@ -1,6 +1,7 @@
 using DfoServer.Game.Characters;
 using DfoServer.Game.CharacterData;
 using DfoServer.Game.Inventory;
+using DfoServer.Game.ItemUpgrade;
 using DfoServer.Game.SelectCharacter;
 using DfoServer.Game.Session;
 using DfoServer.Infrastructure;
@@ -26,6 +27,21 @@ namespace DfoServer.Game.Appearance
 
             player.AppearanceEntries = updated;
             characterRepository.UpdateAppearance(characterId, updated);
+
+            return BuildNoti2Body(player);
+        }
+
+        public static byte[] RefreshPlayerAppearance(
+            PlayerContext player,
+            ICharacterRepository characterRepository)
+        {
+            if (player == null)
+                return Array.Empty<byte>();
+
+            var updated = LoadAppearanceFromEquipEntries(player.CharacterId);
+            player.AppearanceEntries = updated;
+            if (characterRepository != null && player.CharacterId > 0)
+                characterRepository.UpdateAppearance(player.CharacterId, updated);
 
             return BuildNoti2Body(player);
         }
@@ -80,22 +96,34 @@ namespace DfoServer.Game.Appearance
 
         public static CharacterAppearanceEntry[] LoadAppearanceFromEquipEntries(int characterId)
         {
-            var result = new List<CharacterAppearanceEntry>();
             var dbPath = ServerPaths.DatabasePath;
             var schemaPath = ServerPaths.SchemaFilePath;
             var repo = new Game.CharacterData.SqliteSubtype1Repository(dbPath, schemaPath);
 
             if (!repo.HasData(characterId))
-                return result.ToArray();
+                return Array.Empty<CharacterAppearanceEntry>();
 
             var addition = repo.Load(characterId);
-            if (addition.EquippedEntries == null)
+            return BuildFromEquippedEntries(addition.EquippedEntries);
+        }
+
+        internal static CharacterAppearanceEntry[] BuildFromEquippedEntries(
+            IEnumerable<EquippedEntrySnapshot> equippedEntries)
+        {
+            var result = new List<CharacterAppearanceEntry>();
+            if (equippedEntries == null)
                 return result.ToArray();
 
-            foreach (var entry in addition.EquippedEntries)
+            foreach (var entry in equippedEntries)
             {
+                if (entry == null)
+                    continue;
+
                 // 外观列表的 itemId 保持真实穿戴模板；替换称号动画还会由 subtype0 tail 首字段刷新。
-                if (entry.Slot > TitleAppearanceSlot) continue;
+                // slot23 是客户端原生副武器外观槽；守护者主盾也通过同一标准装备槽进入快照。
+                if (entry.Slot > TitleAppearanceSlot
+                    && entry.Slot != (byte)EquipmentType.SupportWeapon)
+                    continue;
                 if (entry.ItemId == 0) continue;
 
                 int displayItemId = entry.ItemId;

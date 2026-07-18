@@ -11,6 +11,8 @@ namespace DfoServer.Game.Inventory
         Equipment = 3,
         Pet = 7,
         AccountCargo = 12,
+        KnightShieldEquipped = 33,
+        KnightShieldCatalog = 34,
     }
 
     // ITEM_LIST/UPDATE_ITEM_LIST 的普通 0x54 entry 协议 DTO。

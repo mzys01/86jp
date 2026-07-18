@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using Microsoft.Data.Sqlite;
+using DfoServer.Game.KnightShield;
 using DfoServer.Game.SelectCharacter;
 using DfoServer.Infrastructure;
 
@@ -9,15 +10,18 @@ namespace DfoServer.Game.CharacterData
     public sealed class SqliteSubtype1Repository
     {
         private readonly string _connectionString;
+        private readonly KnightShieldDeckRepository _knightShieldDeckRepository;
 
         public SqliteSubtype1Repository(string databasePath, string schemaFilePath)
         {
             _connectionString = SqliteDatabaseBootstrap.Initialize(databasePath, schemaFilePath);
+            _knightShieldDeckRepository = KnightShieldDeckRepository.FromConnectionString(_connectionString);
         }
 
         private SqliteSubtype1Repository(string connectionString)
         {
             _connectionString = connectionString ?? throw new ArgumentNullException(nameof(connectionString));
+            _knightShieldDeckRepository = KnightShieldDeckRepository.FromConnectionString(_connectionString);
         }
 
         public static SqliteSubtype1Repository FromConnectionString(string connectionString)
@@ -37,7 +41,16 @@ namespace DfoServer.Game.CharacterData
 
         public UserInfoAdditionSnapshot Load(int characterId)
         {
+            return Load(characterId, null);
+        }
+
+        internal UserInfoAdditionSnapshot Load(
+            int characterId,
+            KnightShieldDeckSnapshot knightShieldDeck)
+        {
             var snap = new UserInfoAdditionSnapshot();
+            byte characterJob = 0;
+            int characterGrowType = 0;
 
             using (var conn = Open())
             {
@@ -92,7 +105,7 @@ namespace DfoServer.Game.CharacterData
                 }
 
                 
-                using (var cmd = new SqliteCommand("SELECT exp, ex_equip_slot_stat, clone_title_item_id FROM characters WHERE character_id=@cid", conn))
+                using (var cmd = new SqliteCommand("SELECT exp, ex_equip_slot_stat, clone_title_item_id, job, grow_type FROM characters WHERE character_id=@cid", conn))
                 {
                     cmd.Parameters.AddWithValue("@cid", characterId);
                     using (var r = cmd.ExecuteReader())
@@ -102,6 +115,8 @@ namespace DfoServer.Game.CharacterData
                             snap.CharacExp = (uint)r.GetInt64(0);
                             snap.ExEquipSlotStat = (byte)r.GetInt32(1);
                             snap.CloneTitleItemId = r.IsDBNull(2) ? 0u : (uint)r.GetInt64(2);
+                            characterJob = (byte)r.GetInt32(3);
+                            characterGrowType = r.GetInt32(4);
                         }
                     }
                 }
@@ -175,6 +190,15 @@ ORDER BY slot", conn))
                 }
 
                 // PvpResults/AbuseValues 保持空列表: 对应功能未实现, 旧表全库为空且无写入方, 已删除
+            }
+
+            if (KnightShieldDataProvider.IsEligibleCharacter(characterJob))
+            {
+                KnightShieldEquipmentSnapshotSynchronizer.Apply(
+                    characterJob,
+                    characterGrowType,
+                    snap,
+                    knightShieldDeck ?? _knightShieldDeckRepository.Load(characterId));
             }
 
             return snap;
