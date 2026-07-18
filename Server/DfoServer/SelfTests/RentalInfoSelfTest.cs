@@ -1,6 +1,10 @@
 using System;
+using System.IO;
+using DfoServer.Game.Inventory;
 using DfoServer.Game.SelectCharacter;
+using DfoServer.Infrastructure;
 using DfoServer.Network.Builders;
+using Microsoft.Data.Sqlite;
 
 namespace DfoServer.SelfTests
 {
@@ -80,8 +84,146 @@ namespace DfoServer.SelfTests
             if (rental.RemoveExpired(now) != 1)
                 return Fail("expired rental entries must be removed from snapshot");
 
+            var cleanupFailure = RunPersistedRentalCleanupRegression();
+            if (cleanupFailure != null)
+                return Fail(cleanupFailure);
+
             Console.WriteLine("RentalInfoSelfTest OK");
             return 0;
+        }
+
+        private static string RunPersistedRentalCleanupRegression()
+        {
+            const int accountId = 997001;
+            const int characterId = 997002;
+            const int legacyRentalTemplateId = int.MaxValue - 1;
+            const int activeLegacyRentalTemplateId = int.MaxValue - 2;
+            const int outOfRangeRentalTemplateId = int.MaxValue - 3;
+            const uint nowUnixSeconds = 1_700_000_000;
+            const int expiredAtUnixSeconds = 1_699_999_999;
+            const int activeUntilUnixSeconds = 1_700_000_001;
+            var databasePath = Path.Combine(
+                Path.GetTempPath(),
+                "rental-info-cleanup-" + Guid.NewGuid().ToString("N") + ".db");
+
+            try
+            {
+                var store = new SqliteInventoryStore(
+                    databasePath,
+                    ServerPaths.SchemaFilePath,
+                    new FixedRentalTimeProvider(nowUnixSeconds));
+
+                using (var connection = new SqliteConnection(store.ConnectionString))
+                {
+                    connection.Open();
+                    using (var command = connection.CreateCommand())
+                    {
+                        command.CommandText = @"
+INSERT OR IGNORE INTO accounts(account_id, m_id, password_hash)
+VALUES(@accountId, 'rental-cleanup-selftest', '');
+INSERT OR IGNORE INTO characters(character_id, account_id, name)
+VALUES(@characterId, @accountId, 'rental-cleanup-main');
+INSERT INTO character_items(
+    owner_scope, owner_id, character_id, list_type, slot_index,
+    item_template_id, item_kind, expire_time)
+VALUES
+    ('character', @characterId, @characterId, 0, @rentalSlot, @legacyRentalTemplateId, 'special', @expiredAt),
+    ('character', @characterId, @characterId, 0, @activeRentalSlot, @activeLegacyRentalTemplateId, 'special', @activeUntil),
+    ('character', @characterId, @characterId, 0, @outOfRangeSlot, @outOfRangeRentalTemplateId, 'special', @expiredAt);
+INSERT INTO character_equipped_entries(character_id, slot, item_id, expire_time, raw_entry)
+VALUES(@characterId, 0, @legacyRentalTemplateId, @expiredAt, X'00');
+INSERT INTO character_rental_items(
+    character_id, shop_entry_id, inventory_template_id, expire_time)
+VALUES
+    (@characterId, 123, @legacyRentalTemplateId, @expiredAt),
+    (@characterId, 124, @activeLegacyRentalTemplateId, @activeUntil),
+    (@characterId, 125, @outOfRangeRentalTemplateId, @expiredAt);";
+                        command.Parameters.AddWithValue("@accountId", accountId);
+                        command.Parameters.AddWithValue("@characterId", characterId);
+                        command.Parameters.AddWithValue("@legacyRentalTemplateId", legacyRentalTemplateId);
+                        command.Parameters.AddWithValue("@activeLegacyRentalTemplateId", activeLegacyRentalTemplateId);
+                        command.Parameters.AddWithValue("@outOfRangeRentalTemplateId", outOfRangeRentalTemplateId);
+                        command.Parameters.AddWithValue("@rentalSlot", SqliteInventoryStore.QuickSlotStart);
+                        command.Parameters.AddWithValue("@activeRentalSlot", SqliteInventoryStore.QuickSlotStart + 1);
+                        command.Parameters.AddWithValue("@outOfRangeSlot", SqliteInventoryStore.RentalBagSlotEnd + 1);
+                        command.Parameters.AddWithValue("@expiredAt", expiredAtUnixSeconds);
+                        command.Parameters.AddWithValue("@activeUntil", activeUntilUnixSeconds);
+                        command.ExecuteNonQuery();
+                    }
+                }
+
+                var removed = store.DeleteExpiredRentalEquipment(characterId, accountId);
+
+                if (removed != 2)
+                    return "cleanup must remove persisted legacy rentals from bag and equipment";
+
+                using (var connection = new SqliteConnection(store.ConnectionString))
+                {
+                    connection.Open();
+                    using (var command = connection.CreateCommand())
+                    {
+                        command.CommandText = @"
+SELECT
+    (SELECT COUNT(*) FROM character_items
+     WHERE character_id = @characterId AND item_template_id = @legacyRentalTemplateId),
+    (SELECT COUNT(*) FROM character_equipped_entries
+     WHERE character_id = @characterId AND item_id = @legacyRentalTemplateId),
+    (SELECT COUNT(*) FROM character_items
+     WHERE character_id = @characterId AND item_template_id = @activeLegacyRentalTemplateId),
+    (SELECT COUNT(*) FROM character_items
+     WHERE character_id = @characterId AND item_template_id = @outOfRangeRentalTemplateId);";
+                        command.Parameters.AddWithValue("@characterId", characterId);
+                        command.Parameters.AddWithValue("@legacyRentalTemplateId", legacyRentalTemplateId);
+                        command.Parameters.AddWithValue("@activeLegacyRentalTemplateId", activeLegacyRentalTemplateId);
+                        command.Parameters.AddWithValue("@outOfRangeRentalTemplateId", outOfRangeRentalTemplateId);
+                        using (var reader = command.ExecuteReader())
+                        {
+                            if (!reader.Read())
+                                return "cleanup verification query returned no row";
+                            if (reader.GetInt32(0) != 0 || reader.GetInt32(1) != 0)
+                                return "expired persisted rentals must be removed from the rental bag range and equipment";
+                            if (reader.GetInt32(2) != 1)
+                                return "active persisted rentals must remain unchanged";
+                            if (reader.GetInt32(3) != 1)
+                                return "cleanup must not extend beyond the existing rental bag range";
+                        }
+                    }
+                }
+            }
+            finally
+            {
+                DeleteTempDatabase(databasePath);
+            }
+
+            return null;
+        }
+
+        private static void DeleteTempDatabase(string databasePath)
+        {
+            SqliteConnection.ClearAllPools();
+            foreach (var path in new[] { databasePath, databasePath + "-wal", databasePath + "-shm" })
+            {
+                try
+                {
+                    if (File.Exists(path))
+                        File.Delete(path);
+                }
+                catch
+                {
+                }
+            }
+        }
+
+        private sealed class FixedRentalTimeProvider : IRentalTimeProvider
+        {
+            private readonly uint _now;
+
+            internal FixedRentalTimeProvider(uint now)
+            {
+                _now = now;
+            }
+
+            public uint UtcNowUnixSeconds() => _now;
         }
 
         private static int Fail(string message)
