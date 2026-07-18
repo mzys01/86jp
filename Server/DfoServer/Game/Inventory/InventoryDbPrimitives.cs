@@ -834,10 +834,6 @@ WHERE character_id = @characterId AND list_type = @listType;";
             if (metadata.ItemKind == "special")
                 return false;
 
-            if ((CharmInventoryPolicy.IsCharmItem(itemTemplateId) && Math.Max(1, stackCount) > 1)
-                || !CharmInventoryPolicy.CanEnterMain(connection, transaction, characterId, itemTemplateId))
-                return false;
-
             if (CurrencyService.IsCubeFragment(itemTemplateId))
             {
                 var count = Math.Max(1, stackCount);

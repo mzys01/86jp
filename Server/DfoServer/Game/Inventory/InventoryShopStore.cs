@@ -235,10 +235,6 @@ namespace DfoServer.Game.Inventory
             // NPC 商店也卖宠物页物品; 容器/槽段/字段编码统一走入库核(ItemIntake)。
             var placement = ItemIntake.ResolvePlacement(itemTemplateId, metadata);
 
-            if (placement.ListType == InventoryListType.Main
-                && !CharmInventoryPolicy.CanEnterMain(connection, transaction, characterId, itemTemplateId))
-                return false;
-
             if (CurrencyService.IsCubeFragment(itemTemplateId))
             {
                 var wallet = _db.LoadWallet(connection, transaction, characterId);
@@ -525,12 +521,6 @@ namespace DfoServer.Game.Inventory
             var isNameTag = !isAvatar && !placement.IsPet
                 && string.Equals(itemKind, "equipment", StringComparison.Ordinal)
                 && ItemMetadataResolver.IsNameTagItem(itemTemplateId);
-            if (!isAvatar && placement.ListType == InventoryListType.Main
-                && !CharmInventoryPolicy.CanEnterMain(connection, transaction, characterId, itemTemplateId))
-            {
-                FileLogger.Log($"  [CeraShopBuy] REJECT: main inventory already contains a charm item=0x{itemTemplateId:X8}");
-                return false;
-            }
             var avatarDurationDays = 0;
             // 发货数量 = 份数 × 每份数量(cerashop count); 价格 = 每份价 × 份数 (avatar 恒为 1)
             var ceraShopStackLimit = ResolveCeraShopStackLimit(product.Count, metadata.StackLimit);
