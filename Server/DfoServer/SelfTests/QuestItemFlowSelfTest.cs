@@ -92,6 +92,24 @@ namespace DfoServer.SelfTests
             MarkQuestCleared(connStr, 2041);
             var failures = 0;
 
+            foreach (var questId in new[] { 1776, 1777, 1778 })
+            {
+                var defaultGoldReward = QuestData.GetRewardExp(
+                    questId, playerLevel: 6, playerJob: 0, playerGrowType: 0);
+                Check($"quest {questId} applies default gold multiplier",
+                    defaultGoldReward.Gold > 0,
+                    ref failures);
+            }
+            Check("quest 1778 uses PVF quest level as gold table index",
+                QuestData.GetRewardExp(1778, playerLevel: 5, playerJob: 0, playerGrowType: 0).Gold == 216,
+                ref failures);
+            Check("quest 1778 gold remains stable after character level-up",
+                QuestData.GetRewardExp(1778, playerLevel: 6, playerJob: 0, playerGrowType: 0).Gold == 216,
+                ref failures);
+            Check("quest 2490 level 85 gold matches client display",
+                QuestData.GetRewardExp(2490, playerLevel: 85, playerJob: 11, playerGrowType: 4).Gold == 7344,
+                ref failures);
+
             var greenStoneQuest = QuestData.GetQuestFile(GreenStoneQuestId);
             Check("green stone quest parses passive object reward",
                 greenStoneQuest != null
