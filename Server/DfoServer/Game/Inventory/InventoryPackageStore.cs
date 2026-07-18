@@ -396,7 +396,7 @@ namespace DfoServer.Game.Inventory
                     || material.SlotIndex > materialSlotEnd)
                 {
                     FileLogger.Log($"  [Booster] REJECT: need material=0x{materialItemTemplateId:X8} at slot={(request.MaterialSlotIndex.HasValue ? request.MaterialSlotIndex.Value.ToString() : "auto")} range={materialSlotStart}-{materialSlotEnd}, found=0x{material?.ItemTemplateId ?? 0:X8}@{material?.SlotIndex ?? 0}");
-                    result.ErrorCode = BoosterUseResult.ErrorMaterialNotEnough;
+                    SetMaterialNotEnoughResult(result, materialItemTemplateId, totalMaterialCount, 0);
                     return false;
                 }
             }
@@ -404,7 +404,7 @@ namespace DfoServer.Game.Inventory
             if (material != null && material.StackCount < totalMaterialCount)
             {
                 FileLogger.Log($"  [Booster] REJECT: need {totalMaterialCount}x material=0x{materialItemTemplateId:X8}, have={material.StackCount}");
-                result.ErrorCode = BoosterUseResult.ErrorMaterialNotEnough;
+                SetMaterialNotEnoughResult(result, materialItemTemplateId, totalMaterialCount, material.StackCount);
                 return false;
             }
 
@@ -500,6 +500,30 @@ namespace DfoServer.Game.Inventory
                 _auditLogger.WriteBuyAuditLog(connection, transaction, characterId, reward.ItemTemplateId, reward.SlotIndex, 0, 0);
             result = useResult;
             return true;
+        }
+
+        private static string ResolveBoosterItemName(int itemTemplateId)
+        {
+            if (itemTemplateId <= 0)
+                return null;
+
+            var stackable = InventoryDbPrimitives.LoadStackableItem(itemTemplateId);
+            return string.IsNullOrWhiteSpace(stackable?.Name)
+                ? null
+                : stackable.Name.Trim('`', ' ', '\t', '\r', '\n');
+        }
+
+        private static void SetMaterialNotEnoughResult(
+            BoosterUseResult result,
+            int materialItemTemplateId,
+            int requiredCount,
+            int availableCount)
+        {
+            result.ErrorCode = BoosterUseResult.ErrorMaterialNotEnough;
+            result.RequiredMaterialItemTemplateId = materialItemTemplateId;
+            result.RequiredMaterialName = ResolveBoosterItemName(materialItemTemplateId);
+            result.RequiredMaterialCount = requiredCount;
+            result.AvailableMaterialCount = Math.Max(0, availableCount);
         }
 
         private SqliteInventoryStore.ItemRecord ResolveBoosterSource(

@@ -377,7 +377,11 @@ namespace DfoServer.Network.Handlers
                     out var result))
             {
                 FileLogger.Log($"[{ProtocolName}] OPEN_MAGIC_BOX: failed cid={cid} aid={aid} slot={request.SlotIndex} item=0x{request.ItemTemplateId:X8} material=0x{request.MaterialItemTemplateId:X8}@{request.MaterialSlotIndex} requested={request.RequestedCount} elapsed={elapsed.ElapsedMilliseconds}ms");
-                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, header.type, new byte[] { 0x00 }));
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
+                    0x01,
+                    header.type,
+                    BuildMagicBoxFailureAckBody(header.type, result)));
+                await SendBoosterMaterialNotice(session, result);
                 return;
             }
 
@@ -421,7 +425,11 @@ namespace DfoServer.Network.Handlers
                     out var result))
             {
                 FileLogger.Log($"[{ProtocolName}] OPEN_MAGIC_BOX_SINGLE: failed cid={cid} aid={aid} slot={request.SlotIndex} materialSlot={(materialSlotIndex.HasValue ? materialSlotIndex.Value.ToString() : "auto")} requested={request.RequestedCount} elapsed={elapsed.ElapsedMilliseconds}ms");
-                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, header.type, new byte[] { 0x00 }));
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
+                    0x01,
+                    header.type,
+                    BuildMagicBoxFailureAckBody(header.type, result)));
+                await SendBoosterMaterialNotice(session, result);
                 return;
             }
 
@@ -475,7 +483,8 @@ namespace DfoServer.Network.Handlers
                     await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
                         0x01,
                         header.type,
-                        CommonPacketBodyBuilder.BuildCmdError(result.ErrorCode)));
+                        BuildBoosterFailureAckBody(result)));
+                    await SendBoosterMaterialNotice(session, result);
                     FileLogger.Log($"[{ProtocolName}] USE_BOOSTER: rejected cid={cid} aid={aid} slot={(slotIndex.HasValue ? slotIndex.Value.ToString() : "auto")} error=0x{result.ErrorCode:X2} elapsed={elapsed.ElapsedMilliseconds}ms");
                     return true;
                 }
@@ -601,6 +610,50 @@ namespace DfoServer.Network.Handlers
 
             if (result.ActivatedPremiums.Count > 0)
                 await Game.Premium.PremiumService.ActivateAndNotify(session, result.ActivatedPremiums);
+        }
+
+        private static async Task SendBoosterMaterialNotice(EnhancedClientSession session, BoosterUseResult result)
+        {
+            var message = BuildBoosterMaterialNoticeMessage(result);
+            if (string.IsNullOrEmpty(message))
+                return;
+
+            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
+                0x00,
+                (ushort)NotiPacketType.SERVER_NOTICE_MESSAGE,
+                ServerNoticeMessageBuilder.Build(message)));
+            FileLogger.Log($"[{nameof(InventoryHandler)}] SERVER_NOTICE_MESSAGE: {message}");
+        }
+
+        internal static byte[] BuildBoosterFailureAckBody(BoosterUseResult result)
+        {
+            // 0x16 走客户端通用错误层的静默分支，避免动态材料提示后再弹固定错误。
+            var errorCode = result?.ErrorCode == BoosterUseResult.ErrorMaterialNotEnough
+                ? (byte)0x16
+                : result?.ErrorCode ?? BoosterUseResult.ErrorInvalidRequest;
+            return CommonPacketBodyBuilder.BuildCmdError(errorCode);
+        }
+
+        internal static byte[] BuildMagicBoxFailureAckBody(ushort responseType, BoosterUseResult result)
+        {
+            if (responseType == 0x00D0 && result?.ErrorCode == BoosterUseResult.ErrorMaterialNotEnough)
+                return MagicBoxOpenAckBuilder.BuildSingleSilentCompletion();
+
+            return BuildBoosterFailureAckBody(result);
+        }
+
+        internal static string BuildBoosterMaterialNoticeMessage(BoosterUseResult result)
+        {
+            if (result == null
+                || result.ErrorCode != BoosterUseResult.ErrorMaterialNotEnough
+                || result.RequiredMaterialItemTemplateId <= 0
+                || result.RequiredMaterialCount <= 0)
+                return null;
+
+            var materialName = string.IsNullOrWhiteSpace(result.RequiredMaterialName)
+                ? "指定材料"
+                : result.RequiredMaterialName.Trim();
+            return $"材料不足：需要【{materialName}】 x{result.RequiredMaterialCount}，当前 x{Math.Max(0, result.AvailableMaterialCount)}。";
         }
 
         private static bool ShouldSendCreatureListRefreshForBoosterRewards(BoosterUseResult result)

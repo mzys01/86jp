@@ -12,6 +12,8 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Linq;
+using System.Text;
 
 namespace DfoServer.SelfTests
 {
@@ -56,6 +58,9 @@ namespace DfoServer.SelfTests
         private const short ShimmeringLightGiftBoxSlot = 73;
         private const short UsableCeraPackageSlot = 74;
         private const short MaterialGiftBoxSlot = 75;
+        private const short SoulBreathSlot = 76;
+        private const short PureSoulBreathSlot = 77;
+        private const short AncientSynthesizerSlot = 78;
         private const int PackageQuickConsumableInitialCount = 7;
         private const int PackageBagConsumableInitialCount = 20;
         private const short RewardStackQuickSlot = 3;
@@ -71,6 +76,11 @@ namespace DfoServer.SelfTests
         private const int UsableCeraPackageItemTemplateId = 1007145;
         private const int UsableCeraPackageRewardItemTemplateId = 63115;
         private const int MaterialGiftBoxItemTemplateId = 2680445;
+        private const int SoulBreathItemTemplateId = 2682169;
+        private const int PureSoulBreathItemTemplateId = 2682170;
+        private const int AncientSynthesizerItemTemplateId = 2749111;
+        private const int RefinedSynthesizerItemTemplateId = 1251;
+        private const int SacredSynthesizerItemTemplateId = 1252;
 
         private static readonly byte[] CapturedOpenRequestBody =
         {
@@ -167,6 +177,13 @@ namespace DfoServer.SelfTests
             0x04,
             0x5C, 0x00,
             0xFF, 0xFF,
+        };
+
+        private static readonly byte[] CapturedUpgradableLegacySingleOpenRequestBody =
+        {
+            0x05,
+            0x51, 0x00,
+            0x47, 0x00,
         };
 
         private static readonly int[] CapturedContextAvatarItemTemplateIds =
@@ -596,6 +613,15 @@ namespace DfoServer.SelfTests
                     Check($"Seria luck single request client type={seriaLuckSingleRequest.RawListType}", seriaLuckSingleRequest.RawListType == 4);
                 }
 
+                Check("parse captured 0x00D0 upgradable-legacy request", MagicBoxOpenRequest.TryParseSingle(CapturedUpgradableLegacySingleOpenRequestBody, out var upgradableLegacyRequest));
+                if (upgradableLegacyRequest != null)
+                {
+                    Check($"upgradable-legacy request slot={upgradableLegacyRequest.SlotIndex}", upgradableLegacyRequest.SlotIndex == 81);
+                    Check($"upgradable-legacy request material slot={upgradableLegacyRequest.MaterialSlotIndex}", upgradableLegacyRequest.MaterialSlotIndex == 71);
+                    Check($"upgradable-legacy request client type={upgradableLegacyRequest.RawListType}", upgradableLegacyRequest.RawListType == 5);
+                    Check("upgradable-legacy request maps to main inventory", upgradableLegacyRequest.ListType == InventoryListType.Main);
+                }
+
                 Check("0x03F3 magic-box success suppresses source ACK", !InventoryHandler.ShouldSendSourceAckForBoosterResponse(0x03F3));
                 Check("0x03F3 non-Seria batch keeps legacy obtained-items popup",
                     InventoryHandler.ShouldSendObtainedItemsPopupForBoosterResponse(0x03F3, new BoosterUseResult()));
@@ -879,8 +905,98 @@ namespace DfoServer.SelfTests
                 }, out var materialGiftBoxFailure));
             Check("material gift box returns material-not-enough error",
                 materialGiftBoxFailure?.ErrorCode == BoosterUseResult.ErrorMaterialNotEnough);
+            Check("material gift box failure identifies required material",
+                materialGiftBoxFailure?.RequiredMaterialItemTemplateId > 0
+                && materialGiftBoxFailure.RequiredMaterialName == "凯丽的祝福"
+                && materialGiftBoxFailure.RequiredMaterialCount > 0
+                && materialGiftBoxFailure.AvailableMaterialCount == 0);
+            Check("Seria luck material resolves its Chinese PVF name",
+                InventoryDbPrimitives.LoadStackableItem(SeriaLuckItemConstants.ItemTemplateId)?.Name == "赛丽亚的幸运");
             Check("material gift box remains after material-not-enough error",
-                store.LoadCharacterItemListSnapshot(CharacterId, AccountId).MainItems.Find(x => x.SlotIndex == MaterialGiftBoxSlot)?.ItemTemplateId == MaterialGiftBoxItemTemplateId);
+                store.LoadCharacterItemListSnapshot(CharacterId, AccountId).MainItems.Exists(x =>
+                    x.SlotIndex == MaterialGiftBoxSlot && x.ItemTemplateId == MaterialGiftBoxItemTemplateId));
+
+            var materialNotice = InventoryHandler.BuildBoosterMaterialNoticeMessage(materialGiftBoxFailure);
+            Check("material notice uses Chinese PVF name without item ID",
+                materialNotice != null
+                && materialNotice == "材料不足：需要【凯丽的祝福】 x10，当前 x0。"
+                && !materialNotice.Contains("0x", StringComparison.OrdinalIgnoreCase)
+                && !materialNotice.Contains("ID", StringComparison.OrdinalIgnoreCase));
+            var noticeBody = ServerNoticeMessageBuilder.Build(materialNotice);
+            Check("server notice message uses mode and UTF-8 dstr",
+                noticeBody.Length > 5
+                && noticeBody[0] == 0
+                && BitConverter.ToInt32(noticeBody, 1) == noticeBody.Length - 5
+                && Encoding.UTF8.GetString(noticeBody, 5, noticeBody.Length - 5) == materialNotice);
+            var materialFailureAck = InventoryHandler.BuildBoosterFailureAckBody(materialGiftBoxFailure);
+            Check("material failure ACK uses silent client error branch",
+                materialFailureAck.Length == 2
+                && materialFailureAck[0] == 0
+                && materialFailureAck[1] == 0x16);
+            var singleMaterialCompletion = InventoryHandler.BuildMagicBoxFailureAckBody(0x00D0, materialGiftBoxFailure);
+            Check("0x00D0 material failure closes UI without entering reward result branch",
+                singleMaterialCompletion.Length == 3
+                && singleMaterialCompletion[0] == 1
+                && singleMaterialCompletion[1] == byte.MaxValue
+                && singleMaterialCompletion[2] == 0);
+            Check("0x03F3 material failure keeps silent client error ACK",
+                BytesEqual(
+                    InventoryHandler.BuildMagicBoxFailureAckBody(0x03F3, materialGiftBoxFailure),
+                    materialFailureAck));
+
+            InsertStackableItem(tempDb, SoulBreathItemTemplateId, SoulBreathSlot, 1);
+            InsertStackableItem(tempDb, PureSoulBreathItemTemplateId, PureSoulBreathSlot, 1);
+            InsertStackableItem(tempDb, AncientSynthesizerItemTemplateId, AncientSynthesizerSlot, 1);
+            Check("灵魂气息消耗古老的装备合成器并成功升级",
+                store.TryUseBoosterItem(CharacterId, AccountId, new BoosterUseRequest
+                {
+                    SlotIndex = SoulBreathSlot,
+                    SelectedItemTemplateIds = Array.Empty<int>(),
+                    ExpectedItemTemplateId = SoulBreathItemTemplateId,
+                    MaterialSlotIndex = AncientSynthesizerSlot,
+                    ExpectedMaterialItemTemplateId = AncientSynthesizerItemTemplateId,
+                }, out var soulBreathResult));
+            Check("灵魂气息发放精制的装备合成器",
+                soulBreathResult?.Rewards.Exists(x =>
+                    x.ItemTemplateId == RefinedSynthesizerItemTemplateId && x.GrantedCount == 1) == true);
+            Check("灵魂气息消耗源物品和古老的装备合成器",
+                soulBreathResult != null &&
+                soulBreathResult.SourceRemainingStackCount == 0 &&
+                soulBreathResult.ConsumedMaterialItemTemplateId == AncientSynthesizerItemTemplateId &&
+                soulBreathResult.ConsumedMaterialCount == 1 &&
+                soulBreathResult.ConsumedMaterialRemainingStackCount == 0);
+
+            var refinedSynthesizer = soulBreathResult?.Rewards.Find(x => x.ItemTemplateId == RefinedSynthesizerItemTemplateId);
+            BoosterUseResult pureSoulBreathResult = null;
+            Check("纯净的灵魂气息消耗精制的装备合成器并成功升级",
+                refinedSynthesizer != null &&
+                store.TryUseBoosterItem(CharacterId, AccountId, new BoosterUseRequest
+                {
+                    SlotIndex = PureSoulBreathSlot,
+                    SelectedItemTemplateIds = Array.Empty<int>(),
+                    ExpectedItemTemplateId = PureSoulBreathItemTemplateId,
+                    MaterialSlotIndex = refinedSynthesizer.SlotIndex,
+                    ExpectedMaterialItemTemplateId = RefinedSynthesizerItemTemplateId,
+                }, out pureSoulBreathResult));
+            if (pureSoulBreathResult != null)
+            {
+                Check("纯净的灵魂气息发放神圣的装备合成器",
+                    pureSoulBreathResult.Rewards.Exists(x =>
+                        x.ItemTemplateId == SacredSynthesizerItemTemplateId && x.GrantedCount == 1));
+                Check("纯净的灵魂气息消耗源物品和精制的装备合成器",
+                    pureSoulBreathResult.SourceRemainingStackCount == 0 &&
+                    pureSoulBreathResult.ConsumedMaterialItemTemplateId == RefinedSynthesizerItemTemplateId &&
+                    pureSoulBreathResult.ConsumedMaterialCount == 1 &&
+                    pureSoulBreathResult.ConsumedMaterialRemainingStackCount == 0);
+
+                pureSoulBreathResult.MagicBoxClientType = 5;
+                var upgradableLegacyAck = MagicBoxOpenAckBuilder.BuildSingle(pureSoulBreathResult);
+                Check("upgradable-legacy ACK preserves client type and source/material slots",
+                    upgradableLegacyAck.Length >= 9 &&
+                    upgradableLegacyAck[1] == 5 &&
+                    BitConverter.ToInt16(upgradableLegacyAck, 3) == PureSoulBreathSlot &&
+                    BitConverter.ToInt16(upgradableLegacyAck, 5) == refinedSynthesizer.SlotIndex);
+            }
 
             using (var connection = new SqliteConnection(SqliteDatabaseBootstrap.BuildConnectionString(tempDb)))
             {
@@ -914,6 +1030,19 @@ namespace DfoServer.SelfTests
             var errorAckBody = CommonPacketBodyBuilder.BuildCmdError(BoosterUseResult.ErrorInvalidRequest);
             Check("0x00A0 error ACK uses common invalid-item error",
                 errorAckBody.Length == 2 && errorAckBody[0] == 0 && errorAckBody[1] == BoosterUseResult.ErrorInvalidRequest);
+            Check("non-material booster failure preserves its error code",
+                BytesEqual(
+                    InventoryHandler.BuildBoosterFailureAckBody(new BoosterUseResult
+                    {
+                        ErrorCode = BoosterUseResult.ErrorInventoryFull,
+                    }),
+                    CommonPacketBodyBuilder.BuildCmdError(BoosterUseResult.ErrorInventoryFull)));
+            Check("non-material magic-box failure preserves its error code",
+                BytesEqual(
+                    InventoryHandler.BuildMagicBoxFailureAckBody(
+                        0x00D0,
+                        new BoosterUseResult { ErrorCode = BoosterUseResult.ErrorInventoryFull }),
+                    CommonPacketBodyBuilder.BuildCmdError(BoosterUseResult.ErrorInventoryFull)));
             Check("0x00A0 fallback uses common invalid-item error",
                 BytesEqual(InventoryHandler.BuildOpenSelectablePackageFallbackErrorBody(), errorAckBody));
 
@@ -1356,7 +1485,7 @@ VALUES
                     ('character', @characterId, @characterId, 0, @crossJobAuraPackageSlot, @auraTemplateId, 'special',
                      1, 1, 0, 0, 0, @expireTime, 0, 0, '{}'),
                     ('character', @characterId, @characterId, 0, @specialBoosterPackageSlot, @specialBoosterTemplateId, 'special',
-                      1, 1, 0, 0, 0, @expireTime, 0, 0, '{}'),
+                     1, 1, 0, 0, 0, @expireTime, 0, 0, '{}'),
                     ('character', @characterId, @characterId, 0, @magicHammerBundleSlot, @magicHammerBundleTemplateId, 'stackable',
                      1, 1, 0, 0, 0, 0, 0, 0, '{}'),
                     ('character', @characterId, @characterId, 0, @shimmeringLightGiftBoxSlot, @shimmeringLightGiftBoxTemplateId, 'stackable',

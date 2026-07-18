@@ -344,6 +344,14 @@ namespace DfoServer.Game.Inventory
 
         public int ConsumedMaterialRemainingStackCount { get; set; }
 
+        public int RequiredMaterialItemTemplateId { get; set; }
+
+        public string RequiredMaterialName { get; set; }
+
+        public int RequiredMaterialCount { get; set; }
+
+        public int AvailableMaterialCount { get; set; }
+
         public List<BoosterRewardResult> Rewards { get; } = new List<BoosterRewardResult>();
 
         public List<PackageGrantedItem> DisplayRewards { get; } = new List<PackageGrantedItem>();
