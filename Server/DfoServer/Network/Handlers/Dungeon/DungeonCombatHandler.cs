@@ -35,6 +35,7 @@ namespace DfoServer.Network.Handlers.Dungeon
         {
             var run = session.Player.CurrentRun;
             if (run == null) return;
+            var isDeathTowerRun = run.Tower != null;
 
             var req = DieMonsterRequest.Parse(body);
 
@@ -51,7 +52,7 @@ namespace DfoServer.Network.Handlers.Dungeon
                 FileLogger.Log($"[DungeonHandler] DIE_MONSTER: passive object code={req.LocalIndex}");
                 if (run.ClearCondition != null && run.ClearCondition.Check(0, req.LocalIndex))
                     await _settlement.TryClearDungeon(session, $"destroy object {req.LocalIndex}");
-                if (run.Tower == null)
+                if (!isDeathTowerRun)
                     await _svc.QuestDrops.CheckPassiveObjectDrop(session, req.LocalIndex);
                 return;
             }
@@ -70,7 +71,7 @@ namespace DfoServer.Network.Handlers.Dungeon
             var monsters = run.RoomMonsters;
 
             IReadOnlyList<DropInfo> towerDrops = null;
-            if (run.Tower != null)
+            if (isDeathTowerRun)
                 _svc.DeathTower.TryGenerateDropsForMonster(session, req.LocalIndex, out towerDrops);
 
             if (roomLocalIndex < 0 || roomLocalIndex >= monsters.Count)
@@ -125,7 +126,7 @@ namespace DfoServer.Network.Handlers.Dungeon
                 try { dungeonMinimumLevel = DungeonData.GetDungeonMinimumRequiredLevel(run.DungeonId); } catch (Exception ex) { FileLogger.Log($"[DungeonHandler] DIE_MONSTER ERROR: minimum level fallback dungeon={run.DungeonId} default={dungeonMinimumLevel}: {ex.Message}"); }
                 int goldGained;
                 IReadOnlyList<DropInfo> generatedDrops;
-                if (run.Tower != null)
+                if (isDeathTowerRun)
                 {
                     generatedDrops = towerDrops ?? Array.Empty<DropInfo>();
                     goldGained = 0;
@@ -190,7 +191,8 @@ namespace DfoServer.Network.Handlers.Dungeon
 
                 // 组队副本联机: 把这次击杀经验发给同队【在副本里】的成员; 传 raw gainedExp + monsterLevel,
                 // 每个队友用【自己等级】各自缩放(df BaseExpPenalty)→ 不同等级同副本得不同经验。
-                await GrantKillExpToPartyAsync(session, gainedExp, monsterLevel);
+                if (!isDeathTowerRun)
+                    await GrantKillExpToPartyAsync(session, gainedExp, monsterLevel);
             }
 
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0026,
@@ -198,12 +200,13 @@ namespace DfoServer.Network.Handlers.Dungeon
 
             // 组队副本联机: 把杀怪广播给同队其他在副本的成员(视觉死亡, 修"怪假死"; 掉落各自独立),
             // 并把击杀计入队友 run 重跑通关检测(PropagateKillForClearAsync)。
-            await BroadcastMonsterDieToPartyAsync(session, req.LocalIndex);
+            if (!isDeathTowerRun)
+                await BroadcastMonsterDieToPartyAsync(session, req.LocalIndex);
 
             // Quest item drop (IDA: CUser::CheckQuestMonster, after DIE_MONSTER NOTI)
-            if (run.Tower != null && killedMonsterType >= 5 && killedMonsterType <= 8)
+            if (isDeathTowerRun && killedMonsterType >= 5 && killedMonsterType <= 8)
                 await _svc.QuestDrops.CheckAiCharacterDrop(session, killedMonsterCode);
-            else if (run.Tower == null)
+            else if (!isDeathTowerRun)
                 await _svc.QuestDrops.CheckMonsterDrop(session, killedMonsterCode);
 
             // check_grid_clear (IDA 0x830A0E8): spawnType==100 && spawnFlag==0 blocks passage

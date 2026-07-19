@@ -1,16 +1,21 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
 using System.Reflection;
+using System.Threading;
+using System.Threading.Tasks;
 using DfoServer.Game.Accounts;
 using DfoServer.Game.DailyReset;
 using DfoServer.Game.DeathTower;
 using DfoServer.Game.Inventory;
+using DfoServer.Game.Progression;
 using DfoServer.Game.ReviveCoin;
 using DfoServer.Infrastructure;
 using DfoServer.Network;
+using DfoServer.Network.Builders;
 using DfoServer.Network.Handlers;
 using DfoServer.Network.Handlers.Dungeon;
 
@@ -48,6 +53,8 @@ namespace DfoServer.SelfTests
                 && liveEntryTower.CurrentStage == 0
                 && liveEntryTower.GetCurrentMapId() == liveConfig.StageMapIds[0],
                 ref failures);
+
+            VerifySyncCombatStageAtomicity(config, ref failures);
 
             var towerInfo = DeathTowerPacketBuilder.BuildTowerInfo(11000, 3);
             Check("0x008E body remains 8 bytes",
@@ -141,15 +148,30 @@ namespace DfoServer.SelfTests
             using (var fixture = SelectDungeonFixture.Create())
             {
                 var rollbackTower = CreateFinalFloorTower(config);
+                var maxLevelEntryExp = (uint)Math.Max(
+                    0,
+                    Game.Dungeon.ExpTableProvider.GetLevelThreshold(
+                        Game.Dungeon.ExpTableProvider.MaxLevel - 1));
+                fixture.SetCharacterProgress(
+                    (byte)(Game.Dungeon.ExpTableProvider.MaxLevel - 1),
+                    maxLevelEntryExp - 1);
                 var previousExp = fixture.Session.Player.Exp;
+                var previousLevel = fixture.Session.Player.Level;
                 var previousGold = fixture.LoadGold();
                 var previousItems = fixture.CountPersistentMainItems();
+                var previousAccountProgress = fixture.LoadAccountProgress();
                 var failed = false;
                 try
                 {
                     new DeathTowerSettlementService(
                             fixture.AssetService,
-                            (scope, characterId, level, exp) => false)
+                            fixture.CreateAccountExperienceService(),
+                            (scope, characterId, accountId, level, exp, gain) =>
+                                CharacterExperienceService.Plan(
+                                    level,
+                                    exp,
+                                    gain,
+                                    normalizeMaxLevelExp: gain > 0))
                         .Grant(fixture.Session, rollbackTower);
                 }
                 catch (InvalidOperationException)
@@ -160,8 +182,15 @@ namespace DfoServer.SelfTests
                 Check("tower settlement rolls back gold, items and memory exp when progress write fails",
                     failed
                     && fixture.Session.Player.Exp == previousExp
+                    && fixture.Session.Player.Level == previousLevel
                     && fixture.LoadGold() == previousGold
                     && fixture.CountPersistentMainItems() == previousItems,
+                    ref failures);
+                var rolledBackAccountProgress = fixture.LoadAccountProgress();
+                Check("tower settlement rollback also restores character and account exp progress",
+                    rolledBackAccountProgress.HonorExp == previousAccountProgress.HonorExp
+                    && rolledBackAccountProgress.GrowthCapsuleExp == previousAccountProgress.GrowthCapsuleExp
+                    && fixture.PersistedProgressMatches(previousLevel, previousExp),
                     ref failures);
                 Check("failed settlement gate can be explicitly reopened",
                     rollbackTower.TryBeginSettlement()
@@ -186,14 +215,26 @@ namespace DfoServer.SelfTests
                     .GetAwaiter()
                     .GetResult();
 
-                var sentPackets = fixture.ReadSentPackets(expectedPackets: 3);
+                var sentPackets = fixture.ReadSentPackets(expectedPackets: 6);
                 Check("tower settlement sends ranking, non-empty reward and EPLP packets first",
-                    sentPackets.Count == 3
+                    sentPackets.Count == 6
                     && sentPackets[0].Type == 0x0090
                     && sentPackets[1].Type == 0x0091
                     && sentPackets[1].Body.Length >= 16
                     && sentPackets[1].Body[4] > 0
                     && sentPackets[2].Type == 0x0092,
+                    ref failures);
+                Check("tower settlement reuses the authoritative 0x0025 experience layout",
+                    sentPackets.Count == 6
+                    && sentPackets[3].Type == 0x0025
+                    && sentPackets[3].Body.Length == ExpNotificationBuilder.BodyLength
+                    && sentPackets[3].Body[0] == fixture.Session.Player.Level
+                    && BitConverter.ToUInt32(sentPackets[3].Body, 1) == fixture.Session.Player.Exp
+                    && sentPackets[4].Type == 0x000E
+                    && sentPackets[5].Type == 0x000E,
+                    ref failures);
+                Check("tower settlement item 0x000E matches committed temporary-database slots",
+                    fixture.ItemUpdateMatchesDatabase(sentPackets[5].Body),
                     ref failures);
                 Check("tower settlement persists PVF-scaled exp, gold and reward items",
                     fixture.Session.Player.Exp > previousExp
@@ -204,6 +245,7 @@ namespace DfoServer.SelfTests
                 var settledExp = fixture.Session.Player.Exp;
                 var settledGold = fixture.LoadGold();
                 var settledItems = fixture.CountPersistentMainItems();
+                var settledAccountProgress = fixture.LoadAccountProgress();
                 handler
                     .Handle_ENUM_CMDPACKET_DEATH_TOWER_STAGE_CMD(
                         fixture.Session,
@@ -214,7 +256,253 @@ namespace DfoServer.SelfTests
                 Check("duplicate final-floor stage command cannot grant settlement twice",
                     fixture.Session.Player.Exp == settledExp
                     && fixture.LoadGold() == settledGold
-                    && fixture.CountPersistentMainItems() == settledItems,
+                    && fixture.CountPersistentMainItems() == settledItems
+                    && fixture.LoadAccountProgress().Equals(settledAccountProgress),
+                    ref failures);
+            }
+
+            using (var fixture = SelectDungeonFixture.Create())
+            {
+                var maxLevelEntryExp = (uint)Math.Max(
+                    0,
+                    Game.Dungeon.ExpTableProvider.GetLevelThreshold(
+                        Game.Dungeon.ExpTableProvider.MaxLevel - 1));
+                fixture.SetCharacterProgress(
+                    (byte)(Game.Dungeon.ExpTableProvider.MaxLevel - 1),
+                    maxLevelEntryExp - 1);
+                fixture.Session.Player.Subtype0Tail = new Game.SelectCharacter.UserInfoMinimumTailSnapshot
+                {
+                    ProgressA = 250,
+                    ProgressB = 0xDEADBEEF,
+                };
+                var failingSummaryAccountExperience = fixture.CreateAccountExperienceService(
+                    new ThrowingListCharacterRepository(fixture.CreateCharacterRepository()));
+                var handler = fixture.CreateDungeonHandler(failingSummaryAccountExperience);
+                var settlementTower = CreateFinalFloorTower(config);
+                DungeonRunLifecycle.BeginTowerRun(fixture.Session, config.DungeonId, settlementTower);
+                settlementTower.SetFighting();
+
+                handler
+                    .Handle_ENUM_CMDPACKET_DEATH_TOWER_STAGE_CMD(
+                        fixture.Session,
+                        new GamePacketHeader(),
+                        new byte[] { 2 })
+                    .GetAwaiter()
+                    .GetResult();
+
+                var sentPackets = fixture.ReadSentPackets(expectedPackets: 7);
+                var accountProgress = fixture.LoadAccountProgress();
+                var honor = HonorLevelDataProvider.CalculateFromHonorExp(
+                    accountProgress.HonorExp,
+                    fullLevelCount: 1);
+                var growth = GrowthCapsuleDataProvider.Calculate(
+                    accountProgress.GrowthCapsuleExp);
+                var committedGold = fixture.LoadGold();
+                var committedItems = fixture.CountPersistentMainItems();
+                Check("85-to-86 tower settlement sends exp then level-up followups before wallet and items",
+                    fixture.Session.Player.Level == Game.Dungeon.ExpTableProvider.MaxLevel
+                    && fixture.Session.Player.Exp == maxLevelEntryExp
+                    && sentPackets.Count == 7
+                    && sentPackets[0].Type == 0x0090
+                    && sentPackets[1].Type == 0x0091
+                    && sentPackets[2].Type == 0x0092
+                    && sentPackets[3].Type == 0x0025
+                    && sentPackets[4].Type == 0x0015
+                    && sentPackets[5].Type == 0x0002
+                    && sentPackets[6].Type == 0x000E,
+                    ref failures);
+                Check("tower 0x0025 reloads committed honor and growth after summary construction fails",
+                    accountProgress.HonorExp > 0
+                    && accountProgress.GrowthCapsuleExp > 0
+                    && BitConverter.ToUInt32(
+                        sentPackets[3].Body,
+                        ExpNotificationBuilder.HonorLevelOffset) == honor.HonorLevel
+                    && BitConverter.ToUInt32(
+                        sentPackets[3].Body,
+                        ExpNotificationBuilder.HonorExpOffset) == honor.HonorExp
+                    && BitConverter.ToUInt32(
+                        sentPackets[3].Body,
+                        ExpNotificationBuilder.GrowthCapsuleExpOffset)
+                        == GrowthCapsuleDataProvider.GetDisplayProgress(
+                            fixture.Session.Player.Level,
+                            growth),
+                    ref failures);
+                Check("85-to-86 settlement persists normalized character progress",
+                    fixture.PersistedProgressMatches(
+                        fixture.Session.Player.Level,
+                        fixture.Session.Player.Exp),
+                    ref failures);
+                handler.Handle_ENUM_CMDPACKET_DEATH_TOWER_STAGE_CMD(
+                        fixture.Session,
+                        new GamePacketHeader(),
+                        new byte[] { 2 })
+                    .GetAwaiter()
+                    .GetResult();
+                Check("summary-fallback settlement assets remain single-grant",
+                    fixture.LoadGold() == committedGold
+                    && fixture.CountPersistentMainItems() == committedItems
+                    && fixture.LoadAccountProgress().Equals(accountProgress)
+                    && !fixture.HasPendingPacket(),
+                    ref failures);
+            }
+
+            using (var fixture = SelectDungeonFixture.Create())
+            {
+                const byte previousLevel = 50;
+                var nextLevelThreshold = (uint)Math.Max(
+                    1,
+                    Game.Dungeon.ExpTableProvider.GetLevelThreshold(previousLevel));
+                fixture.SetCharacterProgress(previousLevel, nextLevelThreshold - 1);
+                var handler = fixture.CreateDungeonHandler();
+                var settlementTower = CreateFinalFloorTower(config);
+                PrepareSettlementItemReward(settlementTower, fixture.Session.Player.Level);
+                DungeonRunLifecycle.BeginTowerRun(fixture.Session, config.DungeonId, settlementTower);
+                settlementTower.SetFighting();
+
+                handler.Handle_ENUM_CMDPACKET_DEATH_TOWER_STAGE_CMD(
+                        fixture.Session,
+                        new GamePacketHeader(),
+                        new byte[] { 2 })
+                    .GetAwaiter()
+                    .GetResult();
+
+                var sentPackets = fixture.ReadSentPackets(expectedPackets: 8);
+                Check("level-up settlement sends complete sequence through final item refresh",
+                    fixture.Session.Player.Level > previousLevel
+                    && sentPackets.Count == 8
+                    && sentPackets[0].Type == 0x0090
+                    && sentPackets[1].Type == 0x0091
+                    && sentPackets[2].Type == 0x0092
+                    && sentPackets[3].Type == 0x0025
+                    && sentPackets[4].Type == 0x0015
+                    && sentPackets[5].Type == 0x0002
+                    && sentPackets[6].Type == 0x000E
+                    && sentPackets[7].Type == 0x000E
+                    && fixture.ItemUpdateMatchesDatabase(sentPackets[7].Body),
+                    ref failures);
+            }
+
+            using (var fixture = SelectDungeonFixture.Create())
+            {
+                var persistAttempts = 0;
+                var handler = fixture.CreateDeathTowerHandler(
+                    (session, settlement) => session.SendPacketAsync(
+                        GamePacketEnvelopeBuilder.Build(
+                            0x00,
+                            0x0025,
+                            new byte[ExpNotificationBuilder.BodyLength])),
+                    (scope, characterId, accountId, level, exp, gain) =>
+                    {
+                        persistAttempts++;
+                        if (persistAttempts == 1)
+                        {
+                            return CharacterExperienceService.Plan(
+                                level,
+                                exp,
+                                gain,
+                                normalizeMaxLevelExp: gain > 0);
+                        }
+
+                        return CharacterExperienceService.GrantInTransaction(
+                                scope.Connection,
+                                scope.Transaction,
+                                characterId,
+                                accountId,
+                                level,
+                                exp,
+                                gain,
+                                normalizeMaxLevelExp: gain > 0);
+                    });
+                var settlementTower = CreateFinalFloorTower(config);
+                PrepareSettlementItemReward(settlementTower, fixture.Session.Player.Level);
+                DungeonRunLifecycle.BeginTowerRun(fixture.Session, config.DungeonId, settlementTower);
+                settlementTower.SetFighting();
+                var previousLevel = fixture.Session.Player.Level;
+                var previousExp = fixture.Session.Player.Exp;
+                var previousGold = fixture.LoadGold();
+                var previousItems = fixture.CountPersistentMainItems();
+
+                handler.HandleStageCommand(
+                        fixture.Session,
+                        new GamePacketHeader(),
+                        new byte[] { 2 })
+                    .GetAwaiter()
+                    .GetResult();
+                Check("handler automatically reopens settlement after pre-commit persistence failure",
+                    persistAttempts == 1
+                    && fixture.Session.Player.Level == previousLevel
+                    && fixture.Session.Player.Exp == previousExp
+                    && fixture.LoadGold() == previousGold
+                    && fixture.CountPersistentMainItems() == previousItems
+                    && !fixture.HasPendingPacket(),
+                    ref failures);
+
+                handler.HandleStageCommand(
+                        fixture.Session,
+                        new GamePacketHeader(),
+                        new byte[] { 2 })
+                    .GetAwaiter()
+                    .GetResult();
+                var settledGold = fixture.LoadGold();
+                var settledItems = fixture.CountPersistentMainItems();
+                var successPacketCount = settledItems > previousItems ? 6 : 5;
+                var successPackets = fixture.ReadSentPackets(successPacketCount);
+                handler.HandleStageCommand(
+                        fixture.Session,
+                        new GamePacketHeader(),
+                        new byte[] { 2 })
+                    .GetAwaiter()
+                    .GetResult();
+                Check("handler retry commits once and the third final-floor command is idempotent",
+                    persistAttempts == 2
+                    && successPackets.Count == successPacketCount
+                    && successPackets[0].Type == 0x0090
+                    && successPackets[1].Type == 0x0091
+                    && successPackets[2].Type == 0x0092
+                    && successPackets[3].Type == 0x0025
+                    && successPackets[4].Type == 0x000E
+                    && fixture.LoadGold() == settledGold
+                    && fixture.CountPersistentMainItems() == settledItems
+                    && !fixture.HasPendingPacket(),
+                    ref failures);
+            }
+
+            using (var fixture = SelectDungeonFixture.Create())
+            {
+                var handler = fixture.CreateDeathTowerHandler(
+                    (session, settlement) =>
+                        throw new InvalidOperationException("Injected post-commit notification failure."));
+                var settlementTower = CreateFinalFloorTower(config);
+                PrepareSettlementItemReward(settlementTower, fixture.Session.Player.Level);
+                DungeonRunLifecycle.BeginTowerRun(fixture.Session, config.DungeonId, settlementTower);
+                settlementTower.SetFighting();
+                var previousGold = fixture.LoadGold();
+                var previousItems = fixture.CountPersistentMainItems();
+
+                handler.HandleStageCommand(
+                        fixture.Session,
+                        new GamePacketHeader(),
+                        new byte[] { 2 })
+                    .GetAwaiter()
+                    .GetResult();
+                var committedGold = fixture.LoadGold();
+                var committedItems = fixture.CountPersistentMainItems();
+                var preFailurePackets = fixture.ReadSentPackets(expectedPackets: 3);
+                handler.HandleStageCommand(
+                        fixture.Session,
+                        new GamePacketHeader(),
+                        new byte[] { 2 })
+                    .GetAwaiter()
+                    .GetResult();
+                Check("post-commit notification failure keeps settlement gate closed",
+                    committedGold > previousGold
+                    && committedItems > previousItems
+                    && preFailurePackets[0].Type == 0x0090
+                    && preFailurePackets[1].Type == 0x0091
+                    && preFailurePackets[2].Type == 0x0092
+                    && fixture.LoadGold() == committedGold
+                    && fixture.CountPersistentMainItems() == committedItems
+                    && !fixture.HasPendingPacket(),
                     ref failures);
             }
 
@@ -232,6 +520,26 @@ namespace DfoServer.SelfTests
                     throw new InvalidOperationException("Unable to advance settlement test to final floor.");
             }
             return tower;
+        }
+
+        private static void PrepareSettlementItemReward(DeathTowerSession tower, byte level)
+        {
+            var rewardConfig = DeathTowerRewardConfig.Load();
+            for (uint seed = 1; seed < 100000; seed++)
+            {
+                var lcg = new Game.Dungeon.DnfLcg(seed);
+                var rarity = rewardConfig.RollItemRarity(lcg);
+                var itemId = Game.Dungeon.MonsterDropConfig.ChooseEquipment(lcg, level, rarity);
+                if (itemId <= 0)
+                    itemId = Game.Dungeon.MonsterDropConfig.ChooseStackable(lcg, level, rarity);
+                if (itemId <= 0)
+                    continue;
+
+                tower.BeginStage(seed, Array.Empty<StageTowerItem>());
+                return;
+            }
+
+            throw new InvalidOperationException($"Unable to find deterministic settlement item seed for level {level}.");
         }
 
         private static bool AbortAndRetrySettlement(DeathTowerSession tower)
@@ -325,11 +633,242 @@ namespace DfoServer.SelfTests
                 && fixture.CountPersistentItem(10089420) == 1;
         }
 
+        private static void VerifySyncCombatStageAtomicity(
+            DeathTowerData.TowerConfig config,
+            ref int failures)
+        {
+            var syncCombatStage = typeof(DeathTowerHandler).GetMethod(
+                "SyncCombatStage",
+                BindingFlags.NonPublic | BindingFlags.Static);
+            if (syncCombatStage == null)
+            {
+                Check("SyncCombatStage reflection entry exists", false, ref failures);
+                return;
+            }
+
+            using (var tcp = new TcpClient())
+            {
+                var session = new EnhancedClientSession(tcp, new GamePacketHeader());
+                var staleTower = new DeathTowerSession(config);
+                staleTower.BeginStage(0x11111111, Array.Empty<StageTowerItem>());
+                var oldTower = new DeathTowerSession(config);
+                oldTower.BeginStage(0x22222222, Array.Empty<StageTowerItem>());
+                var originalMonsters = new List<GameWorld.Dungeon.MonsterSumInfo>
+                {
+                    new GameWorld.Dungeon.MonsterSumInfo { Code = 77, Level = 50, Type = 1 },
+                };
+                var originalKilled = new HashSet<ushort> { 41 };
+                var originalDrops = new Dictionary<ushort, Game.Dungeon.DropInfo>
+                {
+                    [9] = new Game.Dungeon.DropInfo { SceneSlot = 9, TemplateId = 6515, StackCount = 1 },
+                };
+                var originalLcg = new Game.Dungeon.DnfLcg(0x33333333);
+                var run = new Game.Dungeon.DungeonRun(11000, 0)
+                {
+                    Tower = oldTower,
+                    RoomKilledSeqIds = originalKilled,
+                    Drops = originalDrops,
+                    RoomMonsters = originalMonsters,
+                    RoomStartSequence = 41,
+                    Seed = 0x33333333,
+                    RoomLcg = originalLcg,
+                };
+                session.Player.CurrentRun = run;
+
+                var staleMonsters = new CoordinatedStageMonsterList(new[]
+                {
+                    new StageMonster
+                    {
+                        ListIndex = 2,
+                        MonsterUniqueId = 55,
+                        MonsterIndex = 10504,
+                        MonsterLevel = 50,
+                        MonsterType = 5,
+                    },
+                });
+                syncCombatStage.Invoke(null, new object[]
+                {
+                    session,
+                    staleTower,
+                    staleMonsters,
+                });
+
+                Check("stale tower combat sync rejects before building combat DTOs",
+                    !staleMonsters.WasEnumerated
+                    && ReferenceEquals(run.RoomKilledSeqIds, originalKilled)
+                    && originalKilled.SetEquals(new[] { (ushort)41 })
+                    && ReferenceEquals(run.Drops, originalDrops)
+                    && originalDrops.Count == 1
+                    && ReferenceEquals(run.RoomMonsters, originalMonsters)
+                    && run.RoomStartSequence == 41
+                    && run.Seed == 0x33333333
+                    && ReferenceEquals(run.RoomLcg, originalLcg),
+                    ref failures);
+
+                var invoked = new ManualResetEventSlim(false);
+                var dtoBuilt = new ManualResetEventSlim(false);
+                oldTower.BeginStage(0x44444444, Array.Empty<StageTowerItem>());
+                var newTower = new DeathTowerSession(config);
+                newTower.BeginStage(0x55555555, Array.Empty<StageTowerItem>());
+                var racingMonsters = new CoordinatedStageMonsterList(
+                    new[]
+                    {
+                        new StageMonster
+                        {
+                            ListIndex = 3,
+                            MonsterUniqueId = 60,
+                            MonsterIndex = 10505,
+                            MonsterLevel = 51,
+                            MonsterType = 6,
+                        },
+                    },
+                    dtoBuilt);
+                Task syncTask;
+                lock (run.SyncRoot)
+                {
+                    syncTask = Task.Run(() =>
+                    {
+                        invoked.Set();
+                        syncCombatStage.Invoke(null, new object[]
+                        {
+                            session,
+                            oldTower,
+                            racingMonsters,
+                        });
+                    });
+                    invoked.Wait();
+                    dtoBuilt.Wait();
+                    run.Tower = newTower;
+                }
+
+                syncTask.GetAwaiter().GetResult();
+                Check("tower replacement during SyncCombatStage wait leaves every combat field unchanged",
+                    ReferenceEquals(run.Tower, newTower)
+                    && ReferenceEquals(run.RoomKilledSeqIds, originalKilled)
+                    && originalKilled.SetEquals(new[] { (ushort)41 })
+                    && ReferenceEquals(run.Drops, originalDrops)
+                    && originalDrops.Count == 1
+                    && ReferenceEquals(run.RoomMonsters, originalMonsters)
+                    && run.RoomStartSequence == 41
+                    && run.Seed == 0x33333333
+                    && ReferenceEquals(run.RoomLcg, originalLcg),
+                    ref failures);
+
+                var publishMonsters = new List<StageMonster>
+                {
+                    new StageMonster
+                    {
+                        ListIndex = 4,
+                        MonsterUniqueId = 61,
+                        MonsterIndex = 10506,
+                        MonsterLevel = 52,
+                        MonsterType = 7,
+                    },
+                };
+                syncCombatStage.Invoke(null, new object[]
+                {
+                    session,
+                    newTower,
+                    publishMonsters,
+                });
+                var stageLcg = typeof(DeathTowerSession).GetProperty(
+                    "StageLcg",
+                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
+                    ?.GetValue(newTower);
+                Check("SyncCombatStage publishes monsters, seed, and the exact stage LCG together",
+                    run.RoomKilledSeqIds.Count == 0
+                    && run.Drops.Count == 0
+                    && run.RoomMonsters.Count == 1
+                    && run.RoomMonsters[0].Code == 10506
+                    && run.RoomStartSequence == 61
+                    && run.Seed == 0x55555555
+                    && stageLcg != null
+                    && ReferenceEquals(run.RoomLcg, stageLcg),
+                    ref failures);
+                invoked.Dispose();
+                dtoBuilt.Dispose();
+            }
+        }
+
+        private sealed class CoordinatedStageMonsterList : IReadOnlyList<StageMonster>
+        {
+            private readonly IReadOnlyList<StageMonster> _items;
+            private readonly ManualResetEventSlim _enumerationCompleted;
+
+            public CoordinatedStageMonsterList(
+                IReadOnlyList<StageMonster> items,
+                ManualResetEventSlim enumerationCompleted = null)
+            {
+                _items = items ?? throw new ArgumentNullException(nameof(items));
+                _enumerationCompleted = enumerationCompleted;
+            }
+
+            public bool WasEnumerated { get; private set; }
+            public int Count => _items.Count;
+            public StageMonster this[int index] => _items[index];
+
+            public IEnumerator<StageMonster> GetEnumerator()
+            {
+                WasEnumerated = true;
+                for (var index = 0; index < _items.Count; index++)
+                    yield return _items[index];
+                _enumerationCompleted?.Set();
+            }
+
+            IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+        }
+
         private static void Check(string name, bool ok, ref int failures)
         {
             Console.WriteLine($"[{(ok ? "OK" : "FAIL")}] {name}");
             if (!ok)
                 failures++;
+        }
+
+        private sealed class ThrowingListCharacterRepository : Game.Characters.ICharacterRepository
+        {
+            private readonly Game.Characters.ICharacterRepository _inner;
+
+            public ThrowingListCharacterRepository(Game.Characters.ICharacterRepository inner)
+            {
+                _inner = inner ?? throw new ArgumentNullException(nameof(inner));
+            }
+
+            public Game.Characters.CharacterRecord GetById(int characterId) => _inner.GetById(characterId);
+            public IReadOnlyList<Game.Characters.CharacterRecord> ListByAccount(int accountId)
+                => throw new InvalidOperationException("Injected summary construction failure.");
+            public int Create(Game.Characters.CharacterRecord record) => _inner.Create(record);
+            public void UpdatePosition(int characterId, byte townId, byte areaId, short posX, short posY, byte direction, byte areaState)
+                => _inner.UpdatePosition(characterId, townId, areaId, posX, posY, direction, areaState);
+            public void UpdateSeedFields(
+                int characterId,
+                byte[] name,
+                byte job,
+                byte growType,
+                byte level,
+                byte pvpGrade,
+                byte pvpRatingGrade,
+                byte userState,
+                Game.Characters.CharacterAppearanceEntry[] appearance,
+                DateTime? createdAt = null)
+                => _inner.UpdateSeedFields(
+                    characterId,
+                    name,
+                    job,
+                    growType,
+                    level,
+                    pvpGrade,
+                    pvpRatingGrade,
+                    userState,
+                    appearance,
+                    createdAt);
+            public void UpdateAppearance(int characterId, Game.Characters.CharacterAppearanceEntry[] appearance)
+                => _inner.UpdateAppearance(characterId, appearance);
+            public void SoftDelete(int characterId) => _inner.SoftDelete(characterId);
+            public Game.Characters.CharacterRecord GetByName(string name) => _inner.GetByName(name);
+            public int CountByAccount(int accountId) => _inner.CountByAccount(accountId);
+            public void SwapSlotIndexes(int accountId, byte slotA, byte slotB)
+                => _inner.SwapSlotIndexes(accountId, slotA, slotB);
         }
 
         private sealed class SelectDungeonFixture : IDisposable
@@ -344,6 +883,7 @@ namespace DfoServer.SelfTests
             private readonly SqliteInventoryStore _inventoryStore;
             private readonly SqliteAssetService _assetService;
             private readonly DailyResetService _dailyReset;
+            private readonly string _previousDatabasePath;
 
             public EnhancedClientSession Session { get; }
             public IAssetService AssetService => _assetService;
@@ -356,7 +896,8 @@ namespace DfoServer.SelfTests
                 string dbPath,
                 SqliteInventoryStore inventoryStore,
                 SqliteAssetService assetService,
-                DailyResetService dailyReset)
+                DailyResetService dailyReset,
+                string previousDatabasePath)
             {
                 _listener = listener;
                 _client = client;
@@ -366,6 +907,7 @@ namespace DfoServer.SelfTests
                 _inventoryStore = inventoryStore;
                 _assetService = assetService;
                 _dailyReset = dailyReset;
+                _previousDatabasePath = previousDatabasePath;
             }
 
             public static SelectDungeonFixture Create()
@@ -375,6 +917,9 @@ namespace DfoServer.SelfTests
                 var dbPath = Path.Combine(
                     tempDir,
                     $"death-tower-entry-{Guid.NewGuid():N}.db");
+                var previousDatabasePath = Environment.GetEnvironmentVariable(
+                    "INVENTORY_DATABASE_PATH");
+                Environment.SetEnvironmentVariable("INVENTORY_DATABASE_PATH", dbPath);
 
                 SqliteDatabaseBootstrap.Initialize(dbPath, ServerPaths.SchemaFilePath);
                 SeedAccountAndCharacter(dbPath);
@@ -423,12 +968,21 @@ namespace DfoServer.SelfTests
                     dbPath,
                     inventoryStore,
                     assetService,
-                    dailyReset);
+                    dailyReset,
+                    previousDatabasePath);
             }
 
-            public DungeonHandler CreateDungeonHandler()
+            public Game.Characters.SqliteCharacterRepository CreateCharacterRepository()
             {
-                var characterRepository = new Game.Characters.SqliteCharacterRepository(_dbPath, ServerPaths.SchemaFilePath);
+                return new Game.Characters.SqliteCharacterRepository(
+                    _dbPath,
+                    ServerPaths.SchemaFilePath);
+            }
+
+            public DungeonHandler CreateDungeonHandler(
+                AccountExperienceProgressService accountExperience = null)
+            {
+                var characterRepository = CreateCharacterRepository();
                 var selectCharacterDataSource = new Game.SelectCharacter.SqliteSelectCharacterDataSource(
                     _dbPath,
                     ServerPaths.SchemaFilePath,
@@ -453,7 +1007,33 @@ namespace DfoServer.SelfTests
                     SystemRentalTimeProvider.Instance,
                     _inventoryStore,
                     inventoryRefresh,
-                    questDropService: questDropService);
+                    questDropService: questDropService,
+                    accountExperience: accountExperience);
+            }
+
+            public DeathTowerHandler CreateDeathTowerHandler(
+                Func<EnhancedClientSession, DeathTowerSettlementResult, Task> sendExpGrantNotification,
+                DeathTowerExperienceGrantInTransaction grantExperienceInTransaction = null)
+            {
+                var characterRepository = CreateCharacterRepository();
+                var selectCharacterDataSource = new Game.SelectCharacter.SqliteSelectCharacterDataSource(
+                    _dbPath,
+                    ServerPaths.SchemaFilePath,
+                    characterRepository,
+                    _assetService,
+                    _inventoryStore,
+                    SystemRentalTimeProvider.Instance);
+                var inventoryRefresh = new Network.Handlers.InventoryRefreshSender(
+                    _inventoryStore,
+                    selectCharacterDataSource,
+                    characterRepository);
+                return new DeathTowerHandler(
+                    _inventoryStore,
+                    _assetService,
+                    grantExperienceInTransaction,
+                    sendExpGrantNotification,
+                    CreateAccountExperienceService(),
+                    inventoryRefresh: inventoryRefresh);
             }
 
             public int CountPersistentItem(int itemId)
@@ -470,8 +1050,138 @@ namespace DfoServer.SelfTests
 
             public int CountPersistentMainItems()
             {
-                using (var scope = _assetService.OpenScope(CharacterId, AccountId))
-                    return _assetService.LoadSnapshot(scope).MainItems.Count;
+                using (var connection = new Microsoft.Data.Sqlite.SqliteConnection(
+                    SqliteDatabaseBootstrap.BuildConnectionString(_dbPath)))
+                {
+                    connection.Open();
+                    using (var command = connection.CreateCommand())
+                    {
+                        command.CommandText = @"
+SELECT COUNT(*)
+FROM character_items
+WHERE owner_scope = 'character'
+  AND owner_id = @cid
+  AND list_type = 0;";
+                        command.Parameters.AddWithValue("@cid", CharacterId);
+                        return Convert.ToInt32(command.ExecuteScalar());
+                    }
+                }
+            }
+
+            public AccountExperienceProgressService CreateAccountExperienceService(
+                Game.Characters.ICharacterRepository characterRepository = null)
+            {
+                return new AccountExperienceProgressService(
+                    characterRepository ?? CreateCharacterRepository(),
+                    _dbPath,
+                    ServerPaths.SchemaFilePath);
+            }
+
+            public bool HasPendingPacket() => _client.Available > 0;
+
+            public void SetCharacterProgress(byte level, uint exp)
+            {
+                using (var connection = new Microsoft.Data.Sqlite.SqliteConnection(
+                    SqliteDatabaseBootstrap.BuildConnectionString(_dbPath)))
+                {
+                    connection.Open();
+                    using (var command = connection.CreateCommand())
+                    {
+                        command.CommandText = @"
+UPDATE characters
+SET level = @level, exp = @exp
+WHERE character_id = @cid;";
+                        command.Parameters.AddWithValue("@level", level);
+                        command.Parameters.AddWithValue("@exp", (long)exp);
+                        command.Parameters.AddWithValue("@cid", CharacterId);
+                        command.ExecuteNonQuery();
+                    }
+                }
+
+                Session.Player.Level = level;
+                Session.Player.Exp = exp;
+            }
+
+            public AccountProgressSnapshot LoadAccountProgress()
+            {
+                using (var connection = new Microsoft.Data.Sqlite.SqliteConnection(
+                    SqliteDatabaseBootstrap.BuildConnectionString(_dbPath)))
+                {
+                    connection.Open();
+                    using (var command = connection.CreateCommand())
+                    {
+                        command.CommandText = @"
+SELECT honor_exp, growth_capsule_exp
+FROM accounts
+WHERE account_id = @aid;";
+                        command.Parameters.AddWithValue("@aid", AccountId);
+                        using (var reader = command.ExecuteReader())
+                        {
+                            if (!reader.Read())
+                                return default;
+                            return new AccountProgressSnapshot(
+                                (ulong)reader.GetInt64(0),
+                                (uint)reader.GetInt64(1));
+                        }
+                    }
+                }
+            }
+
+            public bool PersistedProgressMatches(byte level, uint exp)
+            {
+                using (var connection = new Microsoft.Data.Sqlite.SqliteConnection(
+                    SqliteDatabaseBootstrap.BuildConnectionString(_dbPath)))
+                {
+                    connection.Open();
+                    using (var command = connection.CreateCommand())
+                    {
+                        command.CommandText = @"
+SELECT level, exp
+FROM characters
+WHERE character_id = @cid;";
+                        command.Parameters.AddWithValue("@cid", CharacterId);
+                        using (var reader = command.ExecuteReader())
+                        {
+                            return reader.Read()
+                                && reader.GetInt32(0) == level
+                                && (uint)reader.GetInt64(1) == exp;
+                        }
+                    }
+                }
+            }
+
+            public bool ItemUpdateMatchesDatabase(byte[] body)
+            {
+                if (body == null
+                    || body.Length < 3
+                    || body[0] != (byte)InventoryListType.Main)
+                    return false;
+
+                var count = BitConverter.ToUInt16(body, 1);
+                if (count == 0 || body.Length != 3 + count * 84)
+                    return false;
+
+                for (var index = 0; index < count; index++)
+                {
+                    var offset = 3 + index * 84;
+                    var slot = BitConverter.ToInt16(body, offset);
+                    var itemId = BitConverter.ToInt32(body, offset + 2);
+                    var stackCount = BitConverter.ToInt32(body, offset + 6);
+                    var persisted = _inventoryStore.LoadCommonItemForRefresh(
+                        CharacterId,
+                        AccountId,
+                        InventoryListType.Main,
+                        slot);
+                    if (persisted == null
+                        || persisted.SlotIndex != slot
+                        || persisted.ItemTemplateId != itemId
+                        || persisted.CountOrInstanceValue != stackCount)
+                    {
+                        return false;
+                    }
+                }
+
+                return true;
             }
 
             public List<ushort> ReadSentTypes(int expectedPackets)
@@ -510,6 +1220,37 @@ namespace DfoServer.SelfTests
 
                 public ushort Type { get; }
                 public byte[] Body { get; }
+            }
+
+            public readonly struct AccountProgressSnapshot : IEquatable<AccountProgressSnapshot>
+            {
+                public AccountProgressSnapshot(ulong honorExp, uint growthCapsuleExp)
+                {
+                    HonorExp = honorExp;
+                    GrowthCapsuleExp = growthCapsuleExp;
+                }
+
+                public ulong HonorExp { get; }
+                public uint GrowthCapsuleExp { get; }
+
+                public bool Equals(AccountProgressSnapshot other)
+                {
+                    return HonorExp == other.HonorExp
+                        && GrowthCapsuleExp == other.GrowthCapsuleExp;
+                }
+
+                public override bool Equals(object obj)
+                {
+                    return obj is AccountProgressSnapshot other && Equals(other);
+                }
+
+                public override int GetHashCode()
+                {
+                    unchecked
+                    {
+                        return ((int)HonorExp * 397) ^ (int)GrowthCapsuleExp;
+                    }
+                }
             }
 
             private byte[] ReadExact(int count)
@@ -556,6 +1297,9 @@ VALUES (@cid);";
                 _accepted.Dispose();
                 _client.Dispose();
                 _listener.Stop();
+                Environment.SetEnvironmentVariable(
+                    "INVENTORY_DATABASE_PATH",
+                    _previousDatabasePath);
             }
         }
     }

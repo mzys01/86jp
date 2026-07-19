@@ -6,7 +6,6 @@ namespace DfoServer.Game.DeathTower
 {
     public sealed class TowerInventoryItem
     {
-        public short SlotIndex { get; internal set; }
         public int ItemId { get; internal set; }
         public int Count { get; internal set; }
         public int StackLimit { get; internal set; }
@@ -15,7 +14,6 @@ namespace DfoServer.Game.DeathTower
 
     public sealed class TowerPickupResult
     {
-        public ushort SceneSlot { get; internal set; }
         public short DestinationSlot { get; internal set; }
         public int ItemId { get; internal set; }
         public IReadOnlyList<short> ChangedSlots { get; internal set; } = Array.Empty<short>();
@@ -23,7 +21,6 @@ namespace DfoServer.Game.DeathTower
 
     public sealed class TowerInventoryMutation
     {
-        public short SlotIndex { get; internal set; }
         public int ItemId { get; internal set; }
         public int RemainingCount { get; internal set; }
         public IReadOnlyList<short> ChangedSlots { get; internal set; } = Array.Empty<short>();
@@ -31,8 +28,6 @@ namespace DfoServer.Game.DeathTower
 
     public sealed class TowerInventoryMoveResult
     {
-        public short SourceSlot { get; internal set; }
-        public short DestinationSlot { get; internal set; }
         public int MoveValue32 { get; internal set; }
         public IReadOnlyList<short> ChangedSlots { get; internal set; } = Array.Empty<short>();
     }
@@ -40,7 +35,7 @@ namespace DfoServer.Game.DeathTower
     internal static class DeathTowerItemSlotPolicy
     {
         internal static bool IsWaste(ItemMetadata metadata)
-            => string.Equals(GetTypeFamily(metadata), "waste", StringComparison.OrdinalIgnoreCase);
+            => metadata != null && metadata.IsPrimaryStackableFamily("waste");
 
         internal static int ResolveStackLimit(ItemMetadata metadata)
         {
@@ -54,8 +49,12 @@ namespace DfoServer.Game.DeathTower
             var result = new List<short>();
             if (IsWaste(metadata))
             {
-                AppendRange(result, 3, 8);
-                AppendRange(result, 65, 120);
+                AppendRange(
+                    result,
+                    SqliteInventoryStore.QuickSlotStart,
+                    SqliteInventoryStore.QuickSlotEnd);
+                GetSlotRange(metadata, out var overflowStart, out var overflowEnd);
+                AppendRange(result, overflowStart, overflowEnd);
                 return result;
             }
 
@@ -67,7 +66,11 @@ namespace DfoServer.Game.DeathTower
         internal static bool IsSlotAllowed(ItemMetadata metadata, short slot)
         {
             if (IsWaste(metadata))
-                return (slot >= 3 && slot <= 8) || (slot >= 65 && slot <= 120);
+            {
+                GetSlotRange(metadata, out var overflowStart, out var overflowEnd);
+                return SqliteInventoryStore.IsQuickSlot(slot)
+                    || (slot >= overflowStart && slot <= overflowEnd);
+            }
 
             GetSlotRange(metadata, out var start, out var end);
             return slot >= start && slot <= end;
@@ -75,32 +78,11 @@ namespace DfoServer.Game.DeathTower
 
         private static void GetSlotRange(ItemMetadata metadata, out short start, out short end)
         {
-            if (metadata == null)
-            {
-                start = 65;
-                end = 120;
-                return;
-            }
-            metadata.GetSlotRange(out var resolvedStart, out var resolvedEnd);
+            (metadata ?? ItemMetadata.CreateDefaultStackable()).GetSlotRange(
+                out var resolvedStart,
+                out var resolvedEnd);
             start = (short)resolvedStart;
             end = (short)resolvedEnd;
-        }
-
-        private static string GetTypeFamily(ItemMetadata metadata)
-        {
-            var tag = GetTypeTag(metadata);
-            var separator = tag.IndexOfAny(new[] { ' ', '\t' });
-            return separator > 0 ? tag.Substring(0, separator) : tag;
-        }
-
-        private static string GetTypeTag(ItemMetadata metadata)
-        {
-            var raw = (metadata?.StackableType ?? string.Empty).Replace("`", string.Empty).Trim();
-            var start = raw.IndexOf('[');
-            var end = start >= 0 ? raw.IndexOf(']', start + 1) : -1;
-            return start >= 0 && end > start
-                ? raw.Substring(start + 1, end - start - 1).Trim()
-                : raw.Trim('[', ']', ' ');
         }
 
         private static void AppendRange(ICollection<short> result, int start, int end)

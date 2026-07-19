@@ -1,8 +1,9 @@
 using System;
 using System.Collections.Generic;
-using DfoServer.Game.Characters;
+using DfoServer.Game.Accounts;
 using DfoServer.Game.Dungeon;
 using DfoServer.Game.Inventory;
+using DfoServer.Game.Progression;
 using DfoServer.Network;
 
 namespace DfoServer.Game.DeathTower
@@ -27,27 +28,56 @@ namespace DfoServer.Game.DeathTower
         public int UpdatedGold { get; set; }
         public byte PreviousLevel { get; set; }
         public byte UpdatedLevel { get; set; }
-        public uint UpdatedExp { get; set; }
+        public uint NormalExpGained { get; set; }
+        public uint HonorExpGained { get; set; }
+        public bool LeveledUp { get; set; }
+        public bool CharacterStateChanged { get; set; }
+        public AccountExperienceProgressSummary AccountProgress { get; set; }
+        public IReadOnlyList<short> ChangedMainSlots { get; set; } = Array.Empty<short>();
         public IReadOnlyList<DeathTowerRewardItem> Items { get; set; } = Array.Empty<DeathTowerRewardItem>();
+        internal ExperienceGrantResult ExperienceGrant { get; set; }
     }
+
+    internal delegate ExperienceGrantResult DeathTowerExperienceGrantInTransaction(
+        DbScope scope,
+        int characterId,
+        int accountId,
+        byte currentLevel,
+        uint currentExp,
+        uint rawGain);
 
     public sealed class DeathTowerSettlementService
     {
         private readonly IAssetService _assetService;
-        private readonly Func<DbScope, int, byte, uint, bool> _persistLevelAndExp;
+        private readonly AccountExperienceProgressService _accountExperience;
+        private readonly DeathTowerExperienceGrantInTransaction _grantExperienceInTransaction;
 
         public DeathTowerSettlementService(
             IAssetService assetService,
-            Func<DbScope, int, byte, uint, bool> persistLevelAndExp = null)
+            AccountExperienceProgressService accountExperience = null)
+            : this(assetService, accountExperience, null)
+        {
+        }
+
+        internal DeathTowerSettlementService(
+            IAssetService assetService,
+            AccountExperienceProgressService accountExperience,
+            DeathTowerExperienceGrantInTransaction grantExperienceInTransaction)
         {
             _assetService = assetService ?? throw new ArgumentNullException(nameof(assetService));
-            _persistLevelAndExp = persistLevelAndExp
-                ?? ((scope, characterId, level, exp) => CharacterProgressService.PersistLevelAndExp(
+            _accountExperience = accountExperience
+                ?? throw new ArgumentNullException(nameof(accountExperience));
+            _grantExperienceInTransaction = grantExperienceInTransaction
+                ?? ((scope, characterId, accountId, level, exp, rawGain) =>
+                    CharacterExperienceService.GrantInTransaction(
                     scope.Connection,
                     scope.Transaction,
                     characterId,
+                    accountId,
                     level,
-                    exp));
+                    exp,
+                    rawGain,
+                    normalizeMaxLevelExp: rawGain > 0));
         }
 
         public DeathTowerSettlementResult Grant(
@@ -62,16 +92,17 @@ namespace DfoServer.Game.DeathTower
             var previousLevel = session.Player.Level;
             var expGained = CalculateExp(previousLevel, rewardConfig.GetExpWeight(clearedFloorCount));
             var goldGained = CalculateGold(previousLevel, rewardConfig.GoldWeight);
-            var updatedExp = AddSaturating(session.Player.Exp, expGained);
-            var updatedLevel = ExpTableProvider.ApplyLevelUps(previousLevel, updatedExp);
             var lcg = tower.StageLcg ?? new DnfLcg(tower.StageSeed);
             var rewardRollCount = Math.Min(
                 Math.Max(0, tower.Config.MaxClearItemCount),
                 rewardConfig.GetRewardCardCount(clearedFloorCount));
 
             var items = new List<DeathTowerRewardItem>(rewardRollCount);
+            var changedMainSlots = new List<short>(rewardRollCount);
+            var changedMainSlotSet = new HashSet<short>();
             var accountId = session.Account?.AccountId ?? 1;
             var updatedGold = 0;
+            ExperienceGrantResult expProgress;
             using (var scope = _assetService.OpenScope(session.Player.CharacterId, accountId))
             {
                 if (goldGained > 0)
@@ -93,15 +124,22 @@ namespace DfoServer.Game.DeathTower
                     }
 
                     items.Add(new DeathTowerRewardItem(itemId, 1));
+                    if (changedMainSlotSet.Add(assignedSlot))
+                        changedMainSlots.Add(assignedSlot);
                 }
 
                 updatedGold = _assetService.LoadWallet(scope).Gold;
-                if ((expGained > 0 || updatedLevel != previousLevel)
-                    && !_persistLevelAndExp(
-                        scope,
-                        session.Player.CharacterId,
-                        updatedLevel,
-                        updatedExp))
+                expProgress = _grantExperienceInTransaction(
+                    scope,
+                    session.Player.CharacterId,
+                    accountId,
+                    previousLevel,
+                    session.Player.Exp,
+                    expGained);
+                var shouldPersistCharacter = expProgress.LeveledUp
+                    || expProgress.NormalExpGain > 0
+                    || expProgress.NormalizedMaxLevelExp;
+                if (shouldPersistCharacter && !expProgress.Persisted)
                 {
                     throw new InvalidOperationException(
                         $"Death tower settlement progress write failed for character {session.Player.CharacterId}.");
@@ -109,8 +147,33 @@ namespace DfoServer.Game.DeathTower
                 scope.Commit();
             }
 
-            session.Player.Exp = updatedExp;
-            session.Player.Level = updatedLevel;
+            session.Player.Exp = expProgress.NewExp;
+            session.Player.Level = expProgress.NewLevel;
+
+            AccountExperienceProgressSummary accountProgress = null;
+            if (expProgress.HonorExpGain > 0 && accountId > 0)
+            {
+                var totals = new AccountExperienceProgressTotals(
+                    expProgress.TotalHonorExp,
+                    expProgress.TotalGrowthCapsuleExp,
+                    expProgress.GrowthCapsuleExpGain);
+                try
+                {
+                    accountProgress = _accountExperience.BuildSummary(accountId, totals);
+                }
+                catch (Exception ex)
+                {
+                    FileLogger.Log($"[DeathTower] committed account progress summary failed: account={accountId} cid={session.Player.CharacterId}: {ex.Message}");
+                }
+                if (accountProgress != null)
+                {
+                    expProgress.Honor = accountProgress.Honor;
+                    expProgress.GrowthCapsule = accountProgress.GrowthCapsule;
+                }
+            }
+
+            var characterStateChanged = expProgress.NewLevel != expProgress.PreviousLevel
+                || expProgress.NewExp != expProgress.PreviousExp;
 
             return new DeathTowerSettlementResult
             {
@@ -119,9 +182,15 @@ namespace DfoServer.Game.DeathTower
                 GoldGained = goldGained,
                 UpdatedGold = updatedGold,
                 PreviousLevel = previousLevel,
-                UpdatedLevel = updatedLevel,
-                UpdatedExp = updatedExp,
+                UpdatedLevel = expProgress.NewLevel,
+                NormalExpGained = expProgress.NormalExpGain,
+                HonorExpGained = expProgress.HonorExpGain,
+                LeveledUp = expProgress.LeveledUp,
+                CharacterStateChanged = characterStateChanged,
+                AccountProgress = accountProgress,
+                ChangedMainSlots = changedMainSlots,
                 Items = items,
+                ExperienceGrant = expProgress,
             };
         }
 
@@ -146,10 +215,5 @@ namespace DfoServer.Game.DeathTower
             return value >= int.MaxValue ? int.MaxValue : (int)value;
         }
 
-        private static uint AddSaturating(uint value, uint add)
-        {
-            var sum = (ulong)value + add;
-            return sum > uint.MaxValue ? uint.MaxValue : (uint)sum;
-        }
     }
 }

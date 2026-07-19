@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
+using DfoServer.Game.Accounts;
 using DfoServer.Network.Builders;
 using DfoServer.Game.Inventory;
 using DfoServer.Network;
@@ -12,15 +13,33 @@ namespace DfoServer.Game.DeathTower
     {
         private readonly IInventoryStore _inventoryStore;
         private readonly DeathTowerSettlementService _settlementService;
+        private readonly Func<EnhancedClientSession, DeathTowerSettlementResult, Task> _sendExpGrantNotification;
+        private readonly Func<EnhancedClientSession, Task> _sendInDungeonLevelUpFollowups;
+        private readonly InventoryRefreshSender _inventoryRefresh;
 
-        public DeathTowerHandler(
+        public DeathTowerHandler()
+            : this(null, null, null, null, null, null, null)
+        {
+        }
+
+        internal DeathTowerHandler(
             IInventoryStore inventoryStore = null,
             IAssetService assetService = null,
-            Func<DbScope, int, byte, uint, bool> persistLevelAndExp = null)
+            DeathTowerExperienceGrantInTransaction grantExperienceInTransaction = null,
+            Func<EnhancedClientSession, DeathTowerSettlementResult, Task> sendExpGrantNotification = null,
+            AccountExperienceProgressService accountExperience = null,
+            Func<EnhancedClientSession, Task> sendInDungeonLevelUpFollowups = null,
+            InventoryRefreshSender inventoryRefresh = null)
         {
             _inventoryStore = inventoryStore;
+            _sendExpGrantNotification = sendExpGrantNotification;
+            _sendInDungeonLevelUpFollowups = sendInDungeonLevelUpFollowups;
+            _inventoryRefresh = inventoryRefresh;
             if (assetService != null)
-                _settlementService = new DeathTowerSettlementService(assetService, persistLevelAndExp);
+                _settlementService = new DeathTowerSettlementService(
+                    assetService,
+                    accountExperience,
+                    grantExperienceInTransaction);
         }
 
         public bool TryCreateSession(int dungeonId, out DeathTowerSession tower)
@@ -179,53 +198,66 @@ namespace DfoServer.Game.DeathTower
             }
 
             // NOTI 144 排行(空安全版)
-            var rankingBody = DeathTowerPacketBuilder.BuildEmptyRanking(tower.Config.DungeonId);
-            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0090, rankingBody));
-            FileLogger.Log($"[DeathTower] SENT 0x0090 RANKING: bodyLen={rankingBody.Length}");
-
-            // NOTI 145: Death Tower reward groups.
-            var rewardGroups = new IReadOnlyList<DeathTowerRewardItem>[]
+            try
             {
-                settlement?.Items ?? Array.Empty<DeathTowerRewardItem>(),
-                Array.Empty<DeathTowerRewardItem>(),
-                Array.Empty<DeathTowerRewardItem>(),
-                Array.Empty<DeathTowerRewardItem>(),
-            };
-            // The first u32 is a separate client field whose semantic name is not proven
-            // in this build. Keep it zero; EXP and gold use their authoritative updates.
-            var rewardBody = DeathTowerPacketBuilder.BuildReward(0, rewardGroups);
-            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0091, rewardBody));
-            FileLogger.Log($"[DeathTower] SENT 0x0091 REWARD: bodyLen={rewardBody.Length} items={settlement?.Items.Count ?? 0}");
+                var rankingBody = DeathTowerPacketBuilder.BuildEmptyRanking(tower.Config.DungeonId);
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0090, rankingBody));
+                FileLogger.Log($"[DeathTower] SENT 0x0090 RANKING: bodyLen={rankingBody.Length}");
 
-            // NOTI 146 EPLP(通关=1)
-            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0092, DeathTowerPacketBuilder.BuildEplp(true)));
-            FileLogger.Log($"[DeathTower] SENT 0x0092 EPLP: cleared=true");
+                // NOTI 145: Death Tower reward groups.
+                var rewardGroups = new IReadOnlyList<DeathTowerRewardItem>[]
+                {
+                    settlement?.Items ?? Array.Empty<DeathTowerRewardItem>(),
+                    Array.Empty<DeathTowerRewardItem>(),
+                    Array.Empty<DeathTowerRewardItem>(),
+                    Array.Empty<DeathTowerRewardItem>(),
+                };
+                // The first u32 is a separate client field whose semantic name is not proven
+                // in this build. Keep it zero; EXP and gold use their authoritative updates.
+                var rewardBody = DeathTowerPacketBuilder.BuildReward(0, rewardGroups);
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0091, rewardBody));
+                FileLogger.Log($"[DeathTower] SENT 0x0091 REWARD: bodyLen={rewardBody.Length} items={settlement?.Items.Count ?? 0}");
 
-            if (settlement != null)
-            {
-                if (settlement.ExpGained > 0 || settlement.UpdatedLevel != settlement.PreviousLevel)
+                // NOTI 146 EPLP(通关=1)
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0092, DeathTowerPacketBuilder.BuildEplp(true)));
+                FileLogger.Log($"[DeathTower] SENT 0x0092 EPLP: cleared=true");
+
+                if (settlement != null)
                 {
-                    await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
-                        0x00,
-                        0x0025,
-                        DungeonNotificationBuilder.BuildExp(
-                            settlement.UpdatedLevel,
-                            settlement.UpdatedExp,
-                            0,
-                            0,
-                            null)));
+                    if (settlement.ExpGained > 0 || settlement.CharacterStateChanged)
+                    {
+                        if (_sendExpGrantNotification != null)
+                            await _sendExpGrantNotification(session, settlement);
+                        else
+                        {
+                            FileLogger.Log($"[DeathTower] SETTLEMENT 0x0025 skipped: cid={cid} experience notification service unavailable");
+                        }
+                    }
+                    if (settlement.LeveledUp && _sendInDungeonLevelUpFollowups != null)
+                        await _sendInDungeonLevelUpFollowups(session);
+                    if (settlement.GoldGained > 0)
+                    {
+                        await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
+                            0x00,
+                            0x000E,
+                            ItemListUpdateBuilder.BuildGoldUpdate(settlement.UpdatedGold)));
+                    }
+                    if (_inventoryRefresh != null && settlement.ChangedMainSlots.Count > 0)
+                    {
+                        await _inventoryRefresh.SendUpdateItemList(
+                            session,
+                            InventoryListType.Main,
+                            settlement.ChangedMainSlots);
+                    }
+                    FileLogger.Log($"[DeathTower] SETTLEMENT rewards: cid={cid} floors={settlement.ClearedFloorCount} exp={settlement.ExpGained} normalExp={settlement.NormalExpGained} honorExp={settlement.HonorExpGained} gold={settlement.GoldGained} items={settlement.Items.Count} level={settlement.PreviousLevel}->{settlement.UpdatedLevel}");
                 }
-                if (settlement.GoldGained > 0)
-                {
-                    await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
-                        0x00,
-                        0x000E,
-                        ItemListUpdateBuilder.BuildGoldUpdate(settlement.UpdatedGold)));
-                }
-                FileLogger.Log($"[DeathTower] SETTLEMENT rewards: cid={cid} floors={settlement.ClearedFloorCount} exp={settlement.ExpGained} gold={settlement.GoldGained} items={settlement.Items.Count} level={settlement.PreviousLevel}->{settlement.UpdatedLevel}");
+
+                FileLogger.Log($"[DeathTower] SETTLEMENT complete: cid={cid}");
             }
-
-            FileLogger.Log($"[DeathTower] SETTLEMENT complete: cid={cid}");
+            catch (Exception ex)
+            {
+                FileLogger.Log($"[DeathTower] SETTLEMENT notification failed after commit: cid={cid}: {ex}");
+            }
         }
 
         private async Task SendStageMap(EnhancedClientSession session, DeathTowerSession tower)
@@ -272,12 +304,18 @@ namespace DfoServer.Game.DeathTower
                 });
             }
 
-            run.RoomKilledSeqIds.Clear();
-            run.Drops.Clear();
-            run.RoomMonsters = combatMonsters;
-            run.RoomStartSequence = monsters.Count > 0 ? monsters[0].MonsterUniqueId : (ushort)0;
-            run.Seed = tower.StageSeed;
-            run.RoomLcg = tower.StageLcg;
+            lock (run.SyncRoot)
+            {
+                if (!ReferenceEquals(run.Tower, tower))
+                    return;
+
+                run.RoomKilledSeqIds.Clear();
+                run.Drops.Clear();
+                run.RoomMonsters = combatMonsters;
+                run.RoomStartSequence = monsters.Count > 0 ? monsters[0].MonsterUniqueId : (ushort)0;
+                run.Seed = tower.StageSeed;
+                run.RoomLcg = tower.StageLcg;
+            }
         }
 
         public bool TryGenerateDropsForMonster(
@@ -339,7 +377,8 @@ namespace DfoServer.Game.DeathTower
             var listType = (InventoryListType)body[2];
             var instanceValue = BitConverter.ToInt32(body, 3);
             if (listType != InventoryListType.Main
-                && (listType != InventoryListType.QuickSlot || !IsTowerQuickSlot(slot)))
+                && (listType != InventoryListType.QuickSlot
+                    || !SqliteInventoryStore.IsQuickSlot(slot)))
                 return false;
 
             var expectedItemId = body.Length >= 11 ? BitConverter.ToInt32(body, 7) : 0;
@@ -434,7 +473,7 @@ namespace DfoServer.Game.DeathTower
             var quickSlotUpdates = new List<CommonInventoryItem>();
             foreach (var slot in slots)
             {
-                var itemSpace = IsTowerQuickSlot(slot)
+                var itemSpace = SqliteInventoryStore.IsQuickSlot(slot)
                     ? InventoryListType.QuickSlot
                     : InventoryListType.Main;
                 var updates = itemSpace == InventoryListType.QuickSlot
@@ -452,9 +491,7 @@ namespace DfoServer.Game.DeathTower
                         InstanceValue = item.Count,
                         ExtraJson = "{}",
                     };
-                    updates.Add(InventoryProtocolMapper.ToCommonItem(
-                        record,
-                        ItemExtraView.Parse(record.ExtraJson)));
+                    updates.Add(InventoryProtocolMapper.ToCommonItem(record));
                 }
                 else
                 {
@@ -472,18 +509,18 @@ namespace DfoServer.Game.DeathTower
                 mainUpdates);
         }
 
-        private static bool IsTowerQuickSlot(short slot) => slot >= 3 && slot <= 8;
-
         private static bool IsSupportedTowerEndpoint(InventoryListType listType, short slot)
             => listType == InventoryListType.Main
-                || (listType == InventoryListType.QuickSlot && IsTowerQuickSlot(slot));
+                || (listType == InventoryListType.QuickSlot
+                    && SqliteInventoryStore.IsQuickSlot(slot));
 
         private static bool IsTowerEndpoint(
             InventoryListType listType,
             short slot,
             DeathTowerSession tower)
             => IsSupportedTowerEndpoint(listType, slot)
-                && (IsTowerQuickSlot(slot) || tower.InventoryItems.ContainsKey(slot));
+                && (SqliteInventoryStore.IsQuickSlot(slot)
+                    || tower.InventoryItems.ContainsKey(slot));
 
         private static Task SyncTowerQuestProgress(
             EnhancedClientSession session,

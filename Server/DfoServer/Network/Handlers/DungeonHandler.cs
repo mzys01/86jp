@@ -28,7 +28,8 @@ namespace DfoServer.Network.Handlers
             InventoryRefreshSender inventoryRefresh,
             Game.Party.PartyManager partyManager = null,
             Game.Session.ISessionDirectory sessionDirectory = null,
-            Game.Quests.QuestDropService questDropService = null)
+            Game.Quests.QuestDropService questDropService = null,
+            Game.Accounts.AccountExperienceProgressService accountExperience = null)
         {
             _services = new DungeonSharedServices(
                 assetService,
@@ -40,7 +41,8 @@ namespace DfoServer.Network.Handlers
                 inventoryRefresh,
                 partyManager,
                 sessionDirectory,
-                questDropService);
+                questDropService,
+                accountExperience);
             _settlement = new DungeonSettlementHandler(_services);
             _map = new DungeonMapHandler(_services);
             _entry = new DungeonEntryHandler(_services, _map);

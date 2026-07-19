@@ -112,7 +112,7 @@ namespace DfoServer.SelfTests
                         && invalidAck.Type == 0x002C
                         && invalidAck.Body.Length >= 1
                         && invalidAck.Body[0] == 0
-                        && fixture.Tower.GetItemCount(TowerHastePotionItemId) == 1,
+                        && GetTowerItemCount(fixture.Tower, TowerHastePotionItemId) == 1,
                     ref failures);
 
                 var handledSevenByteUse = handler.TryHandleUseStackable(
@@ -129,7 +129,7 @@ namespace DfoServer.SelfTests
                         && sevenByteAck.Body[0] == 1
                         && sevenByteUpdate.Type == 0x000E
                         && HasCommonUpdate(sevenByteUpdate.Body, QuickSlotListType, 4, -1, 0)
-                        && fixture.Tower.GetItemCount(TowerHastePotionItemId) == 0,
+                        && GetTowerItemCount(fixture.Tower, TowerHastePotionItemId) == 0,
                     ref failures);
             }
 
@@ -144,7 +144,7 @@ namespace DfoServer.SelfTests
                     petBody).GetAwaiter().GetResult();
                 Check("tower 0x002C leaves non-main inventory lists to later handlers",
                     !handledPetList
-                        && routingFixture.Tower.GetItemCount(TowerHastePotionItemId) == 0
+                        && GetTowerItemCount(routingFixture.Tower, TowerHastePotionItemId) == 0
                         && routingFixture.Tower.GroundItems.Count == 1,
                     ref failures);
 
@@ -173,6 +173,12 @@ namespace DfoServer.SelfTests
             BitConverter.GetBytes(instanceValue).CopyTo(body, 3);
             BitConverter.GetBytes(itemId).CopyTo(body, 7);
             return body;
+        }
+
+        private static int GetTowerItemCount(DeathTowerSession tower, int itemId)
+        {
+            var snapshot = tower.GetItemCountsSnapshot();
+            return snapshot.TryGetValue(itemId, out var count) ? count : 0;
         }
 
         private static byte[] BuildMoveBody(short source, short destination, int count)

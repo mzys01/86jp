@@ -58,7 +58,7 @@ namespace DfoServer.Game.Accounts
         public AccountExperienceProgressSummary AddHonorAndGrowthCapsuleExp(int accountId, uint honorExpGain)
         {
             if (accountId <= 0)
-                return BuildSummary(accountId, 0, 0, 0);
+                return BuildSummary(accountId, default);
 
             AccountExperienceProgressTotals totals;
             using (var connection = new SqliteConnection(_connectionString))
@@ -72,11 +72,7 @@ namespace DfoServer.Game.Accounts
                 }
             }
 
-            return BuildSummary(
-                accountId,
-                totals.TotalHonorExp,
-                totals.TotalGrowthCapsuleExp,
-                totals.GrowthCapsuleExpGain);
+            return BuildSummary(accountId, totals);
         }
 
         internal static AccountExperienceProgressTotals AddInTransaction(
@@ -101,18 +97,16 @@ namespace DfoServer.Game.Accounts
                 appliedGrowthCapsuleExp);
         }
 
-        private AccountExperienceProgressSummary BuildSummary(
+        internal AccountExperienceProgressSummary BuildSummary(
             int accountId,
-            ulong totalHonorExp,
-            uint totalGrowthCapsuleExp,
-            uint growthCapsuleExpGain)
+            AccountExperienceProgressTotals totals)
         {
             var characters = accountId > 0 ? _characterRepository?.ListByAccount(accountId) : null;
             return new AccountExperienceProgressSummary
             {
-                Honor = HonorLevelDataProvider.CalculateFromHonorExp(totalHonorExp, characters),
-                GrowthCapsule = GrowthCapsuleDataProvider.Calculate(totalGrowthCapsuleExp),
-                GrowthCapsuleExpGain = growthCapsuleExpGain,
+                Honor = HonorLevelDataProvider.CalculateFromHonorExp(totals.TotalHonorExp, characters),
+                GrowthCapsule = GrowthCapsuleDataProvider.Calculate(totals.TotalGrowthCapsuleExp),
+                GrowthCapsuleExpGain = totals.GrowthCapsuleExpGain,
             };
         }
     }

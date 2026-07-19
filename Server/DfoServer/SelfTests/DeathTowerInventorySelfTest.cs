@@ -37,6 +37,29 @@ namespace DfoServer.SelfTests
                 ref failures);
             Check("quest fixture item is PVF [quest] family",
                 IsExactType(QuestItemId, "[quest]"), ref failures);
+            Check("synthetic stackable primary family requires the first bounded tag",
+                SyntheticPrimaryFamilyBoundariesAreExact(), ref failures);
+            Check("synthetic material and quest families use their shared slot ranges",
+                SyntheticSlotRangesAreExact(), ref failures);
+            Check("waste family accepts modifiers but rejects unrelated text and tags",
+                SyntheticWasteBoundariesAreExact(), ref failures);
+            Check("ordinary SQLite add shares the real PVF waste/material/quest classification",
+                OrdinarySqliteClassificationIsShared(), ref failures);
+            Check("null tower metadata gets its default slot range from ItemMetadata",
+                NullTowerMetadataUsesSharedDefaultSlotRange(), ref failures);
+            Check("ordinary SQLite preserves and merges an existing 6518 bag stack",
+                OrdinarySqlitePreservesLegacyBagStack(), ref failures);
+            Check("ordinary full quickslots overflow to 65 without affecting tower quickslots",
+                OrdinaryOverflowStaysSeparateFromTower(), ref failures);
+            Check("DeathTowerSession starts at stage zero without redundant snapshot/count APIs",
+                SessionSurfaceIsMinimal(), ref failures);
+            Check("tower inventory DTOs omit redundant slot fields",
+                TowerInventoryDtosAreMinimal(), ref failures);
+            Check("DeathTowerPacketBuilder retains BuildEmptyReward",
+                typeof(DeathTowerPacketBuilder).GetMethod(
+                    "BuildEmptyReward",
+                    BindingFlags.Public | BindingFlags.Static) != null,
+                ref failures);
 
             var pickup = FindOutMethod("TryPickupGroundItem", typeof(ushort));
             var use = FindOutMethod("TryUseItem", typeof(short), typeof(int));
@@ -88,6 +111,250 @@ namespace DfoServer.SelfTests
             });
             tower.GenerateDropsForMonster(91);
             return tower;
+        }
+
+        private static bool SyntheticPrimaryFamilyBoundariesAreExact()
+        {
+            return HasPrimaryFamily(Stackable("` [MaTeRiAl instant item] 2 `"), "material")
+                && HasPrimaryFamily(Stackable("[quest instant item]"), "quest")
+                && HasPrimaryFamily(Stackable("[waste instant item]"), "waste")
+                && !HasPrimaryFamily(Stackable("[materialize]"), "material")
+                && !HasPrimaryFamily(Stackable("[questing]"), "quest")
+                && !HasPrimaryFamily(Stackable("[wasteful]"), "waste")
+                && !HasPrimaryFamily(Stackable("prefix [material]"), "material")
+                && !HasPrimaryFamily(Stackable("ordinary waste text"), "waste")
+                && !HasPrimaryFamily(Stackable("[material] [waste]"), "waste")
+                && !HasPrimaryFamily(new ItemMetadata
+                {
+                    ItemKind = "equipment",
+                    StackableType = "[waste]",
+                }, "waste");
+        }
+
+        private static bool SyntheticSlotRangesAreExact()
+        {
+            return HasSlotRange(Stackable("[material]"), 121, 176)
+                && HasSlotRange(Stackable("[material instant item] 2"), 121, 176)
+                && HasSlotRange(Stackable("[material] 4"), 345, 359)
+                && HasSlotRange(Stackable("[quest]"), 177, 232)
+                && HasSlotRange(Stackable("[quest instant item]"), 177, 232)
+                && HasSlotRange(Stackable("[material expert job]"), 233, 288)
+                && HasSlotRange(Stackable("[avatar emblem]"), 289, 344)
+                && HasSlotRange(Stackable("[materialize]"), 65, 120)
+                && HasSlotRange(Stackable("[questing]"), 65, 120)
+                && HasSlotRange(Stackable("prefix [material]"), 65, 120);
+        }
+
+        private static bool SyntheticWasteBoundariesAreExact()
+        {
+            return DeathTowerItemSlotPolicy.IsWaste(Stackable("[waste]"))
+                && DeathTowerItemSlotPolicy.IsWaste(Stackable("`[waste instant item]`"))
+                && !DeathTowerItemSlotPolicy.IsWaste(Stackable("[wasteful]"))
+                && !DeathTowerItemSlotPolicy.IsWaste(Stackable("prefix [waste]"))
+                && !DeathTowerItemSlotPolicy.IsWaste(Stackable("ordinary waste text"))
+                && !DeathTowerItemSlotPolicy.IsWaste(Stackable("[material] waste"))
+                && !DeathTowerItemSlotPolicy.IsWaste(Stackable("[material] [waste]"))
+                && !DeathTowerItemSlotPolicy.IsWaste(new ItemMetadata
+                {
+                    ItemKind = "equipment",
+                    StackableType = "[waste]",
+                });
+        }
+
+        private static bool OrdinarySqliteClassificationIsShared()
+        {
+            var dbPath = Path.Combine(
+                Path.GetTempPath(),
+                $"death-tower-sqlite-family-{Guid.NewGuid():N}.db");
+            try
+            {
+                SeedInventoryOwner(dbPath);
+                var assetService = new SqliteAssetService(dbPath, ServerPaths.SchemaFilePath);
+                using (var scope = assetService.OpenScope(990011, 990011))
+                {
+                    var wasteAdded = assetService.TryAddItem(
+                        scope, TowerHastePotionItemId, 1, out var wasteSlot);
+                    var materialAdded = assetService.TryAddItem(
+                        scope, TowerMaterialItemId, 1, out var materialSlot);
+                    var questAdded = assetService.TryAddItem(
+                        scope, QuestItemId, 1, out var questSlot);
+                    scope.Commit();
+                    return wasteAdded && wasteSlot == SqliteInventoryStore.QuickSlotStart
+                        && materialAdded && materialSlot == 121
+                        && questAdded && questSlot == 177;
+                }
+            }
+            finally
+            {
+                SqliteConnection.ClearAllPools();
+                if (File.Exists(dbPath))
+                    File.Delete(dbPath);
+            }
+        }
+
+        private static bool NullTowerMetadataUsesSharedDefaultSlotRange()
+        {
+            var factory = typeof(ItemMetadata).GetMethod(
+                "CreateDefaultStackable",
+                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
+            if (factory == null
+                || factory.ReturnType != typeof(ItemMetadata)
+                || factory.GetParameters().Length != 0)
+            {
+                return false;
+            }
+
+            var metadata = factory.Invoke(null, Array.Empty<object>()) as ItemMetadata;
+            if (metadata == null || !metadata.IsStackable)
+                return false;
+
+            metadata.GetSlotRange(out var expectedStart, out var expectedEnd);
+            return DeathTowerItemSlotPolicy.GetAllocationOrder(null).SequenceEqual(
+                Enumerable.Range(expectedStart, expectedEnd - expectedStart + 1)
+                    .Select(slot => (short)slot));
+        }
+
+        private static bool OrdinarySqlitePreservesLegacyBagStack()
+        {
+            var metadata = ItemMetadataResolver.Resolve(TowerHastePotionItemId);
+            if (metadata.StackLimit == 1)
+                return false;
+            var initialCount = metadata.StackLimit > 1
+                ? metadata.StackLimit - 1
+                : 10;
+            var dbPath = Path.Combine(
+                Path.GetTempPath(),
+                $"death-tower-sqlite-legacy-waste-{Guid.NewGuid():N}.db");
+            try
+            {
+                var connStr = SeedInventoryOwner(dbPath);
+                using (var connection = new SqliteConnection(connStr))
+                {
+                    connection.Open();
+                    InsertPersistentStackable(
+                        connection,
+                        990011,
+                        65,
+                        TowerHastePotionItemId,
+                        initialCount);
+                }
+
+                var assetService = new SqliteAssetService(dbPath, ServerPaths.SchemaFilePath);
+                short assignedSlot;
+                using (var scope = assetService.OpenScope(990011, 990011))
+                {
+                    if (!assetService.TryAddItem(
+                        scope,
+                        TowerHastePotionItemId,
+                        1,
+                        out assignedSlot))
+                    {
+                        return false;
+                    }
+                    scope.Commit();
+                }
+
+                using (var connection = new SqliteConnection(connStr))
+                {
+                    connection.Open();
+                    return assignedSlot == 65
+                        && ReadStackCount(connection, 990011, 65, TowerHastePotionItemId)
+                            == initialCount + 1
+                        && ReadItemCountAtSlot(connection, 990011, SqliteInventoryStore.QuickSlotStart)
+                            == 0;
+                }
+            }
+            finally
+            {
+                SqliteConnection.ClearAllPools();
+                if (File.Exists(dbPath))
+                    File.Delete(dbPath);
+            }
+        }
+
+        private static bool OrdinaryOverflowStaysSeparateFromTower()
+        {
+            var dbPath = Path.Combine(
+                Path.GetTempPath(),
+                $"death-tower-sqlite-overflow-{Guid.NewGuid():N}.db");
+            try
+            {
+                var connStr = SeedInventoryOwner(dbPath);
+                using (var connection = new SqliteConnection(connStr))
+                {
+                    connection.Open();
+                    for (var slot = SqliteInventoryStore.QuickSlotStart;
+                        slot <= SqliteInventoryStore.QuickSlotEnd;
+                        slot++)
+                    {
+                        InsertPersistentStackable(
+                            connection,
+                            990011,
+                            (short)slot,
+                            StackableWasteFixtureItemId + slot,
+                            10 + slot);
+                    }
+                }
+
+                var assetService = new SqliteAssetService(dbPath, ServerPaths.SchemaFilePath);
+                short ordinarySlot;
+                using (var scope = assetService.OpenScope(990011, 990011))
+                {
+                    if (!assetService.TryAddItem(
+                        scope,
+                        TowerHastePotionItemId,
+                        1,
+                        out ordinarySlot))
+                    {
+                        return false;
+                    }
+                    scope.Commit();
+                }
+
+                var tower = NewTower();
+                tower.BeginStage(0x13572468, new[]
+                {
+                    StageItem(501, 95, TowerHastePotionItemId, 1),
+                });
+                tower.GenerateDropsForMonster(95);
+                return ordinarySlot == 65
+                    && tower.TryPickupGroundItem(501, out var pickup)
+                    && pickup.DestinationSlot == SqliteInventoryStore.QuickSlotStart;
+            }
+            finally
+            {
+                SqliteConnection.ClearAllPools();
+                if (File.Exists(dbPath))
+                    File.Delete(dbPath);
+            }
+        }
+
+        private static bool SessionSurfaceIsMinimal()
+        {
+            var constructor = typeof(DeathTowerSession).GetConstructors(
+                BindingFlags.Public | BindingFlags.Instance).SingleOrDefault();
+            if (constructor == null)
+                return false;
+            var parameters = constructor.GetParameters();
+            var tower = NewTower();
+            return parameters.Length == 1
+                && parameters[0].ParameterType == typeof(DeathTowerData.TowerConfig)
+                && tower.CurrentStage == 0
+                && typeof(DeathTowerSession).GetProperty(
+                    "CurrentStageItems",
+                    BindingFlags.Public | BindingFlags.Instance) == null
+                && typeof(DeathTowerSession).GetMethod(
+                    "GetItemCount",
+                    BindingFlags.Public | BindingFlags.Instance) == null;
+        }
+
+        private static bool TowerInventoryDtosAreMinimal()
+        {
+            return !HasPublicInstanceMember(typeof(TowerInventoryItem), "SlotIndex")
+                && !HasPublicInstanceMember(typeof(TowerPickupResult), "SceneSlot")
+                && !HasPublicInstanceMember(typeof(TowerInventoryMutation), "SlotIndex")
+                && !HasPublicInstanceMember(typeof(TowerInventoryMoveResult), "SourceSlot")
+                && !HasPublicInstanceMember(typeof(TowerInventoryMoveResult), "DestinationSlot");
         }
 
         private static bool PickupClassificationIsCorrect(DeathTowerSession tower, MethodInfo pickup)
@@ -360,6 +627,117 @@ ORDER BY slot_index;";
         private static DeathTowerSession NewTower()
             => new DeathTowerSession(DeathTowerData.GetConfig(DeathTowerDungeonId));
 
+        private static ItemMetadata Stackable(string stackableType)
+            => new ItemMetadata
+            {
+                ItemKind = "stackable",
+                StackableType = stackableType,
+                StackLimit = 100,
+            };
+
+        private static bool HasPrimaryFamily(ItemMetadata metadata, string family)
+            => metadata.IsPrimaryStackableFamily(family);
+
+        private static bool HasSlotRange(ItemMetadata metadata, int expectedStart, int expectedEnd)
+        {
+            metadata.GetSlotRange(out var actualStart, out var actualEnd);
+            return actualStart == expectedStart && actualEnd == expectedEnd;
+        }
+
+        private static bool HasPublicInstanceMember(Type type, string name)
+            => type.GetProperty(name, BindingFlags.Public | BindingFlags.Instance) != null
+                || type.GetField(name, BindingFlags.Public | BindingFlags.Instance) != null;
+
+        private static string SeedInventoryOwner(string dbPath)
+        {
+            var connStr = SqliteDatabaseBootstrap.Initialize(dbPath, ServerPaths.SchemaFilePath);
+            using (var connection = new SqliteConnection(connStr))
+            {
+                connection.Open();
+                using (var command = connection.CreateCommand())
+                {
+                    command.CommandText = @"
+INSERT OR IGNORE INTO accounts (account_id, m_id, password_hash)
+VALUES (990011, 'death-tower-family', '');
+INSERT OR IGNORE INTO characters (character_id, account_id, name)
+VALUES (990011, 990011, 'death-tower-family');";
+                    command.ExecuteNonQuery();
+                }
+            }
+            return connStr;
+        }
+
+        private static void InsertPersistentStackable(
+            SqliteConnection connection,
+            int characterId,
+            short slot,
+            int itemId,
+            int count)
+        {
+            using (var command = connection.CreateCommand())
+            {
+                command.CommandText = @"
+INSERT INTO character_items (
+    owner_scope, owner_id, character_id, list_type, slot_index, item_template_id, item_kind,
+    stack_count, instance_value, durability, seal_flag, option_value, expire_time, marker_16,
+    pet_serial_or_handle, extra_json)
+VALUES (
+    'character', @characterId, @characterId, 0, @slot, @itemId, 'stackable',
+    @count, @count, 0, 0, 0, 0, 0,
+    0, '{}');";
+                command.Parameters.AddWithValue("@characterId", characterId);
+                command.Parameters.AddWithValue("@slot", slot);
+                command.Parameters.AddWithValue("@itemId", itemId);
+                command.Parameters.AddWithValue("@count", count);
+                command.ExecuteNonQuery();
+            }
+        }
+
+        private static int ReadStackCount(
+            SqliteConnection connection,
+            int characterId,
+            short slot,
+            int itemId)
+        {
+            using (var command = connection.CreateCommand())
+            {
+                command.CommandText = @"
+SELECT stack_count
+FROM character_items
+WHERE character_id=@characterId
+  AND list_type=0
+  AND slot_index=@slot
+  AND item_template_id=@itemId
+LIMIT 1;";
+                command.Parameters.AddWithValue("@characterId", characterId);
+                command.Parameters.AddWithValue("@slot", slot);
+                command.Parameters.AddWithValue("@itemId", itemId);
+                var value = command.ExecuteScalar();
+                return value == null || value == DBNull.Value
+                    ? 0
+                    : Convert.ToInt32(value);
+            }
+        }
+
+        private static int ReadItemCountAtSlot(
+            SqliteConnection connection,
+            int characterId,
+            short slot)
+        {
+            using (var command = connection.CreateCommand())
+            {
+                command.CommandText = @"
+SELECT COUNT(*)
+FROM character_items
+WHERE character_id=@characterId
+  AND list_type=0
+  AND slot_index=@slot;";
+                command.Parameters.AddWithValue("@characterId", characterId);
+                command.Parameters.AddWithValue("@slot", slot);
+                return Convert.ToInt32(command.ExecuteScalar());
+            }
+        }
+
         private static StageTowerItem StageItem(
             ushort itemUniqueId,
             ushort monsterUniqueId,
@@ -426,14 +804,8 @@ ORDER BY slot_index;";
         }
 
         private static bool IsExactType(int itemId, string expected)
-        {
-            var raw = ItemMetadataResolver.Resolve(itemId).StackableType;
-            var normalized = NormalizeType(raw);
-            return string.Equals(
-                normalized,
-                expected.Trim('[', ']', ' '),
-                StringComparison.OrdinalIgnoreCase);
-        }
+            => ItemMetadataResolver.Resolve(itemId).IsPrimaryStackableFamily(
+                expected.Trim('[', ']', ' '));
 
         private static int EffectiveStackLimit(int itemId)
         {
@@ -441,18 +813,6 @@ ORDER BY slot_index;";
             if (!metadata.IsStackable)
                 return 1;
             return metadata.StackLimit > 0 ? metadata.StackLimit : int.MaxValue;
-        }
-
-        private static string NormalizeType(string raw)
-        {
-            var normalized = (raw ?? string.Empty).Replace("`", string.Empty).Trim();
-            var start = normalized.IndexOf('[');
-            var end = start >= 0 ? normalized.IndexOf(']', start + 1) : -1;
-            var tag = start >= 0 && end > start
-                ? normalized.Substring(start + 1, end - start - 1).Trim()
-                : normalized.Trim('[', ']', ' ');
-            var separator = tag.IndexOfAny(new[] { ' ', '\t' });
-            return separator > 0 ? tag.Substring(0, separator) : tag;
         }
 
         private static int ReadInventoryCount(DeathTowerSession tower, short slot)
