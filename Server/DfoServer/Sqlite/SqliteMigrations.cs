@@ -533,6 +533,15 @@ UPDATE characters SET slot_index = (
             (25, "skill_tree_index 未购买状态与默认值", MigrateSkillTreeIndexDefault),
 
             (26, "守护者盾牌5槽", MigrateKnightShieldDeck),
+
+            (27, "角色金币携带/拍卖额双上限", conn => ExecuteBatch(conn, @"
+CREATE TABLE IF NOT EXISTS character_gold_limits (
+    character_id       INTEGER PRIMARY KEY,
+    gold_carry_limit   INTEGER NOT NULL,
+    auction_gold_limit INTEGER NOT NULL,
+    updated_at         TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
+);")),
         };
 
         private static void MigrateKnightShieldDeck(SqliteConnection connection)

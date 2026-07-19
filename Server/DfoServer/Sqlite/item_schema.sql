@@ -59,6 +59,15 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_characters_name_unique
 CREATE INDEX IF NOT EXISTS idx_characters_account
     ON characters(account_id, delete_flag);
 
+-- 金币携带上限与拍卖额上限是两个独立持久化值；升级事务会同步推进两者。
+CREATE TABLE IF NOT EXISTS character_gold_limits (
+    character_id       INTEGER PRIMARY KEY,
+    gold_carry_limit   INTEGER NOT NULL,
+    auction_gold_limit INTEGER NOT NULL,
+    updated_at         TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS character_container_state (
     character_id INTEGER NOT NULL,
     list_type INTEGER NOT NULL,

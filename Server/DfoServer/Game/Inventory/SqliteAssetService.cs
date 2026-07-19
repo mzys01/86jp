@@ -96,9 +96,9 @@ namespace DfoServer.Game.Inventory
             return CurrencyService.LoadWallet(scope.Connection, scope.Transaction, scope.CharacterId);
         }
 
-        public void GrantGold(DbScope scope, int amount)
+        public int GrantGold(DbScope scope, int amount)
         {
-            CurrencyService.GrantGold(scope.Connection, scope.Transaction, scope.CharacterId, amount);
+            return CurrencyService.GrantGold(scope.Connection, scope.Transaction, scope.CharacterId, amount);
         }
 
         public bool TrySpendGold(DbScope scope, int amount)

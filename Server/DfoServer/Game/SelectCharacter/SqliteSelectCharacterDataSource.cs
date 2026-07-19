@@ -31,6 +31,7 @@ namespace DfoServer.Game.SelectCharacter
         private readonly LotteryDoubleRewardPolicy _lotteryDoubleRewardPolicy;
         private readonly TitleBookMutationService _titleBookMutationService;
         private readonly HonorLevelSyncService _honorLevel;
+        private readonly CharacterGoldLimitRepository _goldLimitRepository;
         private readonly string _connectionString;
         private readonly string _databasePath;
         private readonly string _schemaFilePath;
@@ -68,6 +69,7 @@ namespace DfoServer.Game.SelectCharacter
             _titleBookRepository = new CharacterTitleBookRepository(_connectionString);
             _titleBookMutationService = new TitleBookMutationService(_connectionString);
             _honorLevel = new HonorLevelSyncService(_characterRepository);
+            _goldLimitRepository = new CharacterGoldLimitRepository(databasePath, schemaFilePath);
         }
 
         public int GetSeedCharacterId()
@@ -197,6 +199,11 @@ namespace DfoServer.Game.SelectCharacter
 
             var acctSettings = _accountSettingsRepository.Load(accountId);
             var character = _characterRepository?.GetById(characterId);
+            if (character != null)
+            {
+                var goldLimits = _goldLimitRepository.LoadOrCreate(characterId, character.Level);
+                initSnapshot.GoldLimitUpgradeLevel = goldLimits.UpgradeLevel;
+            }
             initSnapshot.MainGameOptionBlob = acctSettings?.MainGameOption ?? Settings.AccountSettings.DefaultMainGameOption;
             initSnapshot.QuickchatBank0 = acctSettings?.QuickchatBank0;
             initSnapshot.QuickchatBank1 = acctSettings?.QuickchatBank1;

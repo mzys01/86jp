@@ -261,8 +261,8 @@ namespace DfoServer.SelfTests
                 command.CommandText = @"
 INSERT INTO accounts (account_id, m_id, password_hash)
 VALUES (@accountId, 'secret-shop-selftest', '');
-INSERT INTO characters (character_id, account_id, name)
-VALUES (@characterId, @accountId, 'secret-shop-selftest');
+INSERT INTO characters (character_id, account_id, name, level)
+VALUES (@characterId, @accountId, 'secret-shop-selftest', 60);
 INSERT INTO character_items (
     owner_scope, owner_id, character_id, list_type, slot_index, item_template_id, item_kind,
     stack_count, instance_value, durability, seal_flag, option_value, expire_time, marker_16,
