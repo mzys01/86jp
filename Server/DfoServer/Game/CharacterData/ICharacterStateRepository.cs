@@ -10,7 +10,7 @@ namespace DfoServer.Game.CharacterData
 
         void SaveCharacterOption(int characterId, byte[] body);
 
-        void SaveEmotionIndex(int characterId, ushort emotionIndex);
+        void SaveMoodValue(int characterId, ushort moodValue);
 
         void SaveHotkeyConfig(int characterId, byte[] hotkeys);
 

@@ -542,6 +542,15 @@ CREATE TABLE IF NOT EXISTS character_gold_limits (
     updated_at         TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (character_id) REFERENCES characters(character_id) ON DELETE CASCADE
 );")),
+
+            // 旧 CHANGE_EMOTION 曾把 1..9 的心情值同时镜像到两个外观字段。
+            // v28 只执行一次；此后业务对 emotion_index/action_byte 的合法修改不会再被清理。
+            (28, "清理心情处理器写入的外观字段污染", conn => ExecuteBatch(conn, @"
+UPDATE character_subtype0_fields
+SET emotion_index = 0,
+    action_byte = 0
+WHERE emotion_index BETWEEN 1 AND 9
+  AND action_byte = emotion_index;")),
         };
 
         private static void MigrateKnightShieldDeck(SqliteConnection connection)
