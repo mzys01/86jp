@@ -32,6 +32,8 @@ namespace DfoServer.Game.Inventory
 
         internal const int QuickSlotStart = 3;
         internal const int QuickSlotEnd = 8;
+        internal static bool IsQuickSlot(int slot)
+            => slot >= QuickSlotStart && slot <= QuickSlotEnd;
         internal const int RentalBagSlotStart = 9;
         internal const int RentalBagSlotEnd = 64;
 
@@ -114,9 +116,7 @@ namespace DfoServer.Game.Inventory
             if (metadata.ItemKind == "special")
                 return false;
 
-            bool isConsumable = metadata.IsStackable
-                && metadata.StackableType != null
-                && metadata.StackableType.IndexOf("[waste]", System.StringComparison.OrdinalIgnoreCase) >= 0;
+            bool isConsumable = metadata.IsPrimaryStackableFamily("waste");
 
             var placement = ItemIntake.ResolvePlacement(itemTemplateId, metadata);
 

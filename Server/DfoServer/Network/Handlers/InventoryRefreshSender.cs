@@ -112,10 +112,7 @@ namespace DfoServer.Network.Handlers
                     updates.Add(item);
                 }
 
-                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
-                    0x00,
-                    0x000E,
-                    ItemListUpdateBuilder.BuildCommonUpdates(itemSpace, updates)));
+                await SendCommonItemUpdates(session, itemSpace, updates);
                 return;
             }
 
@@ -217,6 +214,21 @@ namespace DfoServer.Network.Handlers
                 return;
             }
 
+        }
+
+        public static Task SendCommonItemUpdates(
+            EnhancedClientSession session,
+            InventoryListType itemSpace,
+            IReadOnlyList<CommonInventoryItem> updates)
+        {
+            if (session == null) throw new ArgumentNullException(nameof(session));
+            if (updates == null || updates.Count == 0)
+                return Task.CompletedTask;
+
+            return session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
+                0x00,
+                0x000E,
+                ItemListUpdateBuilder.BuildCommonUpdates(itemSpace, updates)));
         }
 
         public async Task SendSortItemLockSlotRefresh(EnhancedClientSession session, InventoryListType listType, short slotIndex)

@@ -97,14 +97,15 @@ namespace DfoServer.Game.Progression
             int accountId,
             byte currentLevel,
             uint currentExp,
-            uint rawGain)
+            uint rawGain,
+            bool normalizeMaxLevelExp = false)
         {
             if (connection == null) throw new ArgumentNullException(nameof(connection));
 
             var result = NewResult(currentLevel, currentExp, rawGain);
             var level = currentLevel;
             var exp = currentExp;
-            ApplyGainCore(result, ref level, ref exp, rawGain, normalizeMaxLevelExp: false);
+            ApplyGainCore(result, ref level, ref exp, rawGain, normalizeMaxLevelExp);
 
             if (result.HonorExpGain > 0)
             {
@@ -164,12 +165,16 @@ namespace DfoServer.Game.Progression
         }
 
         // 纯计算, 不写任何东西。经验道具使用前的预演(校验通过与否决定要不要开扣除事务)。
-        internal static ExperienceGrantResult Plan(byte currentLevel, uint currentExp, uint rawGain)
+        internal static ExperienceGrantResult Plan(
+            byte currentLevel,
+            uint currentExp,
+            uint rawGain,
+            bool normalizeMaxLevelExp = false)
         {
             var result = NewResult(currentLevel, currentExp, rawGain);
             var level = currentLevel;
             var exp = currentExp;
-            ApplyGainCore(result, ref level, ref exp, rawGain, normalizeMaxLevelExp: false);
+            ApplyGainCore(result, ref level, ref exp, rawGain, normalizeMaxLevelExp);
             return result;
         }
 

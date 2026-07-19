@@ -24,9 +24,12 @@ namespace DfoServer.Network.Handlers
             Game.Characters.SqliteCharacterRepository characterRepository,
             SqliteSelectCharacterDataSource selectCharacterDataSource,
             IRentalTimeProvider rentalTimeProvider,
+            IInventoryStore inventoryStore,
             InventoryRefreshSender inventoryRefresh,
             Game.Party.PartyManager partyManager = null,
-            Game.Session.ISessionDirectory sessionDirectory = null)
+            Game.Session.ISessionDirectory sessionDirectory = null,
+            Game.Quests.QuestDropService questDropService = null,
+            Game.Accounts.AccountExperienceProgressService accountExperience = null)
         {
             _services = new DungeonSharedServices(
                 assetService,
@@ -34,9 +37,12 @@ namespace DfoServer.Network.Handlers
                 characterRepository,
                 selectCharacterDataSource,
                 rentalTimeProvider,
+                inventoryStore,
                 inventoryRefresh,
                 partyManager,
-                sessionDirectory);
+                sessionDirectory,
+                questDropService,
+                accountExperience);
             _settlement = new DungeonSettlementHandler(_services);
             _map = new DungeonMapHandler(_services);
             _entry = new DungeonEntryHandler(_services, _map);
@@ -103,6 +109,12 @@ namespace DfoServer.Network.Handlers
 
         public Task Handle_ENUM_CMDPACKET_DEATH_TOWER_STAGE_CMD(EnhancedClientSession session, GamePacketHeader header, byte[] body)
             => _services.DeathTower.HandleStageCommand(session, header, body);
+
+        public Task<bool> TryHandleDeathTowerUseStackable(EnhancedClientSession session, GamePacketHeader header, byte[] body)
+            => _services.DeathTower.TryHandleUseStackable(session, header, body);
+
+        public Task<bool> TryHandleDeathTowerMoveItem(EnhancedClientSession session, GamePacketHeader header, byte[] body)
+            => _services.DeathTower.TryHandleMoveItem(session, header, body);
 
         public Task HandleDungeonSceneUniqueIdReport(EnhancedClientSession session, GamePacketHeader header, byte[] body)
         {

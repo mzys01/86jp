@@ -56,6 +56,51 @@ namespace DfoServer.Game.DeathTower
             return result;
         }
 
+        public static List<StageTowerItem> LoadStageItems(
+            DeathTowerSession tower,
+            IReadOnlyList<StageMonster> monsters)
+        {
+            var result = new List<StageTowerItem>();
+            if (tower == null || monsters == null)
+                return result;
+
+            foreach (var monster in monsters)
+            {
+                if (monster.MonsterType < 5
+                    || monster.MonsterType > 8
+                    || !TryGetApcDefinition(monster.MonsterIndex, out var definition))
+                {
+                    continue;
+                }
+
+                foreach (var configuredItem in definition.DeathTowerItems)
+                {
+                    if (result.Count >= byte.MaxValue)
+                    {
+                        FileLogger.Log($"[DeathTower] Stage item list truncated to {byte.MaxValue}: stage={tower.CurrentStage} map={tower.GetCurrentMapId()}");
+                        return result;
+                    }
+                    if (configuredItem.ItemId <= 0 || configuredItem.DropRate < 0)
+                    {
+                        FileLogger.Log($"[DeathTower] Skip invalid APC tower item: apc={monster.MonsterIndex} item={configuredItem.ItemId} rate={configuredItem.DropRate}");
+                        continue;
+                    }
+
+                    result.Add(new StageTowerItem
+                    {
+                        SourceListIndex = monster.ListIndex,
+                        SourceMonsterUniqueId = monster.MonsterUniqueId,
+                        ItemUniqueId = tower.NextItemSeq(),
+                        ItemId = configuredItem.ItemId,
+                        DropRate = configuredItem.DropRate,
+                        StackCount = 1,
+                    });
+                }
+            }
+
+            return result;
+        }
+
         private static void AppendOrdinaryMonsters(
             ICollection<StageMonster> result,
             DeathTowerSession tower,
@@ -254,7 +299,8 @@ namespace DfoServer.Game.DeathTower
                 definition = new ApcDefinition(
                     code,
                     (byte)parsedLevel,
-                    ParseFirstInteger(aic.AppearancePoint));
+                    ParseFirstInteger(aic.AppearancePoint),
+                    aic.DeathTowerItems.ToArray());
                 ApcDefinitions[code] = definition;
                 return true;
             }
@@ -298,16 +344,22 @@ namespace DfoServer.Game.DeathTower
 
         private sealed class ApcDefinition
         {
-            public ApcDefinition(int code, byte level, int appearancePoint)
+            public ApcDefinition(
+                int code,
+                byte level,
+                int appearancePoint,
+                IReadOnlyList<AiDeathTowerItem> deathTowerItems)
             {
                 Code = code;
                 Level = level;
                 AppearancePoint = appearancePoint;
+                DeathTowerItems = deathTowerItems ?? Array.Empty<AiDeathTowerItem>();
             }
 
             public int Code { get; }
             public byte Level { get; }
             public int AppearancePoint { get; }
+            public IReadOnlyList<AiDeathTowerItem> DeathTowerItems { get; }
         }
     }
 }

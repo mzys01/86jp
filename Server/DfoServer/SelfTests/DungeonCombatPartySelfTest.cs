@@ -1,0 +1,377 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Net;
+using System.Net.Sockets;
+using DfoServer.Game.Accounts;
+using DfoServer.Game.DailyReset;
+using DfoServer.Game.DeathTower;
+using DfoServer.Game.Dungeon;
+using DfoServer.Game.Inventory;
+using DfoServer.Game.Party;
+using DfoServer.Game.ReviveCoin;
+using DfoServer.Game.Session;
+using DfoServer.Infrastructure;
+using DfoServer.Network;
+using DfoServer.Network.Handlers;
+using Microsoft.Data.Sqlite;
+
+namespace DfoServer.SelfTests
+{
+    public static class DungeonCombatPartySelfTest
+    {
+        private const int KillerCharacterId = 48001;
+        private const int MemberCharacterId = 48002;
+        private const ushort MonsterSequence = 10;
+
+        public static int Run()
+        {
+            Console.WriteLine("=== DUNGEON_COMBAT_PARTY selftest ===");
+            var failures = 0;
+            using (var fixture = Fixture.Create())
+            {
+                var tower = fixture.PrepareTowerKill();
+                var killerLevel = fixture.Killer.Session.Player.Level;
+                var killerExp = fixture.Killer.Session.Player.Exp;
+                var memberRun = fixture.Member.Session.Player.CurrentRun;
+                var memberLevel = fixture.Member.Session.Player.Level;
+                var memberExp = fixture.Member.Session.Player.Exp;
+                var memberPhase = memberRun.Phase;
+
+                fixture.KillMonster();
+
+                var killerPackets = fixture.Killer.ReadAvailableTypes();
+                var memberPackets = fixture.Member.ReadAvailableTypes();
+                Check("tower killer keeps normal EXP/level progression and receives 0x0025/0x0026",
+                    fixture.Killer.Session.Player.Exp > killerExp
+                    && fixture.Killer.Session.Player.Level >= killerLevel
+                    && killerPackets.Contains(0x0025)
+                    && killerPackets.Contains(0x0026),
+                    ref failures);
+                Check("tower APC kill keeps its guaranteed tower drop",
+                    tower.GroundItems.Count == 1,
+                    ref failures);
+                Check("ordinary party member receives no tower kill EXP or combat notifications",
+                    fixture.Member.Session.Player.Level == memberLevel
+                    && fixture.Member.Session.Player.Exp == memberExp
+                    && !memberPackets.Contains(0x0025)
+                    && !memberPackets.Contains(0x0026),
+                    ref failures);
+                Check("tower kill does not mutate or clear the ordinary member run",
+                    memberRun.RoomKilledSeqIds.Count == 0
+                    && memberRun.Phase == memberPhase,
+                    ref failures);
+
+                fixture.PrepareOrdinaryPartyKill();
+                memberRun = fixture.Member.Session.Player.CurrentRun;
+                memberExp = fixture.Member.Session.Player.Exp;
+
+                fixture.KillMonster();
+
+                memberPackets = fixture.Member.ReadAvailableTypes();
+                Check("ordinary party kill still grants member EXP and relays 0x0025/0x0026",
+                    fixture.Member.Session.Player.Exp > memberExp
+                    && memberPackets.Contains(0x0025)
+                    && memberPackets.Contains(0x0026),
+                    ref failures);
+                Check("ordinary party kill still propagates the room kill sequence",
+                    memberRun.RoomKilledSeqIds.SetEquals(new[] { MonsterSequence }),
+                    ref failures);
+            }
+
+            Console.WriteLine(failures == 0 ? "PASS" : $"FAIL: {failures}");
+            return failures == 0 ? 0 : 1;
+        }
+
+        private static void Check(string name, bool ok, ref int failures)
+        {
+            Console.WriteLine($"[{(ok ? "OK" : "FAIL")}] {name}");
+            if (!ok)
+                failures++;
+        }
+
+        private sealed class Fixture : IDisposable
+        {
+            private readonly string _dbPath;
+            private readonly string _previousDatabasePath;
+            private readonly ConnectedSession _killer;
+            private readonly ConnectedSession _member;
+            private readonly DungeonHandler _handler;
+
+            private Fixture(
+                string dbPath,
+                string previousDatabasePath,
+                ConnectedSession killer,
+                ConnectedSession member,
+                DungeonHandler handler)
+            {
+                _dbPath = dbPath;
+                _previousDatabasePath = previousDatabasePath;
+                _killer = killer;
+                _member = member;
+                _handler = handler;
+            }
+
+            public ConnectedSession Killer => _killer;
+            public ConnectedSession Member => _member;
+
+            public static Fixture Create()
+            {
+                var tempDir = Path.Combine(Path.GetTempPath(), "DfoServerSelfTests");
+                Directory.CreateDirectory(tempDir);
+                var dbPath = Path.Combine(tempDir, $"dungeon-combat-party-{Guid.NewGuid():N}.db");
+                var previousDatabasePath = Environment.GetEnvironmentVariable("INVENTORY_DATABASE_PATH");
+                Environment.SetEnvironmentVariable("INVENTORY_DATABASE_PATH", dbPath);
+                SqliteDatabaseBootstrap.Initialize(dbPath, ServerPaths.SchemaFilePath);
+                SeedAccountAndCharacter(dbPath, KillerCharacterId, "combat-killer");
+                SeedAccountAndCharacter(dbPath, MemberCharacterId, "combat-member");
+
+                var inventory = new SqliteInventoryStore(dbPath, ServerPaths.SchemaFilePath);
+                var assets = new SqliteAssetService(dbPath, ServerPaths.SchemaFilePath, inventory);
+                var dailyReset = new DailyResetService(dbPath, ServerPaths.SchemaFilePath);
+                var characters = new Game.Characters.SqliteCharacterRepository(dbPath, ServerPaths.SchemaFilePath);
+                var selectData = new Game.SelectCharacter.SqliteSelectCharacterDataSource(
+                    dbPath,
+                    ServerPaths.SchemaFilePath,
+                    characters,
+                    assets,
+                    inventory,
+                    SystemRentalTimeProvider.Instance);
+                var refresh = new Network.Handlers.InventoryRefreshSender(inventory, selectData, characters);
+                var questDrops = new Game.Quests.QuestDropService(
+                    assets,
+                    refresh,
+                    SqliteDatabaseBootstrap.BuildConnectionString(dbPath));
+                var parties = new PartyManager();
+                var sessions = new SessionDirectory();
+                var killer = ConnectedSession.Create(KillerCharacterId, "combat-killer");
+                var member = ConnectedSession.Create(MemberCharacterId, "combat-member");
+                sessions.Register(KillerCharacterId, killer.Session);
+                sessions.Register(MemberCharacterId, member.Session);
+                var created = parties.CreateParty(ToPartyMember(killer));
+                if (!created.Ok || !parties.Join(created.Party.PartyId, ToPartyMember(member)).Ok)
+                    throw new InvalidOperationException("Unable to create combat self-test party.");
+
+                var handler = new DungeonHandler(
+                    assets,
+                    new ReviveCoinService(inventory, assets, dailyReset),
+                    characters,
+                    selectData,
+                    SystemRentalTimeProvider.Instance,
+                    inventory,
+                    refresh,
+                    parties,
+                    sessions,
+                    questDrops,
+                    new AccountExperienceProgressService(
+                        characters,
+                        dbPath,
+                        ServerPaths.SchemaFilePath));
+                return new Fixture(dbPath, previousDatabasePath, killer, member, handler);
+            }
+
+            public DeathTowerSession PrepareTowerKill()
+            {
+                _killer.ReadAvailableTypes();
+                _member.ReadAvailableTypes();
+                _killer.Session.Player.Level = 50;
+                _killer.Session.Player.Exp = 0;
+                _member.Session.Player.Level = 50;
+                _member.Session.Player.Exp = 0;
+                var config = new DeathTowerData.TowerConfig
+                {
+                    DungeonId = 11000,
+                    TotalStages = 1,
+                    StageMapIds = new[] { 33060 },
+                    BasisLevel = 50,
+                    MaxClearItemCount = 10,
+                };
+                var tower = new DeathTowerSession(config);
+                tower.BeginStage(0x12345678, new[]
+                {
+                    new StageTowerItem
+                    {
+                        SourceListIndex = 0,
+                        SourceMonsterUniqueId = MonsterSequence,
+                        ItemUniqueId = 51,
+                        ItemId = 6515,
+                        DropRate = 10000,
+                        StackCount = 1,
+                    },
+                });
+                _killer.Session.Player.CurrentRun = CreateRun(tower, monsterType: 5, monsterCode: 10504);
+                _member.Session.Player.CurrentRun = CreateRun(null, monsterType: 5, monsterCode: 10504);
+                return tower;
+            }
+
+            public void PrepareOrdinaryPartyKill()
+            {
+                _killer.ReadAvailableTypes();
+                _member.ReadAvailableTypes();
+                _killer.Session.Player.Level = 50;
+                _killer.Session.Player.Exp = 0;
+                _member.Session.Player.Level = 50;
+                _member.Session.Player.Exp = 0;
+                _killer.Session.Player.CurrentRun = CreateRun(null, monsterType: 0, monsterCode: 1001);
+                _member.Session.Player.CurrentRun = CreateRun(null, monsterType: 0, monsterCode: 1001);
+            }
+
+            public void KillMonster()
+            {
+                var body = new byte[4];
+                BitConverter.GetBytes(MonsterSequence).CopyTo(body, 0);
+                BitConverter.GetBytes((ushort)KillerCharacterId).CopyTo(body, 2);
+                _handler.Handle_ENUM_CMDPACKET_DIE_MONSTER(
+                        _killer.Session,
+                        new GamePacketHeader(),
+                        body)
+                    .GetAwaiter()
+                    .GetResult();
+            }
+
+            private static DungeonRun CreateRun(
+                DeathTowerSession tower,
+                byte monsterType,
+                int monsterCode)
+            {
+                var run = new DungeonRun(11000, 0)
+                {
+                    Tower = tower,
+                    RoomKey = new RoomKey(1, 1, 33060),
+                    RoomStartSequence = MonsterSequence,
+                    RoomMonsters = new List<GameWorld.Dungeon.MonsterSumInfo>
+                    {
+                        new GameWorld.Dungeon.MonsterSumInfo
+                        {
+                            Code = monsterCode,
+                            Level = 50,
+                            Type = monsterType,
+                            IsBlocking = true,
+                            TemplateOrder = 0,
+                            PacketIndex = MonsterSequence,
+                        },
+                    },
+                    Seed = tower?.StageSeed ?? 0x87654321,
+                    RoomLcg = tower?.StageLcg ?? new DnfLcg(0x87654321),
+                };
+                return run;
+            }
+
+            private static PartyMember ToPartyMember(ConnectedSession connected)
+            {
+                return new PartyMember
+                {
+                    UserId = (ushort)connected.Session.Player.CharacterId,
+                    CharacterId = connected.Session.Player.CharacterId,
+                    SessionId = connected.Session.SessionId,
+                    Name = connected.Name,
+                    Level = connected.Session.Player.Level,
+                    Job = connected.Session.Player.Job,
+                };
+            }
+
+            private static void SeedAccountAndCharacter(string dbPath, int characterId, string name)
+            {
+                using (var connection = new SqliteConnection(
+                    SqliteDatabaseBootstrap.BuildConnectionString(dbPath)))
+                {
+                    connection.Open();
+                    using (var command = connection.CreateCommand())
+                    {
+                        command.CommandText = @"
+INSERT INTO accounts (account_id, m_id, password_hash)
+VALUES (@id, @name, '');
+INSERT INTO characters (character_id, account_id, name, job, grow_type, level, exp)
+VALUES (@id, @id, @name, 4, 4, 50, 0);
+INSERT INTO character_subtype1_fields (character_id)
+VALUES (@id);";
+                        command.Parameters.AddWithValue("@id", characterId);
+                        command.Parameters.AddWithValue("@name", name);
+                        command.ExecuteNonQuery();
+                    }
+                }
+            }
+
+            public void Dispose()
+            {
+                _killer.Dispose();
+                _member.Dispose();
+                Environment.SetEnvironmentVariable("INVENTORY_DATABASE_PATH", _previousDatabasePath);
+                try { File.Delete(_dbPath); } catch { }
+            }
+        }
+
+        public sealed class ConnectedSession : IDisposable
+        {
+            private readonly TcpListener _listener;
+            private readonly TcpClient _peer;
+            private readonly TcpClient _server;
+
+            private ConnectedSession(
+                string name,
+                TcpListener listener,
+                TcpClient peer,
+                TcpClient server,
+                EnhancedClientSession session)
+            {
+                Name = name;
+                _listener = listener;
+                _peer = peer;
+                _server = server;
+                Session = session;
+            }
+
+            public string Name { get; }
+            public EnhancedClientSession Session { get; }
+
+            public static ConnectedSession Create(int characterId, string name)
+            {
+                var listener = new TcpListener(IPAddress.Loopback, 0);
+                listener.Start();
+                var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+                var peer = new TcpClient();
+                var connect = peer.ConnectAsync(IPAddress.Loopback, port);
+                var server = listener.AcceptTcpClient();
+                connect.GetAwaiter().GetResult();
+                var session = new EnhancedClientSession(server, new GamePacketHeader());
+                session.Player.CharacterId = characterId;
+                session.Player.UserId = (ushort)characterId;
+                session.Player.Name = System.Text.Encoding.UTF8.GetBytes(name);
+                session.Player.Level = 50;
+                session.Player.Job = 4;
+                session.Player.GrowType = 4;
+                session.Account = new AccountRecord { AccountId = characterId, MId = name };
+                return new ConnectedSession(name, listener, peer, server, session);
+            }
+
+            public List<ushort> ReadAvailableTypes()
+            {
+                var result = new List<ushort>();
+                var available = _peer.Available;
+                if (available <= 0)
+                    return result;
+                var bytes = new byte[available];
+                var offset = 0;
+                while (offset < bytes.Length)
+                    offset += _peer.GetStream().Read(bytes, offset, bytes.Length - offset);
+                offset = 0;
+                while (offset + 15 <= bytes.Length)
+                {
+                    var length = BitConverter.ToInt32(bytes, offset + 3);
+                    if (length < 15 || offset + length > bytes.Length)
+                        break;
+                    result.Add(BitConverter.ToUInt16(bytes, offset + 1));
+                    offset += length;
+                }
+                return result;
+            }
+
+            public void Dispose()
+            {
+                _server.Dispose();
+                _peer.Dispose();
+                _listener.Stop();
+            }
+        }
+    }
+}

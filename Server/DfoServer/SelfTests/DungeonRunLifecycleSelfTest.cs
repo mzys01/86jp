@@ -153,18 +153,83 @@ namespace DfoServer.SelfTests
                 BasisLevel = 50,
             });
             DungeonRunLifecycle.BeginTowerRun(session, 11000, tower);
+            tower.BeginStage(123, new[]
+            {
+                new Game.DeathTower.StageTowerItem
+                {
+                    SourceMonsterUniqueId = 7,
+                    ItemUniqueId = 9,
+                    ItemId = 6515,
+                    DropRate = 10000,
+                    StackCount = 1,
+                },
+            });
+            tower.GenerateDropsForMonster(7);
+            tower.TryPickupGroundItem(9, out _);
             Check("BeginTowerRun mounts tower payload",
                 player.IsInDeathTower
                 && ReferenceEquals(player.DeathTowerState, tower)
-                && player.CurrentRun.DungeonId == 11000,
+                && player.CurrentRun.DungeonId == 11000
+                && tower.InventoryItems.Count == 1,
                 ref failures);
 
             DungeonRunLifecycle.EndRunToTownAsync(session).GetAwaiter().GetResult();
             Check("EndRunToTown clears run and tower",
                 player.CurrentRun == null && !player.IsInDeathTower, ref failures);
 
+            var replacementTower = CreateTowerWithPickedItem();
+            DungeonRunLifecycle.BeginTowerRun(session, 11000, replacementTower);
+            DungeonRunLifecycle.BeginRun(session, 1002, 0);
+            Check("starting another dungeon discards tower inventory with the old run",
+                player.CurrentRun != null
+                    && player.CurrentRun.Tower == null
+                    && player.CurrentRun.DungeonId == 1002,
+                ref failures);
+
+            var teardownTower = CreateTowerWithPickedItem();
+            DungeonRunLifecycle.BeginTowerRun(session, 11000, teardownTower);
+            DungeonRunLifecycle.EndRunOnTeardown(session, "tower-selftest");
+            Check("disconnect or character teardown discards tower inventory",
+                player.CurrentRun == null && !player.IsInDeathTower,
+                ref failures);
+
+            var staleTower = CreateTowerWithPickedItem();
+            var freshTower = new Game.DeathTower.DeathTowerSession(staleTower.Config);
+            DungeonRunLifecycle.BeginTowerRun(session, 11000, staleTower);
+            DungeonRunLifecycle.BeginTowerRun(session, 11000, freshTower);
+            Check("starting a new tower run replaces the old temporary inventory",
+                ReferenceEquals(player.DeathTowerState, freshTower)
+                    && freshTower.InventoryItems.Count == 0,
+                ref failures);
+
             Console.WriteLine(failures == 0 ? "PASS" : $"FAIL: {failures}");
             return failures == 0 ? 0 : 1;
+        }
+
+        private static Game.DeathTower.DeathTowerSession CreateTowerWithPickedItem()
+        {
+            var tower = new Game.DeathTower.DeathTowerSession(new Game.DeathTower.DeathTowerData.TowerConfig
+            {
+                DungeonId = 11000,
+                TotalStages = 1,
+                StageMapIds = new[] { 1 },
+                BasisLevel = 50,
+            });
+            tower.BeginStage(456, new[]
+            {
+                new Game.DeathTower.StageTowerItem
+                {
+                    SourceMonsterUniqueId = 10,
+                    ItemUniqueId = 11,
+                    ItemId = 6515,
+                    DropRate = 10000,
+                    StackCount = 1,
+                },
+            });
+            tower.GenerateDropsForMonster(10);
+            if (!tower.TryPickupGroundItem(11, out _))
+                throw new InvalidOperationException("tower lifecycle fixture pickup failed");
+            return tower;
         }
 
         private static void Check(string name, bool ok, ref int failures)

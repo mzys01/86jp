@@ -222,7 +222,11 @@ namespace DfoServer.Game.Quests
             return SyncItemSeekingQuestProgress(characterId, accountId, itemFilter);
         }
 
-        public bool SyncItemSeekingQuestProgress(int characterId, int accountId, ICollection<int> itemFilter)
+        public bool SyncItemSeekingQuestProgress(
+            int characterId,
+            int accountId,
+            ICollection<int> itemFilter,
+            IReadOnlyDictionary<int, int> temporaryHeldCounts = null)
         {
             var active = _repo.LoadActiveQuests(characterId);
             if (active.Count == 0 || _assetService == null)
@@ -244,6 +248,15 @@ namespace DfoServer.Game.Quests
                 {
                     FileLogger.Log($"[QuestService] ERROR: held count read failed, assuming 0: cid={characterId} item={itemId}: {ex.Message}");
                     count = 0;
+                }
+
+                if (temporaryHeldCounts != null
+                    && temporaryHeldCounts.TryGetValue(itemId, out var temporaryCount)
+                    && temporaryCount > 0)
+                {
+                    count = count > int.MaxValue - temporaryCount
+                        ? int.MaxValue
+                        : count + temporaryCount;
                 }
 
                 itemCountCache[itemId] = count;

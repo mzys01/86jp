@@ -50,9 +50,12 @@ namespace DfoServer.Network.Handlers.Dungeon
             SqliteCharacterRepository characterRepository,
             SqliteSelectCharacterDataSource selectCharacterDataSource,
             IRentalTimeProvider rentalTimeProvider,
+            IInventoryStore inventoryStore,
             InventoryRefreshSender inventoryRefresh,
             Game.Party.PartyManager partyManager = null,
-            Game.Session.ISessionDirectory sessions = null)
+            Game.Session.ISessionDirectory sessions = null,
+            Game.Quests.QuestDropService questDropService = null,
+            AccountExperienceProgressService accountExperience = null)
         {
             _assetService = assetService ?? throw new ArgumentNullException(nameof(assetService));
             ReviveCoin = reviveCoin ?? throw new ArgumentNullException(nameof(reviveCoin));
@@ -61,16 +64,23 @@ namespace DfoServer.Network.Handlers.Dungeon
             Sessions = sessions;
             SelectCharacterDataSource = selectCharacterDataSource ?? throw new ArgumentNullException(nameof(selectCharacterDataSource));
             RentalTimeProvider = rentalTimeProvider ?? SystemRentalTimeProvider.Instance;
-            DeathTower = new Game.DeathTower.DeathTowerHandler();
-            QuestDrops = new Game.Quests.QuestDropService(assetService, inventoryRefresh);
+            QuestDrops = questDropService ?? new Game.Quests.QuestDropService(assetService, inventoryRefresh);
             Subtype1Repository = new SqliteSubtype1Repository(ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
             CharacterStateRepository = new SqliteCharacterStateRepository(ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
             ProgressRepository = new SqliteCharacterProgressRepository(ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
             Subtype0FieldsRepository = new SqliteSubtype0FieldsRepository(ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
             HonorLevel = new HonorLevelSyncService(CharacterRepository);
-            AccountExperience = new AccountExperienceProgressService(CharacterRepository);
+            AccountExperience = accountExperience
+                ?? new AccountExperienceProgressService(CharacterRepository);
             GrowthCapsuleSync = new GrowthCapsuleSyncService(CharacterRepository);
             CharacterExperience = new CharacterExperienceService(AccountExperience);
+            DeathTower = new Game.DeathTower.DeathTowerHandler(
+                inventoryStore,
+                assetService,
+                sendExpGrantNotification: SendDeathTowerExpGrantNotificationAsync,
+                accountExperience: AccountExperience,
+                sendInDungeonLevelUpFollowups: SendInDungeonLevelUpFollowups,
+                inventoryRefresh: inventoryRefresh);
             CardRewards = new Game.Dungeon.CardRewardService(this, assetService);
             Drops = new Game.Dungeon.DropService(assetService);
             EntryCost = new Game.Dungeon.DungeonEntryCostService(assetService);
@@ -176,14 +186,24 @@ namespace DfoServer.Network.Handlers.Dungeon
             EnhancedClientSession session,
             ExperienceGrantResult grant,
             string logTag,
-            uint growthContractBonusExp = 0)
+            uint growthContractBonusExp = 0,
+            bool reloadMissingAccountProgress = false)
         {
             if (grant == null
                 || (grant.NormalExpGain == 0 && grant.HonorExpGain == 0 && !grant.LeveledUp))
                 return;
 
-            var honor = ResolveHonorLevelForExp(session, grant.Honor);
-            var capsule = ResolveGrowthCapsuleForExp(session, grant.GrowthCapsule);
+            var honor = grant.Honor;
+            var capsule = grant.GrowthCapsule;
+            if (reloadMissingAccountProgress)
+            {
+                var accountId = session?.Account?.AccountId ?? 0;
+                honor = honor ?? HonorLevel.LoadSummary(accountId);
+                capsule = capsule ?? AccountExperience.LoadGrowthCapsule(accountId);
+            }
+
+            honor = ResolveHonorLevelForExp(session, honor);
+            capsule = ResolveGrowthCapsuleForExp(session, capsule);
             if (!TryGetSkillPointProtocolState(session, persist: grant.LeveledUp, logTag, out var skillPoints))
                 return;
 
@@ -193,6 +213,17 @@ namespace DfoServer.Network.Handlers.Dungeon
                     growthContractBonusExp: growthContractBonusExp,
                     growthCapsuleExp: GrowthCapsuleDataProvider.GetDisplayProgress(
                         session.Player.Level, capsule))));
+        }
+
+        private Task SendDeathTowerExpGrantNotificationAsync(
+            EnhancedClientSession session,
+            Game.DeathTower.DeathTowerSettlementResult settlement)
+        {
+            return SendExpGrantNotificationAsync(
+                session,
+                settlement?.ExperienceGrant,
+                "DEATH_TOWER_SETTLEMENT",
+                reloadMissingAccountProgress: true);
         }
 
         // 副本内升级的后续通知: 刷新可接任务列表 + 补属性(subtype1)。

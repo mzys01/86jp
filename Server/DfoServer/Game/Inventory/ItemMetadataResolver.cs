@@ -50,33 +50,74 @@ namespace DfoServer.Game.Inventory
 
         public bool IsMaterialExchange => NeedMaterialId > 0 && NeedMaterialCount > 0;
 
+        internal static ItemMetadata CreateDefaultStackable()
+            => new ItemMetadata { ItemKind = "stackable" };
+
+        internal bool IsPrimaryStackableFamily(string family)
+        {
+            if (string.IsNullOrWhiteSpace(family)
+                || !TryGetPrimaryStackableTag(out var tag))
+            {
+                return false;
+            }
+
+            var familyEnd = 0;
+            while (familyEnd < tag.Length && !char.IsWhiteSpace(tag[familyEnd]))
+                familyEnd++;
+            if (familyEnd == 0)
+                return false;
+
+            return string.Equals(
+                tag.Substring(0, familyEnd),
+                family.Trim(),
+                StringComparison.OrdinalIgnoreCase);
+        }
+
         public void GetSlotRange(out int slotStart, out int slotEnd)
         {
             if (string.Equals(ItemKind, "equipment", StringComparison.Ordinal))
             {
                 slotStart = 9; slotEnd = 64; return;
             }
-            if (StackableType == null)
+            var st = NormalizeStackableType();
+            TryGetPrimaryStackableTag(out var primaryTag);
+            if (string.Equals(primaryTag, "material expert job", StringComparison.OrdinalIgnoreCase))
+            { slotStart = 233; slotEnd = 288; return; }
+            if (string.Equals(primaryTag, "avatar emblem", StringComparison.OrdinalIgnoreCase))
+            { slotStart = 289; slotEnd = 344; return; }
+            if (IsPrimaryStackableFamily("material"))
             {
-                slotStart = 65; slotEnd = 120; return;
-            }
-            var st = StackableType.Replace("`", "").Trim().ToLowerInvariant();
-            if (st.StartsWith("[material]"))
-            {
-                if (st.EndsWith("4"))
+                if (st.EndsWith("4", StringComparison.Ordinal))
                 { slotStart = 345; slotEnd = 359; }
                 else
                 { slotStart = 121; slotEnd = 176; }
                 return;
             }
-            if (st.StartsWith("[quest]"))
+            if (IsPrimaryStackableFamily("quest"))
             { slotStart = 177; slotEnd = 232; return; }
-            if (st.StartsWith("[material expert job]"))
-            { slotStart = 233; slotEnd = 288; return; }
-            if (st.StartsWith("[avatar emblem]"))
-            { slotStart = 289; slotEnd = 344; return; }
             slotStart = 65; slotEnd = 120;
         }
+
+        private bool TryGetPrimaryStackableTag(out string tag)
+        {
+            tag = string.Empty;
+            if (!IsStackable)
+                return false;
+
+            var normalized = NormalizeStackableType();
+            if (normalized.Length < 3 || normalized[0] != '[')
+                return false;
+
+            var end = normalized.IndexOf(']', 1);
+            if (end <= 1)
+                return false;
+
+            tag = normalized.Substring(1, end - 1).Trim();
+            return tag.Length > 0;
+        }
+
+        private string NormalizeStackableType()
+            => (StackableType ?? string.Empty).Replace("`", string.Empty).Trim();
     }
 
     internal sealed class ItemSellRates

@@ -213,6 +213,42 @@ namespace DfoServer.SelfTests
             Check("generic item-seeking sync clears active quest item channel", LoadTrigger(connStr, UseLetterQuestId) == 0, ref failures);
             Check("generic item-seeking sync sends active quest refresh", sender.LastNotiType == 0x023F && sender.NotiCount == 1, ref failures);
 
+            RemoveItem(assetService, AganzoLetterItemId, 1);
+            QuestService.SaveActiveQuests(connStr, CharacterId, new List<ActiveQuest>
+            {
+                new ActiveQuest { Slot = 0, QuestId = UseLetterQuestId, TriggerValue = 1 },
+            });
+            var towerSender = new RecordingQuestSender(CharacterId, AccountId);
+            var towerQuestManager = new QuestManager(towerSender, connStr, assetService);
+            towerQuestManager.SyncItemSeekingQuestProgressAsync(
+                new[] { AganzoLetterItemId },
+                new Dictionary<int, int> { { AganzoLetterItemId, 1 } })
+                .GetAwaiter().GetResult();
+            Check("tower temporary holding clears item-seeking progress without persistent item",
+                CountItem(assetService, AganzoLetterItemId) == 0
+                    && LoadTrigger(connStr, UseLetterQuestId) == 0,
+                ref failures);
+            towerQuestManager.SyncItemSeekingQuestProgressAsync(new[] { AganzoLetterItemId })
+                .GetAwaiter().GetResult();
+            Check("pure SQLite recalibration rolls tower-only quest progress back",
+                LoadTrigger(connStr, UseLetterQuestId) == 1
+                    && towerSender.LastNotiType == 0x023F
+                    && towerSender.NotiCount == 2,
+                ref failures);
+
+            QuestService.SaveActiveQuests(connStr, CharacterId, new List<ActiveQuest>
+            {
+                new ActiveQuest { Slot = 0, QuestId = UseLetterQuestId, TriggerValue = 0 },
+            });
+            var silentRollbackSender = new RecordingQuestSender(CharacterId, AccountId);
+            var silentRollbackManager = new QuestManager(silentRollbackSender, connStr, assetService);
+            silentRollbackManager.RecalibrateItemSeekingQuestProgressWithoutNotification(
+                new[] { AganzoLetterItemId });
+            Check("old-run replacement recalibrates tower quest progress without notification",
+                LoadTrigger(connStr, UseLetterQuestId) == 1
+                    && silentRollbackSender.NotiCount == 0,
+                ref failures);
+
             AddItem(assetService, NonCarryEventItemId, 1);
             QuestService.SaveActiveQuests(connStr, CharacterId, new List<ActiveQuest>
             {
@@ -318,6 +354,16 @@ namespace DfoServer.SelfTests
                 short assignedSlot;
                 if (!assetService.TryAddItem(scope, itemId, count, out assignedSlot))
                     throw new InvalidOperationException($"failed to add item {itemId}");
+                scope.Commit();
+            }
+        }
+
+        private static void RemoveItem(IAssetService assetService, int itemId, int count)
+        {
+            using (var scope = assetService.OpenScope(CharacterId, AccountId))
+            {
+                if (!assetService.TryRemoveItem(scope, itemId, count, out _, out _))
+                    throw new InvalidOperationException($"failed to remove item {itemId}");
                 scope.Commit();
             }
         }

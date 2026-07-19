@@ -11,6 +11,7 @@ namespace DfoServer.Game.Inventory
         Equipment = 3,
         Pet = 7,
         AccountCargo = 12,
+        QuickSlot = 29,
         KnightShieldEquipped = 33,
         KnightShieldCatalog = 34,
     }
