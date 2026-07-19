@@ -72,7 +72,8 @@ namespace DfoServer.SelfTests
             Check("gold balance is capped at effective carry limit", LoadGold(connectionString, CharacterId) == 800000000);
 
             var assetService = new SqliteAssetService(tempDb, ServerPaths.SchemaFilePath);
-            var dropService = new DropService(assetService);
+            var inventoryStore = new SqliteInventoryStore(tempDb, ServerPaths.SchemaFilePath);
+            var dropService = new DropService(assetService, inventoryStore);
             var run = new DungeonRun();
 
             SetGold(connectionString, CharacterId, 799999990);
