@@ -365,7 +365,9 @@ WHERE character_id = @cid;";
                     FileLogger.Log($"  [EquipMove] EQUIP: slot {equipSlot} want 0x{wantId:X8} — no DB record (no-op)");
                     return EquipOutcome.NoOp;
                 }
-                entryRaw = MakeEquipListCodec.BuildEntryFromDisplayFields(equipSlot, wantId, fields.Value);
+                var modifiedFields = fields.Value;
+                modifiedFields.SealFlag = 0;
+                entryRaw = MakeEquipListCodec.BuildEntryFromDisplayFields(equipSlot, wantId, modifiedFields);
 
                     // 克隆装扮：计算并注入 raw[12..15] 克隆目标物品ID
                     if (ItemMetadataResolver.IsCloneAvatarItem(wantId))
