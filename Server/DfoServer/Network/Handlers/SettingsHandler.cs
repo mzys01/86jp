@@ -80,22 +80,20 @@ namespace DfoServer.Network.Handlers
                 return;
             }
 
-            var emotionIndex = BitConverter.ToUInt16(body, 0);
-            _characterStateRepository.SaveEmotionIndex(characterId, emotionIndex);
+            var moodValue = BitConverter.ToUInt16(body, 0);
+            _characterStateRepository.SaveMoodValue(characterId, moodValue);
 
             if (session?.Player != null)
             {
                 var tail = session.Player.Subtype0Tail ?? new Game.SelectCharacter.UserInfoMinimumTailSnapshot();
-                tail.MoodValue = emotionIndex;
-                tail.EmotionIndex = emotionIndex;
-                tail.ActionByte = (byte)Math.Min(emotionIndex, (ushort)byte.MaxValue);
+                tail.MoodValue = moodValue;
                 session.Player.Subtype0Tail = tail;
 
                 var notiBody = AppearanceService.BuildNoti2Body(session.Player);
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0002, notiBody));
             }
 
-            FileLogger.Log($"[GameProtocol] CHANGE_EMOTION: character={characterId} account={accountId} emotion={emotionIndex}");
+            FileLogger.Log($"[GameProtocol] CHANGE_EMOTION: character={characterId} account={accountId} mood={moodValue}");
         }
 
         public void Handle_SAVE_CHARACTER_OPTION(EnhancedClientSession session, GamePacketHeader header, byte[] body)

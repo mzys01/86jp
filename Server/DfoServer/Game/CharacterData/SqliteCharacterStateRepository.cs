@@ -442,7 +442,7 @@ ON CONFLICT(character_id) DO UPDATE SET character_option_blob = @body", conn))
             }
         }
 
-        public void SaveEmotionIndex(int characterId, ushort emotionIndex)
+        public void SaveMoodValue(int characterId, ushort moodValue)
         {
             if (characterId <= 0)
                 return;
@@ -451,16 +451,13 @@ ON CONFLICT(character_id) DO UPDATE SET character_option_blob = @body", conn))
             {
                 conn.Open();
                 using (var cmd = new SqliteCommand(@"
-INSERT INTO character_subtype0_fields (character_id, mood_value, emotion_index, action_byte)
-VALUES (@cid, @emotion, @emotion, @actionByte)
+INSERT INTO character_subtype0_fields (character_id, mood_value)
+VALUES (@cid, @mood)
 ON CONFLICT(character_id) DO UPDATE SET
-    mood_value = @emotion,
-    emotion_index = @emotion,
-    action_byte = @actionByte", conn))
+    mood_value = @mood", conn))
                 {
                     cmd.Parameters.AddWithValue("@cid", characterId);
-                    cmd.Parameters.AddWithValue("@emotion", (int)emotionIndex);
-                    cmd.Parameters.AddWithValue("@actionByte", (int)Math.Min(emotionIndex, (ushort)byte.MaxValue));
+                    cmd.Parameters.AddWithValue("@mood", (int)moodValue);
                     cmd.ExecuteNonQuery();
                 }
             }
