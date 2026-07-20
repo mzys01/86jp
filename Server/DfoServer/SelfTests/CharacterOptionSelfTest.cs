@@ -75,19 +75,30 @@ namespace DfoServer.SelfTests
                     && snapshot.CharacterRecord.Subtype0Tail.EmotionIndex == 0
                     && snapshot.CharacterRecord.Subtype0Tail.ActionByte == 0);
 
-                stateRepo.SaveEmotionIndex(CharacterId, 6);
-                var snapshotWithEmotion = dataSource.Load(CharacterId, AccountId);
-                Check("change emotion persists to subtype0 tail",
-                    snapshotWithEmotion.CharacterRecord.Subtype0Tail != null
-                    && snapshotWithEmotion.CharacterRecord.Subtype0Tail.EmotionIndex == 6);
-                Check("change emotion mirrors mood_value popup source field",
-                    snapshotWithEmotion.CharacterRecord.Subtype0Tail != null
-                    && snapshotWithEmotion.CharacterRecord.Subtype0Tail.MoodValue == 6);
-                Check("change emotion mirrors action byte for client final field",
-                    snapshotWithEmotion.CharacterRecord.Subtype0Tail != null
-                    && snapshotWithEmotion.CharacterRecord.Subtype0Tail.ActionByte == 6);
-                Check("change emotion leaves legacy channel_id untouched",
+                snapshot.CharacterRecord.Subtype0Tail.EmotionIndex = 0x1234;
+                snapshot.CharacterRecord.Subtype0Tail.ActionByte = 0x56;
+                using (var conn = new SqliteConnection(
+                    SqliteDatabaseBootstrap.BuildConnectionString(tempDb)))
+                {
+                    conn.Open();
+                    SqliteSubtype0FieldsRepository.Save(
+                        conn, CharacterId, snapshot.CharacterRecord.Subtype0Tail);
+                }
+                stateRepo.SaveMoodValue(CharacterId, 6);
+                var snapshotWithMood = dataSource.Load(CharacterId, AccountId);
+                Check("change mood persists to subtype0 tail",
+                    snapshotWithMood.CharacterRecord.Subtype0Tail != null
+                    && snapshotWithMood.CharacterRecord.Subtype0Tail.MoodValue == 6);
+                Check("change mood leaves emotion visual field untouched",
+                    snapshotWithMood.CharacterRecord.Subtype0Tail != null
+                    && snapshotWithMood.CharacterRecord.Subtype0Tail.EmotionIndex == 0x1234);
+                Check("change mood leaves action visual field untouched",
+                    snapshotWithMood.CharacterRecord.Subtype0Tail != null
+                    && snapshotWithMood.CharacterRecord.Subtype0Tail.ActionByte == 0x56);
+                Check("change mood leaves legacy channel_id untouched",
                     ReadLegacyChannelId(tempDb) == 2);
+
+                Check("v28 mood pollution cleanup runs once", VerifyMoodVisualPollutionMigration());
 
                 var mainOption = CopyBytes(AccountSettings.DefaultMainGameOption);
                 mainOption[36] = 0x05;
@@ -270,6 +281,54 @@ VALUES (@cid);";
                     cmd.CommandText = "SELECT channel_id FROM character_subtype0_fields WHERE character_id = @cid";
                     cmd.Parameters.AddWithValue("@cid", CharacterId);
                     return Convert.ToInt32(cmd.ExecuteScalar());
+                }
+            }
+        }
+
+        private static bool VerifyMoodVisualPollutionMigration()
+        {
+            using (var conn = new SqliteConnection(
+                SqliteDatabaseBootstrap.BuildConnectionString(":memory:")))
+            {
+                conn.Open();
+                using (var cmd = conn.CreateCommand())
+                {
+                    cmd.CommandText = @"
+CREATE TABLE character_subtype0_fields (
+    character_id INTEGER PRIMARY KEY,
+    mood_value INTEGER NOT NULL,
+    emotion_index INTEGER NOT NULL,
+    action_byte INTEGER NOT NULL
+);
+INSERT INTO character_subtype0_fields (character_id, mood_value, emotion_index, action_byte)
+VALUES (8201001, 9, 3, 3),
+       (8201002, 7, 9, 2);
+PRAGMA user_version = 27;";
+                    cmd.ExecuteNonQuery();
+
+                    DfoServer.Sqlite.SqliteMigrations.Apply(conn);
+                    cmd.CommandText = @"
+SELECT CASE WHEN
+    (SELECT user_version FROM pragma_user_version) = 28
+    AND (SELECT COUNT(*) FROM character_subtype0_fields WHERE
+        (character_id = 8201001 AND mood_value = 9 AND emotion_index = 0 AND action_byte = 0)
+        OR (character_id = 8201002 AND mood_value = 7 AND emotion_index = 9 AND action_byte = 2)) = 2
+THEN 1 ELSE 0 END;";
+                    var migratedCorrectly = Convert.ToInt32(cmd.ExecuteScalar()) == 1;
+
+                    cmd.CommandText = @"
+UPDATE character_subtype0_fields
+SET emotion_index = 5, action_byte = 5
+WHERE character_id = 8201001;";
+                    cmd.ExecuteNonQuery();
+
+                    DfoServer.Sqlite.SqliteMigrations.Apply(conn);
+                    cmd.CommandText = @"
+SELECT COUNT(*) FROM character_subtype0_fields
+WHERE character_id = 8201001 AND mood_value = 9
+  AND emotion_index = 5 AND action_byte = 5;";
+
+                    return migratedCorrectly && Convert.ToInt32(cmd.ExecuteScalar()) == 1;
                 }
             }
         }
