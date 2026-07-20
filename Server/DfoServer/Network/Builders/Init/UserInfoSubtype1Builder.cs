@@ -151,9 +151,9 @@ namespace DfoServer.Network.Builders
             w.WriteByte(a.ManageLevel);
 
             
-            w.WriteUInt32((uint)a.AbuseValues.Count);
-            foreach (var av in a.AbuseValues)
-                w.WriteUInt32(av);
+            w.WriteUInt32((uint)a.SpecialRewardQuestIds.Count);
+            foreach (var questId in a.SpecialRewardQuestIds)
+                w.WriteUInt32(questId);
 
             
             w.WriteByte(a.FlagByte);
