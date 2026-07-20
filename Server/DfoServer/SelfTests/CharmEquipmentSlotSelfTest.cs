@@ -29,6 +29,7 @@ namespace DfoServer.SelfTests
         private const short ElfCharmGiftBoxSlot = 84;
         private const short SecondElfCharmGiftBoxSlot = 85;
         private const short NormalEquipmentSlot = 11;
+        private const short UnsealedEquipmentReturnSlot = 64;
         private const short CharmEquipSlot = 29;
         private static int _pass;
         private static int _fail;
@@ -169,6 +170,18 @@ namespace DfoServer.SelfTests
             Check("rejected normal equipment stays in backpack", LoadItem(tempDb, InventoryListType.Main, NormalEquipmentSlot) == normalItemId);
             Check("rejected normal equipment does not replace charm", LoadEquippedItem(tempDb, CharmEquipSlot) == CharmItemId);
 
+            Check("sealed normal equipment equips to its slot",
+                MoveToEquipment(store, NormalEquipmentSlot, normalItemId, NormalEquipmentSlot, out var normalEquipResult)
+                && normalEquipResult != null && normalEquipResult.Mutated);
+            Check("first equip clears seal flag in equipped entry",
+                LoadEquippedSealFlag(tempDb, NormalEquipmentSlot) == 0);
+            Check("unsealed equipment returns to backpack",
+                MoveToEquipment(store, UnsealedEquipmentReturnSlot, 0, NormalEquipmentSlot, out var normalUnequipResult)
+                && normalUnequipResult != null && normalUnequipResult.Mutated);
+            Check("unequip persists cleared seal flag",
+                LoadItem(tempDb, InventoryListType.Main, UnsealedEquipmentReturnSlot) == normalItemId
+                && LoadSealFlag(tempDb, InventoryListType.Main, UnsealedEquipmentReturnSlot) == 0);
+
             DeleteTempDatabase(tempDb);
             Console.WriteLine($"=== CHARM_EQUIPMENT_SLOT selftest result: pass={_pass}, fail={_fail} ===");
             return _fail == 0 ? 0 : 1;
@@ -252,7 +265,7 @@ VALUES
     ('character', @characterId, @characterId, 2, @warehouseCharmSlot, @thirdCharmItemId, 'equipment',
      100003, @thirdCharmItemId, 0, 0, 0, 0, -1, 0, '{}'),
     ('character', @characterId, @characterId, 0, @normalEquipmentSlot, @normalItemId, 'equipment',
-     100004, @normalItemId, 1, 0, 0, 0, -1, 0, '{}'),
+     100004, @normalItemId, 1, 1, 0, 0, -1, 0, '{}'),
     ('character', @characterId, @characterId, 0, @elfCharmGiftBoxSlot, @elfCharmGiftBoxItemTemplateId, 'special',
      1, 1, 0, 0, 0, 0, 0, 0, '{}'),
     ('character', @characterId, @characterId, 0, @secondElfCharmGiftBoxSlot, @elfCharmGiftBoxItemTemplateId, 'special',
@@ -280,6 +293,28 @@ VALUES
                 "SELECT COALESCE(MAX(item_template_id), 0) FROM character_items WHERE character_id=@characterId AND list_type=@listType AND slot_index=@value;",
                 slot,
                 listType);
+
+        private static int LoadSealFlag(string databasePath, InventoryListType listType, short slot)
+            => ExecuteScalar(databasePath,
+                "SELECT COALESCE(MAX(seal_flag), -1) FROM character_items WHERE character_id=@characterId AND list_type=@listType AND slot_index=@value;",
+                slot,
+                listType);
+
+        private static int LoadEquippedSealFlag(string databasePath, short slot)
+        {
+            using (var connection = new SqliteConnection(SqliteDatabaseBootstrap.Initialize(databasePath, ServerPaths.SchemaFilePath)))
+            {
+                connection.Open();
+                using (var command = connection.CreateCommand())
+                {
+                    command.CommandText = "SELECT raw_entry FROM character_equipped_entries WHERE character_id=@characterId AND slot=@slot LIMIT 1;";
+                    command.Parameters.AddWithValue("@characterId", CharacterId);
+                    command.Parameters.AddWithValue("@slot", slot);
+                    var raw = command.ExecuteScalar() as byte[];
+                    return raw == null ? -1 : MakeEquipListCodec.ParseDisplayFields(raw).SealFlag;
+                }
+            }
+        }
 
         private static int LoadEquippedItem(string databasePath, short slot)
             => ExecuteScalar(databasePath,
