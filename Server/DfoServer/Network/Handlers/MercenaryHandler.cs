@@ -105,7 +105,7 @@ namespace DfoServer.Network.Handlers
 
             if (requestedSkillId == 0)
             {
-                await HandleZeroSkillSelectionAsync(session, header, activeCharacterId, slot);
+                await HandleClearSelectionAsync(session, header, activeCharacterId, slot);
                 return;
             }
 
@@ -160,47 +160,34 @@ namespace DfoServer.Network.Handlers
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, TagCharacterInfoNotiType, tagBody));
         }
 
-        private async Task HandleZeroSkillSelectionAsync(
+        private async Task HandleClearSelectionAsync(
             EnhancedClientSession session,
             GamePacketHeader header,
             int activeCharacterId,
             byte slot)
         {
-            MercenarySupportState current = null;
             try
             {
-                current = _supportRepository.LoadSlot(activeCharacterId, slot);
+                _supportRepository.Clear(activeCharacterId, slot);
             }
             catch (Exception ex)
             {
-                FileLogger.Log($"[{ProtocolName}] MERCENARY/STRIKER zero-skill load failed: {ex}");
+                FileLogger.Log($"[{ProtocolName}] MERCENARY/STRIKER clear selection failed: {ex}");
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, header.type, BuildSelectFailureAck()));
                 return;
             }
 
-            if (current == null || current.SupportCharacterId <= 0 || current.SkillId == 0)
-            {
-                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, header.type, BuildSelectSuccessAck()));
-                return;
-            }
-            // skillId=0 关闭界面时保留当前绑定。
-            var tagBody = StrikerSupportTagCharacterPacketBuilder.BuildOwnerMappedBody(
-                activeCharacterId,
-                current);
-            if (tagBody == null || tagBody.Length <= 2)
-            {
-                FileLogger.Log($"[{ProtocolName}] MERCENARY/STRIKER zero-skill restore rejected: dynamic 0x019F build failed");
-                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, header.type, BuildSelectFailureAck()));
-                return;
-            }
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, header.type, BuildSelectSuccessAck()));
             await UserInfoBroadcastService.SendSubtype0Async(
                 session,
                 _characterRepository,
                 _subtype0Repository,
                 _honorLevel,
-                "MERCENARY/STRIKER zero-skill restore subtype0");
-            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, TagCharacterInfoNotiType, tagBody));
+                "MERCENARY/STRIKER clear selection subtype0");
+            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
+                0x00,
+                TagCharacterInfoNotiType,
+                StrikerSupportTagCharacterBodyBuilder.BuildEmptyBody()));
         }
 
         private IReadOnlyList<CharacterRecord> ListAccountCharacters(int accountId)
