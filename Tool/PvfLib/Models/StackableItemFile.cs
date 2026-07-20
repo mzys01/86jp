@@ -101,6 +101,7 @@ namespace PvfLib
         public int Value { get; set; } = -1;
         public int Weight { get; set; } = -1;
         public int LotteryUseCost { get; set; }
+        public List<RandomBoxRemovalItemEntry> LotteryUseNeedItems { get; set; } = new List<RandomBoxRemovalItemEntry>();
         public int CoolTime { get; set; } = -1;
         public string CooltimeGroup { get; set; }
 
@@ -228,6 +229,7 @@ namespace PvfLib
                     case "value": stk.Value = ParseInt(data); break;
                     case "weight": stk.Weight = ParseInt(data); break;
                     case "lottery use cost": stk.LotteryUseCost = Math.Max(0, ParseInt(data)); break;
+                    case "lottery use need item": stk.LotteryUseNeedItems = ParseItemCountPairs(node, content); break;
                     case "cool time": stk.CoolTime = ParseInt(data); break;
                     case "cooltime group": stk.CooltimeGroup = data; break;
 
@@ -482,6 +484,11 @@ namespace PvfLib
         }
 
         private static List<RandomBoxRemovalItemEntry> ParseRandomBoxRemovalItems(ScriptNode node, string content)
+        {
+            return ParseItemCountPairs(node, content);
+        }
+
+        private static List<RandomBoxRemovalItemEntry> ParseItemCountPairs(ScriptNode node, string content)
         {
             var result = new List<RandomBoxRemovalItemEntry>();
             if (node == null)

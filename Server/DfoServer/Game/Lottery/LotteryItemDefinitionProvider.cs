@@ -65,9 +65,34 @@ namespace DfoServer.Game.Lottery
                 ItemTemplateId = itemTemplateId,
                 StackableType = stackableType,
                 GoldCost = Math.Max(0, stackable.LotteryUseCost),
+                RequiredMaterial = ResolveRequiredMaterial(itemTemplateId, stackable),
                 RewardPool = validRewards,
             };
             return true;
+        }
+
+        private static LotteryRequiredMaterial ResolveRequiredMaterial(
+            int sourceItemTemplateId,
+            PvfLib.StackableItemFile stackable)
+        {
+            foreach (var item in stackable?.LotteryUseNeedItems ?? Enumerable.Empty<PvfLib.RandomBoxRemovalItemEntry>())
+            {
+                if (item == null
+                    || item.ItemId <= 0
+                    || item.Count <= 0
+                    || item.ItemId == sourceItemTemplateId)
+                {
+                    continue;
+                }
+
+                return new LotteryRequiredMaterial
+                {
+                    ItemTemplateId = item.ItemId,
+                    Count = item.Count,
+                };
+            }
+
+            return null;
         }
 
         private static PvfLib.BoosterRewardEntry CloneReward(PvfLib.BoosterRewardEntry reward)

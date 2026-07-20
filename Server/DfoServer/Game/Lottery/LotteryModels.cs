@@ -11,7 +11,16 @@ namespace DfoServer.Game.Lottery
 
         public int GoldCost { get; set; }
 
+        public LotteryRequiredMaterial RequiredMaterial { get; set; }
+
         public IReadOnlyList<PvfLib.BoosterRewardEntry> RewardPool { get; set; }
+    }
+
+    public sealed class LotteryRequiredMaterial
+    {
+        public int ItemTemplateId { get; set; }
+
+        public int Count { get; set; }
     }
 
     public sealed class LotterySourceContext
@@ -34,6 +43,14 @@ namespace DfoServer.Game.Lottery
         public int ConsumedGold { get; set; }
 
         public int UpdatedGold { get; set; }
+
+        public int ConsumedMaterialItemTemplateId { get; set; }
+
+        public short ConsumedMaterialSlotIndex { get; set; }
+
+        public int ConsumedMaterialCount { get; set; }
+
+        public int ConsumedMaterialRemainingStackCount { get; set; }
 
         public bool UsedDoubleReward { get; set; }
 
