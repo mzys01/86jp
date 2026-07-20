@@ -9,6 +9,7 @@ namespace DfoServer.Game.Inventory
     internal sealed class InventoryEquipmentStore
     {
         private const int CharmEquipmentSlot = 29;
+        private const int FemaleSlayerJob = 11;
         private const string DefaultEquipmentExtraJson =
             "{\"extData0\":0,\"prefixData0E\":\"0000000000000000\",\"middleData1A\":\"0000000000000000000000000000000000\",\"tailData2F\":\"00000000000000000000000000000000000000000000000000000000000000000000000000\"}";
 
@@ -398,6 +399,108 @@ WHERE character_id = @cid;";
                 SaveEquipEntriesTx(connection, transaction, characterId, entries);
                 FileLogger.Log($"  [EquipMove] EQUIP: slot {equipSlot} itemId=0x{wantId:X8}");
                 return EquipOutcome.Equipped;
+            }
+        }
+
+        internal static bool IsPrimarySupportWeaponSwapRequest(InventoryMoveRequest request)
+        {
+            return request != null
+                && request.SourceListType == InventoryListType.Equipment
+                && request.DestinationListType == InventoryListType.Equipment
+                && ((request.SourceSlotIndex == (short)EquipmentType.Weapon
+                        && request.DestinationSlotIndex == (short)EquipmentType.SupportWeapon)
+                    || (request.SourceSlotIndex == (short)EquipmentType.SupportWeapon
+                        && request.DestinationSlotIndex == (short)EquipmentType.Weapon));
+        }
+
+        internal bool TrySwapFemaleSlayerWeapons(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            int characterId,
+            InventoryMoveRequest request,
+            out byte primaryWeaponForging)
+        {
+            primaryWeaponForging = 0;
+            if (!IsPrimarySupportWeaponSwapRequest(request))
+                return false;
+
+            if (!IsFemaleSlayer(connection, transaction, characterId))
+            {
+                FileLogger.Log($"  [EquipMove] WEAPON_SWAP blocked: character {characterId} is not an eligible female slayer");
+                return false;
+            }
+
+            var entries = LoadEquipEntriesTx(connection, transaction, characterId);
+            var source = entries.Find(e => e.Slot == request.SourceSlotIndex);
+            var destination = entries.Find(e => e.Slot == request.DestinationSlotIndex);
+
+            if (source == null || destination == null
+                || request.SourceInstanceValue == 0
+                || request.DestinationInstanceValue == 0
+                || source.ItemId != request.SourceInstanceValue
+                || destination.ItemId != request.DestinationInstanceValue)
+            {
+                FileLogger.Log(
+                    $"  [EquipMove] WEAPON_SWAP blocked: src=({request.SourceSlotIndex},want=0x{request.SourceInstanceValue:X8},found=0x{source?.ItemId ?? 0:X8}) "
+                    + $"dst=({request.DestinationSlotIndex},want=0x{request.DestinationInstanceValue:X8},found=0x{destination?.ItemId ?? 0:X8})");
+                return false;
+            }
+
+            if (source.Raw == null || source.Raw.Length == 0
+                || destination.Raw == null || destination.Raw.Length == 0
+                || !IsWeaponItem(source.ItemId)
+                || !IsWeaponItem(destination.ItemId))
+            {
+                FileLogger.Log(
+                    $"  [EquipMove] WEAPON_SWAP blocked: non-weapon or invalid raw src=0x{source.ItemId:X8} dst=0x{destination.ItemId:X8}");
+                return false;
+            }
+
+            var sourceSlot = source.Slot;
+            source.Slot = destination.Slot;
+            source.Raw = MakeEquipListCodec.SetSlotByte(source.Raw, source.Slot);
+            destination.Slot = sourceSlot;
+            destination.Raw = MakeEquipListCodec.SetSlotByte(destination.Raw, destination.Slot);
+            entries.Sort((left, right) => left.Slot.CompareTo(right.Slot));
+            SaveEquipEntriesTx(connection, transaction, characterId, entries);
+
+            var primaryWeapon = entries.Find(e => e.Slot == (short)EquipmentType.Weapon);
+            if (primaryWeapon?.Raw != null)
+                primaryWeaponForging = MakeEquipListCodec.ParseDisplayFields(primaryWeapon.Raw).Forging;
+
+            FileLogger.Log(
+                $"  [EquipMove] WEAPON_SWAP: slot {request.SourceSlotIndex} item=0x{source.ItemId:X8} "
+                + $"<-> slot {request.DestinationSlotIndex} item=0x{destination.ItemId:X8}");
+            return true;
+        }
+
+        private static bool IsFemaleSlayer(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            int characterId)
+        {
+            using (var command = connection.CreateCommand())
+            {
+                command.Transaction = transaction;
+                command.CommandText = "SELECT job FROM characters WHERE character_id = @characterId LIMIT 1;";
+                command.Parameters.AddWithValue("@characterId", characterId);
+                var value = command.ExecuteScalar();
+                return value != null
+                    && value != DBNull.Value
+                    && Convert.ToInt32(value, CultureInfo.InvariantCulture) == FemaleSlayerJob;
+            }
+        }
+
+        private static bool IsWeaponItem(int itemTemplateId)
+        {
+            try
+            {
+                return EquipmentTypeInfo.IsWeapon(
+                    EquipmentTypeInfo.ParseOrUnknown(ItemMetadataResolver.ResolveEquipmentType(itemTemplateId)));
+            }
+            catch
+            {
+                return false;
             }
         }
 
