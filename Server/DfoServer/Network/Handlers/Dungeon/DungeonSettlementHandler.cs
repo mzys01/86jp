@@ -21,6 +21,8 @@ namespace DfoServer.Network.Handlers.Dungeon
         private readonly DungeonSharedServices _svc;
 
         private const int SetPlayResultRankPointOffset = 10;
+        private const int SetPlayResultSeizeMoneyHitCountOffset = 6;
+        private const int SeizeMoneyGoldIngotItemId = 10089565;
         // 成长之契约经验加成从 PVF premiumlist_new.etc 读取(PremiumEffectProvider)。
         private const float BlackDiamondBonusRate = 0.10f;
         private static readonly int[] BlackDiamondPremiumTypes = { 1, 17 };
@@ -41,6 +43,7 @@ namespace DfoServer.Network.Handlers.Dungeon
             var run = session.Player.CurrentRun;
             if (run == null) return;
             if (run.Phase != DungeonRunPhase.Cleared) return;
+            await TrySendSeizeMoneyGoldIngotDropsAsync(session, body);
             run.Phase = DungeonRunPhase.ResultShown;
 
             var clearRank = CalculateClearRank(body);
@@ -128,6 +131,74 @@ namespace DfoServer.Network.Handlers.Dungeon
             await UpdateDungeonPermission(session, run.DungeonId, run.Difficulty);
         }
 
+        private static async Task TrySendSeizeMoneyGoldIngotDropsAsync(
+            EnhancedClientSession session,
+            byte[] body)
+        {
+            var run = session?.Player?.CurrentRun;
+            var special = run?.SpecialDungeon;
+            if (run == null
+                || special == null
+                || special.Kind != SpecialDungeonKind.SeizeMoney)
+            {
+                return;
+            }
+
+            var config = special.Config.SeizeMoney;
+            var unitValue = Math.Max(1, config.GaugeSubOnDamage);
+            var maxUnits = Math.Max(1, config.GaugeMax / unitValue);
+            var hitCount = Math.Max(
+                0,
+                ReadInt32(body, SetPlayResultSeizeMoneyHitCountOffset));
+            var remainingUnits =
+                Math.Max(0, maxUnits - Math.Min(maxUnits, hitCount));
+            var bossSeq = special.SeizeMoneyBossSeq;
+            if (bossSeq == 0
+                || !special.TryReserveSeizeMoneyClearReward(
+                    remainingUnits,
+                    out var count,
+                    out var gauge))
+            {
+                FileLogger.Log(
+                    $"[SpecialDungeonModule] SEIZE_MONEY drops skipped: " +
+                    $"cid={session.Player.CharacterId} dungeon={run.DungeonId} " +
+                    $"bossSeq={bossSeq} hitCount={hitCount} " +
+                    $"remainingUnits={remainingUnits} gauge={special.SeizeMoneyGauge}");
+                return;
+            }
+
+            var drops = new List<DropInfo>();
+            lock (run.SyncRoot)
+            {
+                for (var i = 0; i < count; i++)
+                {
+                    run.SceneSlotCounter++;
+                    var drop = new DropInfo
+                    {
+                        SceneSlot = run.SceneSlotCounter,
+                        TemplateId = SeizeMoneyGoldIngotItemId,
+                        StackCount = 1,
+                    };
+                    drops.Add(drop);
+                    run.Drops[drop.SceneSlot] = drop;
+                }
+            }
+
+            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
+                0x00,
+                0x0026,
+                DungeonNotificationBuilder.BuildMonsterDie(
+                    bossSeq,
+                    drops,
+                    session.Player.UserId)));
+            FileLogger.Log(
+                $"[SpecialDungeonModule] SEIZE_MONEY drops sent: " +
+                $"cid={session.Player.CharacterId} dungeon={run.DungeonId} " +
+                $"bossSeq={bossSeq} item={SeizeMoneyGoldIngotItemId} " +
+                $"count={count} hitCount={hitCount} " +
+                $"remainingUnits={remainingUnits} gauge={gauge}/{config.GaugeMax}");
+        }
+
         private static ClearRankParts CalculateClearRank(byte[] body)
         {
             var clientRankPoint = ExtractClientRankPoint(body);
@@ -153,6 +224,14 @@ namespace DfoServer.Network.Handlers.Dungeon
                 return body[SetPlayResultRankPointOffset];
 
             return body[0];
+        }
+
+        private static int ReadInt32(byte[] body, int offset)
+        {
+            if (body == null || offset < 0 || offset + 3 >= body.Length)
+                return 0;
+
+            return BitConverter.ToInt32(body, offset);
         }
 
         private static int CalculateClearTimeMs(DungeonRun run)

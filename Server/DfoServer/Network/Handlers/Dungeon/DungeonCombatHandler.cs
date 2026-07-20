@@ -35,7 +35,6 @@ namespace DfoServer.Network.Handlers.Dungeon
         {
             var run = session.Player.CurrentRun;
             if (run == null) return;
-            var isDeathTowerRun = run.Tower != null;
 
             var req = DieMonsterRequest.Parse(body);
 
@@ -52,8 +51,7 @@ namespace DfoServer.Network.Handlers.Dungeon
                 FileLogger.Log($"[DungeonHandler] DIE_MONSTER: passive object code={req.LocalIndex}");
                 if (run.ClearCondition != null && run.ClearCondition.Check(0, req.LocalIndex))
                     await _settlement.TryClearDungeon(session, $"destroy object {req.LocalIndex}");
-                if (!isDeathTowerRun)
-                    await _svc.QuestDrops.CheckPassiveObjectDrop(session, req.LocalIndex);
+                await _svc.QuestDrops.CheckPassiveObjectDrop(session, req.LocalIndex);
                 return;
             }
 
@@ -70,10 +68,6 @@ namespace DfoServer.Network.Handlers.Dungeon
             var roomLocalIndex = req.LocalIndex - run.RoomStartSequence;
             var monsters = run.RoomMonsters;
 
-            IReadOnlyList<DropInfo> towerDrops = null;
-            if (isDeathTowerRun)
-                _svc.DeathTower.TryGenerateDropsForMonster(session, req.LocalIndex, out towerDrops);
-
             if (roomLocalIndex < 0 || roomLocalIndex >= monsters.Count)
             {
                 if (TryGetCurrentRoomState(session, out var outOfRangeRoomState) && outOfRangeRoomState.IsHellPartyRoom)
@@ -82,7 +76,7 @@ namespace DfoServer.Network.Handlers.Dungeon
                 }
             }
 
-            IReadOnlyList<DropInfo> drops = towerDrops;
+            List<DropInfo> drops = null;
             byte killedMonsterType = 0;
             int killedMonsterCode = 0;
             if (roomLocalIndex >= 0 && roomLocalIndex < monsters.Count)
@@ -125,13 +119,8 @@ namespace DfoServer.Network.Handlers.Dungeon
                 int dungeonMinimumLevel = dungeonBasisLevel;
                 try { dungeonMinimumLevel = DungeonData.GetDungeonMinimumRequiredLevel(run.DungeonId); } catch (Exception ex) { FileLogger.Log($"[DungeonHandler] DIE_MONSTER ERROR: minimum level fallback dungeon={run.DungeonId} default={dungeonMinimumLevel}: {ex.Message}"); }
                 int goldGained;
-                IReadOnlyList<DropInfo> generatedDrops;
-                if (isDeathTowerRun)
-                {
-                    generatedDrops = towerDrops ?? Array.Empty<DropInfo>();
-                    goldGained = 0;
-                }
-                else if (monster.IsHellPartyActor && dieRoomState != null && dieRoomState.IsHellPartyRoom)
+                List<DropInfo> generatedDrops;
+                if (monster.IsHellPartyActor && dieRoomState != null && dieRoomState.IsHellPartyRoom)
                 {
                     var abyssRequest = BuildAbyssPartyDropRequest(
                         dieRoomState, monster, dungeonMinimumLevel, dungeonBasisLevel);
@@ -177,8 +166,7 @@ namespace DfoServer.Network.Handlers.Dungeon
                 if (generatedDrops != null && generatedDrops.Count > 0)
                 {
                     drops = generatedDrops;
-                    var dropSeed = run.RoomLcg?.Seed ?? run.Seed;
-                    FileLogger.Log($"[DungeonHandler] DROP: {generatedDrops.Count} items, seqId={req.LocalIndex} seed={dropSeed:X8}");
+                    FileLogger.Log($"[DungeonHandler] DROP: {generatedDrops.Count} items, seqId={req.LocalIndex} seed={run.RoomLcg.Seed:X8}");
                 }
 
                 await _svc.SendExpGrantNotificationAsync(session, grant, "DIE_MONSTER", growthContractBonusExp);
@@ -191,8 +179,7 @@ namespace DfoServer.Network.Handlers.Dungeon
 
                 // 组队副本联机: 把这次击杀经验发给同队【在副本里】的成员; 传 raw gainedExp + monsterLevel,
                 // 每个队友用【自己等级】各自缩放(df BaseExpPenalty)→ 不同等级同副本得不同经验。
-                if (!isDeathTowerRun)
-                    await GrantKillExpToPartyAsync(session, gainedExp, monsterLevel);
+                await GrantKillExpToPartyAsync(session, gainedExp, monsterLevel);
             }
 
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0026,
@@ -208,6 +195,11 @@ namespace DfoServer.Network.Handlers.Dungeon
                 await _svc.QuestDrops.CheckAiCharacterDrop(session, killedMonsterCode);
             else if (!isDeathTowerRun)
                 await _svc.QuestDrops.CheckMonsterDrop(session, killedMonsterCode);
+
+            await SpecialDungeonNotifier.ObserveMonsterKilledAsync(
+                session,
+                killedMonsterCode,
+                killedMonsterType);
 
             // check_grid_clear (IDA 0x830A0E8): spawnType==100 && spawnFlag==0 blocks passage
             // 判定唯一实现在 DungeonRoomTopology.ComputeRoomClearedLocked(主路径与组队 relay 共用)。
@@ -243,7 +235,7 @@ namespace DfoServer.Network.Handlers.Dungeon
 
                 await PetCreatureRuntimeService.GrantRoomClearExperienceOnceAsync(session, clearedRoomState, 1);
 
-                if (ccType1 || endPoint)
+                if ((ccType1 || endPoint) && !run.IgnoreDefaultDungeonClear)
                     await _settlement.TryClearDungeon(session, $"prepare_dungeon_clear ccType1={ccType1} endPoint={endPoint}", killedMonsterCode);
 
                 FileLogger.Log($"[DungeonHandler] ROOM CLEARED: dungeon={run.DungeonId} room=({run.RoomKey.X},{run.RoomKey.Y}) map={currentMapId} killedBlocking={killedBlockingCount}/{blockingCount} killedTotal={run.RoomKilledSeqIds.Count}");
@@ -278,7 +270,8 @@ namespace DfoServer.Network.Handlers.Dungeon
             if (run.ClearCondition != null)
             {
                 int ccType = IsBossActorType(killedMonsterType) ? 4 : (killedMonsterType >= 5 ? 3 : 2);
-                if (run.ClearCondition.Check(ccType, killedMonsterCode))
+                if (run.ClearCondition.Check(ccType, killedMonsterCode)
+                    && !run.IgnoreDefaultDungeonClear)
                     await _settlement.TryClearDungeon(session, $"ClearCondition type={ccType} target={killedMonsterCode}", killedMonsterCode);
             }
 
@@ -293,6 +286,49 @@ namespace DfoServer.Network.Handlers.Dungeon
                 int diagBossY = run.BossMapPos != null && run.BossMapPos.Length >= 2 ? run.BossMapPos[1] : -1;
                 FileLogger.Log($"[DungeonHandler] CLEAR_DIAG boss killed but NOT cleared: cid={session.Player.CharacterId} seqId={req.LocalIndex} code={killedMonsterCode} type={killedMonsterType} roomCleared={roomCleared} blocking={killedBlockingCount}/{blockingCount} ccNull={run.ClearCondition == null} ccCleared={run.ClearCondition?.IsCleared} roomPos=({diagRoomX},{diagRoomY}) bossPos=({diagBossX},{diagBossY}) phase={run.Phase}");
             }
+        }
+
+        internal async Task HandleBossDieCheck(
+            EnhancedClientSession session,
+            GamePacketHeader header,
+            byte[] body)
+        {
+            var run = session?.Player?.CurrentRun;
+            if (run == null
+                || !BossDieCheckRequest.TryParse(body, out var request))
+            {
+                return;
+            }
+
+            run.SpecialDungeon?.NoteSeizeMoneyBossSeq(request.BossSequence);
+            FileLogger.Log(
+                $"[SpecialDungeonModule] BOSS_DIE_CHECK: " +
+                $"cid={session.Player.CharacterId} dungeon={run.DungeonId} " +
+                $"kind={run.SpecialDungeon?.Kind.ToString() ?? "none"} " +
+                $"uid={request.UserId} bossSeq={request.BossSequence}");
+
+            var special = run.SpecialDungeon;
+            if (special == null
+                || !SpecialDungeonRunCoordinator.IsBossEntranceSummonKind(
+                    special.Kind)
+                || run.Phase != DungeonRunPhase.InProgress
+                || !run.MeltdownHelpusBossSpawned
+                || request.BossSequence !=
+                    SpecialDungeonNotifier.BossSummonRuntimeKey)
+            {
+                return;
+            }
+
+            var bossCode =
+                SpecialDungeonNotifier.ResolveBossSummonCode(run.DungeonId);
+            if (bossCode <= 0)
+                return;
+
+            await _settlement.TryClearDungeon(
+                session,
+                $"special boss die check kind={special.Kind} " +
+                $"uid={request.UserId} bossSeq={request.BossSequence}",
+                bossCode);
         }
 
         // 组队副本联机: 把 MonsterDie(SC 0x0026, 只发视觉死亡, 不带drops)广播给同队【在副本里】的其他成员,
@@ -360,14 +396,16 @@ namespace DfoServer.Network.Handlers.Dungeon
                         endPoint = roomState.Maze.X == run.BossMapPos[0] && roomState.Maze.Y == run.BossMapPos[1];
                     int currentMapId = roomState != null ? roomState.Maze.Index : 0;
                     ccType1 = run.ClearCondition != null && run.ClearCondition.Check(1, currentMapId);
-                    doPrepareClear = ccType1 || endPoint;
+                    doPrepareClear =
+                        (ccType1 || endPoint) && !run.IgnoreDefaultDungeonClear;
                     FileLogger.Log($"[DungeonHandler] PARTY_RELAY_CLEAR cid={bs.Player.CharacterId} seqId={seqId} roomCleared={roomCleared} blocking={killedBlockingCount}/{blockingCount} endPoint={endPoint} ccType1={ccType1} phase={run.Phase}");
                 }
 
                 if (run.ClearCondition != null && run.Phase == DungeonRunPhase.InProgress)
                 {
                     ccType = IsBossActorType(kType) ? 4 : (kType >= 5 ? 3 : 2);
-                    doCondClear = run.ClearCondition.Check(ccType, kCode);
+                    doCondClear = run.ClearCondition.Check(ccType, kCode)
+                        && !run.IgnoreDefaultDungeonClear;
                 }
             }
 
@@ -707,12 +745,6 @@ namespace DfoServer.Network.Handlers.Dungeon
 
             var req = GetItemRequest.Parse(body);
             FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] GET_ITEM: cid={session.Player.CharacterId} srcSlot={req.SrcSlot}");
-
-            if (run.Tower != null
-                && await _svc.DeathTower.TryHandleGetItem(session, req.SrcSlot))
-            {
-                return;
-            }
 
             var accountId = session.Account?.AccountId ?? 1;
             var pickup = _svc.Drops.TryPickup(run, req.SrcSlot, session.Player.CharacterId, accountId);

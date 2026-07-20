@@ -119,6 +119,18 @@ namespace DfoServer.Network.Handlers
         public Task<bool> TryHandleDeathTowerMoveItem(EnhancedClientSession session, GamePacketHeader header, byte[] body)
             => _services.DeathTower.TryHandleMoveItem(session, header, body);
 
+        public Task Handle_SPECIAL_SUMMON_MONSTER(EnhancedClientSession session, GamePacketHeader header, byte[] body)
+            => Dungeon.SpecialDungeonNotifier.HandleBossSummonRequestAsync(session, header, body);
+
+        public Task Handle_SPECIAL_TIMER_MODIFY_INFO(EnhancedClientSession session, GamePacketHeader header, byte[] body)
+            => Dungeon.SpecialDungeonNotifier.HandleGentInfiltrateTimerModifyInfoAsync(session, header, body);
+
+        public Task Handle_SPECIAL_SEA_CHASE_RESULT(EnhancedClientSession session, GamePacketHeader header, byte[] body)
+            => Dungeon.SpecialDungeonNotifier.HandleSeaChaseMiniGameResultAsync(session, header, body);
+
+        public Task Handle_SPECIAL_SEA_CHASE_OBSERVE(EnhancedClientSession session, GamePacketHeader header, byte[] body)
+            => Dungeon.SpecialDungeonNotifier.ObserveSeaChasePacketAsync(session, header, body);
+
         public Task HandleDungeonSceneUniqueIdReport(EnhancedClientSession session, GamePacketHeader header, byte[] body)
         {
             if (session?.Player != null && body != null && body.Length >= 2)

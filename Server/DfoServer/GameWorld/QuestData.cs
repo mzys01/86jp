@@ -22,6 +22,16 @@ namespace DfoServer.GameWorld
         public int Count;
     }
 
+    internal sealed class HuntMonsterQuestTarget
+    {
+        public int QuestId;
+        public int DungeonId;
+        public int MapId;
+        public int MonsterCode;
+        public int RequiredCount;
+        public int ChannelIndex;
+    }
+
     internal static class QuestData
     {
         // PVF [slot expansion] rewards use reward int data as an equipment slot id, not an item id.
@@ -479,6 +489,48 @@ namespace DfoServer.GameWorld
             return ParseIntList(qst.CollisionQuest);
         }
 
+        internal static List<HuntMonsterQuestTarget> GetHuntMonsterTargets(
+            int questId)
+        {
+            var result = new List<HuntMonsterQuestTarget>();
+            var qst = GetQuestFile(questId);
+            if (qst == null
+                || NormalizeQuestTag(qst.Type) != "hunt monster")
+            {
+                return result;
+            }
+
+            var values = ParseIntList(qst.IntData);
+            const int stride = 4;
+            for (var offset = 0;
+                offset + stride <= values.Count;
+                offset += stride)
+            {
+                var dungeonId = values[offset];
+                var mapId = values[offset + 1];
+                var monsterCode = values[offset + 2];
+                var requiredCount = values[offset + 3];
+                if (dungeonId <= 0
+                    || monsterCode <= 0
+                    || requiredCount <= 0)
+                {
+                    continue;
+                }
+
+                result.Add(new HuntMonsterQuestTarget
+                {
+                    QuestId = questId,
+                    DungeonId = dungeonId,
+                    MapId = mapId,
+                    MonsterCode = monsterCode,
+                    RequiredCount = requiredCount,
+                    ChannelIndex = offset / stride,
+                });
+            }
+
+            return result;
+        }
+
         public static uint GetInitTrigger(int questId)
         {
             var qst = GetQuestFile(questId);
@@ -858,6 +910,15 @@ namespace DfoServer.GameWorld
                 channelValue = (uint)value;
 
             return (trigger & ~(0x1FFu << shift)) | (channelValue << shift);
+        }
+
+        internal static int GetTriggerChannel(uint trigger, int channelIndex)
+        {
+            var shift = channelIndex * 9;
+            if (shift < 0 || shift > 18)
+                return 0;
+
+            return (int)((trigger >> shift) & 0x1FFu);
         }
 
         internal static bool IsSeekAndMeetNpcQuest(int questId)
