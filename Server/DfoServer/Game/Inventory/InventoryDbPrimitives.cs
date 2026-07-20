@@ -619,6 +619,25 @@ WHERE item_uid = @itemUid;";
             }
         }
 
+        internal void UpdateEquipmentQualitySeed(SqliteConnection connection, SqliteTransaction transaction, long itemUid, int qualitySeed)
+        {
+            using (var command = connection.CreateCommand())
+            {
+                command.Transaction = transaction;
+                command.CommandText = @"
+UPDATE character_items
+SET stack_count = @qualitySeed,
+    instance_value = @qualitySeed,
+    updated_at = CURRENT_TIMESTAMP
+WHERE item_uid = @itemUid
+  AND item_kind = 'equipment';";
+                command.Parameters.AddWithValue("@qualitySeed", qualitySeed);
+                command.Parameters.AddWithValue("@itemUid", itemUid);
+                if (command.ExecuteNonQuery() != 1)
+                    throw new InvalidOperationException("Equipment quality seed update did not affect exactly one row.");
+            }
+        }
+
         // Pet list packets use pet_serial_or_handle as the third entry field, so stack counts must mirror there.
         internal void UpdatePetStackCount(SqliteConnection connection, SqliteTransaction transaction, long itemUid, int stackCount)
         {

@@ -450,6 +450,52 @@ namespace DfoServer.Game.Inventory
         public ushort AmplifyValue { get; set; }
     }
 
+    public enum ResetItemAttrMode : byte
+    {
+        Random = 0,
+        Highest = 1,
+    }
+
+    public sealed class ResetItemAttrRequest
+    {
+        public short TargetSlotIndex { get; set; }
+
+        public int TargetItemTemplateId { get; set; }
+
+        public short MaterialSlotIndex { get; set; }
+    }
+
+    public sealed class ResetItemAttrResult
+    {
+        public const byte ErrorInvalidRequest = 0x01;
+        public const byte ErrorInvalidTarget = 0x02;
+        public const byte ErrorInvalidMaterial = 0x03;
+        public const byte ErrorUnsupported = 0x04;
+        public const byte ErrorLocked = 0x05;
+
+        public ResetItemAttrRequest Request { get; set; }
+
+        public byte ErrorCode { get; set; }
+
+        public ResetItemAttrMode Mode { get; set; }
+
+        public InventoryListType TargetListType { get; set; } = InventoryListType.Main;
+
+        public short TargetSlotIndex { get; set; }
+
+        public int TargetItemTemplateId { get; set; }
+
+        public short MaterialSlotIndex { get; set; }
+
+        public int MaterialItemTemplateId { get; set; }
+
+        public int MaterialRemainingCount { get; set; }
+
+        public int OldQualitySeed { get; set; }
+
+        public int NewQualitySeed { get; set; }
+    }
+
     public enum InvestItemAmplifyOptionAction
     {
         Invest = 0,

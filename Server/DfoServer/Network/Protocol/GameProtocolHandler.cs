@@ -328,6 +328,7 @@ namespace DfoServer.Network
             d[0x00D0] = _inventoryHandler.Handle_OPEN_MAGIC_BOX_SINGLE;
             d[0x00D9] = _lotteryItemHandler.HandleOverflowInfo;
             d[0x0050] = _inventoryHandler.Handle_ENUM_CMDPACKET_UPGRADE_ITEM;      //80
+            d[(ushort)CmdPacketType.RESET_ITEM_ATTR] = _inventoryHandler.Handle_ENUM_CMDPACKET_RESET_ITEM_ATTR;
             d[0x00A0] = _inventoryHandler.Handle_OPEN_SELECTABLE_PACKAGE;
             d[0x0110] = _inventoryHandler.Handle_ENUM_CMDPACKET_ENCHANT_BY_BEAD;   //272
             d[0x0191] = _inventoryHandler.Handle_UNSEAL_RANDOM_OPTION;             //401
