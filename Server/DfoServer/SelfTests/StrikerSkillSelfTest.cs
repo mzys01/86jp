@@ -273,8 +273,16 @@ VALUES (91001, 1, 'owner', 3, 0, 1),
                 Check("mercenary support state upserts by owner+slot", overwritten != null && overwritten.SkillId == 24 && overwritten.StrikerSkillId == 1);
 
                 repo.Clear(91001, 0);
-                Check("mercenary support state clears primary table", repo.LoadSlot(91001, 0) == null);
-                Check("mercenary support state clears subtype0 link", ReadSubtype0Link(tempDb, 91001) == "0/0/0");
+                Check("blank support selection clears persisted state", repo.LoadSlot(91001, 0) == null);
+                Check("blank support selection disables subtype0 link", ReadSubtype0Link(tempDb, 91001) == "0/0/0");
+                Check("blank support selection emits an empty 0x019F body",
+                    StrikerSupportTagCharacterBodyBuilder.BuildEmptyBody()
+                        .SequenceEqual(new byte[] { 0x00, 0x00 }));
+
+                repo.Clear(91001, 0);
+                Check("blank support selection clear is idempotent",
+                    repo.LoadSlot(91001, 0) == null
+                    && ReadSubtype0Link(tempDb, 91001) == "0/0/0");
             }
             finally
             {
