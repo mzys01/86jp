@@ -83,6 +83,9 @@ namespace DfoServer.Network.Handlers
         public Task Handle_ENUM_CMDPACKET_GET_ITEM(EnhancedClientSession session, GamePacketHeader header, byte[] body)
             => _combat.HandleGetItem(session, header, body);
 
+        public Task Handle_ENUM_CMDPACKET_DROP_ITEM(EnhancedClientSession session, GamePacketHeader header, byte[] body)
+            => _combat.HandleDropItem(session, header, body);
+
         public Task Handle_ENUM_CMDPACKET_SELECT_CARD(EnhancedClientSession session, GamePacketHeader header, byte[] body)
             => _settlement.HandleSelectCard(session, header, body);
 

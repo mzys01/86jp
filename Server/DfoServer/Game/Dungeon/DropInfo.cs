@@ -7,7 +7,13 @@ namespace DfoServer.Game.Dungeon
         public uint StackCount;
         public ushort Endurance;
         public byte UpgradeLevel;
+        public bool IsPlayerDropped;
+        public Inventory.DungeonInventoryDropPayload InventoryPayload;
 
         public bool IsGold => TemplateId == 0;
+
+        public uint PacketValue => InventoryPayload?.PacketItem != null
+            ? unchecked((uint)InventoryPayload.PacketItem.CountOrInstanceValue)
+            : StackCount;
     }
 }
