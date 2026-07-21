@@ -14,12 +14,17 @@ namespace DfoServer.Network.Builders
                 if (StrikerSupportTagCharacterPacketBuilder.TryBuildOwnerSupportBody(characterId, out body))
                     return true;
 
-                body = new byte[] { 0x00, 0x00 };
+                body = BuildEmptyBody();
                 return true;
             }
 
             body = null;
             return false;
+        }
+
+        internal static byte[] BuildEmptyBody()
+        {
+            return new byte[] { 0x00, 0x00 };
         }
     }
 }

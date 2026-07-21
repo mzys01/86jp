@@ -135,7 +135,7 @@ namespace DfoServer.Network.Builders
         {
             return _registry.TryBuild(0x019F, snapshot, 0, out var body)
                 ? body
-                : new byte[] { 0x00, 0x00 };
+                : StrikerSupportTagCharacterBodyBuilder.BuildEmptyBody();
         }
 
         private static bool HasTemplate(List<SelectCharacterPacketTemplate> templates, byte command, ushort type)
