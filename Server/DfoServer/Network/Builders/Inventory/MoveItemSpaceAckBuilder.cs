@@ -5,6 +5,7 @@ namespace DfoServer.Network.Builders
 {
     public static class MoveItemSpaceAckBuilder
     {
+        public const byte InvalidOperationErrorCode = 0x02;
         public const int SuccessBodyLength = 11;
         public const int ErrorBodyLength = 4;
 

@@ -41,6 +41,30 @@ namespace DfoServer.Game.Inventory
             using (var connection = OpenConnection())
             using (var transaction = connection.BeginTransaction())
             {
+                if (InventoryEquipmentStore.IsPrimarySupportWeaponSwapRequest(request))
+                {
+                    if (!_equipStore.TrySwapFemaleSlayerWeapons(
+                        connection,
+                        transaction,
+                        characterId,
+                        request,
+                        out var primaryWeaponForging))
+                    {
+                        FileLogger.Log($"  [MoveItem] FAIL: primary/support weapon swap was rejected");
+                        return false;
+                    }
+
+                    transaction.Commit();
+                    result = CreateMoveResult(request, request.MoveCount);
+                    result.AffectedEquipmentSlot = (short)EquipmentType.Weapon;
+                    result.Subtype0TailMutation = new Subtype0TailMoveMutation
+                    {
+                        ForgingChanged = true,
+                        Forging = primaryWeaponForging,
+                    };
+                    return true;
+                }
+
                 bool srcIsCargo = request.SourceListType == InventoryListType.AccountCargo;
                 bool dstIsCargo = request.DestinationListType == InventoryListType.AccountCargo;
 
