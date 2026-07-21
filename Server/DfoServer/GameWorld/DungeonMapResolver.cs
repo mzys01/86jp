@@ -65,6 +65,10 @@ namespace DfoServer.GameWorld
         private static readonly ConcurrentDictionary<int, bool> BossActorMapCache =
             new ConcurrentDictionary<int, bool>();
 
+        private static readonly ConcurrentDictionary<int, HashSet<int>>
+            MapMonsterCodeCache =
+                new ConcurrentDictionary<int, HashSet<int>>();
+
         private static readonly ConcurrentDictionary<int, DungeonMapDirectoryIndex> DirIndexCache =
             new ConcurrentDictionary<int, DungeonMapDirectoryIndex>();
 
@@ -111,6 +115,119 @@ namespace DfoServer.GameWorld
 
             FileLogger.Log($"[DungeonMapResolver] UNRESOLVED: dungeon={dungeonId} maze={mazeIndex} room=({x},{y}) start={isStartRoom} boss={isBossRoom} quest={isQuestConnected} dirEntries={CountIndexEntries(index)}");
             return -1;
+        }
+
+        internal static bool HasExplicitBossCandidatePool(
+            MazeInfo maze,
+            int x,
+            int y)
+        {
+            if (maze?.MapSpecifications == null)
+                return false;
+
+            foreach (var item in maze.MapSpecifications)
+            {
+                if (item.X != x
+                    || item.Y != y
+                    || (!string.Equals(
+                            item.Type,
+                            "boss",
+                            StringComparison.OrdinalIgnoreCase)
+                        && !string.Equals(
+                            item.Type,
+                            "map",
+                            StringComparison.OrdinalIgnoreCase)))
+                {
+                    continue;
+                }
+
+                if (item.MapCandidates != null
+                    && item.MapCandidates.Length > 1)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        internal static List<int> GetExplicitBossCandidateMapIds(
+            MazeInfo maze,
+            int x,
+            int y)
+        {
+            var result = new List<int>();
+            var seen = new HashSet<int>();
+            if (maze?.MapSpecifications == null)
+                return result;
+
+            foreach (var item in maze.MapSpecifications)
+            {
+                if (item.X != x
+                    || item.Y != y
+                    || (!string.Equals(
+                            item.Type,
+                            "boss",
+                            StringComparison.OrdinalIgnoreCase)
+                        && !string.Equals(
+                            item.Type,
+                            "map",
+                            StringComparison.OrdinalIgnoreCase)))
+                {
+                    continue;
+                }
+
+                var candidates = item.MapCandidates != null
+                    && item.MapCandidates.Length > 0
+                        ? item.MapCandidates
+                        : new[] { item.Index };
+                foreach (var mapId in candidates)
+                {
+                    if (mapId > 0 && seen.Add(mapId))
+                        result.Add(mapId);
+                }
+            }
+
+            return result;
+        }
+
+        internal static int ResolveExplicitBossCandidateMapId(
+            MazeInfo maze,
+            int x,
+            int y)
+        {
+            if (!HasExplicitBossCandidatePool(maze, x, y))
+                return -1;
+
+            var maplst = Dungeon.LoadLstFile(Path.Combine("map", "map.lst"));
+            return ResolveFromMapSpecification(
+                maplst,
+                maze,
+                x,
+                y,
+                isBossRoom: true);
+        }
+
+        internal static bool MapContainsMonsterCode(
+            int mapId,
+            int monsterCode)
+        {
+            if (mapId <= 0 || monsterCode <= 0)
+                return false;
+
+            try
+            {
+                return MapMonsterCodeCache
+                    .GetOrAdd(mapId, LoadMapMonsterCodes)
+                    .Contains(monsterCode);
+            }
+            catch (Exception ex)
+            {
+                FileLogger.Log(
+                    $"[DungeonMapResolver] quest target inspection failed: " +
+                    $"map={mapId} monster={monsterCode} error={ex.Message}");
+                return false;
+            }
         }
 
         // --- Step 1: MapSpecification ---
@@ -435,6 +552,54 @@ namespace DfoServer.GameWorld
             catch { }
             BossActorMapCache[mapId] = found;
             return found;
+        }
+
+        private static HashSet<int> LoadMapMonsterCodes(int mapId)
+        {
+            var result = new HashSet<int>();
+            var maplst = Dungeon.LoadLstFile(Path.Combine("map", "map.lst"));
+            var mapFilePath = Dungeon.ResolveFilePath(maplst, mapId, "map");
+            var mapFile = MapFile.Parse(
+                PvfArchiveAccessor.ReadText(Path.Combine("map", mapFilePath)));
+
+            AddMonsterCodes(result, mapFile.Monsters);
+            AddMonsterCodes(result, mapFile.MonsterConditionMonsters);
+            AddMonsterCodes(result, mapFile.ConditionalSummonMonsters);
+
+            foreach (var apc in mapFile.AICharacters)
+            {
+                if (apc.Code > 0)
+                    result.Add(apc.Code);
+            }
+
+            foreach (var obj in mapFile.SpecialPassiveObjects)
+            {
+                if (obj?.Spawns == null)
+                    continue;
+
+                foreach (var spawn in obj.Spawns)
+                {
+                    if (spawn.Code > 0)
+                        result.Add(spawn.Code);
+                }
+            }
+
+            return result;
+        }
+
+        private static void AddMonsterCodes(
+            HashSet<int> result,
+            IReadOnlyList<MonsterInfo> monsters)
+        {
+            if (result == null || monsters == null)
+                return;
+
+            foreach (var monster in monsters)
+            {
+                var code = monster?.MonsterId.GetValueOrDefault() ?? 0;
+                if (code > 0)
+                    result.Add(code);
+            }
         }
 
         // --- Helpers ---

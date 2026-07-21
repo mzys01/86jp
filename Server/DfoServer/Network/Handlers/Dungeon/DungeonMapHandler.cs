@@ -80,6 +80,10 @@ namespace DfoServer.Network.Handlers.Dungeon
                 run.LayeredMapIndex = -1;
             }
 
+            SpecialDungeonRunCoordinator.TryApplyGentWarpOverride(
+                session,
+                moveTarget,
+                ref overrideMapId);
             await SendStartMapAsync(session, moveTarget.X, moveTarget.Y, overrideMapId);
 
             // ★组队副本联机: 队长移动到下一房间时, 带同队队员一起换图(队员是follower、不自发MOVE_MAP)。
@@ -119,8 +123,19 @@ namespace DfoServer.Network.Handlers.Dungeon
             var run = session.Player.CurrentRun;
             if (run == null) return;
 
-            var effectiveOverrideMapId = overrideMapId;
-            var maze = DungeonData.GetDungeonMapMonsterSummaryInformation(run.DungeonId, nextX, nextY, run.MazeIndex, overrideMapId, run.BossMapPos);
+            var effectiveOverrideMapId =
+                SpecialDungeonRunCoordinator.ResolveStartMapOverride(
+                    run,
+                    nextX,
+                    nextY,
+                    overrideMapId);
+            var maze = DungeonData.GetDungeonMapMonsterSummaryInformation(
+                run.DungeonId,
+                nextX,
+                nextY,
+                run.MazeIndex,
+                effectiveOverrideMapId,
+                run.BossMapPos);
             if (overrideMapId <= 0
                 && run.HellMode
                 && run.HellMapId > 0
@@ -182,7 +197,12 @@ namespace DfoServer.Network.Handlers.Dungeon
                     : maze;
 
                 if (!isHellPartyRoom)
+                {
                     ApplyChampionPromotion(session, startMapMaze.Monsters);
+                    SpecialDungeonRunCoordinator.AppendStartMapActors(
+                        session,
+                        startMapMaze);
+                }
 
                 run.RoomMonsters = startMapMaze.Monsters;
 
@@ -196,7 +216,7 @@ namespace DfoServer.Network.Handlers.Dungeon
                     Lcg = lcg,
                 };
 
-                byte layeredFlag = (byte)(overrideMapId > 0 ? 1 : 0);
+                byte layeredFlag = (byte)(effectiveOverrideMapId > 0 ? 1 : 0);
 
                 if (isHellPartyRoom)
                 {
@@ -247,6 +267,7 @@ namespace DfoServer.Network.Handlers.Dungeon
             } // end lock(run.SyncRoot)
 
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x001D, startMapBody));
+            await SpecialDungeonNotifier.SendStartMapStateAsync(session);
 
             if (hellPartyMonsterInfoAfterStartMap != null && hellPartyMonsterInfoAfterStartMap.Count > 0)
             {

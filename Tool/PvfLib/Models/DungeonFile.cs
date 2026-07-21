@@ -22,6 +22,7 @@ namespace PvfLib
     {
         public int SelectCount { get; set; }
         public bool Regenerate { get; set; }
+        public int MinimapIcon { get; set; }
         public List<RidableObject> Objects { get; set; } = new List<RidableObject>();
     }
 
@@ -518,10 +519,10 @@ namespace PvfLib
                     case "tournament clear reward exp": dgn.TournamentClearRewardExp = data; break;
                     case "clear map": dgn.ClearMap = data; break;
                     case "clear reward item": dgn.ClearRewardItem = data; break;
-                    case "boss room entrance condition": dgn.BossRoomEntranceCondition = data; break;
+                    case "boss room entrance condition": dgn.BossRoomEntranceCondition = ReadRawNodeData(node, text, data); break;
                     case "named monster map pos": dgn.NamedMonsterMapPos = data; break;
-                    case "warp map condition": dgn.WarpMapCondition = data; break;
-                    case "dungeon minimap icon setting": dgn.DungeonMinimapIconSetting = data; break;
+                    case "warp map condition": dgn.WarpMapCondition = node.GetContent(text).Trim(); break;
+                    case "dungeon minimap icon setting": dgn.DungeonMinimapIconSetting = ReadRawNodeData(node, text, data); break;
                     case "realdungeon checkup": dgn.RealdungeonCheckup = data; break;
                     case "common passive object": dgn.CommonPassiveObject = data; break;
                     case "on clear add passive object": dgn.OnClearAddPassiveObject = data; break;
@@ -701,6 +702,9 @@ namespace PvfLib
                         break;
                     case "regenerate":
                         script.Regenerate = ParseInt(childData) != 0;
+                        break;
+                    case "minimap icon":
+                        script.MinimapIcon = ParseInt(childData);
                         break;
                     case "object":
                         var obj = new RidableObject();
@@ -893,6 +897,15 @@ namespace PvfLib
         #endregion
 
         #region 辅助
+
+        private static string ReadRawNodeData(ScriptNode node, string text, string data)
+        {
+            if (!string.IsNullOrWhiteSpace(data))
+                return data;
+            if (node == null || node.Children == null || node.Children.Count == 0)
+                return data ?? string.Empty;
+            return node.GetContent(text).Trim();
+        }
 
         private static void ParseCutsceneImage(string data, DungeonFile dgn)
         {
