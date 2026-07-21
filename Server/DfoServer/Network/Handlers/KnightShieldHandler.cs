@@ -211,7 +211,7 @@ namespace DfoServer.Network.Handlers
                 0x01,
                 (ushort)CmdPacketType.MOVE_ITEMSPACE,
                 MoveItemSpaceAckBuilder.BuildError(
-                    0x02,
+                    MoveItemSpaceAckBuilder.InvalidOperationErrorCode,
                     (byte)sourceListType,
                     (byte)destinationListType)));
             FileLogger.Log($"[GameProtocol] KNIGHT_SHIELD MOVE REJECT: {rejectReason}");
