@@ -365,7 +365,15 @@ WHERE character_id = @cid;";
                     FileLogger.Log($"  [EquipMove] EQUIP: slot {equipSlot} want 0x{wantId:X8} — no DB record (no-op)");
                     return EquipOutcome.NoOp;
                 }
-                entryRaw = MakeEquipListCodec.BuildEntryFromDisplayFields(equipSlot, wantId, fields.Value);
+                var equippedFields = fields.Value;
+                if (mainSource != null
+                    && string.Equals(mainSource.ItemKind, "equipment", StringComparison.Ordinal)
+                    && equippedFields.SealFlag != 0)
+                {
+                    equippedFields.SealFlag = 0;
+                    FileLogger.Log($"  [EquipMove] UNSEAL: slot {request.SourceSlotIndex} itemId=0x{wantId:X8} first equip persisted in equipped entry");
+                }
+                entryRaw = MakeEquipListCodec.BuildEntryFromDisplayFields(equipSlot, wantId, equippedFields);
 
                     // 克隆装扮：计算并注入 raw[12..15] 克隆目标物品ID
                     if (ItemMetadataResolver.IsCloneAvatarItem(wantId))
