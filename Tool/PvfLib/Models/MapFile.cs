@@ -28,6 +28,9 @@ namespace PvfLib
         public int? X { get; set; }
         public int? Y { get; set; }
         public int? Z { get; set; }
+        public int? ConditionalParam0 { get; set; }
+        public int? ConditionalParam1 { get; set; }
+        public int? ConditionalParam2 { get; set; }
         public int? RandomDropCnt { get; set; }
         public int? SpecifyDropCnt { get; set; }
         public string Fixed { get; set; }
@@ -117,6 +120,8 @@ namespace PvfLib
         public List<SpecialPassiveObjectInfo> SpecialPassiveObjects { get; set; } = new List<SpecialPassiveObjectInfo>();
         public int MonsterCount { get; set; } = -1;
         public List<MonsterInfo> Monsters { get; set; } = new List<MonsterInfo>();
+        public List<MonsterInfo> MonsterConditionMonsters { get; set; } = new List<MonsterInfo>();
+        public List<MonsterInfo> ConditionalSummonMonsters { get; set; } = new List<MonsterInfo>();
         public int EventMonsterPositionCount { get; set; } = -1;
         public int NpcCount { get; set; } = -1;
         public string MonsterSpecificAI { get; set; }
@@ -444,6 +449,7 @@ namespace PvfLib
                     // --- Complex raw string ---
                     case "monster condition":
                         map.MonsterCondition = data;
+                        map.MonsterConditionMonsters = ParseMonsters(data);
                         break;
                     case "monster spawn pos":
                         map.MonsterSpawnPos = data;
@@ -483,6 +489,7 @@ namespace PvfLib
                         break;
                     case "conditional summon monster":
                         map.ConditionalSummonMonster = data;
+                        map.ConditionalSummonMonsters = ParseConditionalSummonMonsters(data);
                         break;
                     case "map over move ani":
                         map.MapOverMoveAni = data;
@@ -656,6 +663,43 @@ namespace PvfLib
                     Fixed = StripBacktick(values[index + 8]),
                     Type = ParseMonsterType(StripBacktick(values[index + 9])),
                 });
+            }
+
+            return result;
+        }
+
+        private static List<MonsterInfo> ParseConditionalSummonMonsters(string data)
+        {
+            var result = new List<MonsterInfo>();
+            if (string.IsNullOrWhiteSpace(data))
+                return result;
+
+            var values = data.Split(new[] { ' ', '\t', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+            for (var index = 0; index + 9 < values.Length;)
+            {
+                var hasTailPosition = index + 12 < values.Length
+                    && int.TryParse(values[index + 10], out _)
+                    && int.TryParse(values[index + 11], out _)
+                    && int.TryParse(values[index + 12], out _);
+
+                result.Add(new MonsterInfo
+                {
+                    MonsterId = ParseNullableInt(values[index]),
+                    Lv = ParseNullableInt(values[index + 1]),
+                    AutoLv = ParseNullableInt(values[index + 2]),
+                    ConditionalParam0 = ParseNullableInt(values[index + 3]),
+                    ConditionalParam1 = ParseNullableInt(values[index + 4]),
+                    ConditionalParam2 = ParseNullableInt(values[index + 5]),
+                    X = hasTailPosition ? ParseNullableInt(values[index + 10]) : ParseNullableInt(values[index + 3]),
+                    Y = hasTailPosition ? ParseNullableInt(values[index + 11]) : ParseNullableInt(values[index + 4]),
+                    Z = hasTailPosition ? ParseNullableInt(values[index + 12]) : ParseNullableInt(values[index + 5]),
+                    RandomDropCnt = ParseNullableInt(values[index + 6]),
+                    SpecifyDropCnt = ParseNullableInt(values[index + 7]),
+                    Fixed = StripBacktick(values[index + 8]),
+                    Type = ParseMonsterType(StripBacktick(values[index + 9])),
+                });
+
+                index += hasTailPosition ? 13 : 10;
             }
 
             return result;

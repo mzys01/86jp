@@ -209,6 +209,11 @@ namespace DfoServer.Network.Handlers.Dungeon
             else if (!isDeathTowerRun)
                 await _svc.QuestDrops.CheckMonsterDrop(session, killedMonsterCode);
 
+            await SpecialDungeonNotifier.ObserveMonsterKilledAsync(
+                session,
+                killedMonsterCode,
+                killedMonsterType);
+
             // check_grid_clear (IDA 0x830A0E8): spawnType==100 && spawnFlag==0 blocks passage
             // 判定唯一实现在 DungeonRoomTopology.ComputeRoomClearedLocked(主路径与组队 relay 共用)。
             int blockingCount, killedBlockingCount;
@@ -243,7 +248,7 @@ namespace DfoServer.Network.Handlers.Dungeon
 
                 await PetCreatureRuntimeService.GrantRoomClearExperienceOnceAsync(session, clearedRoomState, 1);
 
-                if (ccType1 || endPoint)
+                if ((ccType1 || endPoint) && !run.IgnoreDefaultDungeonClear)
                     await _settlement.TryClearDungeon(session, $"prepare_dungeon_clear ccType1={ccType1} endPoint={endPoint}", killedMonsterCode);
 
                 FileLogger.Log($"[DungeonHandler] ROOM CLEARED: dungeon={run.DungeonId} room=({run.RoomKey.X},{run.RoomKey.Y}) map={currentMapId} killedBlocking={killedBlockingCount}/{blockingCount} killedTotal={run.RoomKilledSeqIds.Count}");
@@ -278,7 +283,8 @@ namespace DfoServer.Network.Handlers.Dungeon
             if (run.ClearCondition != null)
             {
                 int ccType = IsBossActorType(killedMonsterType) ? 4 : (killedMonsterType >= 5 ? 3 : 2);
-                if (run.ClearCondition.Check(ccType, killedMonsterCode))
+                if (run.ClearCondition.Check(ccType, killedMonsterCode)
+                    && !run.IgnoreDefaultDungeonClear)
                     await _settlement.TryClearDungeon(session, $"ClearCondition type={ccType} target={killedMonsterCode}", killedMonsterCode);
             }
 
@@ -293,6 +299,49 @@ namespace DfoServer.Network.Handlers.Dungeon
                 int diagBossY = run.BossMapPos != null && run.BossMapPos.Length >= 2 ? run.BossMapPos[1] : -1;
                 FileLogger.Log($"[DungeonHandler] CLEAR_DIAG boss killed but NOT cleared: cid={session.Player.CharacterId} seqId={req.LocalIndex} code={killedMonsterCode} type={killedMonsterType} roomCleared={roomCleared} blocking={killedBlockingCount}/{blockingCount} ccNull={run.ClearCondition == null} ccCleared={run.ClearCondition?.IsCleared} roomPos=({diagRoomX},{diagRoomY}) bossPos=({diagBossX},{diagBossY}) phase={run.Phase}");
             }
+        }
+
+        internal async Task HandleBossDieCheck(
+            EnhancedClientSession session,
+            GamePacketHeader header,
+            byte[] body)
+        {
+            var run = session?.Player?.CurrentRun;
+            if (run == null
+                || !BossDieCheckRequest.TryParse(body, out var request))
+            {
+                return;
+            }
+
+            run.SpecialDungeon?.NoteSeizeMoneyBossSeq(request.BossSequence);
+            FileLogger.Log(
+                $"[SpecialDungeonModule] BOSS_DIE_CHECK: " +
+                $"cid={session.Player.CharacterId} dungeon={run.DungeonId} " +
+                $"kind={run.SpecialDungeon?.Kind.ToString() ?? "none"} " +
+                $"uid={request.UserId} bossSeq={request.BossSequence}");
+
+            var special = run.SpecialDungeon;
+            if (special == null
+                || !SpecialDungeonRunCoordinator.IsBossEntranceSummonKind(
+                    special.Kind)
+                || run.Phase != DungeonRunPhase.InProgress
+                || !run.MeltdownHelpusBossSpawned
+                || request.BossSequence !=
+                    SpecialDungeonNotifier.BossSummonRuntimeKey)
+            {
+                return;
+            }
+
+            var bossCode =
+                SpecialDungeonNotifier.ResolveBossSummonCode(run.DungeonId);
+            if (bossCode <= 0)
+                return;
+
+            await _settlement.TryClearDungeon(
+                session,
+                $"special boss die check kind={special.Kind} " +
+                $"uid={request.UserId} bossSeq={request.BossSequence}",
+                bossCode);
         }
 
         // 组队副本联机: 把 MonsterDie(SC 0x0026, 只发视觉死亡, 不带drops)广播给同队【在副本里】的其他成员,
@@ -360,14 +409,16 @@ namespace DfoServer.Network.Handlers.Dungeon
                         endPoint = roomState.Maze.X == run.BossMapPos[0] && roomState.Maze.Y == run.BossMapPos[1];
                     int currentMapId = roomState != null ? roomState.Maze.Index : 0;
                     ccType1 = run.ClearCondition != null && run.ClearCondition.Check(1, currentMapId);
-                    doPrepareClear = ccType1 || endPoint;
+                    doPrepareClear =
+                        (ccType1 || endPoint) && !run.IgnoreDefaultDungeonClear;
                     FileLogger.Log($"[DungeonHandler] PARTY_RELAY_CLEAR cid={bs.Player.CharacterId} seqId={seqId} roomCleared={roomCleared} blocking={killedBlockingCount}/{blockingCount} endPoint={endPoint} ccType1={ccType1} phase={run.Phase}");
                 }
 
                 if (run.ClearCondition != null && run.Phase == DungeonRunPhase.InProgress)
                 {
                     ccType = IsBossActorType(kType) ? 4 : (kType >= 5 ? 3 : 2);
-                    doCondClear = run.ClearCondition.Check(ccType, kCode);
+                    doCondClear = run.ClearCondition.Check(ccType, kCode)
+                        && !run.IgnoreDefaultDungeonClear;
                 }
             }
 

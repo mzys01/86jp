@@ -104,11 +104,17 @@ namespace DfoServer.Network.Handlers.Dungeon
             // 塔类副本分流: dungeonKind==1 走专属流程(NOTI 142+143, 非普通副本的 START_MAP)
             if (_svc.DeathTower.TryCreateSession(req.DungeonId, out var tower))
             {
+                await SpecialDungeonNotifier.ClearRunBuffsAsync(
+                    session,
+                    "select_tower_replace_run");
                 DungeonRunLifecycle.BeginTowerRun(session, req.DungeonId, tower, req.Difficulty);
                 await _svc.DeathTower.SendEntryPacketsAsync(session, tower, req.Difficulty);
                 return;
             }
 
+            await SpecialDungeonNotifier.ClearRunBuffsAsync(
+                session,
+                "select_dungeon_replace_run");
             DungeonRunLifecycle.BeginRun(session, req.DungeonId, req.Difficulty);
             var run = session.Player.CurrentRun;
             run.HellMode = req.HellPartyRequestFlag != 0 && DungeonData.IsHellDungeon(req.DungeonId);
@@ -118,15 +124,18 @@ namespace DfoServer.Network.Handlers.Dungeon
             if (req.HellPartyRequestFlag != 0)
                 FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] SELECT_DUNGEON: manual hell requested dungeon={req.DungeonId} enabled={run.HellMode}");
 
+            List<ActiveQuest> activeQuests = null;
             HashSet<int> activeQuestIds = null;
             HashSet<int> clearedQuestIds = null;
             try
             {
                 var connStr = SqliteDatabaseBootstrap.Initialize(
                     ServerPaths.DatabasePath, ServerPaths.SchemaFilePath);
-                var quests = QuestService.LoadActiveQuests(connStr, session.Player.CharacterId);
-                if (quests.Count > 0)
-                    activeQuestIds = new HashSet<int>(quests.ConvertAll(q => (int)q.QuestId));
+                activeQuests = QuestService.LoadActiveQuests(
+                    connStr,
+                    session.Player.CharacterId);
+                if (activeQuests.Count > 0)
+                    activeQuestIds = new HashSet<int>(activeQuests.ConvertAll(q => (int)q.QuestId));
                 var clearedFlags = new Game.Quests.QuestRepository(connStr)
                     .LoadClearedFlags(session.Player.CharacterId);
                 if (clearedFlags.Count > 0)
@@ -148,6 +157,14 @@ namespace DfoServer.Network.Handlers.Dungeon
             run.BossMapPos = bossPos;
             run.RidableObjects = DungeonMapHandler.InitRidableObjects(selection.Maze);
             run.ClearCondition = new ClearConditionState(selection.Maze.ClearConditions);
+            SpecialDungeonRunCoordinator.ConfigureSelection(
+                run,
+                selection.Maze,
+                bossPos,
+                activeQuests);
+            DungeonRunLifecycle.StartSpecialDungeonTimer(
+                session,
+                "select_dungeon");
             if (run.HellMode)
                 await PrepareManualHellPartyAsync(session, req, selection.Maze, selection.Index);
 
@@ -170,7 +187,11 @@ namespace DfoServer.Network.Handlers.Dungeon
             byte mazeModeFlag)
         {
             var run = s.Player.CurrentRun;
-            var extraPairGroups = BuildMinimapIconGroups(req.DungeonId, mazeModeFlag);
+            var extraPairGroups =
+                SpecialDungeonRunCoordinator.ResolveMinimapIconGroups(
+                    run,
+                    req.DungeonId,
+                    mazeModeFlag);
             await s.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x001C, DungeonNotificationBuilder.BuildDungeonInfo(
                 dungeonId: req.DungeonId,
                 difficulty: req.Difficulty,
@@ -185,6 +206,9 @@ namespace DfoServer.Network.Handlers.Dungeon
                 value2: run.HellMode ? (byte)0x0B : (byte)0,
                 flagA: extraPairGroups != null ? (byte)1 : (byte)0)));
 
+            await SpecialDungeonNotifier.SendBossEntranceMinimapIconInfoAsync(
+                s,
+                "after_dungeon_info");
             await _mapHandler.SendStartMapAsync(s, 0xFF, 0xFF, overrideMapId: -1);
 
             if (StrikerSupportTagCharacterPacketBuilder.TryBuildOwnerSupportBody(s.Player.CharacterId, out var strikerBody))
@@ -234,6 +258,9 @@ namespace DfoServer.Network.Handlers.Dungeon
                     //   让其客户端进入"进副本"状态, 再重放 SELECT 才能真换图。
                     await HandleEnterSelectDungeon(bs, header, System.Array.Empty<byte>());
 
+                    await SpecialDungeonNotifier.ClearRunBuffsAsync(
+                        bs,
+                        "party_select_dungeon_replace_run");
                     DungeonRunLifecycle.BeginRun(bs, req.DungeonId, req.Difficulty);
                     var br = bs.Player.CurrentRun;
                     // 拷贝队长的迷宫 selection → 队员 run(解析出【同一】实例, 不重掷)
@@ -253,7 +280,11 @@ namespace DfoServer.Network.Handlers.Dungeon
                     br.HellMapX = lr.HellMapX;
                     br.HellMapY = lr.HellMapY;
                     br.HellRoomInfo = lr.HellRoomInfo;
+                    SpecialDungeonRunCoordinator.CloneSelectionState(lr, br);
                     bs.Player.UserState = 0x01;
+                    DungeonRunLifecycle.StartSpecialDungeonTimer(
+                        bs,
+                        "party_select_dungeon");
                     await SendDungeonSelectPacketsTo(bs, req, bossPos, mazeModeFlag);
                     FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] PARTY_DUNGEON_COOP: member cid={bs.Player.CharacterId} 驱动进副本 maze={br.MazeIndex}");
                 }
@@ -477,27 +508,5 @@ namespace DfoServer.Network.Handlers.Dungeon
             }
         }
 
-        // 小地图特殊图标坐标。两种来源:
-        // 1. [randomized object creation] → 已有 [map] 坐标(根特系列)
-        // 2. [boss room entrance condition] → [hunt monster] 条件怪需随机分配房间(陷落的村庄)
-        //    照 df_game_r SetGridPath: 从非起点/非BOSS房的有效房间里随机选。
-        private static IReadOnlyList<IReadOnlyList<(byte, byte)>> BuildMinimapIconGroups(int dungeonId, int mazeIndex)
-        {
-            PvfLib.MazeInfo maze;
-            try { maze = DungeonData.GetDungeonMaze(dungeonId, mazeIndex); }
-            catch { return null; }
-
-            // 来源1: [randomized object creation]
-            if (maze?.RidableScript != null && maze.RidableScript.Objects.Count > 0)
-            {
-                var groups = new List<IReadOnlyList<(byte, byte)>>();
-                var pairs = new List<(byte, byte)>();
-                foreach (var obj in maze.RidableScript.Objects)
-                    pairs.Add(((byte)obj.MapX, (byte)obj.MapY));
-                groups.Add(pairs);
-                return groups;
-            }
-            return null;
-        }
     }
 }

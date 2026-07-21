@@ -90,6 +90,11 @@ namespace DfoServer.GameWorld
 
             // monster/APC 脚本中的 [hell monster] 标记。为 true 时不触发最终装备奖励。
             public bool IsHellMonsterScript { get; set; }
+
+            // Source coordinates retained for conditional runtime spawns.
+            public int X { get; set; }
+            public int Y { get; set; }
+            public int Z { get; set; }
         }
 
         public struct MazeSumInfo
@@ -495,6 +500,133 @@ namespace DfoServer.GameWorld
                     return spec.LayeredMapIds;
             }
             return null;
+        }
+
+        internal static bool TryGetWarpMapOverride(
+            int dungeonId,
+            int mazeIndex,
+            int targetX,
+            int targetY,
+            out int sourceX,
+            out int sourceY,
+            out int destX,
+            out int destY,
+            out int overrideMapId)
+        {
+            sourceX = sourceY = destX = destY = overrideMapId = -1;
+
+            try
+            {
+                var dngFile = GetDungeonFile(dungeonId);
+                if (dngFile.Mazes == null || dngFile.Mazes.Count == 0
+                    || string.IsNullOrWhiteSpace(dngFile.WarpMapCondition))
+                    return false;
+
+                var maze = mazeIndex >= 0 && mazeIndex < dngFile.Mazes.Count
+                    ? dngFile.Mazes[mazeIndex]
+                    : dngFile.Mazes[0];
+                if (!TryParseWarpMapCondition(
+                    dngFile.WarpMapCondition,
+                    out sourceX,
+                    out sourceY,
+                    out destX,
+                    out destY))
+                {
+                    return false;
+                }
+
+                if (sourceX != targetX || sourceY != targetY)
+                    return false;
+
+                if (maze?.MapSpecifications == null)
+                    return false;
+
+                foreach (var spec in maze.MapSpecifications)
+                {
+                    if (spec.X != destX || spec.Y != destY || spec.Index <= 0)
+                        continue;
+
+                    overrideMapId = spec.Index;
+                    return true;
+                }
+            }
+            catch (Exception ex)
+            {
+                FileLogger.Log($"[Dungeon] warp map condition parse failed: dungeon={dungeonId} maze={mazeIndex} target=({targetX},{targetY}) error={ex.Message}");
+            }
+
+            return false;
+        }
+
+        private static bool TryParseWarpMapCondition(
+            string raw,
+            out int sourceX,
+            out int sourceY,
+            out int destX,
+            out int destY)
+        {
+            sourceX = sourceY = destX = destY = -1;
+            if (string.IsNullOrWhiteSpace(raw))
+                return false;
+
+            if (TryReadTaggedPoint(raw, "source grid pos", out sourceX, out sourceY)
+                && TryReadTaggedPoint(raw, "dest grid pos", out destX, out destY))
+            {
+                return true;
+            }
+
+            var matches = Regex.Matches(raw, @"-?\d+");
+            if (matches.Count < 4)
+                return false;
+
+            return int.TryParse(matches[0].Value, out sourceX)
+                && int.TryParse(matches[1].Value, out sourceY)
+                && int.TryParse(matches[2].Value, out destX)
+                && int.TryParse(matches[3].Value, out destY);
+        }
+
+        private static bool TryReadTaggedPoint(string raw, string tag, out int x, out int y)
+        {
+            x = y = -1;
+            var pattern = @"\[" + Regex.Escape(tag) + @"\]\s*(?<x>-?\d+)\s+(?<y>-?\d+)";
+            var match = Regex.Match(raw, pattern, RegexOptions.IgnoreCase);
+            return match.Success
+                && int.TryParse(match.Groups["x"].Value, out x)
+                && int.TryParse(match.Groups["y"].Value, out y);
+        }
+
+        public static List<MonsterSumInfo> GetMapMonsterConditionSummaryInformation(
+            int mapId,
+            int dungeonId,
+            int x,
+            int y,
+            ICollection<int> monsterCodes)
+        {
+            var result = new List<MonsterSumInfo>();
+            if (mapId <= 0 || monsterCodes == null || monsterCodes.Count == 0)
+                return result;
+
+            try
+            {
+                var dungeonBasicLv = GetDungeonBasicLv(dungeonId);
+                var maplst = LoadLstFile(Path.Combine("map", "map.lst"));
+                var mapFilePath = ResolveFilePath(maplst, mapId, "map");
+                var mapFile = MapFile.Parse(
+                    PvfArchiveAccessor.ReadText(Path.Combine("map", mapFilePath)));
+
+                AppendConditionalMonsterInfos(
+                    result,
+                    mapFile.MonsterConditionMonsters,
+                    dungeonBasicLv,
+                    monsterCodes,
+                    conditionalSummon: false);
+            }
+            catch (Exception ex)
+            {
+                FileLogger.Log($"[Dungeon] monster condition load failed: dungeon={dungeonId} room=({x},{y}) map={mapId}: {ex.Message}");
+            }
+
+            return result;
         }
 
         public static bool IsHellDungeon(int dungeonId)
@@ -935,6 +1067,92 @@ namespace DfoServer.GameWorld
             return match.Success
                 && int.TryParse(match.Groups[1].Value, out var value)
                 && value == 1;
+        }
+
+        public static List<MonsterSumInfo> GetMapConditionalSummonSummaryInformation(
+            int mapId,
+            int dungeonId,
+            int x,
+            int y,
+            ICollection<int> monsterCodes)
+        {
+            var result = new List<MonsterSumInfo>();
+            if (mapId <= 0 || monsterCodes == null || monsterCodes.Count == 0)
+                return result;
+
+            try
+            {
+                var dungeonBasicLv = GetDungeonBasicLv(dungeonId);
+                var maplst = LoadLstFile(Path.Combine("map", "map.lst"));
+                var mapFilePath = ResolveFilePath(maplst, mapId, "map");
+                var mapFile = MapFile.Parse(
+                    PvfArchiveAccessor.ReadText(Path.Combine("map", mapFilePath)));
+
+                AppendConditionalMonsterInfos(
+                    result,
+                    mapFile.ConditionalSummonMonsters,
+                    dungeonBasicLv,
+                    monsterCodes,
+                    conditionalSummon: true);
+            }
+            catch (Exception ex)
+            {
+                FileLogger.Log($"[Dungeon] conditional summon load failed: dungeon={dungeonId} room=({x},{y}) map={mapId}: {ex.Message}");
+            }
+
+            return result;
+        }
+
+        private static void AppendConditionalMonsterInfos(
+            List<MonsterSumInfo> result,
+            IReadOnlyList<MonsterInfo> monsters,
+            byte dungeonBasicLv,
+            ICollection<int> monsterCodes,
+            bool conditionalSummon)
+        {
+            if (result == null || monsters == null || monsterCodes == null)
+                return;
+
+            for (var index = 0; index < monsters.Count; index++)
+            {
+                var item = monsters[index];
+                if (!item.MonsterId.HasValue
+                    || item.MonsterId.Value <= 0
+                    || !monsterCodes.Contains(item.MonsterId.Value))
+                {
+                    continue;
+                }
+
+                var monsterType = (byte)item.Type;
+                if (monsterType > 3)
+                    monsterType = 0;
+
+                var rawLevel = item.Lv.GetValueOrDefault() != 0
+                    ? dungeonBasicLv + item.AutoLv.GetValueOrDefault()
+                    : item.AutoLv.GetValueOrDefault();
+                var level = rawLevel > 0
+                    ? (byte)Math.Min(rawLevel, 255)
+                    : dungeonBasicLv;
+                var conditionalOrder = item.ConditionalParam0.GetValueOrDefault();
+
+                result.Add(new MonsterSumInfo
+                {
+                    Code = item.MonsterId.Value,
+                    Type = monsterType,
+                    Level = level,
+                    X = item.X.GetValueOrDefault(),
+                    Y = item.Y.GetValueOrDefault(),
+                    Z = item.Z.GetValueOrDefault(),
+                    IsBlocking = !conditionalSummon,
+                    TemplateOrder = conditionalSummon && conditionalOrder > 0
+                        ? (ushort)Math.Min(conditionalOrder, ushort.MaxValue)
+                        : (ushort)0,
+                    PacketIndex = conditionalSummon && item.ConditionalParam0.HasValue
+                        ? item.ConditionalParam0.Value
+                        : index,
+                    Flag0 = conditionalSummon ? (byte)1 : (byte)0,
+                });
+            }
         }
 
         public static MazeSumInfo GetDungeonMapMonsterSummaryInformation(int dungeonId, int x, int y, int mazeIndex = -1, int overrideMapId = -1, int[] bossPos = null)
