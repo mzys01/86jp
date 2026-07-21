@@ -212,6 +212,17 @@ namespace DfoServer.GameWorld
             return NormalizeQuestTag(qst.RewardType) == "title";
         }
 
+        // The client rebuilds these native character effects from the completed
+        // quest id and the QST's [special reward status] block.
+        internal static bool HasSpecialRewardStatus(int questId)
+        {
+            if (questId <= 0)
+                return false;
+
+            var qst = GetQuestFile(questId);
+            return qst != null && qst.HasTag("special reward status");
+        }
+
         public static bool CanGiveup(int questId)
         {
             var qst = GetQuestFile(questId);
