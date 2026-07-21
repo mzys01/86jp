@@ -1043,6 +1043,43 @@ namespace DfoServer.GameWorld
             });
         }
 
+        internal static bool TryGetTowerOfDespairFloor(int dungeonId, out int floor)
+        {
+            floor = 0;
+            var loaded = LoadDungeonFileWithPath(dungeonId);
+            if (loaded.File.TowerOfDespair <= 0)
+                return false;
+
+            var dungeonFileName = Path.GetFileNameWithoutExtension(loaded.FilePath) ?? string.Empty;
+            var match = Regex.Match(
+                dungeonFileName,
+                @"TowerOfDespair(?<floor>\d{3})$",
+                RegexOptions.IgnoreCase);
+            return match.Success
+                && int.TryParse(match.Groups["floor"].Value, out floor)
+                && floor > 0;
+        }
+
+        internal static bool TryGetTowerOfDespairDungeonId(int floor, out int dungeonId)
+        {
+            dungeonId = 0;
+            if (floor < 1 || floor > 100)
+                return false;
+
+            var expectedFileName = $"TowerOfDespair{floor:000}";
+            foreach (var entry in LoadDungeonLstFile().Entries)
+            {
+                var fileName = Path.GetFileNameWithoutExtension(entry.FilePath) ?? string.Empty;
+                if (!fileName.EndsWith(expectedFileName, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                dungeonId = entry.Id;
+                return dungeonId > 0;
+            }
+
+            return false;
+        }
+
         private static MapFile LoadMapFile(int mapId)
         {
             var maplst = LoadLstFile(Path.Combine("map", "map.lst"));

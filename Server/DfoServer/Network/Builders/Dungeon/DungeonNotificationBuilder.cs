@@ -256,6 +256,26 @@ namespace DfoServer.Network.Builders
             return writer.ToArray();
         }
 
+        public static byte[] BuildTowerOfDespairClearReward(
+            uint clearTimeMilliseconds,
+            int floor,
+            int itemId,
+            int itemCount)
+        {
+            var writer = new GamePacketWriter();
+            writer.WriteUInt32(clearTimeMilliseconds);
+            writer.WriteUInt16((ushort)Math.Clamp(floor, 1, 100));
+
+            var hasItemReward = itemId > 0 && itemCount > 0;
+            writer.WriteByte(hasItemReward ? (byte)1 : (byte)0);
+            if (hasItemReward)
+            {
+                writer.WriteUInt32((uint)itemId);
+                writer.WriteUInt32((uint)itemCount);
+            }
+            return writer.ToArray();
+        }
+
         public static byte[] BuildPlayResult(
             ushort userId,
             int clearTimeMs,
