@@ -189,7 +189,26 @@ ORDER BY slot", conn))
                     }
                 }
 
-                // PvpResults/AbuseValues 保持空列表: 对应功能未实现, 旧表全库为空且无写入方, 已删除
+                // The client consumes this as a list of completed QST ids and
+                // resolves [special reward status] locally. Do not send raw
+                // advanced attribute values through subtype1.
+                using (var cmd = new SqliteCommand(@"
+SELECT slot_index
+FROM character_invisible_falgs
+WHERE character_id=@cid AND flag_value<>0
+ORDER BY slot_index", conn))
+                {
+                    cmd.Parameters.AddWithValue("@cid", characterId);
+                    using (var r = cmd.ExecuteReader())
+                    {
+                        while (r.Read())
+                        {
+                            int questId = r.GetInt32(0);
+                            if (GameWorld.QuestData.HasSpecialRewardStatus(questId))
+                                snap.SpecialRewardQuestIds.Add((uint)questId);
+                        }
+                    }
+                }
             }
 
             if (KnightShieldDataProvider.IsEligibleCharacter(characterJob))
