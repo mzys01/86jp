@@ -88,6 +88,23 @@ namespace DfoServer.GameWorld
 
             var index = GetOrBuildIndex(dungeonId, maplst, mapDirCandidates);
 
+            // A boss specification belongs to the selected maze, while the directory
+            // index is shared by every maze in the dungeon. Resolve the maze-local
+            // declaration first so another maze's boss file at the same coordinate
+            // cannot be selected from the shared index.
+            if (isBossRoom)
+            {
+                var explicitBossMapId = ResolveFromMapSpecification(
+                    maplst,
+                    maze,
+                    x,
+                    y,
+                    isBossRoom: true,
+                    allowMapTypeForBossRoom: false);
+                if (explicitBossMapId > 0)
+                    return explicitBossMapId;
+            }
+
             // For non-quest start/boss rooms, a typed directory file at the exact
             // coordinate takes priority over generic MapSpecification (the start/boss
             // variant has different NPCs/layout from the ordinary "map" type spec).
@@ -232,7 +249,13 @@ namespace DfoServer.GameWorld
 
         // --- Step 1: MapSpecification ---
 
-        private static int ResolveFromMapSpecification(LstFile maplst, MazeInfo maze, int x, int y, bool isBossRoom)
+        private static int ResolveFromMapSpecification(
+            LstFile maplst,
+            MazeInfo maze,
+            int x,
+            int y,
+            bool isBossRoom,
+            bool allowMapTypeForBossRoom = true)
         {
             if (maze.MapSpecifications == null || maze.MapSpecifications.Count == 0)
                 return -1;
@@ -247,7 +270,8 @@ namespace DfoServer.GameWorld
                     if (item.X != x || item.Y != y) continue;
                     var specType = item.Type ?? string.Empty;
                     if (!string.Equals(specType, "boss", StringComparison.OrdinalIgnoreCase)
-                        && !string.Equals(specType, "map", StringComparison.OrdinalIgnoreCase))
+                        && !(allowMapTypeForBossRoom
+                            && string.Equals(specType, "map", StringComparison.OrdinalIgnoreCase)))
                         continue;
 
                     var candidates = item.MapCandidates != null && item.MapCandidates.Length > 0
