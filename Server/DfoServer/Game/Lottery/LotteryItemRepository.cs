@@ -22,23 +22,6 @@ namespace DfoServer.Game.Lottery
         internal int StackCount => InventoryRecord.StackCount;
     }
 
-    internal sealed class LotteryMaterialRecord
-    {
-        internal LotteryMaterialRecord(SqliteInventoryStore.ItemRecord inventoryRecord)
-        {
-            InventoryRecord = inventoryRecord
-                ?? throw new ArgumentNullException(nameof(inventoryRecord));
-        }
-
-        internal SqliteInventoryStore.ItemRecord InventoryRecord { get; }
-
-        internal short SlotIndex => InventoryRecord.SlotIndex;
-
-        internal int ItemTemplateId => InventoryRecord.ItemTemplateId;
-
-        internal int StackCount => InventoryRecord.StackCount;
-    }
-
     public sealed class LotteryItemRepository
     {
         private readonly SqliteInventoryStore _inventoryStore;
@@ -95,40 +78,6 @@ namespace DfoServer.Game.Lottery
         internal bool TrySpendGold(DbScope scope, int amount)
             => amount <= 0 || _assetService.TrySpendGold(scope, amount);
 
-        internal bool TryLoadMaterial(
-            DbScope scope,
-            LotteryRequiredMaterial requiredMaterial,
-            out LotteryMaterialRecord material)
-        {
-            material = null;
-            if (scope == null || requiredMaterial == null || requiredMaterial.ItemTemplateId <= 0 || requiredMaterial.Count <= 0)
-                return true;
-
-            var metadata = ItemMetadataResolver.Resolve(requiredMaterial.ItemTemplateId);
-            metadata.GetSlotRange(out var slotStart, out var slotEnd);
-            var record = _inventoryStore._db.FindItemByTemplateIdInRange(
-                    scope.Connection,
-                    scope.Transaction,
-                    scope.CharacterId,
-                    InventoryListType.Main,
-                    requiredMaterial.ItemTemplateId,
-                    SqliteInventoryStore.QuickSlotStart,
-                    SqliteInventoryStore.QuickSlotEnd)
-                ?? _inventoryStore._db.FindItemByTemplateIdInRange(
-                    scope.Connection,
-                    scope.Transaction,
-                    scope.CharacterId,
-                    InventoryListType.Main,
-                    requiredMaterial.ItemTemplateId,
-                    slotStart,
-                    slotEnd);
-            if (record == null || record.StackCount < requiredMaterial.Count)
-                return false;
-
-            material = new LotteryMaterialRecord(record);
-            return true;
-        }
-
         internal bool TryConsumeSource(
             DbScope scope,
             LotterySourceRecord source,
@@ -157,34 +106,6 @@ namespace DfoServer.Game.Lottery
                     scope.Connection,
                     scope.Transaction,
                     source.InventoryRecord.ItemUid);
-            }
-
-            return true;
-        }
-
-        internal bool TryConsumeMaterial(
-            DbScope scope,
-            LotteryMaterialRecord material,
-            int count)
-        {
-            if (scope == null || material == null || count <= 0 || material.StackCount < count)
-                return false;
-
-            var remaining = material.StackCount - count;
-            if (remaining > 0)
-            {
-                _inventoryStore._db.UpdateStackCount(
-                    scope.Connection,
-                    scope.Transaction,
-                    material.InventoryRecord.ItemUid,
-                    remaining);
-            }
-            else
-            {
-                _inventoryStore._db.DeleteItem(
-                    scope.Connection,
-                    scope.Transaction,
-                    material.InventoryRecord.ItemUid);
             }
 
             return true;
@@ -229,8 +150,6 @@ namespace DfoServer.Game.Lottery
         internal void WriteAudit(
             DbScope scope,
             LotterySourceRecord source,
-            LotteryMaterialRecord material,
-            int materialCount,
             IReadOnlyList<LotteryRewardGrant> grants)
         {
             _auditLogger.WriteDeleteAuditLog(
@@ -239,15 +158,6 @@ namespace DfoServer.Game.Lottery
                 scope.CharacterId,
                 source.InventoryRecord,
                 1);
-            if (material != null && materialCount > 0)
-            {
-                _auditLogger.WriteDeleteAuditLog(
-                    scope.Connection,
-                    scope.Transaction,
-                    scope.CharacterId,
-                    material.InventoryRecord,
-                    materialCount);
-            }
 
             foreach (var grant in grants ?? Array.Empty<LotteryRewardGrant>())
             {
