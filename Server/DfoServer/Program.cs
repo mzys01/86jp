@@ -21,6 +21,7 @@ namespace DfoServer
             ("--selftest-inventory-sale", SelfTests.InventorySaleSelfTest.Run),
             ("--selftest-npc-material-exchange-price", SelfTests.NpcMaterialExchangePriceSelfTest.Run),
             ("--selftest-charm-equipment-slot", SelfTests.CharmEquipmentSlotSelfTest.Run),
+            ("--selftest-equipped-weapon-swap", SelfTests.EquippedWeaponSwapSelfTest.Run),
             ("--selftest-personal-cargo", SelfTests.PersonalCargoSelfTest.Run),
             ("--selftest-lottery-item", SelfTests.LotteryItemSelfTest.Run),
             ("--selftest-dungeon-map-fallback", SelfTests.DungeonMapFallbackSelfTest.Run),

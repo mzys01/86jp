@@ -18,7 +18,10 @@ namespace DfoServer.Network.Handlers
             {
                 if (body != null && body.Length >= 4)
                     await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0013,
-                        MoveItemSpaceAckBuilder.BuildError(0x04, body[0], body.Length > 11 ? body[11] : body[0])));
+                        MoveItemSpaceAckBuilder.BuildError(
+                            MoveItemSpaceAckBuilder.InvalidOperationErrorCode,
+                            body[0],
+                            body.Length > 11 ? body[11] : body[0])));
                 return;
             }
 
@@ -48,7 +51,10 @@ namespace DfoServer.Network.Handlers
                 {
                     // 0x04 是“仓库空间不足”，符咒快捷栏上限使用通用移动失败响应。
                     await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0013,
-                        MoveItemSpaceAckBuilder.BuildError(0x02, (byte)request.SourceListType, (byte)request.DestinationListType)));
+                        MoveItemSpaceAckBuilder.BuildError(
+                            MoveItemSpaceAckBuilder.InvalidOperationErrorCode,
+                            (byte)request.SourceListType,
+                            (byte)request.DestinationListType)));
                     await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
                         0x00,
                         (ushort)NotiPacketType.SERVER_NOTICE_MESSAGE,
@@ -59,14 +65,20 @@ namespace DfoServer.Network.Handlers
 
                 FileLogger.Log($"[{ProtocolName}] MOVE_ITEMSPACE: FAILED src=({request.SourceListType},{request.SourceSlotIndex}) dst=({request.DestinationListType},{request.DestinationSlotIndex})");
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0013,
-                    MoveItemSpaceAckBuilder.BuildError(0x04, (byte)request.SourceListType, (byte)request.DestinationListType)));
+                    MoveItemSpaceAckBuilder.BuildError(
+                        MoveItemSpaceAckBuilder.InvalidOperationErrorCode,
+                        (byte)request.SourceListType,
+                        (byte)request.DestinationListType)));
                 return;
             }
 
             if (result.AckError)
             {
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0013,
-                    MoveItemSpaceAckBuilder.BuildError(0x02, (byte)request.SourceListType, (byte)request.DestinationListType)));
+                    MoveItemSpaceAckBuilder.BuildError(
+                        MoveItemSpaceAckBuilder.InvalidOperationErrorCode,
+                        (byte)request.SourceListType,
+                        (byte)request.DestinationListType)));
                 FileLogger.Log($"[{ProtocolName}] MOVE_ITEMSPACE: ReverseError -> ERROR ACK (撤销反转包, 不卡住)");
                 return;
             }
