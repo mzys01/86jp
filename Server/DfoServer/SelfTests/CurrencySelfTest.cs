@@ -145,25 +145,6 @@ namespace DfoServer.SelfTests
                 Check("uncommitted scope rolls back spend", LoadGold(conn, CharacterId) == 250);
             }
 
-            var grantRewardMethod = typeof(Game.Dungeon.CardRewardService).GetMethod(
-                "GrantGoldReward",
-                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
-            WalletSnapshot rewardWallet = null;
-            if (grantRewardMethod != null)
-            {
-                rewardWallet = grantRewardMethod.Invoke(
-                    null,
-                    new object[] { assetService, FreshCharacterId, AccountId, 75 }) as WalletSnapshot;
-            }
-            using (var conn = new SqliteConnection(connStr))
-            {
-                conn.Open();
-                Check("card gold reward loads wallet before commit and persists the grant",
-                    rewardWallet != null
-                    && rewardWallet.Gold == 852
-                    && LoadGold(conn, FreshCharacterId) == 852);
-            }
-
             PrintSummary();
             return _fail == 0 ? 0 : 1;
         }

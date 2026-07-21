@@ -1,9 +1,9 @@
 using DfoServer.Infrastructure;
+using DfoServer.Game.Dungeon;
 using DfoServer.Game.Session;
 using Microsoft.Data.Sqlite;
 using System;
 using System.IO;
-using System.Reflection;
 
 namespace DfoServer.SelfTests
 {
@@ -26,54 +26,68 @@ namespace DfoServer.SelfTests
                     ServerPaths.SchemaFilePath);
                 SeedCharacter(connectionString);
 
-                var assembly = typeof(TowerOfDespairProgressSelfTest).Assembly;
-                var repositoryType = assembly.GetType(
-                    "DfoServer.Game.Dungeon.TowerOfDespairProgressRepository");
-                var serviceType = assembly.GetType(
-                    "DfoServer.Game.Dungeon.TowerOfDespairProgressService");
-
-                Check("progress repository exists", repositoryType != null, ref failures);
-                Check("progress service exists", serviceType != null, ref failures);
-                if (repositoryType == null || serviceType == null)
-                    return Finish(failures);
-
-                var repository = Activator.CreateInstance(
-                    repositoryType,
+                var repository = new TowerOfDespairProgressRepository(
                     databasePath,
                     ServerPaths.SchemaFilePath);
-                var service = Activator.CreateInstance(serviceType, repository);
+                var service = new TowerOfDespairProgressService(repository);
 
                 Check("fresh character starts on floor 1",
-                    ResolveEntryDungeon(serviceType, service, CharacterId, 11008) == 11008,
+                    service.ResolveEntryDungeonId(CharacterId, 11008) == 11008,
                     ref failures);
                 Check("non tower dungeon is unchanged",
-                    ResolveEntryDungeon(serviceType, service, CharacterId, 144) == 144,
+                    service.ResolveEntryDungeonId(CharacterId, 144) == 144,
                     ref failures);
 
-                RecordClear(serviceType, service, CharacterId, 11008);
+                Check("floor 1 clear is recorded",
+                    service.TryRecordClear(CharacterId, 11008, out _, out _),
+                    ref failures);
                 Check("clearing floor 1 redirects the base request to floor 2",
-                    ResolveEntryDungeon(serviceType, service, CharacterId, 11008) == 11009,
+                    service.ResolveEntryDungeonId(CharacterId, 11008) == 11009,
                     ref failures);
 
-                var reopenedRepository = Activator.CreateInstance(
-                    repositoryType,
+                var reopenedRepository = new TowerOfDespairProgressRepository(
                     databasePath,
                     ServerPaths.SchemaFilePath);
-                var reopenedService = Activator.CreateInstance(serviceType, reopenedRepository);
+                var reopenedService = new TowerOfDespairProgressService(reopenedRepository);
                 Check("floor progress survives repository recreation",
-                    ResolveEntryDungeon(serviceType, reopenedService, CharacterId, 11008) == 11009,
+                    reopenedService.ResolveEntryDungeonId(CharacterId, 11008) == 11009,
                     ref failures);
 
-                CheckEnterSelectDungeonFloorLayout(assembly, ref failures);
+                CheckEnterSelectDungeonFloorLayout(ref failures);
 
-                RecordClear(serviceType, reopenedService, CharacterId, 11008);
+                Check("replayed floor 1 clear is accepted idempotently",
+                    reopenedService.TryRecordClear(CharacterId, 11008, out _, out _),
+                    ref failures);
                 Check("replaying an older clear does not skip a floor",
-                    ResolveEntryDungeon(serviceType, reopenedService, CharacterId, 11008) == 11009,
+                    reopenedService.ResolveEntryDungeonId(CharacterId, 11008) == 11009,
                     ref failures);
 
-                RecordClear(serviceType, reopenedService, CharacterId, 11107);
+                Check("floor 100 clear is recorded",
+                    reopenedService.TryRecordClear(CharacterId, 11107, out _, out _),
+                    ref failures);
                 Check("floor progress is capped at floor 100",
-                    ResolveEntryDungeon(serviceType, reopenedService, CharacterId, 11008) == 11107,
+                    reopenedService.ResolveEntryDungeonId(CharacterId, 11008) == 11107,
+                    ref failures);
+
+                DropTowerProgressTable(connectionString);
+                Check("missing progress table returns a safe floor fallback",
+                    !reopenedService.TryGetNextFloor(
+                        CharacterId,
+                        out var fallbackFloor,
+                        out var readError)
+                    && fallbackFloor == 1
+                    && readError != null,
+                    ref failures);
+                Check("missing progress table keeps the requested entry dungeon",
+                    reopenedService.ResolveEntryDungeonId(CharacterId, 11008) == 11008,
+                    ref failures);
+                Check("missing progress table rejects a clear before rewards are exposed",
+                    !reopenedService.TryRecordClear(
+                        CharacterId,
+                        11008,
+                        out _,
+                        out var writeError)
+                    && writeError != null,
                     ref failures);
 
                 using (var connection = new SqliteConnection(connectionString))
@@ -82,11 +96,13 @@ namespace DfoServer.SelfTests
                     using (var command = connection.CreateCommand())
                     {
                         command.CommandText = "PRAGMA user_version;";
-                        Check("tower progress schema migration is version 29",
-                            Convert.ToInt32(command.ExecuteScalar()) == 29,
+                        Check("tower progress schema migration includes version 29",
+                            Convert.ToInt32(command.ExecuteScalar()) >= 29,
                             ref failures);
                     }
                 }
+
+                CheckLegacyV20Migration(ref failures);
             }
             catch (Exception ex)
             {
@@ -101,59 +117,11 @@ namespace DfoServer.SelfTests
             return Finish(failures);
         }
 
-        private static int ResolveEntryDungeon(
-            Type serviceType,
-            object service,
-            int characterId,
-            int requestedDungeonId)
+        private static void CheckEnterSelectDungeonFloorLayout(ref int failures)
         {
-            var method = serviceType.GetMethod(
-                "ResolveEntryDungeonId",
-                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-            if (method == null)
-                throw new MissingMethodException(serviceType.FullName, "ResolveEntryDungeonId");
-
-            return Convert.ToInt32(method.Invoke(
-                service,
-                new object[] { characterId, requestedDungeonId }));
-        }
-
-        private static void RecordClear(
-            Type serviceType,
-            object service,
-            int characterId,
-            int clearedDungeonId)
-        {
-            var method = serviceType.GetMethod(
-                "RecordClear",
-                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-            if (method == null)
-                throw new MissingMethodException(serviceType.FullName, "RecordClear");
-
-            method.Invoke(service, new object[] { characterId, clearedDungeonId });
-        }
-
-        private static void CheckEnterSelectDungeonFloorLayout(
-            Assembly assembly,
-            ref int failures)
-        {
-            var builderType = assembly.GetType(
-                "DfoServer.Network.Builders.EnterSelectDungeonStateBuilder");
-            var method = builderType?.GetMethod(
-                "BuildEnterSelectDungeon",
-                BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic,
-                binder: null,
-                types: new[] { typeof(PlayerContext), typeof(int) },
-                modifiers: null);
-
-            Check("enter-select-dungeon builder accepts the current despair floor",
-                method != null,
-                ref failures);
-            if (method == null)
-                return;
-
             var player = new PlayerContext { UserId = 1002 };
-            var body = (byte[])method.Invoke(null, new object[] { player, 8 });
+            var body = Network.Builders.EnterSelectDungeonStateBuilder
+                .BuildEnterSelectDungeon(player, 8);
             Check("enter-select-dungeon body keeps the proven 19-byte layout",
                 body != null && body.Length == 19,
                 ref failures);
@@ -167,6 +135,91 @@ namespace DfoServer.SelfTests
                     && body.Length >= 16
                     && BitConverter.ToUInt16(body, 14) == 8,
                 ref failures);
+        }
+
+        private static void DropTowerProgressTable(string connectionString)
+        {
+            using (var connection = new SqliteConnection(connectionString))
+            {
+                connection.Open();
+                using (var command = connection.CreateCommand())
+                {
+                    command.CommandText = "DROP TABLE character_tower_of_despair_progress;";
+                    command.ExecuteNonQuery();
+                }
+            }
+        }
+
+        private static void CheckLegacyV20Migration(ref int failures)
+        {
+            var databasePath = Path.Combine(
+                Path.GetTempPath(),
+                "tower-of-despair-v20-migration-" + Guid.NewGuid().ToString("N") + ".db");
+            var connectionString = SqliteDatabaseBootstrap.BuildConnectionString(databasePath);
+
+            try
+            {
+                using (var connection = new SqliteConnection(connectionString))
+                {
+                    connection.Open();
+                    using (var command = connection.CreateCommand())
+                    {
+                        command.CommandText = File.ReadAllText(ServerPaths.SchemaFilePath);
+                        command.ExecuteNonQuery();
+                        command.CommandText = @"
+INSERT OR IGNORE INTO accounts(account_id, m_id, password_hash)
+VALUES(@accountId, 'tower-of-despair-v20', '');
+INSERT OR IGNORE INTO characters(character_id, account_id, name, level)
+VALUES(@characterId, @accountId, 'tower-of-despair-v20', 86);
+INSERT INTO character_tower_of_despair_progress(
+    character_id,
+    highest_cleared_floor)
+VALUES(@characterId, 7);
+ALTER TABLE accounts DROP COLUMN growth_capsule_exp;
+PRAGMA user_version=20;";
+                        command.Parameters.AddWithValue("@accountId", AccountId + 1);
+                        command.Parameters.AddWithValue("@characterId", CharacterId + 1);
+                        command.ExecuteNonQuery();
+                    }
+                }
+
+                SqliteDatabaseBootstrap.Initialize(
+                    databasePath,
+                    ServerPaths.SchemaFilePath);
+
+                using (var connection = new SqliteConnection(connectionString))
+                {
+                    connection.Open();
+                    using (var command = connection.CreateCommand())
+                    {
+                        command.CommandText = @"
+SELECT COUNT(*)
+FROM pragma_table_info('accounts')
+WHERE name='growth_capsule_exp';";
+                        Check("legacy v20 migration restores the mainline growth capsule column",
+                            Convert.ToInt32(command.ExecuteScalar()) == 1,
+                            ref failures);
+
+                        command.CommandText = @"
+SELECT highest_cleared_floor
+FROM character_tower_of_despair_progress
+WHERE character_id=@characterId;";
+                        command.Parameters.AddWithValue("@characterId", CharacterId + 1);
+                        Check("legacy v20 migration preserves tower floor progress",
+                            Convert.ToInt32(command.ExecuteScalar()) == 7,
+                            ref failures);
+
+                        command.CommandText = "PRAGMA user_version;";
+                        Check("legacy v20 migration advances through the tower migration",
+                            Convert.ToInt32(command.ExecuteScalar()) >= 29,
+                            ref failures);
+                    }
+                }
+            }
+            finally
+            {
+                DeleteDatabase(databasePath);
+            }
         }
 
         private static void SeedCharacter(string connectionString)

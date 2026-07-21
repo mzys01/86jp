@@ -1,4 +1,3 @@
-using DfoServer.Game.Currency;
 using DfoServer.Game.Inventory;
 using DfoServer.Infrastructure;
 using DfoServer.Network;
@@ -314,25 +313,15 @@ namespace DfoServer.Game.Dungeon
             if (cards.Count <= index || !cards[index].IsGold || cards[index].GoldAmount <= 0) return;
             try
             {
-                var wallet = GrantGoldReward(_assetService, cid, aid, cards[index].GoldAmount);
-                entries.Add(ItemListUpdateBuilder.BuildRawItemEntry(0, 0, (uint)wallet.Gold));
+                using (var scope = _assetService.OpenScope(cid, aid))
+                {
+                    _assetService.GrantGold(scope, cards[index].GoldAmount);
+                    var wallet = _assetService.LoadWallet(scope);
+                    scope.Commit();
+                    entries.Add(ItemListUpdateBuilder.BuildRawItemEntry(0, 0, (uint)wallet.Gold));
+                }
             }
             catch (Exception ex) { FileLogger.Log($"[CardReward] CollectGoldReward ERROR: {ex.Message}"); }
-        }
-
-        private static WalletSnapshot GrantGoldReward(
-            IAssetService assetService,
-            int characterId,
-            int accountId,
-            int amount)
-        {
-            using (var scope = assetService.OpenScope(characterId, accountId))
-            {
-                assetService.GrantGold(scope, amount);
-                var wallet = assetService.LoadWallet(scope);
-                scope.Commit();
-                return wallet;
-            }
         }
 
         private void CollectItemReward(int cid, int aid, List<ClearRewardGenerator.CardReward> cards, int index, List<byte[]> entries)

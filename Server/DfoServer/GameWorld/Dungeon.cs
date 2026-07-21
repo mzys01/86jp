@@ -1046,18 +1046,26 @@ namespace DfoServer.GameWorld
         internal static bool TryGetTowerOfDespairFloor(int dungeonId, out int floor)
         {
             floor = 0;
-            var loaded = LoadDungeonFileWithPath(dungeonId);
-            if (loaded.File.TowerOfDespair <= 0)
-                return false;
+            try
+            {
+                var loaded = LoadDungeonFileWithPath(dungeonId);
+                if (loaded.File.TowerOfDespair <= 0)
+                    return false;
 
-            var dungeonFileName = Path.GetFileNameWithoutExtension(loaded.FilePath) ?? string.Empty;
-            var match = Regex.Match(
-                dungeonFileName,
-                @"TowerOfDespair(?<floor>\d{3})$",
-                RegexOptions.IgnoreCase);
-            return match.Success
-                && int.TryParse(match.Groups["floor"].Value, out floor)
-                && floor > 0;
+                var dungeonFileName = Path.GetFileNameWithoutExtension(loaded.FilePath) ?? string.Empty;
+                var match = Regex.Match(
+                    dungeonFileName,
+                    @"TowerOfDespair(?<floor>\d{3})$",
+                    RegexOptions.IgnoreCase);
+                return match.Success
+                    && int.TryParse(match.Groups["floor"].Value, out floor)
+                    && floor > 0;
+            }
+            catch
+            {
+                floor = 0;
+                return false;
+            }
         }
 
         internal static bool TryGetTowerOfDespairDungeonId(int floor, out int dungeonId)
@@ -1066,15 +1074,22 @@ namespace DfoServer.GameWorld
             if (floor < 1 || floor > 100)
                 return false;
 
-            var expectedFileName = $"TowerOfDespair{floor:000}";
-            foreach (var entry in LoadDungeonLstFile().Entries)
+            try
             {
-                var fileName = Path.GetFileNameWithoutExtension(entry.FilePath) ?? string.Empty;
-                if (!fileName.EndsWith(expectedFileName, StringComparison.OrdinalIgnoreCase))
-                    continue;
+                var expectedFileName = $"TowerOfDespair{floor:000}";
+                foreach (var entry in LoadDungeonLstFile().Entries)
+                {
+                    var fileName = Path.GetFileNameWithoutExtension(entry.FilePath) ?? string.Empty;
+                    if (!fileName.EndsWith(expectedFileName, StringComparison.OrdinalIgnoreCase))
+                        continue;
 
-                dungeonId = entry.Id;
-                return dungeonId > 0;
+                    dungeonId = entry.Id;
+                    return dungeonId > 0;
+                }
+            }
+            catch
+            {
+                dungeonId = 0;
             }
 
             return false;

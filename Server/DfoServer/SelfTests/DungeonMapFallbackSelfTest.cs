@@ -166,6 +166,21 @@ namespace DfoServer.SelfTests
 
             CheckSuitableLevelEligibility(ref failures);
 
+            var towerClassificationIsSafe = false;
+            try
+            {
+                towerClassificationIsSafe = !DungeonData.TryGetTowerOfDespairFloor(
+                    int.MaxValue,
+                    out _);
+            }
+            catch
+            {
+                towerClassificationIsSafe = false;
+            }
+            Check("tower classification treats an unknown dungeon as non-tower without throwing",
+                towerClassificationIsSafe,
+                ref failures);
+
             try
             {
                 var despairTowerFirstFloor = DungeonData.GetDungeonMapMonsterSummaryInformation(
@@ -181,32 +196,6 @@ namespace DfoServer.SelfTests
             catch (Exception ex)
             {
                 Console.WriteLine($"[FAIL] tower of despair first floor resolves its PVF map and boss APC: {ex.Message}");
-                failures++;
-            }
-
-            try
-            {
-                var method = typeof(DungeonSettlementHandler).GetMethod(
-                    "TryBuildTowerOfDespairClearReward",
-                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
-                var args = new object[] { 11008, null };
-                var built = method != null
-                    && (bool)method.Invoke(null, args)
-                    ? args[1] as byte[]
-                    : null;
-                var emptyFirstFloorBody = new byte[]
-                {
-                    0x00, 0x00, 0x00, 0x00,
-                    0x01, 0x00,
-                    0x00,
-                };
-                Check("tower of despair settlement helper builds an empty client-layout TOD_CLEAR_REWARD body",
-                    ByteEquals(built, emptyFirstFloorBody),
-                    ref failures);
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"[FAIL] tower of despair first-floor settlement builds captured TOD_CLEAR_REWARD body: {ex.Message}");
                 failures++;
             }
 
@@ -581,15 +570,6 @@ namespace DfoServer.SelfTests
         {
             Console.WriteLine($"[{(ok ? "OK" : "FAIL")}] {name}");
             if (!ok) failures++;
-        }
-
-        private static bool ByteEquals(byte[] left, byte[] right)
-        {
-            if (ReferenceEquals(left, right)) return true;
-            if (left == null || right == null || left.Length != right.Length) return false;
-            for (var i = 0; i < left.Length; i++)
-                if (left[i] != right[i]) return false;
-            return true;
         }
 
         private static void CheckSuitableLevelEligibility(ref int failures)

@@ -88,8 +88,18 @@ namespace DfoServer.Network.Handlers.Dungeon
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0003, EnterSelectDungeonStateBuilder.BuildUserState(session.Player)));
 
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x001A, UdpHostBuilder.BuildUnavailable()));
-                var towerOfDespairFloor = _svc.TowerOfDespairProgress.GetNextFloor(
-                    session.Player.CharacterId);
+                var towerOfDespairFloor = 1;
+                if (!_svc.TowerOfDespairProgress.TryGetNextFloor(
+                        session.Player.CharacterId,
+                        out towerOfDespairFloor,
+                        out var towerProgressError))
+                {
+                    FileLogger.Log(
+                        $"[{DungeonSharedServices.ProtocolLogName}] " +
+                        $"ENTER_SELECT_DUNGEON tower floor fallback: " +
+                        $"cid={session.Player.CharacterId} " +
+                        $"error={towerProgressError?.Message}");
+                }
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
                     0x00,
                     0x001B,

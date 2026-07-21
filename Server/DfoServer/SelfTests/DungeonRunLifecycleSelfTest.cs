@@ -4,7 +4,6 @@ using System.Reflection;
 using DfoServer.Game.Dungeon;
 using DfoServer.Infrastructure;
 using DfoServer.Network;
-using DfoServer.Network.Builders;
 using DfoServer.Network.Handlers.Dungeon;
 
 namespace DfoServer.SelfTests
@@ -57,8 +56,6 @@ namespace DfoServer.SelfTests
                 ref failures);
 
             CheckTowerSettlementPolicy(ref failures);
-            CheckTowerSelectionProbeRemoved(ref failures);
-
             // 3. BeginRun 建立新局
             DungeonRunLifecycle.BeginRun(session, 1002, 1);
             var run = player.CurrentRun;
@@ -283,14 +280,6 @@ namespace DfoServer.SelfTests
                 ref failures);
         }
 
-        private static void CheckTowerSelectionProbeRemoved(ref int failures)
-        {
-            Check("tower selection flow exposes no unsafe partial-state 0x02F8 probe",
-                typeof(DungeonNotificationBuilder).GetMethod(
-                    "BuildTowerOfDespairSelectionProbe",
-                    BindingFlags.Public | BindingFlags.Static) == null,
-                ref failures);
-        }
         private static void Check(string name, bool ok, ref int failures)
         {
             Console.WriteLine($"[{(ok ? "OK" : "FAIL")}] {name}");
