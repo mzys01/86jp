@@ -242,6 +242,7 @@ namespace DfoServer.Game.Inventory
                     MinimumLevel = stackable.MinimumLevel,
                     Rarity = stackable.Rarity,
                     ItemCategory = stackable.ItemCategory,
+                    AttachType = stackable.AttachType,
                     ImpossibleContents = stackable.ImpossibleContentItems,
                 };
             }

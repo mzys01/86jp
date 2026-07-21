@@ -82,7 +82,7 @@ namespace DfoServer.Network.Handlers.Dungeon
                 sendInDungeonLevelUpFollowups: SendInDungeonLevelUpFollowups,
                 inventoryRefresh: inventoryRefresh);
             CardRewards = new Game.Dungeon.CardRewardService(this, assetService);
-            Drops = new Game.Dungeon.DropService(assetService);
+            Drops = new Game.Dungeon.DropService(assetService, inventoryStore);
             EntryCost = new Game.Dungeon.DungeonEntryCostService(assetService);
         }
 

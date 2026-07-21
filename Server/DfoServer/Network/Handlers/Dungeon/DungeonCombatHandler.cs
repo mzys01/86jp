@@ -733,11 +733,72 @@ namespace DfoServer.Network.Handlers.Dungeon
             {
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0027,
                     DropItemBuilder.BuildPickupItem(req.SrcSlot, session.Player.UserId, (ushort)pickup.InventorySlot, 7)));
+                if (pickup.RestoredItem != null)
+                {
+                    await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
+                        0x00,
+                        0x000E,
+                        ItemListUpdateBuilder.BuildCommonUpdates(new[] { pickup.RestoredItem })));
+                }
                 if (session.GameSession?.QuestManager != null && pickup.PickedUpItemId > 0)
                     await session.GameSession.QuestManager.SyncItemSeekingQuestProgressAsync(
                         new[] { pickup.PickedUpItemId });
-                FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] GET_ITEM: item pickup srcSlot={req.SrcSlot} templateId={pickup.PickedUpItemId} invSlot={pickup.InventorySlot}");
+                FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] GET_ITEM: item pickup srcSlot={req.SrcSlot} templateId={pickup.PickedUpItemId} invSlot={pickup.InventorySlot} restoredValue={pickup.RestoredItem?.CountOrInstanceValue.ToString() ?? "-"}");
             }
+        }
+
+        internal async Task HandleDropItem(EnhancedClientSession session, GamePacketHeader header, byte[] body)
+        {
+            var run = session.Player.CurrentRun;
+            if (run == null)
+                return;
+
+            DropItemRequest request;
+            try
+            {
+                request = DropItemRequest.Parse(body);
+            }
+            catch (ArgumentException ex)
+            {
+                FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] DROP_ITEM: rejected body({body?.Length ?? 0}B): {ex.Message}");
+                return;
+            }
+
+            var result = _svc.Drops.TryDropInventoryItem(
+                run,
+                session.Player.CharacterId,
+                request.ListType,
+                request.SlotIndex,
+                request.Count);
+            if (!result.Success)
+            {
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
+                    0x01,
+                    header.type,
+                    DropItemBuilder.BuildDropFailureAck(17, (byte)request.ListType)));
+                FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] DROP_ITEM: {result.FailReason} cid={session.Player.CharacterId} list={request.ListType} slot={request.SlotIndex} count={request.Count}");
+                return;
+            }
+
+            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
+                0x00,
+                (ushort)NotiPacketType.DROP_ITEM,
+                DropItemBuilder.BuildDrop(
+                    session.Player.UserId,
+                    request.PositionX,
+                    request.PositionY,
+                    result.Drop,
+                    session.Player.UserId)));
+
+            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
+                0x01,
+                header.type,
+                DropItemBuilder.BuildDropSuccessAck(
+                    (byte)request.ListType,
+                    unchecked((ushort)request.SlotIndex),
+                    request.Count)));
+
+            FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] DROP_ITEM: cid={session.Player.CharacterId} slot={request.SlotIndex} templateId={result.Drop.TemplateId} count={result.Drop.StackCount} value={result.Drop.PacketValue} remaining={result.RemainingStackCount} sceneSlot={result.Drop.SceneSlot} pos=({request.PositionX},{request.PositionY})");
         }
     }
 }

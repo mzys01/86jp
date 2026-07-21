@@ -8,10 +8,12 @@ namespace DfoServer.Game.Dungeon
     internal sealed class DropService
     {
         private readonly IAssetService _assetService;
+        private readonly IInventoryStore _inventoryStore;
 
-        internal DropService(IAssetService assetService)
+        internal DropService(IAssetService assetService, IInventoryStore inventoryStore)
         {
             _assetService = assetService ?? throw new ArgumentNullException(nameof(assetService));
+            _inventoryStore = inventoryStore ?? throw new ArgumentNullException(nameof(inventoryStore));
         }
 
         internal static void WarmUpAbyssParty()
@@ -87,7 +89,7 @@ namespace DfoServer.Game.Dungeon
             if (drop.IsGold)
             {
                 var baseGold = (int)drop.StackCount;
-                var bonusPct = GetEquippedGoldBonus(characterId);
+                var bonusPct = drop.IsPlayerDropped ? 0 : GetEquippedGoldBonus(characterId);
                 var extraGold = baseGold * bonusPct / 100;
                 var grantedGold = PersistGold(characterId, accountId, baseGold + extraGold);
                 if (!grantedGold.HasValue)
@@ -105,8 +107,23 @@ namespace DfoServer.Game.Dungeon
                 };
             }
 
-            if (!TryPickupItemToInventory(characterId, accountId, (int)drop.TemplateId, (int)drop.StackCount, out var invSlot))
+            short invSlot;
+            CommonInventoryItem restoredItem = null;
+            if (drop.InventoryPayload != null)
+            {
+                if (!_inventoryStore.TryRestoreDungeonDrop(
+                        characterId,
+                        drop.InventoryPayload,
+                        out invSlot,
+                        out restoredItem))
+                {
+                    return PickupResult.InventoryFull;
+                }
+            }
+            else if (!TryPickupItemToInventory(characterId, accountId, (int)drop.TemplateId, (int)drop.StackCount, out invSlot))
+            {
                 return PickupResult.InventoryFull;
+            }
 
             run.Drops.Remove(srcSlot);
             return new PickupResult
@@ -114,7 +131,63 @@ namespace DfoServer.Game.Dungeon
                 Success = true,
                 IsGold = false,
                 InventorySlot = invSlot,
-                PickedUpItemId = (int)drop.TemplateId
+                PickedUpItemId = (int)drop.TemplateId,
+                RestoredItem = restoredItem,
+            };
+        }
+
+        internal InventoryDropResult TryDropInventoryItem(
+            DungeonRun run,
+            int characterId,
+            InventoryListType listType,
+            short slotIndex,
+            int count)
+        {
+            if (run == null
+                || listType != InventoryListType.Main
+                || slotIndex < 0
+                || count <= 0)
+            {
+                return InventoryDropResult.InvalidRequest;
+            }
+
+            if (!_inventoryStore.TryTakeDungeonDrop(
+                    characterId,
+                    listType,
+                    slotIndex,
+                    count,
+                    out var payload)
+                || payload == null
+                || payload.DroppedCount <= 0)
+            {
+                return InventoryDropResult.InventoryRejected;
+            }
+
+            DropInfo drop;
+            lock (run.SyncRoot)
+            {
+                run.SceneSlotCounter++;
+                if (run.SceneSlotCounter == 0)
+                    run.SceneSlotCounter++;
+
+                drop = new DropInfo
+                {
+                    SceneSlot = run.SceneSlotCounter,
+                    TemplateId = (uint)payload.ItemTemplateId,
+                    StackCount = (uint)payload.DroppedCount,
+                    Endurance = payload.PacketItem?.Durability ?? 0,
+                    UpgradeLevel = payload.PacketItem?.ExtData0 ?? 0,
+                    IsPlayerDropped = true,
+                    InventoryPayload = payload,
+                };
+                run.Drops[drop.SceneSlot] = drop;
+            }
+
+            return new InventoryDropResult
+            {
+                Success = true,
+                Drop = drop,
+                RemainingStackCount = payload.RemainingCount,
             };
         }
 
@@ -238,6 +311,7 @@ namespace DfoServer.Game.Dungeon
         public int ExtraGold;
         public short InventorySlot;
         public int PickedUpItemId;
+        public CommonInventoryItem RestoredItem;
         public PickupFailReason FailReason;
 
         internal static readonly PickupResult NotFound = new PickupResult { FailReason = PickupFailReason.NotFound };
@@ -245,11 +319,36 @@ namespace DfoServer.Game.Dungeon
         internal static readonly PickupResult PersistenceFailed = new PickupResult { FailReason = PickupFailReason.PersistenceFailed };
     }
 
+    internal struct InventoryDropResult
+    {
+        internal bool Success;
+        internal DropInfo Drop;
+        internal int RemainingStackCount;
+        internal InventoryDropFailReason FailReason;
+
+        internal static readonly InventoryDropResult InvalidRequest = new InventoryDropResult
+        {
+            FailReason = InventoryDropFailReason.InvalidRequest,
+        };
+
+        internal static readonly InventoryDropResult InventoryRejected = new InventoryDropResult
+        {
+            FailReason = InventoryDropFailReason.InventoryRejected,
+        };
+    }
+
+    internal enum InventoryDropFailReason : byte
+    {
+        None,
+        InvalidRequest,
+        InventoryRejected,
+    }
+
     internal enum PickupFailReason : byte
     {
         None,
         NotFound,
         InventoryFull,
-        PersistenceFailed
+        PersistenceFailed,
     }
 }

@@ -26,6 +26,19 @@ namespace DfoServer.Game.Inventory
 
         bool TryDeleteItem(int characterId, int accountId, InventoryListType listType, short slotIndex, short deleteCount, out InventoryMutationResult result);
 
+        bool TryTakeDungeonDrop(
+            int characterId,
+            InventoryListType listType,
+            short slotIndex,
+            int dropCount,
+            out DungeonInventoryDropPayload payload);
+
+        bool TryRestoreDungeonDrop(
+            int characterId,
+            DungeonInventoryDropPayload payload,
+            out short assignedSlot,
+            out CommonInventoryItem restoredItem);
+
         bool TryOpenAvatarPackage(int characterId, int accountId, AvatarPackageOpenRequest request, out AvatarPackageOpenResult result);
 
         bool TryOpenSelectablePackage(int characterId, int accountId, SelectablePackageOpenRequest request, out SelectablePackageOpenResult result);
