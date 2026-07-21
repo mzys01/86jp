@@ -61,7 +61,9 @@ namespace DfoServer.Game.SelectCharacter
 
         
         public byte ManageLevel { get; set; }
-        public List<uint> AbuseValues { get; } = new List<uint>();
+        // Historical field name was "AbuseValues". On the client this slot is
+        // a u32 count followed by quest ids used to rebuild QST effects.
+        public List<uint> SpecialRewardQuestIds { get; } = new List<uint>();
         public byte FlagByte { get; set; }
         public uint GuildPowerWar { get; set; }
         public uint ServerTimestamp { get; set; }
