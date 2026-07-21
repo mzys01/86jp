@@ -119,6 +119,13 @@ namespace DfoServer.GameWorld
             public string FilePath { get; set; }
         }
 
+        public sealed class LinkedDungeonEntry
+        {
+            public int DungeonId { get; set; }
+            public int Rate { get; set; }
+            public int Condition { get; set; }
+        }
+
         public sealed class HellPartyWaveInfo
         {
             public int GroupId { get; set; }
@@ -339,6 +346,119 @@ namespace DfoServer.GameWorld
             }
 
             return defaultMaze;
+        }
+
+        public static List<LinkedDungeonEntry> GetLinkedDungeonNextEntries(int dungeonId)
+        {
+            try
+            {
+                return ParseLinkedDungeonNextEntries(
+                    GetDungeonFile(dungeonId)?.LinkedDungeon);
+            }
+            catch (Exception ex)
+            {
+                FileLogger.Log(
+                    $"[Dungeon] linked dungeon parse failed: " +
+                    $"dungeon={dungeonId} error={ex.Message}");
+                return new List<LinkedDungeonEntry>();
+            }
+        }
+
+        public static bool IsSpecialLinkedDungeon(int dungeonId)
+        {
+            try
+            {
+                var dungeonFile = GetDungeonFile(dungeonId);
+                return dungeonFile?.SpecialDungeon == true
+                    && ParseLinkedDungeonNextEntries(
+                        dungeonFile.LinkedDungeon).Count > 0;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        public static LinkedDungeonEntry PickLinkedDungeonNext(int dungeonId)
+        {
+            var entries = GetLinkedDungeonNextEntries(dungeonId);
+            if (entries.Count == 0)
+                return null;
+
+            var totalRate = 0;
+            foreach (var entry in entries)
+            {
+                if (entry.Rate > 0
+                    && totalRate <= int.MaxValue - entry.Rate)
+                {
+                    totalRate += entry.Rate;
+                }
+            }
+
+            if (totalRate <= 0)
+                return entries[0];
+
+            var roll = Infrastructure.ServerRandom.Next(totalRate);
+            foreach (var entry in entries)
+            {
+                if (entry.Rate <= 0)
+                    continue;
+                if (roll < entry.Rate)
+                    return entry;
+                roll -= entry.Rate;
+            }
+
+            return entries[0];
+        }
+
+        internal static List<LinkedDungeonEntry> ParseLinkedDungeonNextEntries(
+            string linkedDungeon)
+        {
+            var result = new List<LinkedDungeonEntry>();
+            if (string.IsNullOrWhiteSpace(linkedDungeon))
+                return result;
+
+            var blocks = new List<string>();
+            var matches = Regex.Matches(
+                linkedDungeon,
+                @"\[next\](?<body>.*?)(?:\[/next\]|$)",
+                RegexOptions.IgnoreCase | RegexOptions.Singleline);
+            foreach (Match match in matches)
+                blocks.Add(match.Groups["body"].Value);
+            if (blocks.Count == 0)
+                blocks.Add(linkedDungeon);
+
+            foreach (var block in blocks)
+            {
+                var numbers = Regex.Matches(
+                    block ?? string.Empty,
+                    @"[+-]?\d+");
+                for (var i = 0; i + 2 < numbers.Count; i += 3)
+                {
+                    if (!int.TryParse(
+                            numbers[i].Value,
+                            out var nextDungeonId)
+                        || !int.TryParse(
+                            numbers[i + 1].Value,
+                            out var rate)
+                        || !int.TryParse(
+                            numbers[i + 2].Value,
+                            out var condition)
+                        || nextDungeonId <= 0)
+                    {
+                        continue;
+                    }
+
+                    result.Add(new LinkedDungeonEntry
+                    {
+                        DungeonId = nextDungeonId,
+                        Rate = rate,
+                        Condition = condition,
+                    });
+                }
+            }
+
+            return result;
         }
 
         private static readonly Lazy<Dictionary<int, bool>> _monsterHellFlags =

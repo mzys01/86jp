@@ -246,6 +246,16 @@ namespace DfoServer.Network.Builders
             return new byte[] { 0x00 };
         }
 
+        public static byte[] BuildLinkedDungeonInfo(
+            int nextDungeonId,
+            int difficulty)
+        {
+            var writer = new GamePacketWriter();
+            writer.WriteInt32(nextDungeonId);
+            writer.WriteInt32(difficulty);
+            return writer.ToArray();
+        }
+
         public static byte[] BuildPlayResult(
             ushort userId,
             int clearTimeMs,

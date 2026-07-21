@@ -28,6 +28,7 @@ namespace DfoServer
             ("--selftest-dungeon-room-progress", SelfTests.DungeonRoomProgressSelfTest.Run),
             ("--selftest-dungeon-run", SelfTests.DungeonRunLifecycleSelfTest.Run),
             ("--selftest-special-dungeon", SelfTests.SpecialDungeonSelfTest.Run),
+            ("--selftest-special-dungeon-part2", SelfTests.SpecialDungeonPart2SelfTest.Run),
             ("--selftest-card-reward-flow", SelfTests.CardRewardFlowSelfTest.Run),
             ("--selftest-secret-shop", SelfTests.SecretShopSelfTest.Run),
             ("--selftest-monster-card-drop", SelfTests.MonsterCardDropSelfTest.Run),
