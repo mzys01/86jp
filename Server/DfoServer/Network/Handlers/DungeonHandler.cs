@@ -86,6 +86,9 @@ namespace DfoServer.Network.Handlers
         public Task Handle_ENUM_CMDPACKET_DROP_ITEM(EnhancedClientSession session, GamePacketHeader header, byte[] body)
             => _combat.HandleDropItem(session, header, body);
 
+        public Task Handle_BOSS_DIE_CHECK(EnhancedClientSession session, GamePacketHeader header, byte[] body)
+            => _combat.HandleBossDieCheck(session, header, body);
+
         public Task Handle_ENUM_CMDPACKET_SELECT_CARD(EnhancedClientSession session, GamePacketHeader header, byte[] body)
             => _settlement.HandleSelectCard(session, header, body);
 
@@ -118,6 +121,18 @@ namespace DfoServer.Network.Handlers
 
         public Task<bool> TryHandleDeathTowerMoveItem(EnhancedClientSession session, GamePacketHeader header, byte[] body)
             => _services.DeathTower.TryHandleMoveItem(session, header, body);
+
+        public Task Handle_SPECIAL_SUMMON_MONSTER(EnhancedClientSession session, GamePacketHeader header, byte[] body)
+            => Dungeon.SpecialDungeonNotifier.HandleBossSummonRequestAsync(session, header, body);
+
+        public Task Handle_SPECIAL_TIMER_MODIFY_INFO(EnhancedClientSession session, GamePacketHeader header, byte[] body)
+            => Dungeon.SpecialDungeonNotifier.HandleGentInfiltrateTimerModifyInfoAsync(session, header, body);
+
+        public Task Handle_SPECIAL_SEA_CHASE_RESULT(EnhancedClientSession session, GamePacketHeader header, byte[] body)
+            => Dungeon.SpecialDungeonNotifier.HandleSeaChaseMiniGameResultAsync(session, header, body);
+
+        public Task Handle_SPECIAL_SEA_CHASE_OBSERVE(EnhancedClientSession session, GamePacketHeader header, byte[] body)
+            => Dungeon.SpecialDungeonNotifier.ObserveSeaChasePacketAsync(session, header, body);
 
         public Task HandleDungeonSceneUniqueIdReport(EnhancedClientSession session, GamePacketHeader header, byte[] body)
         {
