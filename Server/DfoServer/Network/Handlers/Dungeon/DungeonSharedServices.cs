@@ -39,6 +39,7 @@ namespace DfoServer.Network.Handlers.Dungeon
         internal AccountExperienceProgressService AccountExperience { get; }
         internal GrowthCapsuleSyncService GrowthCapsuleSync { get; }
         internal CharacterExperienceService CharacterExperience { get; }
+        internal Game.Dungeon.TowerOfDespairProgressService TowerOfDespairProgress { get; }
 
         // 组队副本联机用: 检测队伍 + 定位队员会话(可空; 未接线时副本 fan-out 优雅跳过=单人不回归)。
         internal Game.Party.PartyManager PartyManager { get; }
@@ -81,6 +82,10 @@ namespace DfoServer.Network.Handlers.Dungeon
                 accountExperience: AccountExperience,
                 sendInDungeonLevelUpFollowups: SendInDungeonLevelUpFollowups,
                 inventoryRefresh: inventoryRefresh);
+            TowerOfDespairProgress = new Game.Dungeon.TowerOfDespairProgressService(
+                new Game.Dungeon.TowerOfDespairProgressRepository(
+                    ServerPaths.DatabasePath,
+                    ServerPaths.SchemaFilePath));
             CardRewards = new Game.Dungeon.CardRewardService(this, assetService);
             Drops = new Game.Dungeon.DropService(assetService, inventoryStore);
             EntryCost = new Game.Dungeon.DungeonEntryCostService(assetService);
