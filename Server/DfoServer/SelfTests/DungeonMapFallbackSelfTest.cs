@@ -317,6 +317,36 @@ namespace DfoServer.SelfTests
                 Check("issue 361 selected upper boss room keeps boss actor map",
                     issue361SelectedUpperBoss.Index == 18914 && ContainsMonster(issue361SelectedUpperBoss, 65029),
                     ref failures);
+                var repeatedUpperBossSelectionsKeepActor = true;
+                for (var selection = 0; selection < 32; selection++)
+                {
+                    var repeatedUpperBoss = DungeonData.GetDungeonMapMonsterSummaryInformation(
+                        dungeonId: 158,
+                        x: 4,
+                        y: 0,
+                        mazeIndex: 0,
+                        bossPos: new[] { 4, 0 });
+                    if (repeatedUpperBoss.Index != 18914
+                        || !ContainsMonster(repeatedUpperBoss, 65029))
+                    {
+                        repeatedUpperBossSelectionsKeepActor = false;
+                        break;
+                    }
+                }
+                Check("issue 361 repeated upper boss selections keep boss actor map",
+                    repeatedUpperBossSelectionsKeepActor,
+                    ref failures);
+                var issue361QuestMazeBoss = DungeonData.GetDungeonMapMonsterSummaryInformation(
+                    dungeonId: 158,
+                    x: 4,
+                    y: 0,
+                    mazeIndex: 3,
+                    bossPos: new[] { 4, 0 });
+                Check("issue 361 quest maze keeps its explicit APC boss map",
+                    issue361QuestMazeBoss.Index == 18919
+                    && ContainsMonster(issue361QuestMazeBoss, 56408)
+                    && !ContainsMonster(issue361QuestMazeBoss, 65029),
+                    ref failures);
                 Check("issue 361 unselected lower boss coordinate does not spawn false boss",
                     issue361UnselectedLowerBossCoordinate.Index != 18915
                     && !ContainsMonster(issue361UnselectedLowerBossCoordinate, 65029),
