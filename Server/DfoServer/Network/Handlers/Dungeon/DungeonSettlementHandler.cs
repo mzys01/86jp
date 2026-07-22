@@ -53,6 +53,32 @@ namespace DfoServer.Network.Handlers.Dungeon
             await TrySendSeizeMoneyGoldIngotDropsAsync(session, body);
             run.Phase = DungeonRunPhase.ResultShown;
 
+            var isTowerOfDespair = DungeonData.TryGetTowerOfDespairFloor(
+                run.DungeonId,
+                out _);
+            if (isTowerOfDespair)
+            {
+                if (!_svc.TowerOfDespairProgress.TryRecordClear(
+                        session.Player.CharacterId,
+                        run.DungeonId,
+                        out var nextFloor,
+                        out var progressError))
+                {
+                    FileLogger.Log(
+                        $"[{DungeonSharedServices.ProtocolLogName}] " +
+                        $"TOWER_OF_DESPAIR_PROGRESS rejected settlement before rewards: " +
+                        $"cid={session.Player.CharacterId} dungeon={run.DungeonId} " +
+                        $"error={progressError?.Message}");
+                    run.Phase = DungeonRunPhase.Cleared;
+                    return;
+                }
+
+                FileLogger.Log(
+                    $"[{DungeonSharedServices.ProtocolLogName}] " +
+                    $"TOWER_OF_DESPAIR_PROGRESS: cid={session.Player.CharacterId} " +
+                    $"dungeon={run.DungeonId} nextFloor={nextFloor}");
+            }
+
             var clearRank = CalculateClearRank(body);
             var clearExp = CalculateClearRewardExp(session, clearRank.RankBonusIndex);
             var prevLevel = session.Player.Level;
@@ -74,10 +100,20 @@ namespace DfoServer.Network.Handlers.Dungeon
                 dungeonLevel, run.Difficulty, lcg);
             var freeItem = ClearRewardGenerator.GenerateItemCard(
                 dungeonLevel, run.Difficulty, lcg);
-            var paidGold = ClearRewardGenerator.GenerateGoldCard(
-                dungeonLevel, run.Difficulty, lcg);
-            var paidItem = ClearRewardGenerator.GenerateItemCard(
-                dungeonLevel, run.Difficulty, lcg);
+            if (isTowerOfDespair && freeItem.IsGold)
+            {
+                freeGold.GoldAmount += freeItem.GoldAmount;
+                freeItem = default;
+            }
+            var paidGold = default(ClearRewardGenerator.CardReward);
+            var paidItem = default(ClearRewardGenerator.CardReward);
+            if (ShouldGeneratePaidCardRewards(run.DungeonId))
+            {
+                paidGold = ClearRewardGenerator.GenerateGoldCard(
+                    dungeonLevel, run.Difficulty, lcg);
+                paidItem = ClearRewardGenerator.GenerateItemCard(
+                    dungeonLevel, run.Difficulty, lcg);
+            }
             run.CardRewards = new List<ClearRewardGenerator.CardReward>
             {
                 freeGold, freeItem, default, default,  // free: [0]gold [1]item [2-3]empty(solo)
@@ -113,6 +149,18 @@ namespace DfoServer.Network.Handlers.Dungeon
                     superChampionExp: 0,
                     freeCardGold: freeGold.GoldAmount,
                     freeCardItemId: freeItem.ItemId, freeCardItemCount: freeItem.StackCount)));
+
+            var clearTimeMilliseconds = (uint)Math.Max(0, clearTimeMs);
+            if (TryBuildTowerOfDespairClearRewardWithTime(
+                    run.DungeonId,
+                    clearTimeMilliseconds,
+                    freeItem.ItemId,
+                    freeItem.StackCount,
+                    out var towerClearReward))
+            {
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x015C, towerClearReward));
+                FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] TOD_CLEAR_REWARD: dungeon={run.DungeonId} clearTimeMs={clearTimeMilliseconds}");
+            }
 
             // 符合判断使用结算前等级，奖励通知放在结算三包之后。
             await GrantSuitableDungeonLuckyStar(session, prevLevel);
@@ -205,6 +253,30 @@ namespace DfoServer.Network.Handlers.Dungeon
                 $"bossSeq={bossSeq} item={SeizeMoneyGoldIngotItemId} " +
                 $"count={count} hitCount={hitCount} " +
                 $"remainingUnits={remainingUnits} gauge={gauge}/{config.GaugeMax}");
+        }
+
+        private static bool TryBuildTowerOfDespairClearRewardWithTime(
+            int dungeonId,
+            uint clearTimeMilliseconds,
+            int itemId,
+            int itemCount,
+            out byte[] body)
+        {
+            body = null;
+            if (!DungeonData.TryGetTowerOfDespairFloor(dungeonId, out var floor))
+                return false;
+
+            body = DungeonNotificationBuilder.BuildTowerOfDespairClearReward(
+                clearTimeMilliseconds,
+                floor,
+                itemId,
+                itemCount);
+            return true;
+        }
+
+        private static bool ShouldGeneratePaidCardRewards(int dungeonId)
+        {
+            return !DungeonData.TryGetTowerOfDespairFloor(dungeonId, out _);
         }
 
         private static ClearRankParts CalculateClearRank(byte[] body)
