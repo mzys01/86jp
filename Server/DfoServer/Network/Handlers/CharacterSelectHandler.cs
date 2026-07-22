@@ -326,7 +326,11 @@ namespace DfoServer.Network.Handlers
 
             if (_characterRepository.GetByName(nameStr) != null)
             {
-                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0005, new byte[] { 0x00 }));
+                // 与 CHECK_DOUBLE_CHARACTER_NAME 一致：24 = 已存在的角色名
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
+                    0x01,
+                    0x0005,
+                    CommonPacketBodyBuilder.BuildCmdError(24)));
                 return;
             }
 
