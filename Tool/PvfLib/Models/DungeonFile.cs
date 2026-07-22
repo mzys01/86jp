@@ -606,6 +606,9 @@ namespace PvfLib
             // Multi-group format: levelOverride flag count [itemId dropRate]... repeated
             // Each group = one stDungeonAssignItem_t entry
             var vals = ParseIntArray(data);
+            if (vals == null || vals.Length < 3)
+                return;
+
             int pos = 0;
             int idx = 0;
             while (pos + 2 < vals.Length)

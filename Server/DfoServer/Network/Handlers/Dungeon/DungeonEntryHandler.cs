@@ -100,6 +100,7 @@ namespace DfoServer.Network.Handlers.Dungeon
                         $"cid={session.Player.CharacterId} " +
                         $"error={towerProgressError?.Message}");
                 }
+                await _svc.AntonNormal.RestoreBeforeSelectAsync(session);
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
                     0x00,
                     0x001B,
