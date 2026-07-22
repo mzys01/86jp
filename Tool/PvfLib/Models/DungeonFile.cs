@@ -527,7 +527,7 @@ namespace PvfLib
                     case "common passive object": dgn.CommonPassiveObject = data; break;
                     case "on clear add passive object": dgn.OnClearAddPassiveObject = data; break;
                     case "appendage destory object": dgn.AppendageDestoryObject = data; break;
-                    case "linked dungeon": dgn.LinkedDungeon = data; break;
+                    case "linked dungeon": dgn.LinkedDungeon = ReadRawNodeData(node, text, data); break;
                     case "clear action": dgn.ClearAction = data; break;
                     case "point by type": dgn.PointByType = data; break;
                     case "dungeon exp bonus monster": dgn.DungeonExpBonusMonster = data; break;
