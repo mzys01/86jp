@@ -84,9 +84,28 @@ namespace DfoServer.Network.Handlers.Dungeon
                         FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] ENTER_SELECT_DUNGEON ERROR: record={record != null} addition={addition != null}, USERINFO not sent (no fallback)");
                     }
                 }
+
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x0003, EnterSelectDungeonStateBuilder.BuildUserState(session.Player)));
+
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x001A, UdpHostBuilder.BuildUnavailable()));
-                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x001B, EnterSelectDungeonStateBuilder.BuildEnterSelectDungeon(session.Player)));
+                var towerOfDespairFloor = 1;
+                if (!_svc.TowerOfDespairProgress.TryGetNextFloor(
+                        session.Player.CharacterId,
+                        out towerOfDespairFloor,
+                        out var towerProgressError))
+                {
+                    FileLogger.Log(
+                        $"[{DungeonSharedServices.ProtocolLogName}] " +
+                        $"ENTER_SELECT_DUNGEON tower floor fallback: " +
+                        $"cid={session.Player.CharacterId} " +
+                        $"error={towerProgressError?.Message}");
+                }
+                await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(
+                    0x00,
+                    0x001B,
+                    EnterSelectDungeonStateBuilder.BuildEnterSelectDungeon(
+                        session.Player,
+                        towerOfDespairFloor)));
                 await _svc.GrowthCapsuleSync.SendExpProgressAsync(
                     session, "enter-select-dungeon", honor: honorSummary);
                 FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] ENTER_SELECT_DUNGEON: state packets and account EXP progress sent OK");
@@ -100,6 +119,25 @@ namespace DfoServer.Network.Handlers.Dungeon
         internal async Task HandleSelectDungeon(EnhancedClientSession session, GamePacketHeader header, byte[] body)
         {
             var req = Network.Parsers.Dungeon.SelectDungeonRequest.Parse(body);
+            try
+            {
+                var resolvedDungeonId = _svc.TowerOfDespairProgress.ResolveEntryDungeonId(
+                    session.Player.CharacterId,
+                    req.DungeonId);
+                if (resolvedDungeonId != req.DungeonId)
+                {
+                    FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] TOWER_OF_DESPAIR_ENTRY: cid={session.Player.CharacterId} requested={req.DungeonId} resolved={resolvedDungeonId}");
+                    req = new Network.Parsers.Dungeon.SelectDungeonRequest(
+                        (ushort)resolvedDungeonId,
+                        req.Difficulty,
+                        req.Flag1,
+                        req.Flag2);
+                }
+            }
+            catch (Exception ex)
+            {
+                FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] TOWER_OF_DESPAIR_ENTRY ERROR: cid={session.Player.CharacterId} requested={req.DungeonId}: {ex.Message}");
+            }
 
             // 塔类副本分流: dungeonKind==1 走专属流程(NOTI 142+143, 非普通副本的 START_MAP)
             if (_svc.DeathTower.TryCreateSession(req.DungeonId, out var tower))

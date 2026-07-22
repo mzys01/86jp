@@ -166,6 +166,39 @@ namespace DfoServer.SelfTests
 
             CheckSuitableLevelEligibility(ref failures);
 
+            var towerClassificationIsSafe = false;
+            try
+            {
+                towerClassificationIsSafe = !DungeonData.TryGetTowerOfDespairFloor(
+                    int.MaxValue,
+                    out _);
+            }
+            catch
+            {
+                towerClassificationIsSafe = false;
+            }
+            Check("tower classification treats an unknown dungeon as non-tower without throwing",
+                towerClassificationIsSafe,
+                ref failures);
+
+            try
+            {
+                var despairTowerFirstFloor = DungeonData.GetDungeonMapMonsterSummaryInformation(
+                    dungeonId: 11008,
+                    x: 0xFF,
+                    y: 0xFF,
+                    mazeIndex: 0);
+                Check("tower of despair first floor resolves its PVF map and boss APC",
+                    despairTowerFirstFloor.Index == 15130
+                    && ContainsMonster(despairTowerFirstFloor, 20426),
+                    ref failures);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[FAIL] tower of despair first floor resolves its PVF map and boss APC: {ex.Message}");
+                failures++;
+            }
+
             try
             {
                 var issue189StartMap = DungeonData.GetDungeonMapMonsterSummaryInformation(

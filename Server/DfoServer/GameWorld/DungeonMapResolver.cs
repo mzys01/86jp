@@ -76,6 +76,16 @@ namespace DfoServer.GameWorld
         {
             var maplst = Dungeon.LoadLstFile(Path.Combine("map", "map.lst"));
             var loaded = Dungeon.LoadDungeonFileWithPath(dungeonId);
+
+            if (loaded.File.TowerOfDespair > 0)
+            {
+                var towerMapId = Dungeon.TryGetTowerOfDespairFloor(dungeonId, out var floor)
+                    ? ResolveTowerOfDespairMapId(maplst, floor)
+                    : -1;
+                if (towerMapId > 0)
+                    return towerMapId;
+            }
+
             var mapDirCandidates = Dungeon.BuildMapDirCandidates(maplst, maze, loaded.FilePath);
 
             var effectiveBoss = bossPos ?? (maze.BossMap != null && maze.BossMap.Length >= 2
@@ -228,6 +238,27 @@ namespace DfoServer.GameWorld
                     $"map={mapId} monster={monsterCode} error={ex.Message}");
                 return false;
             }
+        }
+
+        private static int ResolveTowerOfDespairMapId(LstFile maplst, int floor)
+        {
+            if (maplst == null || floor <= 0)
+                return -1;
+
+            var expectedMapSuffix = $"despair{floor:000}.map";
+            foreach (var entry in maplst.Entries)
+            {
+                if (entry == null || string.IsNullOrEmpty(entry.FilePath))
+                    continue;
+
+                var normalizedPath = entry.FilePath.Replace('\\', '/');
+                if ((normalizedPath.StartsWith("towerofdespair_down/", StringComparison.OrdinalIgnoreCase)
+                     || normalizedPath.StartsWith("towerofdespair_up/", StringComparison.OrdinalIgnoreCase))
+                    && normalizedPath.EndsWith(expectedMapSuffix, StringComparison.OrdinalIgnoreCase))
+                    return entry.Id;
+            }
+
+            return -1;
         }
 
         // --- Step 1: MapSpecification ---

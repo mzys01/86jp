@@ -434,7 +434,9 @@ namespace PvfLib
                     case "adjust mob exp by level": dgn.AdjustMobExpByLevel = ParseInt(data); break;
                     case "blood max round": dgn.BloodMaxRound = ParseInt(data); break;
                     case "mob level charac level replace flag": dgn.MobLevelCharacLevelReplaceFlag = ParseInt(data); break;
-                    case "tower of despair": dgn.TowerOfDespair = ParseInt(data); break;
+                    case "tower of despair":
+                        dgn.TowerOfDespair = string.IsNullOrWhiteSpace(data) ? 1 : ParseInt(data);
+                        break;
                     case "tower fp cubepiece": dgn.TowerFpCubepiece = ParseInt(data); break;
                     case "tower limit of stackable item": dgn.TowerLimitOfStackableItem = ParseInt(data); break;
                     case "tower max clear item num": dgn.TowerMaxClearItemNum = ParseInt(data); break;
