@@ -164,6 +164,7 @@ namespace DfoServer.Network.Handlers.Dungeon
 
             // 符合判断使用结算前等级，奖励通知放在结算三包之后。
             await GrantSuitableDungeonLuckyStar(session, prevLevel);
+            _svc.AntonNormal.ConfigureLinkedChallenge(run);
             await SendLinkedDungeonInfoAsync(session, run);
 
             FileLogger.Log($"[{DungeonSharedServices.ProtocolLogName}] CLEAR_EXP: dungeon={run.DungeonId} diff={run.Difficulty} clientRank={clearRank.ClientRankPoint} rankPoint={clearRank.RankPoint} rankGrade={clearRank.RankGrade} rankBonusIndex={clearRank.RankBonusIndex} base={clearExp.Base} scoreBonus={clearExp.ScoreBonus} growthContract={clearExp.GrowthContractBonus} blackDiamond={clearExp.BlackDiamondBonus} adventureGroup={clearExp.AdventureGroupBonus} bonus={clearExp.Bonus} total={clearExp.Total} monsterTotalExp={monsterTotalExp} monsterGrowthContract={monsterGrowthContractBonus} bossTotalExp={bossTotalExp} championTotalExp={championTotalExp} superChampionTotalExp={superChampionTotalExp} namedMonsterTotalExp={namedMonsterTotalExp} charExp={session.Player.Exp}");
@@ -185,6 +186,7 @@ namespace DfoServer.Network.Handlers.Dungeon
             _svc.CardRewards.ScheduleAutoFlow(session, layoutDelayMs: 2000, autoFlipDelayMs: 4000);
 
             await UpdateDungeonPermission(session, run.DungeonId, run.Difficulty);
+            await _svc.AntonNormal.ApplyClearAsync(session, run);
         }
 
         private static async Task TrySendSeizeMoneyGoldIngotDropsAsync(
