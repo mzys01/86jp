@@ -273,6 +273,20 @@ namespace DfoServer.Network.Builders
                 writer.WriteUInt32((uint)itemId);
                 writer.WriteUInt32((uint)itemCount);
             }
+
+            return writer.ToArray();
+        }
+
+        // A14 SEQUENTIAL_DUNGEON_INFO reads int32 + byte + int32.
+        internal static byte[] BuildSequentialDungeonInfo(
+            int configKey,
+            byte progressIndex,
+            int routeMask)
+        {
+            var writer = new GamePacketWriter();
+            writer.WriteInt32(configKey);
+            writer.WriteByte(progressIndex);
+            writer.WriteInt32(routeMask);
             return writer.ToArray();
         }
 
