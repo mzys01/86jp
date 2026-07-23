@@ -54,6 +54,42 @@ VALUES (
             }
         }
 
+        internal void WriteResetItemAttrAuditLog(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            int characterId,
+            SqliteInventoryStore.ItemRecord target,
+            SqliteInventoryStore.ItemRecord material,
+            int oldQualitySeed,
+            int newQualitySeed)
+        {
+            using (var command = connection.CreateCommand())
+            {
+                command.Transaction = transaction;
+                command.CommandText = @"
+INSERT INTO item_audit_log (
+    owner_scope, owner_id, character_id, action_name, list_type, slot_index, item_uid,
+    item_template_id, delta_stack_count, payload_json)
+VALUES (
+    'character', @ownerId, @characterId, 'reset_item_attr', @listType, @slotIndex, @itemUid,
+    @itemTemplateId, 0, @payloadJson);";
+                command.Parameters.AddWithValue("@ownerId", characterId);
+                command.Parameters.AddWithValue("@characterId", characterId);
+                command.Parameters.AddWithValue("@listType", (int)target.ListType);
+                command.Parameters.AddWithValue("@slotIndex", target.SlotIndex);
+                command.Parameters.AddWithValue("@itemUid", target.ItemUid);
+                command.Parameters.AddWithValue("@itemTemplateId", target.ItemTemplateId);
+                command.Parameters.AddWithValue("@payloadJson",
+                    "{\"materialItemUid\":" + material.ItemUid
+                    + ",\"materialItemTemplateId\":" + material.ItemTemplateId
+                    + ",\"materialSlotIndex\":" + material.SlotIndex
+                    + ",\"oldQualitySeed\":" + oldQualitySeed
+                    + ",\"newQualitySeed\":" + newQualitySeed
+                    + "}");
+                command.ExecuteNonQuery();
+            }
+        }
+
         internal void WriteEnchantAuditLog(SqliteConnection connection, SqliteTransaction transaction, int characterId, SqliteInventoryStore.ItemRecord bead, SqliteInventoryStore.ItemRecord target, int enchantCardItemId, byte enchantUpgradeCount)
         {
             using (var command = connection.CreateCommand())
