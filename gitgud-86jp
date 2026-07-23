@@ -1,0 +1,24 @@
+name: Sync Upstream Repository
+
+# 配置触发条件
+on:
+  # 定时触发：每天 18:01 UTC 运行，你也可以修改 cron 表达式
+  schedule:
+    - cron: '1 18 * * *'
+  # 允许手动触发，方便测试
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Sync from gitgud.io to GitHub
+        # 使用 dabreadman 的 action 来完成同步
+        uses: dabreadman/sync-upstream-repo@v1.3.0
+        with:
+          # 🔴 重要：改成你的源仓库地址
+          upstream_repo: "https://gitgud.io/rewio/86JP.git"
+          # 🔴 重要：改成你的目标分支，通常是 main 或 master
+          downstream_branch: "main"
+          # 使用 GitHub 自动生成的 token 进行认证，无需修改
+          token: ${{ secrets.GITHUB_TOKEN }}
