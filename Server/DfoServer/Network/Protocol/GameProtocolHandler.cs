@@ -330,6 +330,8 @@ namespace DfoServer.Network
             d[0x0050] = _inventoryHandler.Handle_ENUM_CMDPACKET_UPGRADE_ITEM;      //80
             d[0x00A0] = _inventoryHandler.Handle_OPEN_SELECTABLE_PACKAGE;
             d[0x0110] = _inventoryHandler.Handle_ENUM_CMDPACKET_ENCHANT_BY_BEAD;   //272
+            d[0x0171] = (s, h, b) => Task.CompletedTask;                           //369 legacy no-op selector
+            d[0x0172] = _inventoryHandler.Handle_ENCHANT_3RD_CHRONICLE_ITEM;       //370
             d[0x0191] = _inventoryHandler.Handle_UNSEAL_RANDOM_OPTION;             //401
             d[0x019C] = _inventoryHandler.Handle_TITLE_BOOK;                       //412
             d[0x01B6] = _inventoryHandler.Handle_CHANGE_RANDOM_OPTION;             //438

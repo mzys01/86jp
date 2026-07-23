@@ -36,6 +36,305 @@ namespace DfoServer.Game.Inventory
             }
         }
 
+        public bool TryRefineChronicleItem(int characterId, int accountId, ChronicleRefineCommand command, out ChronicleRefineResult result)
+        {
+            result = ChronicleRefineResult.Error(command, ChronicleRefineResult.ErrorInvalidMaterial);
+            if (characterId <= 0 || command == null)
+                return false;
+
+            using (var connection = OpenConnection())
+            using (var transaction = connection.BeginTransaction())
+            {
+                var material = _db.LoadItemRecord(connection, transaction, characterId, InventoryListType.Main, command.MaterialSlotIndex);
+                if (material == null
+                    || material.ItemKind != "stackable"
+                    || material.StackCount <= 0
+                    || material.ItemTemplateId != command.MaterialItemTemplateId)
+                    return false;
+
+                if (!TryResolveChronicleRefineMaterial(material.ItemTemplateId, out var materialDefinition))
+                {
+                    result = ChronicleRefineResult.Error(command, ChronicleRefineResult.ErrorUnsupported);
+                    return false;
+                }
+
+                var target = _db.LoadItemRecord(connection, transaction, characterId, InventoryListType.Main, command.TargetSlotIndex);
+                if (target == null || target.ItemKind != "equipment")
+                {
+                    result = ChronicleRefineResult.Error(command, ChronicleRefineResult.ErrorInvalidTarget);
+                    return false;
+                }
+                if (target.ItemTemplateId != command.TargetItemTemplateId)
+                {
+                    result = ChronicleRefineResult.Error(command, ChronicleRefineResult.ErrorTemplateMismatch);
+                    return false;
+                }
+
+                if (IsEquipmentItemLocked(connection, transaction, characterId, target))
+                {
+                    result = ChronicleRefineResult.Error(command, ChronicleRefineResult.ErrorLocked);
+                    return false;
+                }
+
+                var metadata = ItemMetadataResolver.Resolve(target.ItemTemplateId);
+                var equipmentType = EquipmentTypeInfo.ParseOrUnknown(metadata.EquipmentType);
+                if (metadata.Rarity != 5 || !EquipmentTypeInfo.IsUpgradeTargetType(equipmentType))
+                {
+                    result = ChronicleRefineResult.Error(command, ChronicleRefineResult.ErrorUnsupported);
+                    return false;
+                }
+
+                if (!ItemMetadataResolver.TryLoadEquipmentFile(target.ItemTemplateId, out var equipment)
+                    || !ChronicleRefineJobMatcher.Matches(equipment.UsableJob, command.CharacterJob))
+                {
+                    result = ChronicleRefineResult.Error(command, ChronicleRefineResult.ErrorUnsupported);
+                    return false;
+                }
+
+                var selectedCheck = FindChronicleCheck(
+                    materialDefinition.ThreeChronicleEnchant,
+                    command.CharacterJob,
+                    command.FirstGrowType,
+                    metadata.EquipmentType,
+                    command.OptionNo);
+                var selectedSkill = selectedCheck?.Skills.Find(skill =>
+                    skill.OptionNo == command.OptionNo
+                    && ChronicleRefineJobMatcher.Matches(skill.Job, command.CharacterJob));
+                if (selectedCheck == null
+                    || selectedSkill == null
+                    || selectedSkill.SkillId < 0
+                    || !ChronicleRefineJobMatcher.Matches(selectedSkill.Job, command.CharacterJob)
+                    || !ChronicleRefineMaterialResolver.TryGetPacketAuraItemId(
+                        materialDefinition.Type,
+                        out var packetAuraItemId))
+                {
+                    result = ChronicleRefineResult.Error(command, ChronicleRefineResult.ErrorUnsupported);
+                    return false;
+                }
+
+                var targetView = InventoryItemView.ForCommon(target);
+                if ((targetView.AmplifyType & 0x80) != 0)
+                {
+                    result = ChronicleRefineResult.Error(command, ChronicleRefineResult.ErrorUnidentified);
+                    return false;
+                }
+                if (target.Durability != metadata.Durability)
+                {
+                    result = ChronicleRefineResult.Error(command, ChronicleRefineResult.ErrorDurability);
+                    return false;
+                }
+                if (command.OptionNo > 0x1F)
+                {
+                    result = ChronicleRefineResult.Error(command, ChronicleRefineResult.ErrorUnsupported);
+                    return false;
+                }
+
+                targetView.Entry84.MiddleData1A = ChronicleRefineProtocol.NormalizeMiddleData(
+                    equipmentType,
+                    targetView.Entry84.MiddleData1A);
+                var current = targetView.Entry84.ChronicleOptions;
+                if (current.Count >= 2)
+                {
+                    result = ChronicleRefineResult.Error(command, ChronicleRefineResult.ErrorOptionFull);
+                    return false;
+                }
+
+                for (var i = 0; i < current.Count; i++)
+                {
+                    if (current[i].OptionNo == command.OptionNo
+                        && ChronicleRefineMaterialResolver.TryGetAuraType(current[i].OptionId, out var currentAuraType)
+                        && currentAuraType == materialDefinition.Type)
+                    {
+                        result = ChronicleRefineResult.Error(command, ChronicleRefineResult.ErrorUnsupported);
+                        return false;
+                    }
+                }
+
+                var probability = current.Count < materialDefinition.ThreeChronicleEnchant.Probabilities.Count
+                    ? materialDefinition.ThreeChronicleEnchant.Probabilities[current.Count]
+                    : 0;
+                // The legacy server calls randInt(100), whose upper bound is inclusive.
+                var roll = Infrastructure.ServerRandom.Next(101);
+                var refineSucceeded = ChronicleRefineProbability.IsSuccess(probability, roll);
+
+                var options = new MakeEquipListCodec.ChronicleOptionFields[refineSucceeded ? current.Count + 1 : current.Count];
+                for (var i = 0; i < current.Count; i++)
+                {
+                    options[i] = new MakeEquipListCodec.ChronicleOptionFields
+                    {
+                        OptionId = current[i].OptionId,
+                        CharacJob = current[i].CharacJob,
+                        FirstGrowType = current[i].FirstGrowType,
+                        EquipmentType = current[i].EquipmentType,
+                        OptionNo = current[i].OptionNo,
+                    };
+                }
+
+                if (refineSucceeded)
+                {
+                    options[current.Count] = new MakeEquipListCodec.ChronicleOptionFields
+                    {
+                        OptionId = packetAuraItemId,
+                        CharacJob = command.CharacterJob,
+                        FirstGrowType = command.FirstGrowType,
+                        EquipmentType = (byte)equipmentType,
+                        OptionNo = command.OptionNo,
+                    };
+                    targetView.Entry84.MiddleData1A = MakeEquipListCodec.BuildMiddleData1A(options);
+                    _db.UpdateItemExtraJson(connection, transaction, target.ItemUid, target.ExtraJson);
+                }
+                var remaining = material.StackCount - 1;
+                if (remaining > 0)
+                    _db.UpdateStackCount(connection, transaction, material.ItemUid, remaining);
+                else
+                {
+                    _db.DeleteItem(connection, transaction, material.ItemUid);
+                    DeleteSortItemLock(characterId, connection, transaction, material.ListType, material.SlotIndex);
+                }
+
+                _auditLogger.WriteDeleteAuditLog(connection, transaction, characterId, material, 1);
+                var failureRewards = new List<DisjointMaterialResult>();
+                if (!refineSucceeded)
+                {
+                    if (!ChronicleRefineMaterialResolver.TryGetFragmentItemId(
+                        materialDefinition,
+                        out var fragmentItemTemplateId))
+                    {
+                        result = ChronicleRefineResult.Error(command, ChronicleRefineResult.ErrorUnsupported);
+                        return false;
+                    }
+                    failureRewards = BuildChronicleFailureRewards(
+                        metadata,
+                        targetView.Upgrade,
+                        fragmentItemTemplateId);
+                    if (failureRewards.Count == 0)
+                    {
+                        result = ChronicleRefineResult.Error(command, ChronicleRefineResult.ErrorUnsupported);
+                        return false;
+                    }
+
+                    _db.DeleteItem(connection, transaction, target.ItemUid);
+                    DeleteSortItemLock(characterId, connection, transaction, target.ListType, target.SlotIndex);
+                    foreach (var reward in failureRewards)
+                    {
+                        if (!TryPickupItemCore(connection, transaction, characterId, accountId,
+                            reward.ItemTemplateId, reward.Count, out var assignedSlot))
+                        {
+                            result = ChronicleRefineResult.Error(command, ChronicleRefineResult.ErrorInventoryFull);
+                            return false;
+                        }
+                        reward.SlotIndex = assignedSlot;
+                    }
+                }
+
+                _auditLogger.WriteAuditLog(connection, transaction, characterId,
+                    refineSucceeded ? "refine_3rd_chronicle_item" : "refine_3rd_chronicle_item_destroyed", target,
+                    target.ListType, target.SlotIndex, 0);
+                transaction.Commit();
+
+                result = new ChronicleRefineResult
+                {
+                    Success = true,
+                    RefineSucceeded = refineSucceeded,
+                    TargetDestroyed = !refineSucceeded,
+                    Command = command,
+                    MaterialRemainingStackCount = remaining,
+                    EquipmentType = (byte)materialDefinition.Type,
+                    OptionCount = (byte)options.Length,
+                    SuccessProbability = probability,
+                    ProbabilityRoll = roll,
+                };
+                result.FailureRewards.AddRange(failureRewards);
+                return true;
+            }
+        }
+
+        private static bool TryResolveChronicleRefineMaterial(int itemTemplateId, out PvfLib.StackableItemFile stackable)
+        {
+            return ChronicleRefineMaterialResolver.TryResolveMaterial(itemTemplateId, out stackable);
+        }
+
+        private static PvfLib.ThreeChronicleEnchantCheck FindChronicleCheck(
+            PvfLib.ThreeChronicleEnchantInfo enchant,
+            byte characterJob,
+            byte firstGrowType,
+            string targetEquipmentType,
+            byte optionNo)
+        {
+            if (enchant?.Checks == null)
+                return null;
+
+            var targetType = NormalizeChronicleEquipmentType(targetEquipmentType);
+            foreach (var check in enchant.Checks)
+            {
+                if (check == null || check.Values.Count < 2)
+                    continue;
+                if (check.Values[0] != characterJob || check.Values[1] != firstGrowType)
+                    continue;
+                if (!string.Equals(NormalizeChronicleEquipmentType(check.EquipmentType), targetType, StringComparison.OrdinalIgnoreCase))
+                    continue;
+                if (!check.Skills.Exists(skill =>
+                    skill.OptionNo == optionNo
+                    && ChronicleRefineJobMatcher.Matches(skill.Job, characterJob)))
+                    continue;
+                return check;
+            }
+
+            return null;
+        }
+
+        private static string NormalizeChronicleEquipmentType(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+                return string.Empty;
+
+            return value.Trim().Trim('`').Trim('[', ']').Trim().ToLowerInvariant();
+        }
+
+        internal static List<DisjointMaterialResult> BuildChronicleFailureRewards(
+            ItemMetadata metadata,
+            int reinforcementLevel,
+            int fragmentItemTemplateId)
+        {
+            var rewards = new List<DisjointMaterialResult>();
+            AddOrMergeChronicleReward(
+                rewards,
+                fragmentItemTemplateId,
+                Math.Max(1, reinforcementLevel + 1));
+            foreach (var disjointReward in DisjointResultCalculator.Calculate(metadata))
+            {
+                AddOrMergeChronicleReward(
+                    rewards,
+                    disjointReward.ItemTemplateId,
+                    disjointReward.Count);
+            }
+            return rewards;
+        }
+
+        private static void AddOrMergeChronicleReward(
+            List<DisjointMaterialResult> rewards,
+            int itemTemplateId,
+            int count)
+        {
+            if (rewards == null || itemTemplateId <= 0 || count <= 0)
+                return;
+
+            foreach (var reward in rewards)
+            {
+                if (reward.ItemTemplateId != itemTemplateId)
+                    continue;
+                reward.Count += count;
+                return;
+            }
+
+            rewards.Add(new DisjointMaterialResult
+            {
+                SlotIndex = -1,
+                ItemTemplateId = itemTemplateId,
+                Count = count,
+            });
+        }
+
         public bool TryOpenEquipmentSocket(int characterId, short targetSlotIndex, int targetItemTemplateId, short materialSlotIndex, out EquipmentSocketMutationResult result)
         {
             result = null;

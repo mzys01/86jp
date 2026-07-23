@@ -7,7 +7,7 @@ namespace DfoServer.Game.Inventory
         {
             var view = InventoryItemView.ForCommon(record);
             var entry = view.Entry84;
-            return new CommonInventoryItem
+            return NormalizeCommonItem(new CommonInventoryItem
             {
                 SlotIndex = entry.SlotIndex,
                 ItemTemplateId = entry.ItemTemplateId,
@@ -22,7 +22,18 @@ namespace DfoServer.Game.Inventory
                 TailData2F = entry.TailData2F,
                 JewelSocket = entry.JewelSocket,
                 EquipmentLockId = record.EquipmentLockId,
-            };
+            });
+        }
+
+        internal static CommonInventoryItem NormalizeCommonItem(CommonInventoryItem item)
+        {
+            if (item == null)
+                return null;
+
+            item.MiddleData1A = ChronicleRefineProtocol.NormalizeMiddleData(
+                item.ItemTemplateId,
+                item.MiddleData1A);
+            return item;
         }
 
         internal static AvatarInventoryItem ToAvatarItem(SqliteInventoryStore.ItemRecord record)
