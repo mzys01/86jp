@@ -67,6 +67,7 @@ namespace DfoServer
             ("--selftest-udp-relay", SelfTests.UdpRelaySelfTest.Run),
             ("--selftest-growth-capsule", SelfTests.GrowthCapsuleSelfTest.Run),
             ("--selftest-experience-item", SelfTests.ExperienceItemSelfTest.Run),
+            ("--selftest-chronicle-growth", SelfTests.ChronicleGrowthSelfTest.Run),
         };
 
         // 顺序跑全部自测, 输出汇总表; 任一失败(或抛异常)退出码为 1。

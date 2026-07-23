@@ -128,6 +128,8 @@ namespace DfoServer.Game.Inventory
 
         bool TryUpgradeItem(int characterId, int accountId, ItemUpgradeCommand command, out ItemUpgradeResult result);
 
+        bool TryGrowChronicleEquipment(int characterId, int accountId, ChronicleGrowthCommand command, out ChronicleGrowthResult result);
+
         bool TryPurifyItem(int characterId, int accountId, PurifyItemRequest request, out PurifyItemResult result);
 
         bool TryInvestItemAmplifyOption(int characterId, int accountId, InvestItemAmplifyOptionRequest request, out InvestItemAmplifyOptionResult result);
