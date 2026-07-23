@@ -64,6 +64,7 @@ namespace DfoServer.Game.Inventory
     {
         None = 0,
         CharmCarryLimit = 1,
+        CargoFull = 2,
     }
 
     public sealed class Subtype0TailMoveMutation
