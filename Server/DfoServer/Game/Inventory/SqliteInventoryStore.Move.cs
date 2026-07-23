@@ -156,6 +156,47 @@ namespace DfoServer.Game.Inventory
                     return false;
                 }
                 var moveCount = NormalizeMoveCount(source, request.MoveCount);
+                if (destination != null
+                    && !CanStack(source, destination, moveCount)
+                    && ShouldAutoPlaceIntoEmptyCargoSlot(request.SourceListType, request.DestinationListType))
+                {
+                    var stackDestination = ResolveDestinationStackTarget(
+                        characterId,
+                        accountId,
+                        connection,
+                        transaction,
+                        source,
+                        null,
+                        dbSrcList,
+                        dbDstList,
+                        moveCount);
+                    if (CanStack(source, stackDestination, moveCount))
+                    {
+                        FileLogger.Log($"  [MoveItem] CARGO auto-stack: requested slot {request.DestinationSlotIndex} occupied, using stack slot {stackDestination.SlotIndex}");
+                        destination = stackDestination;
+                    }
+                    else
+                    {
+                    if (!TryResolveEmptyCargoDestinationSlot(
+                            connection,
+                            transaction,
+                            characterId,
+                            accountId,
+                            request.DestinationListType,
+                            out var emptyCargoSlot))
+                    {
+                        FileLogger.Log($"  [MoveItem] FAIL: no empty cargo slot for dst={request.DestinationListType}");
+                        result = CreateMoveResult(request, 0, mutated: false);
+                        result.FailureReason = InventoryMoveFailureReason.CargoFull;
+                        return false;
+                    }
+
+                    FileLogger.Log($"  [MoveItem] CARGO auto-place: requested slot {request.DestinationSlotIndex} occupied, using empty slot {emptyCargoSlot}");
+                    request.DestinationSlotIndex = emptyCargoSlot;
+                    destination = null;
+                    }
+                }
+
                 destination = ResolveDestinationStackTarget(characterId, accountId, connection, transaction, source, destination, dbSrcList, dbDstList, moveCount);
 
                 if (!CharmInventoryPolicy.CanApplyQuickSlotMove(
@@ -817,6 +858,44 @@ ORDER BY slot_index;";
                 default:
                     return new Dictionary<byte, (short, short)>();
             }
+        }
+
+        private static bool ShouldAutoPlaceIntoEmptyCargoSlot(InventoryListType sourceListType, InventoryListType destinationListType)
+        {
+            if (sourceListType == destinationListType)
+                return false;
+
+            return destinationListType == InventoryListType.PersonalCargo;
+        }
+
+        private bool TryResolveEmptyCargoDestinationSlot(
+            SqliteConnection connection,
+            SqliteTransaction transaction,
+            int characterId,
+            int accountId,
+            InventoryListType destinationListType,
+            out short slotIndex)
+        {
+            slotIndex = -1;
+
+            if (destinationListType == InventoryListType.PersonalCargo)
+            {
+                var capacity = LoadPersonalCargoListParam16Core(connection, transaction, characterId);
+                var empty = _db.FindEmptySlot(
+                    connection,
+                    transaction,
+                    characterId,
+                    InventoryListType.PersonalCargo,
+                    0,
+                    Math.Max(0, capacity - 1));
+                if (empty < 0)
+                    return false;
+
+                slotIndex = (short)empty;
+                return true;
+            }
+
+            return false;
         }
 
         private static InventoryMoveResult CreateMoveResult(InventoryMoveRequest request, int moveValue32, bool mutated = true)

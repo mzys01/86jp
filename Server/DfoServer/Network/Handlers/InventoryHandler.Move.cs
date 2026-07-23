@@ -63,6 +63,17 @@ namespace DfoServer.Network.Handlers
                     return;
                 }
 
+                if (result?.FailureReason == InventoryMoveFailureReason.CargoFull)
+                {
+                    await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0013,
+                        MoveItemSpaceAckBuilder.BuildError(
+                            0x04,
+                            (byte)request.SourceListType,
+                            (byte)request.DestinationListType)));
+                    FileLogger.Log($"[{ProtocolName}] MOVE_ITEMSPACE: CARGO_FULL src=({request.SourceListType},{request.SourceSlotIndex}) dst=({request.DestinationListType},{request.DestinationSlotIndex})");
+                    return;
+                }
+
                 FileLogger.Log($"[{ProtocolName}] MOVE_ITEMSPACE: FAILED src=({request.SourceListType},{request.SourceSlotIndex}) dst=({request.DestinationListType},{request.DestinationSlotIndex})");
                 await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x01, 0x0013,
                     MoveItemSpaceAckBuilder.BuildError(
