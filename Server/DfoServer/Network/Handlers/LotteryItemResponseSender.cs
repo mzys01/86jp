@@ -75,6 +75,7 @@ namespace DfoServer.Network.Handlers
                 mainRewards,
                 useDoubleResultFlow);
             await SendRewardUpdates(session, snapshot, refreshRewards);
+            await SendMaterialUpdate(session, snapshot, result);
 
             var firstNoticeItem = LotteryPresentationPolicy.ResolveResultItem(
                 snapshot,
@@ -160,6 +161,21 @@ namespace DfoServer.Network.Handlers
             var body = ItemListUpdateBuilder.BuildCommonUpdates(updates);
             await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000E, body));
             FileLogger.Log($"[{ProtocolName}] USE_LOTTERY_ITEM: refreshed reward slots {string.Join(",", updates.Select(item => $"0x{item.ItemTemplateId:X8}@{item.SlotIndex}"))}");
+        }
+
+        private static async Task SendMaterialUpdate(
+            EnhancedClientSession session,
+            CharacterItemListSnapshot snapshot,
+            LotteryOpenResult result)
+        {
+            if (result == null || result.ConsumedMaterialItemTemplateId <= 0)
+                return;
+
+            var item = snapshot?.MainItems.FirstOrDefault(x => x.SlotIndex == result.ConsumedMaterialSlotIndex)
+                ?? ItemListUpdateBuilder.CreateEmptyCommonItem(result.ConsumedMaterialSlotIndex);
+            var body = ItemListUpdateBuilder.BuildCommonUpdates(new[] { item });
+            await session.SendPacketAsync(GamePacketEnvelopeBuilder.Build(0x00, 0x000E, body));
+            FileLogger.Log($"[{ProtocolName}] USE_LOTTERY_ITEM: refreshed material slot 0x{result.ConsumedMaterialItemTemplateId:X8}@{result.ConsumedMaterialSlotIndex} remaining={result.ConsumedMaterialRemainingStackCount}");
         }
 
         private async Task BroadcastNotices(

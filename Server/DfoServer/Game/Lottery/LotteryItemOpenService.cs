@@ -44,6 +44,8 @@ namespace DfoServer.Game.Lottery
 
                 if (_repository.LoadGold(scope) < definition.GoldCost)
                     return false;
+                if (!_repository.TryLoadMaterial(scope, definition.RequiredMaterial, out _))
+                    return false;
 
                 sourceContext = new LotterySourceContext
                 {
@@ -80,6 +82,8 @@ namespace DfoServer.Game.Lottery
                 var currentGold = _repository.LoadGold(scope);
                 if (currentGold < definition.GoldCost)
                     return false;
+                if (!_repository.TryLoadMaterial(scope, definition.RequiredMaterial, out var material))
+                    return false;
 
                 var appliedDoubleReward = useDoubleReward
                     && _doubleRewardPolicy.TryConsume(scope);
@@ -88,6 +92,8 @@ namespace DfoServer.Game.Lottery
                     return false;
 
                 if (!_repository.TryConsumeSource(scope, source, 1))
+                    return false;
+                if (material != null && !_repository.TryConsumeMaterial(scope, material, definition.RequiredMaterial.Count))
                     return false;
                 if (!_repository.TrySpendGold(scope, definition.GoldCost))
                     return false;
@@ -99,6 +105,10 @@ namespace DfoServer.Game.Lottery
                     SourceRemainingStackCount = Math.Max(0, source.StackCount - 1),
                     ConsumedGold = definition.GoldCost,
                     UpdatedGold = currentGold - definition.GoldCost,
+                    ConsumedMaterialItemTemplateId = material?.ItemTemplateId ?? 0,
+                    ConsumedMaterialSlotIndex = material?.SlotIndex ?? 0,
+                    ConsumedMaterialCount = material == null ? 0 : definition.RequiredMaterial.Count,
+                    ConsumedMaterialRemainingStackCount = material == null ? 0 : Math.Max(0, material.StackCount - definition.RequiredMaterial.Count),
                     UsedDoubleReward = appliedDoubleReward,
                 };
 
@@ -117,7 +127,12 @@ namespace DfoServer.Game.Lottery
                     openResult.Rewards.AddRange(grants);
                 }
 
-                _repository.WriteAudit(scope, source, openResult.Rewards);
+                _repository.WriteAudit(
+                    scope,
+                    source,
+                    material,
+                    openResult.ConsumedMaterialCount,
+                    openResult.Rewards);
                 scope.Commit();
                 result = openResult;
                 return true;
