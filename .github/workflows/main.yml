@@ -1,24 +1,438 @@
-name: Sync Upstream Repository
+name: Sync and Publish
 
-# 配置触发条件
 on:
-  # 定时触发：每天 18:01 UTC 运行，你也可以修改 cron 表达式
+  # 定时触发：每天 UTC 0:00 和 12:00 检查
   schedule:
     - cron: '0 0 * * *'
-  # 允许手动触发，方便测试
+    - cron: '0 12 * * *'
+  # 手动触发
   workflow_dispatch:
+    inputs:
+      force_publish:
+        description: '强制打包（即使没有更新）'
+        type: boolean
+        default: false
+
+env:
+  DOTNET_CHANNEL: '10.0'
+  PROJECT: Server/DfoServer/DfoServer.csproj
+  # 优化：禁用 .NET 遥测和首次体验
+  DOTNET_CLI_TELEMETRY_OPTOUT: 1
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 1
+  DOTNET_NOLOGO: 1
 
 jobs:
+  # ============================================
+  # Job 1: 同步代码并检测更新
+  # ============================================
   sync:
-    runs-on: ubuntu-latest
+    runs-on: codeberg-tiny
+    outputs:
+      has_update: ${{ steps.sync_check.outputs.has_update }}
+      current_version: ${{ steps.sync_check.outputs.current_version }}
     steps:
-      - name: Sync from gitgud.io to GitHub
-        # 使用 dabreadman 的 action 来完成同步
-        uses: dabreadman/sync-upstream-repo@v1.3.0
+      - name: Checkout target repository
+        uses: https://code.forgejo.org/actions/checkout@v4
         with:
-          # 🔴 重要：改成你的源仓库地址
-          upstream_repo: "https://gitgud.io/rewio/86JP.git"
-          # 🔴 重要：改成你的目标分支，通常是 main 或 master
-          downstream_branch: "main"
-          # 使用 GitHub 自动生成的 token 进行认证，无需修改
-          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+          ref: main
+
+      - name: Sync from gitgud.io
+        id: sync_check
+        run: |
+          # 配置 Git
+          git config user.name "Codeberg Bot"
+          git config user.email "bot@codeberg.org"
+
+          # 记录同步前的 commit
+          BEFORE=$(git rev-parse HEAD)
+
+          # 添加源仓库
+          git remote add upstream https://gitgud.io/rewio/86JP.git
+
+          # 拉取最新
+          echo "📥 正在从 gitgud.io 拉取更新..."
+          git fetch upstream
+
+          # 尝试合并
+          echo "🔄 正在合并更新..."
+          if git merge upstream/main --allow-unrelated-histories \
+            --no-edit -m "Auto merge from gitgud.io $(date +'%Y-%m-%d %H:%M:%S')" 2>&1 | tee /tmp/merge.log; then
+            
+            AFTER=$(git rev-parse HEAD)
+            
+            if [ "$BEFORE" != "$AFTER" ]; then
+              # 有更新
+              echo "has_update=true" >> $GITHUB_OUTPUT
+              echo "current_version=${AFTER:0:8}" >> $GITHUB_OUTPUT
+              echo "✅ 检测到更新！"
+              echo "   Before: ${BEFORE:0:8}"
+              echo "   After:  ${AFTER:0:8}"
+              
+              # 推送到 Codeberg
+              git push origin main
+              echo "✅ 已推送到 Codeberg"
+            else
+              # 没有更新
+              echo "has_update=false" >> $GITHUB_OUTPUT
+              echo "current_version=${BEFORE:0:8}" >> $GITHUB_OUTPUT
+              echo "⏭️ 没有新更新"
+            fi
+          else
+            # 合并冲突
+            echo "⚠️ 合并冲突，跳过打包"
+            git merge --abort
+            echo "has_update=false" >> $GITHUB_OUTPUT
+            echo "current_version=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+          fi
+
+  # ============================================
+  # Job 2: 构建 Windows 版本（优化版）
+  # ============================================
+  build-windows:
+    runs-on: codeberg-tiny
+    needs: sync
+    if: |
+      needs.sync.outputs.has_update == 'true' ||
+      github.event.inputs.force_publish == 'true'
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: https://code.forgejo.org/actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: main
+
+      - name: Set version
+        id: set_version
+        run: |
+          VERSION=$(git describe --tags --always --dirty 2>/dev/null || echo "latest")
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "📌 版本: $VERSION"
+
+      - name: Setup .NET
+        run: |
+          echo "📥 安装 .NET ${DOTNET_CHANNEL}..."
+          curl -sSL https://dot.net/v1/dotnet-install.sh | bash -s -- \
+            --channel "$DOTNET_CHANNEL" \
+            --no-path
+          echo "$HOME/.dotnet" >> "$GITHUB_PATH"
+          echo "DOTNET_ROOT=$HOME/.dotnet" >> "$GITHUB_ENV"
+          
+          # 验证安装
+          $HOME/.dotnet/dotnet --info
+
+      - name: Restore dependencies for Windows
+        run: |
+          echo "::group::📦 Restore 依赖包 (win-x64)"
+          dotnet restore "$PROJECT" \
+            -r win-x64 \
+            --disable-build-servers \
+            -v minimal
+          echo "::endgroup::"
+
+      - name: Build Windows x64
+        run: |
+          VERSION="${{ steps.set_version.outputs.version }}"
+          BUILD_DATE=$(date +'%Y%m%d')
+          SHORT_SHA=$(git rev-parse --short HEAD)
+          
+          echo "::group::📦 构建 Windows x64"
+          
+          # 构建
+          dotnet publish "$PROJECT" \
+            -c Release -r win-x64 \
+            --self-contained true \
+            --no-restore \
+            -p:PublishSingleFile=true \
+            -p:IncludeNativeLibrariesForSelfExtract=true \
+            -p:DebugType=none \
+            -p:DebugSymbols=false \
+            -p:UseSharedCompilation=false \
+            -p:BuildInParallel=false \
+            -p:MaxConcurrentBuilds=1 \
+            -p:ContinousIntegrationBuild=true \
+            -o out/win-x64/ \
+            --disable-build-servers \
+            -v minimal
+          
+          if [ $? -ne 0 ]; then
+            echo "⚠️ Windows 构建失败"
+            exit 1
+          fi
+          
+          echo "✅ Windows 构建完成"
+          
+          # 复制启动脚本
+          if [ -f "start-server.bat" ]; then
+            cp start-server.bat out/win-x64/
+            echo "📄 复制 start-server.bat"
+          fi
+          
+          # 打包
+          PACKAGE_NAME="DfoServer-${VERSION}-${BUILD_DATE}-${SHORT_SHA}-win-x64.zip"
+          echo "📦 打包: ${PACKAGE_NAME}"
+          (cd out/win-x64 && zip -r "../../${PACKAGE_NAME}" .)
+          
+          # 记录文件名
+          echo "PACKAGE_NAME=${PACKAGE_NAME}" >> $GITHUB_ENV
+          
+          # 清理
+          rm -rf out/win-x64
+          
+          echo "::endgroup::"
+
+      - name: Upload Windows artifact
+        uses: https://code.forgejo.org/actions/upload-artifact@v3
+        with:
+          name: DfoServer-win-x64
+          path: DfoServer-*-win-x64.zip
+          retention-days: 30
+
+  # ============================================
+  # Job 3: 构建 Linux 版本（优化版）
+  # ============================================
+  build-linux:
+    runs-on: codeberg-tiny
+    needs: sync
+    if: |
+      needs.sync.outputs.has_update == 'true' ||
+      github.event.inputs.force_publish == 'true'
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: https://code.forgejo.org/actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: main
+
+      - name: Set version
+        id: set_version
+        run: |
+          VERSION=$(git describe --tags --always --dirty 2>/dev/null || echo "latest")
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "📌 版本: $VERSION"
+
+      - name: Setup .NET
+        run: |
+          echo "📥 安装 .NET ${DOTNET_CHANNEL}..."
+          curl -sSL https://dot.net/v1/dotnet-install.sh | bash -s -- \
+            --channel "$DOTNET_CHANNEL" \
+            --no-path
+          echo "$HOME/.dotnet" >> "$GITHUB_PATH"
+          echo "DOTNET_ROOT=$HOME/.dotnet" >> "$GITHUB_ENV"
+          
+          # 验证安装
+          $HOME/.dotnet/dotnet --info
+
+      - name: Restore dependencies for Linux
+        run: |
+          echo "::group::📦 Restore 依赖包 (linux-x64)"
+          dotnet restore "$PROJECT" \
+            -r linux-x64 \
+            --disable-build-servers \
+            -v minimal
+          echo "::endgroup::"
+
+      - name: Build Linux x64
+        run: |
+          VERSION="${{ steps.set_version.outputs.version }}"
+          BUILD_DATE=$(date +'%Y%m%d')
+          SHORT_SHA=$(git rev-parse --short HEAD)
+          
+          echo "::group::📦 构建 Linux x64"
+          
+          # 构建
+          dotnet publish "$PROJECT" \
+            -c Release -r linux-x64 \
+            --self-contained true \
+            --no-restore \
+            -p:PublishSingleFile=true \
+            -p:IncludeNativeLibrariesForSelfExtract=true \
+            -p:DebugType=none \
+            -p:DebugSymbols=false \
+            -p:UseSharedCompilation=false \
+            -p:BuildInParallel=false \
+            -p:MaxConcurrentBuilds=1 \
+            -p:ContinousIntegrationBuild=true \
+            -o out/linux-x64/ \
+            --disable-build-servers \
+            -v minimal
+          
+          if [ $? -ne 0 ]; then
+            echo "⚠️ Linux 构建失败"
+            exit 1
+          fi
+          
+          echo "✅ Linux 构建完成"
+          
+          # 复制启动脚本
+          if [ -f "start-server.sh" ]; then
+            cp start-server.sh out/linux-x64/
+            chmod +x out/linux-x64/start-server.sh
+            echo "📄 复制 start-server.sh (已设置执行权限)"
+          fi
+          
+          # 给主程序添加执行权限
+          chmod +x out/linux-x64/DfoServer 2>/dev/null || true
+          
+          # 打包
+          PACKAGE_NAME="DfoServer-${VERSION}-${BUILD_DATE}-${SHORT_SHA}-linux-x64.zip"
+          echo "📦 打包: ${PACKAGE_NAME}"
+          (cd out/linux-x64 && zip -r "../../${PACKAGE_NAME}" .)
+          
+          # 记录文件名
+          echo "PACKAGE_NAME=${PACKAGE_NAME}" >> $GITHUB_ENV
+          
+          # 清理
+          rm -rf out/linux-x64
+          
+          echo "::endgroup::"
+
+      - name: Upload Linux artifact
+        uses: https://code.forgejo.org/actions/upload-artifact@v3
+        with:
+          name: DfoServer-linux-x64
+          path: DfoServer-*-linux-x64.zip
+          retention-days: 30
+
+  # ============================================
+  # Job 4: 创建 Release（修复版）
+  # ============================================
+  release:
+    runs-on: codeberg-tiny
+    needs: [build-windows, build-linux]
+    if: |
+      (needs.build-windows.result == 'success' || needs.build-linux.result == 'success') &&
+      (needs.sync.outputs.has_update == 'true' || github.event.inputs.force_publish == 'true')
+    steps:
+      - name: Checkout
+        uses: https://code.forgejo.org/actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: main
+
+      # 分别下载每个 artifact（更可靠）
+      - name: Download Windows artifact
+        uses: https://code.forgejo.org/actions/download-artifact@v3
+        with:
+          name: DfoServer-win-x64
+          path: dist/win-x64/
+
+      - name: Download Linux artifact
+        uses: https://code.forgejo.org/actions/download-artifact@v3
+        with:
+          name: DfoServer-linux-x64
+          path: dist/linux-x64/
+
+      - name: List downloaded artifacts
+        run: |
+          echo "📂 下载的构建产物:"
+          echo "=== dist 目录 ==="
+          ls -la dist/ || echo "dist 目录不存在"
+          echo ""
+          echo "=== dist/win-x64 ==="
+          ls -la dist/win-x64/ 2>/dev/null || echo "win-x64 目录不存在"
+          echo ""
+          echo "=== dist/linux-x64 ==="
+          ls -la dist/linux-x64/ 2>/dev/null || echo "linux-x64 目录不存在"
+          echo ""
+          echo "📂 递归查找所有 zip 文件:"
+          find . -name "*.zip" -type f 2>/dev/null || echo "没有找到 zip 文件"
+
+      - name: Create release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # 检查是否有 tag
+          TAG=$(git describe --tags --exact-match 2>/dev/null || echo "")
+          
+          if [ -z "$TAG" ]; then
+            echo "⏭️ 没有 tag，跳过 Release 创建"
+            echo "💡 如需创建 Release，请打一个 v* 格式的 tag"
+            exit 0
+          fi
+
+          echo "📦 创建 Release: ${TAG}"
+
+          # 生成 Release 说明
+          cat > /tmp/body.md << 'EOF'
+          ## 🚀 自动构建版本
+
+          ### 构建信息
+          - **平台**: Windows x64 + Linux x64
+          - **构建时间**: $(date '+%Y-%m-%d %H:%M:%S UTC')
+          - **同步源**: [gitgud.io/rewio/86JP](https://gitgud.io/rewio/86JP)
+
+          ### 📦 包含文件
+          - Windows: `DfoServer.exe` + `start-server.bat`
+          - Linux: `DfoServer` + `start-server.sh`
+
+          ### 📝 使用说明
+          1. 解压对应平台的 zip 包
+          2. 将客户端 `Script.pvf` 放到 `Data/Pvf/Script.pvf`
+          3. 运行 `start-server.bat` (Windows) 或 `./start-server.sh` (Linux)
+          4. 使用 `--server-ip auto` 参数可自动广播本机 IPv4 地址
+
+          ### ⚠️ 注意
+          - 这是自包含（self-contained）版本，无需安装 .NET 运行时
+          - Linux 版本需要给 `DfoServer` 和 `start-server.sh` 添加执行权限
+          EOF
+
+          # 获取 API 地址
+          API="${{ github.server_url }}/api/v1/repos/${{ github.repository }}"
+          TOKEN="${{ secrets.GITHUB_TOKEN }}"
+
+          # 创建 Release
+          rel_id=$(curl -sf -X POST \
+            -H "Authorization: token ${TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d "$(jq -n \
+              --arg tag "$TAG" \
+              --arg name "DfoServer ${TAG}" \
+              --arg body "$(cat /tmp/body.md)" \
+              --arg target "${GITHUB_SHA}" \
+              '{tag_name: $tag, name: $name, body: $body, prerelease: false, target_commitish: $target}')" \
+            "${API}/releases" | jq -r '.id')"
+
+          if [ -n "$rel_id" ] && [ "$rel_id" != "null" ]; then
+            echo "✅ Release #${rel_id} 创建成功"
+            
+            # 🔴 关键修复：从 dist 子目录递归查找并上传 zip 文件
+            echo "📤 上传构建产物..."
+            
+            # 使用 find 递归查找所有 zip 文件
+            ZIP_FILES=$(find dist -name "*.zip" -type f 2>/dev/null)
+            
+            if [ -z "$ZIP_FILES" ]; then
+              echo "⚠️ 在 dist 目录下没有找到 zip 文件"
+              echo "尝试从当前目录查找..."
+              ZIP_FILES=$(find . -maxdepth 2 -name "*.zip" -type f 2>/dev/null)
+            fi
+            
+            for zip in $ZIP_FILES; do
+              if [ -f "$zip" ]; then
+                filename=$(basename "$zip")
+                echo "  上传 ${filename} (从 ${zip})..."
+                curl -sf -X POST \
+                  -H "Authorization: token ${TOKEN}" \
+                  -H "Content-Type: application/octet-stream" \
+                  --data-binary "@${zip}" \
+                  "${API}/releases/${rel_id}/assets?name=${filename}"
+                if [ $? -eq 0 ]; then
+                  echo "   ✅ ${filename} 上传完成"
+                else
+                  echo "   ❌ ${filename} 上传失败"
+                fi
+              fi
+            done
+            
+            echo ""
+            echo "🎉 发布完成！"
+            echo "🔗 查看: ${{ github.server_url }}/${{ github.repository }}/releases/tag/${TAG}"
+          else
+            echo "❌ Release 创建失败"
+            exit 1
+          fi
